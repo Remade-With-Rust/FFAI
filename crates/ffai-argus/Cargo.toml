@@ -1,0 +1,26 @@
+[package]
+name = "ffai-argus"
+description = "Argus — FFai's VLM component: image captioning and video understanding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ffai-core = { workspace = true }
+
+# BACKEND PLAN (Phase 4): mistral.rs — the candle-based inference engine — as
+# an optional dependency powering Qwen-VL / LLaVA-class models:
+#   mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", optional = true }
+# Deliberately not added in Phase 0: it is a large git dependency every
+# contributor would fetch while the feature is still a stub. It lands together
+# with the first working describe_image().
+
+[features]
+# Will enable the mistral.rs backend once wired (Phase 4).
+mistralrs-backend = []
+
+[lints]
+workspace = true

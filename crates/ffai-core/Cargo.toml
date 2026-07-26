@@ -1,0 +1,23 @@
+[package]
+name = "ffai-core"
+description = "FFai shared types, engine traits, and the engine registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+candle-core = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+# GPU backends forward straight to candle. Note: today these pull C/CUDA/Metal
+# tooling — the pure-Rust replacement path (cool-japan/oxicuda) is tracked in
+# ROADMAP.md § Watchlist.
+cuda = ["candle-core/cuda"]
+metal = ["candle-core/metal"]
+
+[lints]
+workspace = true

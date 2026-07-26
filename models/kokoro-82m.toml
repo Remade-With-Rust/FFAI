@@ -1,0 +1,9 @@
+# Lightweight TTS — the Phase 2 bring-up target (via any-tts).
+name = "kokoro-82m"
+task = "tts"
+description = "Kokoro-82M — lightweight neural TTS"
+license = "Apache-2.0"
+hf_repo = "hexgrad/Kokoro-82M"
+
+[[files]]
+name = "kokoro-v1_0.pth"

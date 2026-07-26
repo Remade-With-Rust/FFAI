@@ -1,0 +1,15 @@
+# Smallest OpenAI Whisper — smoke tests and CI; the Phase 1 bring-up target.
+name = "whisper-tiny"
+task = "asr"
+description = "OpenAI Whisper tiny (39M params) — fast smoke-test model"
+license = "Apache-2.0"
+hf_repo = "openai/whisper-tiny"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

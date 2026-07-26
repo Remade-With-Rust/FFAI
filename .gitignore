@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+# benchmarking scratch: corpora audio is fetched, never committed (the
+# hash-pinned manifest in corpora/*.toml is the committed artifact)
+/corpora/clips/
+/.venv-bench/
+# NOTE: bench/ledger.jsonl is deliberately NOT ignored. "Every claim traces
+# to a ledger line" only holds if the ledger ships with the repo.
+# model weights are data, not code — they live in the cache, never the repo
+*.safetensors
+*.gguf
+*.onnx
+*.bin

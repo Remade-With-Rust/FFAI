@@ -1,0 +1,21 @@
+[package]
+name = "ffai-bench"
+description = "FFai's analyzer — one call to compare any engine against world standards, ledger-backed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ffai-core = { workspace = true }
+ffai-media = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
+regex = { workspace = true }
+
+[lints]
+workspace = true

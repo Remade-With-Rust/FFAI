@@ -1,0 +1,51 @@
+# World-standard reference implementations `ffai bench` compares against.
+#
+# ASR references use BATCH mode: the adapter is invoked once for the whole
+# corpus with a {filelist}, and reports per-clip transcription time itself, so
+# interpreter startup and model load don't land inside every timed run. See
+# crates/ffai-bench/src/reference.rs for why that matters, and
+# corpora/refs/*.py for the adapters.
+#
+# DECODE CONFIG IS PINNED EXPLICITLY. Implementations ship different defaults
+# — openai-whisper decodes greedily by default, faster-whisper uses
+# beam_size=5 — and benchmarking one against the other unpinned compares
+# decoding strategies while pretending to compare implementations. Every ASR
+# reference below is pinned to beam_size=5 on the .en model of its size.
+#
+# Paths assume the bench venv from docs/benchmarking.md:
+#   python -m venv .venv-bench
+#   .venv-bench/Scripts/pip install faster-whisper openai-whisper
+# Adjust the interpreter path for your platform (Scripts/ -> bin/ on unix).
+
+# ---- openai-whisper (Python/PyTorch): the accuracy definition ----
+[[reference]]
+name = "openai-whisper-tiny"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "5"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
+
+[[reference]]
+name = "openai-whisper-base"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "base.en", "--beam-size", "5"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
+
+# ---- faster-whisper (Python + CTranslate2/C++): the speed bar in production ----
+[[reference]]
+name = "faster-whisper-tiny"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "5", "--compute-type", "int8"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
+
+[[reference]]
+name = "faster-whisper-base"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "base.en", "--beam-size", "5", "--compute-type", "int8"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
+
+# ---- OCR (Carmenta, Phase 3) ----
+[[reference]]
+name = "tesseract"
+task = "ocr"
+command = ["tesseract", "{input}", "stdout"]
+version_command = ["tesseract", "--version"]

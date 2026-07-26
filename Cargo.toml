@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Remade-With-Rust/FFai"
+authors = ["Remade With Rust"]
+
+[workspace.dependencies]
+# ---- internal crates ----
+ffai-core = { path = "crates/ffai-core", version = "0.1.0" }
+ffai-media = { path = "crates/ffai-media", version = "0.1.0" }
+ffai-models = { path = "crates/ffai-models", version = "0.1.0" }
+ffai-mercury = { path = "crates/ffai-mercury", version = "0.1.0" }
+ffai-carmenta = { path = "crates/ffai-carmenta", version = "0.1.0" }
+ffai-argus = { path = "crates/ffai-argus", version = "0.1.0" }
+ffai-bench = { path = "crates/ffai-bench", version = "0.1.0" }
+
+# ---- tensor spine ----
+# Candle is FFai's PyTorch: every engine shares its Tensor/Device types so
+# buffers move between models without copies or format conversions.
+candle-core = "0.9"
+
+# ---- ecosystem ----
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+hound = "3"
+dirs = "6"
+sha2 = "0.10"
+serde_json = "1"
+regex = "1"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[profile.release]
+lto = "thin"

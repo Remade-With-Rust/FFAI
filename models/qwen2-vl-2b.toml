@@ -1,0 +1,15 @@
+# Small VLM — the Phase 4 bring-up target for Argus (via mistral.rs).
+name = "qwen2-vl-2b"
+task = "vlm"
+description = "Qwen2-VL 2B Instruct — small vision-language model for captioning/VQA"
+license = "Apache-2.0"
+hf_repo = "Qwen/Qwen2-VL-2B-Instruct"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

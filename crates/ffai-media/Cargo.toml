@@ -1,0 +1,27 @@
+[package]
+name = "ffai-media"
+description = "FFai media ingest/egress — demux, decode, resample (rff-backed)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ffai-core = { workspace = true }
+hound = { workspace = true }
+
+# DEFAULT CODEC BACKEND (Phase 1): remade_ffmpeg_rs — our own pure-Rust ffmpeg
+# (https://github.com/Remade-With-Rust/remade_ffmpeg_rs, the `rff-*` workspace).
+# All demux/decode beyond WAV routes through rff crates when it lands, e.g.:
+#   rff-format = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
+#   rff-codec  = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
+# Kept out of Phase 0 so the skeleton builds fast and independently.
+
+[features]
+# Will enable the rff-* backend once wired (Phase 1).
+remade-ffmpeg = []
+
+[lints]
+workspace = true
