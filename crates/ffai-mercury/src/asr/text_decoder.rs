@@ -151,6 +151,18 @@ impl QLinear {
     }
 
     /// Load a layer that will only ever be fed one row at a time.
+    /// **Currently unreachable — retained deliberately, not stranded.**
+    ///
+    /// The int8 decoder path it builds was measured and reverted twice: alone
+    /// on the MLP it was inside the noise (1.005x), and across every
+    /// projection it failed the corpus quality gate at 8.39 % WER. Those
+    /// projections now use f16 (`from_vb_gemv_f16`), which passes.
+    ///
+    /// Kept because re-testing a deleted experiment costs its whole rebuild.
+    /// Note the case has since got WORSE, not better: int8 was measured
+    /// against an f32 baseline (4x traffic advantage) and the baseline is now
+    /// f16, so it would buy 2x for the same quality risk that already failed.
+    #[allow(dead_code)]
     pub fn from_vb_gemv(
         in_dim: usize,
         out_dim: usize,
