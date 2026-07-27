@@ -29,5 +29,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n  projections+copies/layer {:6.2} ms  x4 layers = {:6.2} ms", glue*1e3, glue*4e3);
     println!("  fused kernel  x4 layers  = {:6.2} ms", 10.44*4.0);
     println!("  => accounted {:6.2} ms vs stage 83 ms", glue*4e3 + 41.8);
+
+    // ---- what is in the 16.6 ms residue? ----
+    let scale = t(9, || { std::hint::black_box((&heads * 0.125f64).unwrap()); });
+    let ctx = heads.contiguous()?;
+    let merge = t(9, || {
+        std::hint::black_box(ctx.transpose(1, 2).unwrap().flatten_from(2).unwrap().contiguous().unwrap());
+    });
+    println!("
+RESIDUE CANDIDATES (per layer):");
+    println!("  `* scale` on (1,6,1500,64)   {:6.2} ms  x2 per layer (q and k)", scale*1e3);
+    println!("  merge: transpose+flatten+cont {:6.2} ms", merge*1e3);
+    let extra = scale*2.0 + merge;
+    println!("  => {:6.2} ms/layer = {:6.2} ms over 4 layers", extra*1e3, extra*4e3);
     Ok(())
 }
+// appended: what is IN the residue?
