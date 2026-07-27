@@ -495,7 +495,14 @@ impl Attention {
                 let k = self.key.forward(audio)?;
                 let v = self.value.forward(audio)?;
                 // Prepared once per window, reused for every token.
-                let k = (self.split_heads(&k)?.transpose(2, 3)? * scale)?.contiguous()?;
+                // Whisper folds 1/sqrt(d) as ^-0.25 into BOTH q and k. That is
+                // symmetric but not required: (q*s)·(k*s) = q·k·s^2, so the
+                // whole factor can ride on q alone. Here q is ONE row per
+                // token and k is 1500x384 per layer, so scaling k meant a
+                // 2.3 MB multiply-and-allocate per layer at cache build —
+                // paid once per clip, and these corpus clips average ~6 s, so
+                // a fixed cost lands heavily on the throughput figure.
+                let k = self.split_heads(&k)?.transpose(2, 3)?.contiguous()?;
                 let v = self.split_heads(&v)?.contiguous()?;
                 // The cross-attention cache is read IN FULL on every generated
                 // token — 4.6 MB per layer, 18.4 MB per token across the stack
@@ -542,9 +549,12 @@ impl Attention {
             }
         };
         let q = super::profile::timed(&p.xa_prep, || {
-            // Match the cache's dtype; the query is one row, so the conversion
-            // is free against the megabytes it unlocks.
-            (self.split_heads(&q)? * scale)?.contiguous()?.to_dtype(k.dtype())
+            // scale^2 because k no longer carries its half — see the cache
+            // build above. Match the cache's dtype; the query is one row, so
+            // the conversion is free against the megabytes it unlocks.
+            (self.split_heads(&q)? * (scale * scale))?
+                .contiguous()?
+                .to_dtype(k.dtype())
         })?;
 
         // Inlined from attend_prepared so each step is separately timed in
