@@ -87,6 +87,26 @@ pub enum QLinear {
     // microbenchmark is not a cliff that exists in the pipeline.
     Full(Linear),
     Quant { matmul: QMatMul, bias: Option<Tensor> },
+    /// int8 GEMV for layers that only ever see ONE input row.
+    ///
+    /// The decoder MLP is 18.9 MB of weights per token across the stack and
+    /// measured 16.9 GB/s — the same bandwidth-bound single-row shape the
+    /// vocabulary projection was, where this kernel gave 4.34x. The encoder
+    /// MLP has the same weights but M=1500, which is a real GEMM that
+    /// candle's `gemm` already does well, so `full` stays live and serves
+    /// anything wider than one row.
+    Int8 {
+        q: super::vocab_int8::Int8Vocab,
+        bias: Option<Tensor>,
+        full: Linear,
+    },
+}
+
+/// `FFAI_MLP_INT8=off` forces the decoder MLP back to the GEMM path.
+fn mlp_int8_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("FFAI_MLP_INT8").as_deref() == Ok("off"))
 }
 
 impl QLinear {
@@ -101,6 +121,33 @@ impl QLinear {
         let weight = vb.get((out_dim, in_dim), "weight")?;
         let bias = if bias { Some(vb.get(out_dim, "bias")?) } else { None };
         Self::new(weight, bias, precision)
+    }
+
+    /// Load a layer that will only ever be fed one row at a time.
+    pub fn from_vb_gemv(
+        in_dim: usize,
+        out_dim: usize,
+        vb: VarBuilder,
+        bias: bool,
+        precision: Precision,
+    ) -> CandleResult<Self> {
+        let weight = vb.get((out_dim, in_dim), "weight")?;
+        let bias = if bias { Some(vb.get(out_dim, "bias")?) } else { None };
+        // A/B escape hatch. Resolved ONCE here at load, never per call — an
+        // earlier optimization in this crate regressed itself 3x by reading an
+        // env var inside the per-token path.
+        if mlp_int8_disabled() {
+            return Self::new(weight, bias, precision);
+        }
+        // Weight is already (out, in) row-major — the layout the kernel reads.
+        match super::vocab_int8::Int8Vocab::new(&weight)? {
+            Some(q) => Ok(QLinear::Int8 {
+                q,
+                bias: bias.clone(),
+                full: Linear::new(weight, bias),
+            }),
+            None => Self::new(weight, bias, precision),
+        }
     }
 
     fn new(weight: Tensor, bias: Option<Tensor>, precision: Precision) -> CandleResult<Self> {
@@ -126,6 +173,25 @@ impl QLinear {
                     Some(b) => y.broadcast_add(b),
                     None => Ok(y),
                 }
+            }
+            QLinear::Int8 { q, bias, full } => {
+                // One row only; anything wider goes to the GEMM.
+                let dims = x.dims();
+                let rows: usize = dims[..dims.len() - 1].iter().product();
+                if rows != 1 {
+                    return full.forward(x);
+                }
+                let flat = x.reshape((1, dims[dims.len() - 1]))?;
+                let y = q.forward(&flat)?;
+                let y = match bias {
+                    Some(b) => y.broadcast_add(b)?,
+                    None => y,
+                };
+                // Restore the caller's rank, e.g. (1,1,d).
+                let mut out = dims.to_vec();
+                let n = out.len();
+                out[n - 1] = y.dim(1)?;
+                y.reshape(out)
             }
         }
     }
@@ -719,6 +785,27 @@ impl Block {
             cross_attn: Attention::load(n_state, n_head, vb.pp("encoder_attn"), p)?,
             cross_attn_ln: layer_norm(n_state, vb.pp("encoder_attn_layer_norm"))?,
             mlp_ln: layer_norm(n_state, vb.pp("final_layer_norm"))?,
+            // MEASURED AND REVERTED: int8 GEMV on the decoder MLP.
+            //
+            // The shape is right — 18.9 MB of weights per token at 16.9 GB/s,
+            // the same bandwidth-bound single-row case where the vocabulary
+            // projection gained 4.34x — and the stage did speed up, 0.046 ->
+            // 0.037 s (1.36x per call). It bought nothing end to end:
+            // **8/15 paired rounds, z = +0.3, ratio 1.005x**, transcription
+            // time only, load excluded.
+            //
+            // Arithmetic explains it. The MLP is ~20 % of decode and decode is
+            // ~50 % of the pipeline, so 1.36x on it is worth ~2.6 % overall —
+            // below what any harness here can resolve. Against that: it
+            // quantizes 4.7 M weights at load, keeps both int8 and f32 copies
+            // resident, and unlike the vocabulary projection its error
+            // COMPOUNDS, feeding the residual stream and the next layer's
+            // attention rather than either flipping an argmax or vanishing.
+            //
+            // Reverted because the delta sat inside the noise — NOT because it
+            // measured worse. `QLinear::Int8` and `FFAI_MLP_INT8` stay for the
+            // re-test if the surrounding stages ever shrink enough to make
+            // 2.6 % resolvable.
             mlp1: linear(n_state, n_state * 4, vb.pp("fc1"), p)?,
             mlp2: linear(n_state * 4, n_state, vb.pp("fc2"), p)?,
         })
