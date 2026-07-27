@@ -66,8 +66,13 @@ impl Block {
         let attn = super::profile::timed(&p.enc_attn, || self.attn.forward(&ln))?;
         let x = (x + attn)?;
         let mlp = super::profile::timed(&p.enc_mlp, || {
-            self.mlp2
-                .forward(&fast_gelu(&self.mlp1.forward(&self.mlp_ln.forward(&x)?)?)?)
+            // Broken out because the stage carried a ~10 ms residue that only
+            // standalone probes had estimated — and on encoder attention those
+            // probes were 7x wrong about which op owned the time.
+            let n = super::profile::timed(&p.em_ln, || self.mlp_ln.forward(&x))?;
+            let h = super::profile::timed(&p.em_fc1, || self.mlp1.forward(&n))?;
+            let g = super::profile::timed(&p.em_gelu, || fast_gelu(&h))?;
+            super::profile::timed(&p.em_fc2, || self.mlp2.forward(&g))
         })?;
         x + mlp
     }

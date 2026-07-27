@@ -80,6 +80,10 @@ pub struct Profile {
     /// Encoder-attention sub-ops. The stage had a 16.6 ms residue (20 % of
     /// itself) that standalone probes could only guess at; these name it in
     /// context, which is the measurement that wins when the two disagree.
+    pub em_ln: Stage,
+    pub em_fc1: Stage,
+    pub em_gelu: Stage,
+    pub em_fc2: Stage,
     pub ea_proj: Stage,
     pub ea_prep: Stage,
     pub ea_kernel: Stage,
@@ -111,6 +115,10 @@ impl Profile {
             enc_attn: Stage::new(),
             enc_mlp: Stage::new(),
             xa_qproj: Stage::new(),
+            em_ln: Stage::new(),
+            em_fc1: Stage::new(),
+            em_gelu: Stage::new(),
+            em_fc2: Stage::new(),
             ea_proj: Stage::new(),
             ea_prep: Stage::new(),
             ea_kernel: Stage::new(),
@@ -186,7 +194,11 @@ impl Profile {
             }
         }
 
-        let xa: [(&str, &Stage); 11] = [
+        let xa: [(&str, &Stage); 15] = [
+            ("  em ln", &self.em_ln),
+            ("  em fc1", &self.em_fc1),
+            ("  em gelu", &self.em_gelu),
+            ("  em fc2", &self.em_fc2),
             ("  ea proj", &self.ea_proj),
             ("  ea prep", &self.ea_prep),
             ("  ea kernel", &self.ea_kernel),
