@@ -100,6 +100,26 @@ pub enum QLinear {
         bias: Option<Tensor>,
         full: Linear,
     },
+    /// f16 weights, pre-transposed, for layers fed ONE row at a time.
+    ///
+    /// This is the precision the reference actually runs — its tiny.en file is
+    /// 77.7 MB, i.e. f16, against 156 MB for f32 — and matching it is the
+    /// honest way to close the decode gap. int8 undercuts their traffic (8.3
+    /// vs 16.5 MB/token) but pays in error that COMPOUNDS through the residual
+    /// stream, and failed the corpus quality gate at 8.39 % WER. f16 keeps
+    /// ~3 decimal digits, which is why the reference reaches 7.58 % on it.
+    Half {
+        wt: Tensor,
+        bias: Option<Tensor>,
+        full: Linear,
+    },
+}
+
+/// `FFAI_DEC_F16=off` forces the decoder's single-row projections back to f32.
+fn dec_f16_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("FFAI_DEC_F16").as_deref() == Ok("off"))
 }
 
 /// `FFAI_MLP_INT8=off` forces the decoder MLP back to the GEMM path.
@@ -150,6 +170,31 @@ impl QLinear {
         }
     }
 
+    /// f16 GEMV loader: match the reference's precision on the single-row
+    /// paths. Pays the transpose once here rather than once per token.
+    pub fn from_vb_gemv_f16(
+        in_dim: usize,
+        out_dim: usize,
+        vb: VarBuilder,
+        bias: bool,
+        precision: Precision,
+    ) -> CandleResult<Self> {
+        let weight = vb.get((out_dim, in_dim), "weight")?;
+        let bias = if bias { Some(vb.get(out_dim, "bias")?) } else { None };
+        // A/B escape hatch, resolved once at load.
+        if dec_f16_disabled() {
+            return Self::new(weight, bias, precision);
+        }
+        match weight.t().and_then(|w| w.contiguous()).and_then(|w| w.to_dtype(DType::F16)) {
+            Ok(wt) => Ok(QLinear::Half {
+                wt,
+                bias: bias.clone(),
+                full: Linear::new(weight, bias),
+            }),
+            Err(_) => Self::new(weight, bias, precision),
+        }
+    }
+
     fn new(weight: Tensor, bias: Option<Tensor>, precision: Precision) -> CandleResult<Self> {
         match precision.ggml() {
             // Quantization needs the contracted dimension to be a multiple of
@@ -173,6 +218,26 @@ impl QLinear {
                     Some(b) => y.broadcast_add(b),
                     None => Ok(y),
                 }
+            }
+            QLinear::Half { wt, bias, full } => {
+                let dims = x.dims();
+                let rows: usize = dims[..dims.len() - 1].iter().product();
+                if rows != 1 {
+                    return full.forward(x);
+                }
+                let flat = x.reshape((1, dims[dims.len() - 1]))?;
+                let y = flat
+                    .to_dtype(DType::F16)?
+                    .matmul(wt)?
+                    .to_dtype(x.dtype())?;
+                let y = match bias {
+                    Some(b) => y.broadcast_add(b)?,
+                    None => y,
+                };
+                let mut out = dims.to_vec();
+                let n = out.len();
+                out[n - 1] = y.dim(1)?;
+                y.reshape(out)
             }
             QLinear::Int8 { q, bias, full } => {
                 // One row only; anything wider goes to the GEMM.
@@ -471,6 +536,39 @@ struct Attention {
 // weights — the precision they actually use — not int8. `Precision` has no
 // F16 variant today; that is the next experiment, not this one.
 impl Attention {
+    /// Decoder attention: projections fed ONE row per generated token take
+    /// f16 weights, matching the reference's precision. `kv_single_row`
+    /// distinguishes self-attention (all four project one token) from
+    /// cross-attention (k/v project the 1500-row encoder output once, a real
+    /// GEMM that belongs on candle's gemm).
+    fn load_decode(
+        n_state: usize,
+        n_head: usize,
+        vb: VarBuilder,
+        p: Precision,
+        kv_single_row: bool,
+    ) -> CandleResult<Self> {
+        let half = |name: &str, b: bool| {
+            QLinear::from_vb_gemv_f16(n_state, n_state, vb.pp(name), b, p)
+        };
+        Ok(Attention {
+            query: half("q_proj", true)?,
+            key: if kv_single_row {
+                half("k_proj", false)?
+            } else {
+                linear_no_bias(n_state, n_state, vb.pp("k_proj"), p)?
+            },
+            value: if kv_single_row {
+                half("v_proj", true)?
+            } else {
+                linear(n_state, n_state, vb.pp("v_proj"), p)?
+            },
+            out: half("out_proj", true)?,
+            n_head,
+            cache: None,
+        })
+    }
+
     fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
         Ok(Attention {
             query: linear(n_state, n_state, vb.pp("q_proj"), p)?,
@@ -834,9 +932,9 @@ struct Block {
 impl Block {
     fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
         Ok(Block {
-            attn: Attention::load(n_state, n_head, vb.pp("self_attn"), p)?,
+            attn: Attention::load_decode(n_state, n_head, vb.pp("self_attn"), p, true)?,
             attn_ln: layer_norm(n_state, vb.pp("self_attn_layer_norm"))?,
-            cross_attn: Attention::load(n_state, n_head, vb.pp("encoder_attn"), p)?,
+            cross_attn: Attention::load_decode(n_state, n_head, vb.pp("encoder_attn"), p, false)?,
             cross_attn_ln: layer_norm(n_state, vb.pp("encoder_attn_layer_norm"))?,
             mlp_ln: layer_norm(n_state, vb.pp("final_layer_norm"))?,
             // MEASURED AND REVERTED: int8 GEMV on the decoder MLP.
@@ -860,8 +958,8 @@ impl Block {
             // measured worse. `QLinear::Int8` and `FFAI_MLP_INT8` stay for the
             // re-test if the surrounding stages ever shrink enough to make
             // 2.6 % resolvable.
-            mlp1: linear(n_state, n_state * 4, vb.pp("fc1"), p)?,
-            mlp2: linear(n_state * 4, n_state, vb.pp("fc2"), p)?,
+            mlp1: QLinear::from_vb_gemv_f16(n_state, n_state * 4, vb.pp("fc1"), true, p)?,
+            mlp2: QLinear::from_vb_gemv_f16(n_state * 4, n_state, vb.pp("fc2"), true, p)?,
         })
     }
 
