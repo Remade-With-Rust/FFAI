@@ -42,6 +42,27 @@ const HD: usize = 64;
 /// reuse to exploit at all.
 const MIN_SEQ: usize = 256;
 
+/// Minimum cached keys before the decode-shape kernel takes over.
+///
+/// Decoder self-attention moves only ~138 KB per call but costs 274 us —
+/// **2 % of memory bandwidth, so ~98 % of it is framework dispatch**. The
+/// traffic argument that justifies the cross-attention threshold does not
+/// apply here; the case for fusing is collapsing op count, which pays at far
+/// smaller key counts. Tunable so the crossover is measured, not guessed.
+fn min_decode_keys() -> usize {
+    use std::sync::OnceLock;
+    static K: OnceLock<usize> = OnceLock::new();
+    *K.get_or_init(|| {
+        std::env::var("FFAI_DECODE_MIN_KEYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            // Measured, not guessed: at this floor the fused kernel wins
+            // 12/15 paired rounds (z=+2.3) on TOTAL transcription time,
+            // 1.104x, with the self-attention stage going 0.051 -> 0.034 s.
+            .unwrap_or(8)
+    })
+}
+
 #[cfg(target_arch = "x86_64")]
 fn have_avx2() -> bool {
     use std::sync::OnceLock;
@@ -91,7 +112,11 @@ pub fn attend(q: &Tensor, kt: &Tensor, v: &Tensor, masked: bool) -> CandleResult
         Ok((1, h, d, k)) if h == heads && d == HD => k,
         _ => return Ok(None),
     };
-    if v.dims4()? != (1, heads, keys, HD) || keys < MIN_SEQ {
+    if v.dims4()? != (1, heads, keys, HD) {
+        return Ok(None);
+    }
+    let floor = if qlen == 1 { min_decode_keys() } else { MIN_SEQ };
+    if keys < floor {
         return Ok(None);
     }
     // Two shapes, two kernels. The encoder tiles 64 query rows and holds a

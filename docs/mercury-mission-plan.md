@@ -1597,6 +1597,50 @@ our code. The defensible numbers are the single-instrument ones above.
 **Standing: quality PASS on two corpora, speed FAIL on both, "not claimable
 yet".**
 
+### 6.25 Fused decoder self-attention — and a dismissal that was nearly wrong
+
+After the previous three kernels, I wrote that decoder self-attention was
+"dispatch-bound... a different problem, and by the arithmetic above, one whose
+ceiling is likely under the noise floor too." That reasoned from the MLP
+result — where a 1.36x stage win vanished into the pipeline — and applied it to
+a stage with a completely different profile.
+
+| stage | rate | headroom |
+|---|---|---|
+| decoder MLP | 17 GB/s | ~1.4x — genuinely small |
+| decoder self-attn | **2 % of bandwidth** (274 us to move 138 KB vs a 5.5 us floor) | **~50x on paper** |
+
+**"Dispatch-bound" is not a synonym for "not worth attacking."** The M=1
+streaming kernel already existed and was declining this shape purely on a
+key-count threshold set at 256 — a number justified by the *cross-attention*
+traffic argument, which does not transfer: here the case for fusing is
+collapsing op count, and that pays at far smaller key counts.
+
+Dropping the floor to 8 keys:
+
+| | |
+|---|---|
+| paired A/B, total transcription time | **24/25, z = +4.6, 1.128x** |
+| self-attention stage | 0.051 -> 0.034 s |
+
+The first A/B gave z = +2.3 — over the bar but marginal, and this campaign has
+been burned by marginal signals; 25 rounds settled it at +4.6.
+
+#### Both gates, both corpora
+
+| | ours | whisper.cpp | verdict |
+|---|---:|---:|---|
+| test-clean WER | 7.77 % | 7.58 % | PASS |
+| test-clean xRT | 24.6x | 30.1x | gap 1.22x |
+| test-other WER | 16.83 % | 16.82 % | PASS (parity) |
+| test-other xRT | 19.1x | 23.8x | gap 1.25x |
+
+WER unchanged on both — expected, since this kernel is numerically exact
+against the three-op path rather than a quantization.
+
+**Standing: quality PASS on two corpora, speed FAIL on both, gap 1.22-1.25x
+(from 2.84x at the start of this campaign). Verdict "not claimable yet".**
+
 ## 7. Engineering discipline (inherited, non-negotiable)
 
 - **One brick per commit;** revert if the bench says it's not better.
