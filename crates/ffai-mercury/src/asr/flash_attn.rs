@@ -63,6 +63,13 @@ fn min_decode_keys() -> usize {
     })
 }
 
+/// `FFAI_PAR_HEADS=on` fans the decode-shape heads across cores.
+fn par_heads() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("FFAI_PAR_HEADS").as_deref() == Ok("on"))
+}
+
 #[cfg(target_arch = "x86_64")]
 fn have_f16c() -> bool {
     use std::sync::OnceLock;
@@ -270,18 +277,35 @@ impl CustomOp3 for FlashAttnOp {
                     )
                 };
                 let mut out = vec![0f32; heads * HD];
+                if par_heads() {
+                    let mut scratch = vec![0f32; heads * keys];
+                    out.par_chunks_mut(HD)
+                        .zip(scratch.par_chunks_mut(keys))
+                        .enumerate()
+                        .for_each(|(h, (o, sc))| unsafe {
+                            xattn_head_f16(
+                                &q[h * HD..(h + 1) * HD],
+                                &ktb[h * HD * keys..(h + 1) * HD * keys],
+                                &vb[h * keys * HD..(h + 1) * keys * HD],
+                                o,
+                                keys,
+                                sc,
+                            );
+                        });
+                } else {
                 let mut scratch = vec![0f32; keys];
                 for h in 0..heads {
                     unsafe {
                         xattn_head_f16(
                             &q[h * HD..(h + 1) * HD],
-                            &ktb[h * HD * keys..(h + 1) * HD * keys],
+                            &ktb[h * HD * keys..(h + 1) * keys * HD / HD * HD],
                             &vb[h * keys * HD..(h + 1) * keys * HD],
                             &mut out[h * HD..(h + 1) * HD],
                             keys,
                             &mut scratch,
                         );
                     }
+                }
                 }
                 return Ok((CpuStorage::F32(out), Shape::from_dims(&[1, heads, 1, HD])));
             }

@@ -129,6 +129,13 @@ fn dec_f16_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("FFAI_DEC_F16").as_deref() == Ok("off"))
 }
 
+/// `FFAI_MLP_INT8=on` puts the decoder MLP on int8 instead of f16.
+fn mlp_int8_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("FFAI_MLP_INT8").as_deref() == Ok("on"))
+}
+
 /// `FFAI_MLP_INT8=off` forces the decoder MLP back to the GEMM path.
 fn mlp_int8_disabled() -> bool {
     use std::sync::OnceLock;
@@ -162,7 +169,6 @@ impl QLinear {
     /// Note the case has since got WORSE, not better: int8 was measured
     /// against an f32 baseline (4x traffic advantage) and the baseline is now
     /// f16, so it would buy 2x for the same quality risk that already failed.
-    #[allow(dead_code)]
     pub fn from_vb_gemv(
         in_dim: usize,
         out_dim: usize,
@@ -1042,8 +1048,16 @@ impl Block {
             // measured worse. `QLinear::Int8` and `FFAI_MLP_INT8` stay for the
             // re-test if the surrounding stages ever shrink enough to make
             // 2.6 % resolvable.
-            mlp1: QLinear::from_vb_gemv_f16(n_state, n_state * 4, vb.pp("fc1"), true, p)?,
-            mlp2: QLinear::from_vb_gemv_f16(n_state * 4, n_state, vb.pp("fc2"), true, p)?,
+            mlp1: if mlp_int8_enabled() {
+                QLinear::from_vb_gemv(n_state, n_state * 4, vb.pp("fc1"), true, p)?
+            } else {
+                QLinear::from_vb_gemv_f16(n_state, n_state * 4, vb.pp("fc1"), true, p)?
+            },
+            mlp2: if mlp_int8_enabled() {
+                QLinear::from_vb_gemv(n_state * 4, n_state, vb.pp("fc2"), true, p)?
+            } else {
+                QLinear::from_vb_gemv_f16(n_state * 4, n_state, vb.pp("fc2"), true, p)?
+            },
         })
     }
 
