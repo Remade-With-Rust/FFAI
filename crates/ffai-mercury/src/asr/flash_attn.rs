@@ -166,7 +166,19 @@ impl CustomOp3 for FlashAttnOp {
 
         let mut out = vec![0f32; heads * qlen * HD];
         if qlen == 1 {
-            // Decode step: serial over 6 heads, each a streaming pass.
+            // Decode step: one streaming pass per head, heads SERIAL.
+            //
+            // MEASURED AND REVERTED: rayon across the 6 heads. The stage got
+            // faster — cross-attn 0.073 -> 0.064 s, 1.14x — and the pipeline
+            // got SLOWER: 0.355 -> 0.364 s total, 7/21 paired rounds,
+            // z = -1.5. Each head streams ~512 KB, so there is real work to
+            // split, but the fork-join contends with the rest of the pipeline
+            // and gives back more than the stage wins.
+            //
+            // This is the chain-level rule with a fresh data point: an
+            // optimization is applied to an op and paid for by its
+            // NEIGHBOURS. A stage-level win is not a result until the level
+            // above confirms it.
             let mut scratch = vec![0f32; keys];
             for h in 0..heads {
                 unsafe {
