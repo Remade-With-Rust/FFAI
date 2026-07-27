@@ -942,11 +942,52 @@ impl EncoderAttention {
         Ok(EncoderAttention { inner: Attention::load(n_state, n_head, vb, p)? })
     }
 
+    /// Inlined from `Attention::attend` so each step is timed IN CONTEXT.
+    ///
+    /// The stage carried a 16.6 ms residue — 20 % of itself — that standalone
+    /// probes could only guess at. Cross-attention already had this treatment;
+    /// the encoder did not, which is how the residue stayed unnamed while I
+    /// twice called the stage exhausted.
     pub fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
-        let q = self.inner.query.forward(x)?;
-        let k = self.inner.key.forward(x)?;
-        let v = self.inner.value.forward(x)?;
-        self.inner.attend(&q, &k, &v, None)
+        let p = super::profile::profile();
+        let (q, k, v) = super::profile::timed(&p.ea_proj, || -> CandleResult<_> {
+            Ok((
+                self.inner.query.forward(x)?,
+                self.inner.key.forward(x)?,
+                self.inner.value.forward(x)?,
+            ))
+        })?;
+
+        let scale = self.inner.scale(&q)?;
+        let (q, k, v) = super::profile::timed(&p.ea_prep, || -> CandleResult<_> {
+            // Whole scale on q — see `Attention::attend`.
+            Ok((
+                (self.inner.split_heads(&q)? * (scale * scale))?.contiguous()?,
+                self.inner.split_heads(&k)?.transpose(2, 3)?.contiguous()?,
+                self.inner.split_heads(&v)?.contiguous()?,
+            ))
+        })?;
+
+        // Merged path: the kernel writes (1, seq, heads*HD) directly, so the
+        // strided transpose in `ea_merge` never happens.
+        if let Some(merged) =
+            super::profile::timed(&p.ea_kernel, || super::flash_attn::attend_merged(&q, &k, &v))?
+        {
+            return super::profile::timed(&p.ea_merge, || self.inner.out.forward(&merged));
+        }
+        let wv = super::profile::timed(&p.ea_kernel, || -> CandleResult<Tensor> {
+            if let Some(wv) = super::flash_attn::attend(&q, &k, &v, false)? {
+                return Ok(wv);
+            }
+            let qk = q.matmul(&k)?;
+            candle_nn::ops::softmax_last_dim(&qk)?.matmul(&v)
+        })?;
+
+        super::profile::timed(&p.ea_merge, || {
+            wv.transpose(1, 2)?
+                .flatten_from(2)
+                .and_then(|wv| self.inner.out.forward(&wv))
+        })
     }
 }
 

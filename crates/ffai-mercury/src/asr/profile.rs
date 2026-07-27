@@ -77,6 +77,13 @@ pub struct Profile {
 
     // ---- cross-attention internals (in-context, not microbenched) ----
     pub xa_qproj: Stage,
+    /// Encoder-attention sub-ops. The stage had a 16.6 ms residue (20 % of
+    /// itself) that standalone probes could only guess at; these name it in
+    /// context, which is the measurement that wins when the two disagree.
+    pub ea_proj: Stage,
+    pub ea_prep: Stage,
+    pub ea_kernel: Stage,
+    pub ea_merge: Stage,
     pub xa_prep: Stage,
     pub xa_qk: Stage,
     pub xa_softmax: Stage,
@@ -104,6 +111,10 @@ impl Profile {
             enc_attn: Stage::new(),
             enc_mlp: Stage::new(),
             xa_qproj: Stage::new(),
+            ea_proj: Stage::new(),
+            ea_prep: Stage::new(),
+            ea_kernel: Stage::new(),
+            ea_merge: Stage::new(),
             xa_prep: Stage::new(),
             xa_qk: Stage::new(),
             xa_softmax: Stage::new(),
@@ -175,7 +186,11 @@ impl Profile {
             }
         }
 
-        let xa: [(&str, &Stage); 7] = [
+        let xa: [(&str, &Stage); 11] = [
+            ("  ea proj", &self.ea_proj),
+            ("  ea prep", &self.ea_prep),
+            ("  ea kernel", &self.ea_kernel),
+            ("  ea merge", &self.ea_merge),
             ("  q proj", &self.xa_qproj),
             ("  q prep", &self.xa_prep),
             ("  q@k", &self.xa_qk),

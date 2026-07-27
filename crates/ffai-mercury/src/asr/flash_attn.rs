@@ -103,6 +103,83 @@ pub fn serves(kt: &Tensor, v: &Tensor) -> bool {
     }
 }
 
+/// Encoder attention returning (1, seq, heads*HD) — already merged.
+///
+/// Saves the caller a `transpose(1,2) + flatten_from(2)`, which is a strided
+/// copy of 2.3 MB per layer measured at 13 ms in context across the encoder.
+pub fn attend_merged(q: &Tensor, kt: &Tensor, v: &Tensor) -> CandleResult<Option<Tensor>> {
+    let (b, heads, qlen, hd) = match q.dims4() {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    if b != 1 || hd != HD || !have_avx2() || !matches!(q.device(), Device::Cpu) {
+        return Ok(None);
+    }
+    if q.dtype() != DType::F32 || kt.dtype() != DType::F32 || v.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    let keys = match kt.dims4() {
+        Ok((1, h, d, k)) if h == heads && d == HD => k,
+        _ => return Ok(None),
+    };
+    if v.dims4()? != (1, heads, keys, HD) || qlen != keys || keys < MIN_SEQ {
+        return Ok(None);
+    }
+    Ok(Some(q.apply_op3(kt, v, MergedAttnOp { heads, seq: keys })?))
+}
+
+struct MergedAttnOp {
+    heads: usize,
+    seq: usize,
+}
+
+impl CustomOp3 for MergedAttnOp {
+    fn name(&self) -> &'static str {
+        "flash-attn-merged"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+        s3: &CpuStorage,
+        l3: &Layout,
+    ) -> CandleResult<(CpuStorage, Shape)> {
+        let (q, kt, v) = match (s1, s2, s3) {
+            (CpuStorage::F32(a), CpuStorage::F32(b), CpuStorage::F32(c)) => (a, b, c),
+            _ => ffai_core::candle::bail!("flash-attn-merged: f32 only"),
+        };
+        if !l1.is_contiguous() || !l2.is_contiguous() || !l3.is_contiguous() {
+            ffai_core::candle::bail!("flash-attn-merged: contiguous only")
+        }
+        let (heads, seq) = (self.heads, self.seq);
+        let n = heads * seq * HD;
+        let q = &q[l1.start_offset()..l1.start_offset() + n];
+        let kt = &kt[l2.start_offset()..l2.start_offset() + n];
+        let v = &v[l3.start_offset()..l3.start_offset() + n];
+
+        let width = heads * HD;
+        let mut out = vec![0f32; seq * width];
+        // Heads write disjoint COLUMN BANDS of the same rows, so the slices
+        // cannot be handed out by `par_chunks_mut`. Split by head over raw
+        // pointers instead; each head touches only `[.. + h*HD .. + h*HD+HD]`
+        // of every row, so no two threads ever write the same element.
+        let base = out.as_mut_ptr() as usize;
+        (0..heads).into_par_iter().for_each(|h| {
+            let per = seq * HD;
+            let r = h * per..(h + 1) * per;
+            // SAFETY: disjoint column bands, as argued above.
+            let slice = unsafe {
+                std::slice::from_raw_parts_mut((base as *mut f32).add(h * HD), seq * width - h * HD)
+            };
+            flash_head_strided(&q[r.clone()], &kt[r.clone()], &v[r], slice, seq, width);
+        });
+        Ok((CpuStorage::F32(out), Shape::from_dims(&[1, seq, width])))
+    }
+}
+
 /// Fused attention, or `Ok(None)` when this shape is not one the kernel serves.
 ///
 /// `q` is (1, heads, seq, 64); `kt` is (1, heads, 64, seq) — already
@@ -266,6 +343,26 @@ impl CustomOp3 for FlashAttnOp {
 
 #[cfg(target_arch = "x86_64")]
 fn flash_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], seq: usize) {
+    flash_head_strided(q, kt, v, out, seq, HD)
+}
+
+/// `out_stride` is the distance between consecutive query rows in `out`.
+///
+/// With `HD` the head writes a contiguous (seq, HD) block, which the caller
+/// then has to transpose into (seq, heads*HD) — measured at 13 ms in context
+/// across the encoder, 7x what a standalone probe suggested. With
+/// `heads * HD` the head writes straight into its own column band of the
+/// merged buffer and the transpose disappears: the kernel was already storing
+/// element by element, so a different offset costs nothing.
+#[cfg(target_arch = "x86_64")]
+fn flash_head_strided(
+    q: &[f32],
+    kt: &[f32],
+    v: &[f32],
+    out: &mut [f32],
+    seq: usize,
+    out_stride: usize,
+) {
     let mut scores = vec![0f32; BQ * BK];
     let mut acc = vec![0f32; BQ * HD];
     let mut run_max = vec![0f32; BQ];
@@ -299,7 +396,8 @@ fn flash_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], seq: usize) {
 
         for i in 0..rows {
             let inv = 1.0 / run_sum[i];
-            for (o, &a) in out[(q0 + i) * HD..(q0 + i + 1) * HD]
+            let base = (q0 + i) * out_stride;
+            for (o, &a) in out[base..base + HD]
                 .iter_mut()
                 .zip(&acc[i * HD..(i + 1) * HD])
             {
