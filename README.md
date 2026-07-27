@@ -36,8 +36,8 @@ One call compares any FFai engine against world-standard implementations on
 a pinned, hash-verified corpus:
 
 ```text
-ffai bench asr --corpus corpora/asr-smoke-v1.toml            # us vs the world
-ffai bench asr --corpus corpora/asr-smoke-v1.toml --baseline-only   # world only
+ffai bench asr --corpus corpora/librispeech-test-clean-v2.toml          # us vs the world
+ffai bench asr --corpus corpora/librispeech-test-other-v1.toml --baseline-only   # world only
 ```
 
 It runs our engine and every reference declared in `corpora/references.toml`
@@ -85,25 +85,45 @@ plugin is just an engine registered at runtime.
 
 ## Status
 
-**Mercury ASR transcribes today, in pure Rust.** `whisper-candle` runs
-OpenAI Whisper on candle with our own mel front-end (STFT + Slaney
-filterbank), tokenizer grammar, and decode loop. On a hash-pinned 11-clip
-LibriSpeech test-clean holdout, at matched greedy decoding on a CPU:
+**Mercury ASR transcribes today, in pure Rust, at WER parity with whisper.cpp
+and within ~1.12× of its throughput.** `whisper-candle` runs OpenAI Whisper on
+candle with our own mel front-end (STFT + Slaney filterbank), tokenizer
+grammar, decode loop, audio encoder, and four hand-written AVX2 kernels.
 
-| Implementation | WER % | ×realtime (warm) |
-|---|---:|---:|
-| **whisper-candle** tiny.en (Rust) | **3.00** | 7.0 |
-| openai-whisper tiny.en (Python) | 3.37 | 21.5 |
-| **whisper-candle-base** base.en (Rust) | **1.72** | 3.3 |
-| openai-whisper base.en (Python) | 3.12 | 13.5 |
+Measured on two hash-pinned **134-clip** LibriSpeech holdouts, matched greedy
+decoding, CPU only, tiny.en:
 
-Accuracy is at or better than the reference; **speed is roughly 4× behind**,
-which is the honest state of an unoptimized bring-up and the whole subject of
-M2. Note that 11 clips is a smoke corpus — enough to gate a milestone, not
-enough to publish a comparative accuracy claim. Full details, including the
-six methodology and bring-up defects found along the way, are in the
-[Mercury mission plan](docs/mercury-mission-plan.md); every number traces to a
-line in [`bench/ledger.jsonl`](bench/ledger.jsonl).
+| Corpus | Implementation | WER % | CER % | ×realtime (warm) |
+|---|---|---:|---:|---:|
+| test-clean | **whisper-candle** (Rust) | 7.77 | 3.25 | 32.1–32.8 |
+| test-clean | whisper.cpp (C++/ggml) | **7.58** | **2.87** | **35.7–36.6** |
+| test-other | **whisper-candle** (Rust) | **16.79** | **8.34** | 26.7 |
+| test-other | whisper.cpp (C++/ggml) | 16.82 | 8.41 | **29.5** |
+
+**Quality: PASS on both corpora** — ahead of whisper.cpp on the noisy half
+(16.79 % vs 16.82 %), 0.19 pp behind on the clean half, both inside the 5 %
+relative band. **Speed: FAIL at ~1.12×** (1.088–1.137× across repeat runs,
+corroborated by a 21-round paired test at z = −4.15). **Footprint: SKIP** —
+peak-memory instrumentation is not built, and a skipped gate is never a pass,
+so the four-gate verdict is **not claimable yet**.
+
+Worth knowing what the bar is: whisper.cpp is not a naive baseline. It runs
+**flash attention on by default**, an OpenBLAS backend, runtime ISA dispatch
+selecting an AVX-VNNI build, blocked weight repacking, and f16 weights.
+Toggling its own `-nfa` flag prices that fused attention at **1.65×** — and
+against its *unfused* encoder ours is **1.38× faster**.
+
+Two cautions this project keeps on the record. Single-run gap ratios are
+worthless here: across six ledger runs of the same code the test-clean gap
+reads 1.01×–1.29× purely on machine state, so progress is reported as our own
+throughput (22.9 → 32.8 ×RT) and the ratio only as standing. And the widest
+quality signal is not WER but **test-clean CER — 3.25 % vs 2.87 %, 13 %
+relative** — an unexplained deficit that does not appear on test-other.
+
+Full details, including every reverted experiment and the methodology defects
+found along the way, are in the [Mercury mission plan](docs/mercury-mission-plan.md)
+and [docs/whys/](docs/whys/); every number traces to a line in
+[`bench/ledger.jsonl`](bench/ledger.jsonl).
 
 TTS, OCR (Carmenta), and VLM (Argus) remain honest `stub`s — visible as such
 in `ffai engines`. See [ROADMAP.md](ROADMAP.md) for the build-out order.
