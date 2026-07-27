@@ -14,7 +14,6 @@
 pub mod adaptive;
 pub mod audio_encoder;
 pub mod decoder;
-/// Measured and reverted — see the module header.
 pub mod f16_gemv;
 pub mod flash_attn;
 pub mod mel;

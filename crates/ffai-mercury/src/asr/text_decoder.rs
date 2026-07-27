@@ -109,7 +109,7 @@ pub enum QLinear {
     /// stream, and failed the corpus quality gate at 8.39 % WER. f16 keeps
     /// ~3 decimal digits, which is why the reference reaches 7.58 % on it.
     Half {
-        wt: Tensor,
+        k: super::f16_gemv::F16Gemv,
         bias: Option<Tensor>,
         full: Linear,
     },
@@ -185,13 +185,13 @@ impl QLinear {
         if dec_f16_disabled() {
             return Self::new(weight, bias, precision);
         }
-        match weight.t().and_then(|w| w.contiguous()).and_then(|w| w.to_dtype(DType::F16)) {
-            Ok(wt) => Ok(QLinear::Half {
-                wt,
+        match super::f16_gemv::F16Gemv::new(&weight)? {
+            Some(k) => Ok(QLinear::Half {
+                k,
                 bias: bias.clone(),
                 full: Linear::new(weight, bias),
             }),
-            Err(_) => Self::new(weight, bias, precision),
+            None => Self::new(weight, bias, precision),
         }
     }
 
@@ -219,17 +219,14 @@ impl QLinear {
                     None => Ok(y),
                 }
             }
-            QLinear::Half { wt, bias, full } => {
+            QLinear::Half { k, bias, full } => {
                 let dims = x.dims();
                 let rows: usize = dims[..dims.len() - 1].iter().product();
                 if rows != 1 {
                     return full.forward(x);
                 }
                 let flat = x.reshape((1, dims[dims.len() - 1]))?;
-                let y = flat
-                    .to_dtype(DType::F16)?
-                    .matmul(wt)?
-                    .to_dtype(x.dtype())?;
+                let y = k.forward(&flat)?;
                 let y = match bias {
                     Some(b) => y.broadcast_add(b)?,
                     None => y,

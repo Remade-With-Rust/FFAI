@@ -43,8 +43,9 @@
 //! but its error compounds through the residual stream and it failed the
 //! corpus quality gate at 8.39 % WER. f16 keeps ~3 decimal digits.
 
-use ffai_core::candle::{DType, Device, Result as CandleResult, Tensor};
-use rayon::prelude::*;
+use ffai_core::candle::{
+    CpuStorage, CustomOp1, DType, Device, Layout, Result as CandleResult, Shape, Tensor,
+};
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -52,7 +53,9 @@ use std::arch::x86_64::*;
 /// f16 weights in (out, in) row-major — the layout `QLinear` already stores,
 /// so no transpose is needed.
 pub struct F16Gemv {
-    w: Vec<u16>,
+    // Arc because `apply_op1` requires a 'static op, so the op cannot borrow
+    // the weights. A refcount bump per call, not a copy.
+    w: std::sync::Arc<Vec<u16>>,
     out_dim: usize,
     in_dim: usize,
 }
@@ -90,23 +93,54 @@ impl F16Gemv {
             return Ok(None);
         }
         let half = weight.to_dtype(DType::F16)?.flatten_all()?.to_vec1::<half::f16>()?;
-        let w = half.into_iter().map(|h| h.to_bits()).collect();
+        let w = std::sync::Arc::new(half.into_iter().map(|h| h.to_bits()).collect::<Vec<u16>>());
         Ok(Some(F16Gemv { w, out_dim, in_dim }))
     }
 
     /// `x` is (1, in) f32 → (1, out) f32. The activation is never converted.
+    ///
+    /// Delivered as `CustomOp1` so the kernel reads candle's own storage —
+    /// the first version copied the activation out with `to_vec1()` and
+    /// rebuilt the result with `Tensor::from_vec` on every call.
+    ///
+    /// And SERIAL: at these shapes the per-call work is 4.6-18.4 us, while a
+    /// rayon fork-join costs ~10-20 us. Parallelism was costing more than the
+    /// arithmetic it split.
     pub fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
-        let xf: Vec<f32> = x.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?;
-        let mut out = vec![0f32; self.out_dim];
-        let (d, w) = (self.in_dim, &self.w);
-        out.par_chunks_mut(256).enumerate().for_each(|(ci, o)| {
-            let v0 = ci * 256;
-            for (i, slot) in o.iter_mut().enumerate() {
-                let row = (v0 + i) * d;
-                *slot = unsafe { dot_f16(w.as_ptr().add(row), &xf, d) };
-            }
-        });
-        Tensor::from_vec(out, (1, self.out_dim), x.device())
+        x.apply_op1(F16GemvOp {
+            w: self.w.clone(),
+            in_dim: self.in_dim,
+            out_dim: self.out_dim,
+        })
+    }
+}
+
+struct F16GemvOp {
+    w: std::sync::Arc<Vec<u16>>,
+    in_dim: usize,
+    out_dim: usize,
+}
+
+impl CustomOp1 for F16GemvOp {
+    fn name(&self) -> &'static str {
+        "f16-gemv"
+    }
+
+    fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> CandleResult<(CpuStorage, Shape)> {
+        let xf = match s {
+            CpuStorage::F32(v) => v,
+            _ => ffai_core::candle::bail!("f16-gemv: f32 activations only"),
+        };
+        if !l.is_contiguous() {
+            ffai_core::candle::bail!("f16-gemv: contiguous only")
+        }
+        let (d, o) = (self.in_dim, self.out_dim);
+        let x = &xf[l.start_offset()..l.start_offset() + d];
+        let mut out = vec![0f32; o];
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = unsafe { dot_f16(self.w.as_ptr().add(i * d), x, d) };
+        }
+        Ok((CpuStorage::F32(out), Shape::from_dims(&[1, o])))
     }
 }
 
