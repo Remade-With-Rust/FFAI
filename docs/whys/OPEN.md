@@ -27,6 +27,29 @@ not a measurement** — that distinction is why these are "unexamined", not
 | **parallel decode heads** | 1.14× stage, 0.975× pipeline | measured at f32 cache size | loses harder — the f16 cache **halved per-head work**, so fork-join is now relatively more expensive |
 | **f16 KV pipeline claim** | 13/21, z = +1.1, inconclusive | kept anyway, on stage win + halved memory | unresolvable at ~2.5 % without a quieter machine |
 
+## 1b. NT-form kernel — BUILT, MEASURED, REVERTED
+
+The micro said **1.95x** (33 -> 64 GFLOP/s on a 64x256 tile). Ported it in
+full; in context `ea_kernel` went **0.038 -> 0.054 s** — slower.
+
+The micro used a 64x256x64 tile, ~80 KB, entirely L1-resident. In context K is
+384 KB per head, 2.3 MB per layer. The access patterns then diverge:
+
+- **AXPY form** reads `kt[t*seq + k0+j]` — ONE contiguous stream of 256 keys.
+- **NT form** reads `k[(k0+j)*HD + d]` — FOUR rows 256 B apart, four streams.
+
+In L1 that costs nothing. At 2.3 MB it is 4x the cache pressure, and it eats
+the register-tiling win plus the transpose saving.
+
+So the ORIGINAL refutation was right, and the probe that "reversed" it was
+right too — about a tile that fits in L1, which is not the tile that runs.
+Both my refutation and my reversal were single-level measurements.
+
+**Caveat on this entry:** the revert rests on profile samples, not a paired
+A/B. Under the three-probe rule that is not sufficient to call it settled —
+it is sufficient to justify not shipping it. If revisited, block K so the
+four streams stay resident (smaller BK, or pack K into tiles at load).
+
 ## 2. Sized but not built: q/k/v fusion
 
 **Do not rebuild this without reading why it died.** The refutation's
