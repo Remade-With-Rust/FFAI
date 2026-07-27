@@ -426,6 +426,50 @@ struct Attention {
     cache: Option<(Tensor, Tensor)>,
 }
 
+// MEASURED AND REVERTED: int8 GEMV across every decoder projection.
+//
+// This came from the last open D6 question — *are both arms doing the same
+// work?* — and the answer was no. The reference ships **f16 weights** (its
+// tiny.en file is 77.7 MB; f32 would be 156 MB) while we run f32, so it reads
+// HALF the weight bytes we do on every generated token. On one identical
+// 10.44 s clip:
+//
+//   stage    ours          whisper.cpp
+//   mel      7.0 ms        4.4 ms       1.6x slower
+//   encode   160 ms        117 ms       1.37x slower
+//   decode   4.11 ms/tok   2.22 ms/tok  1.85x slower
+//   sample   12 ms         19.9 ms      we are 1.66x FASTER
+//
+// Decoder linear traffic: f32 33.0 MB/token, their f16 16.5, int8 8.3. A 2.0x
+// traffic ratio against a 1.85x measured decode gap — **the decode gap is the
+// precision, not the code.**
+//
+// int8 on every single-row projection delivered exactly what that predicts:
+// decoder 0.149 -> 0.125 s, total 0.316 -> 0.289 s, **19/21 paired rounds,
+// z = +3.7**. It also explains why the MLP alone measured 1.005x (inside
+// noise): the traffic saving only becomes resolvable when every projection
+// contributes.
+//
+// **It fails the quality gate.** Corpus WER:
+//
+//   test-clean   7.77 % -> 8.39 %   FAIL (band is 7.959 %)
+//   test-other  16.83 % -> 16.88 %  pass
+//
+// Unlike the vocabulary projection — where a quantization error either flips
+// an argmax or vanishes — error here feeds the residual stream and the next
+// layer's attention, so it COMPOUNDS. The argmax-flip instrument cannot see
+// this class at all: it measures the final projection, which is downstream of
+// the damage.
+//
+// Note the asymmetry, which is the second time this campaign has produced it
+// and is still mechanically unexplained: the HARDER corpus is the LESS
+// sensitive one (+0.05 pp vs +0.62 pp), matching the earlier flip-rate
+// finding (1.07 % on test-other vs 1.77 % on test-clean). I predicted the
+// opposite both times.
+//
+// The route to matching their traffic without their error profile is f16
+// weights — the precision they actually use — not int8. `Precision` has no
+// F16 variant today; that is the next experiment, not this one.
 impl Attention {
     fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
         Ok(Attention {
