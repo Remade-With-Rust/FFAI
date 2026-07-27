@@ -115,6 +115,13 @@ pub enum QLinear {
     },
 }
 
+/// `FFAI_KV_F16=on` opts the cross-attention cache into f16.
+fn kv_f16_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("FFAI_KV_F16").as_deref() == Ok("on"))
+}
+
 /// `FFAI_DEC_F16=off` forces the decoder's single-row projections back to f32.
 fn dec_f16_disabled() -> bool {
     use std::sync::OnceLock;
@@ -669,7 +676,29 @@ impl Attention {
                 // the fused kernel can serve this shape the choice is no
                 // longer a balance to calibrate, so stop calibrating it.
                 let kv_dtype = if super::flash_attn::serves(&k, &v) {
-                    DType::F32
+                    // f16 cache: the fused kernel widens it with F16C as it
+                    // streams and still accumulates in f32, so this halves the
+                    // 18.4 MB/token read without halving the arithmetic. That
+                    // is the distinction §6.16's failed f16 K/V chain missed —
+                    // it did f16 MATH, and the softmax between the matmuls ran
+                    // 82 % slower for it.
+                    // MEASURED AND REVERTED as the default: f16 halved the
+                    // cache read (18.4 -> 9.2 MB/token) and the stage did get
+                    // faster — cross-attn 0.064 -> 0.055 s, 1.16x — but the
+                    // pipeline did not resolve it: **13/21 paired rounds,
+                    // z = +1.1, ratio 1.003x**.
+                    //
+                    // The arithmetic says why, and it is the same shape as the
+                    // int8 MLP: cross-attention is ~18 % of the pipeline, so
+                    // 1.16x there is worth ~2.5 % overall — under this
+                    // harness's noise floor. Reverted because the delta sat
+                    // INSIDE the noise, not because it measured worse.
+                    //
+                    // The f16 kernel (`xattn_head_f16`) stays, reachable with
+                    // FFAI_KV_F16=on. It also halves cache memory, which will
+                    // matter once the footprint gate is instrumented — that is
+                    // a claim this campaign cannot make yet.
+                    if kv_f16_enabled() { DType::F16 } else { DType::F32 }
                 } else {
                     super::adaptive::attention_kv_dtype(
                         k.dim(1)?,
@@ -691,9 +720,10 @@ impl Attention {
             // scale^2 because k no longer carries its half — see the cache
             // build above. Match the cache's dtype; the query is one row, so
             // the conversion is free against the megabytes it unlocks.
-            (self.split_heads(&q)? * (scale * scale))?
-                .contiguous()?
-                .to_dtype(k.dtype())
+            // NOT k.dtype(): with an f16 cache the kernel wants q in f32 so
+            // the accumulation stays full precision.
+            let q = (self.split_heads(&q)? * (scale * scale))?.contiguous()?;
+            if super::flash_attn::serves(&k, &v) { Ok(q) } else { q.to_dtype(k.dtype()) }
         })?;
 
         // Inlined from attend_prepared so each step is separately timed in

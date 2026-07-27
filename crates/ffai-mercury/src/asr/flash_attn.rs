@@ -64,6 +64,18 @@ fn min_decode_keys() -> usize {
 }
 
 #[cfg(target_arch = "x86_64")]
+fn have_f16c() -> bool {
+    use std::sync::OnceLock;
+    static OK: OnceLock<bool> = OnceLock::new();
+    *OK.get_or_init(|| is_x86_feature_detected!("f16c"))
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn have_f16c() -> bool {
+    false
+}
+
+#[cfg(target_arch = "x86_64")]
 fn have_avx2() -> bool {
     use std::sync::OnceLock;
     static OK: OnceLock<bool> = OnceLock::new();
@@ -99,6 +111,15 @@ pub fn serves(kt: &Tensor, v: &Tensor) -> bool {
 /// point, so no scaling happens here.
 pub fn attend(q: &Tensor, kt: &Tensor, v: &Tensor, masked: bool) -> CandleResult<Option<Tensor>> {
     if masked || !have_avx2() || !matches!(q.device(), Device::Cpu) || q.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    // K/V may be f16 (decode shape only); q always stays f32 so the
+    // accumulation keeps full precision.
+    let kv_half = kt.dtype() == DType::F16;
+    if kv_half && (v.dtype() != DType::F16 || !have_f16c()) {
+        return Ok(None);
+    }
+    if !kv_half && (kt.dtype() != DType::F32 || v.dtype() != DType::F32) {
         return Ok(None);
     }
     let (b, heads, qlen, hd) = match q.dims4() {
@@ -152,6 +173,42 @@ impl CustomOp3 for FlashAttnOp {
         s3: &CpuStorage,
         l3: &Layout,
     ) -> CandleResult<(CpuStorage, Shape)> {
+        // f16 K/V is served at the decode shape only: the cache is read in
+        // full every token, so halving it pays there. The encoder shape reads
+        // its K/V once per pass and would gain nothing for the precision.
+        if let (CpuStorage::F32(q), CpuStorage::F16(kt), CpuStorage::F16(v)) = (s1, s2, s3) {
+            if self.qlen == 1 && l1.is_contiguous() && l2.is_contiguous() && l3.is_contiguous() {
+                let (heads, keys) = (self.heads, self.keys);
+                let q = &q[l1.start_offset()..l1.start_offset() + heads * HD];
+                let ktb: &[u16] = unsafe {
+                    std::slice::from_raw_parts(
+                        kt.as_ptr().add(l2.start_offset()) as *const u16,
+                        heads * HD * keys,
+                    )
+                };
+                let vb: &[u16] = unsafe {
+                    std::slice::from_raw_parts(
+                        v.as_ptr().add(l3.start_offset()) as *const u16,
+                        heads * keys * HD,
+                    )
+                };
+                let mut out = vec![0f32; heads * HD];
+                let mut scratch = vec![0f32; keys];
+                for h in 0..heads {
+                    unsafe {
+                        xattn_head_f16(
+                            &q[h * HD..(h + 1) * HD],
+                            &ktb[h * HD * keys..(h + 1) * HD * keys],
+                            &vb[h * keys * HD..(h + 1) * keys * HD],
+                            &mut out[h * HD..(h + 1) * HD],
+                            keys,
+                            &mut scratch,
+                        );
+                    }
+                }
+                return Ok((CpuStorage::F32(out), Shape::from_dims(&[1, heads, 1, HD])));
+            }
+        }
         let (q, kt, v) = match (s1, s2, s3) {
             (CpuStorage::F32(a), CpuStorage::F32(b), CpuStorage::F32(c)) => (a, b, c),
             _ => ffai_core::candle::bail!("flash-attn: f32 only"),
@@ -391,6 +448,85 @@ unsafe fn xattn_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], keys: us
     _mm256_storeu_ps(op.add(40), a5);
     _mm256_storeu_ps(op.add(48), a6);
     _mm256_storeu_ps(op.add(56), a7);
+}
+
+/// Decode-shape head with an **f16 K/V cache**, widened on the fly.
+///
+/// The cross-attention cache is read in full on every generated token —
+/// 18.4 MB per token at f32 across the stack, which after the decoder weights
+/// went to f16 is the largest remaining per-token read in decode. Storing it
+/// f16 halves that to 9.2 MB; `_mm256_cvtph_ps` widens 8 values per
+/// instruction as they stream, so the accumulation still happens in f32.
+///
+/// This is the same trick that took the f16 GEMV from 0.946x to 1.144x: pay
+/// f16's traffic, keep f32's arithmetic. NOT f16 arithmetic — an earlier
+/// attempt at an f16 K/V chain (§6.16) lost precisely because the softmax
+/// between the two matmuls ran 82 % slower in half precision.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma,f16c")]
+unsafe fn xattn_head_f16(
+    q: &[f32],
+    kt: &[u16],
+    v: &[u16],
+    out: &mut [f32],
+    keys: usize,
+    s: &mut [f32],
+) {
+    s[..keys].fill(0.0);
+    for t in 0..HD {
+        let qv = _mm256_set1_ps(*q.get_unchecked(t));
+        let krow = kt.as_ptr().add(t * keys);
+        let sp = s.as_mut_ptr();
+        let mut j = 0;
+        while j + 8 <= keys {
+            let kf = _mm256_cvtph_ps(_mm_loadu_si128(krow.add(j) as *const __m128i));
+            _mm256_storeu_ps(sp.add(j), _mm256_fmadd_ps(qv, kf, _mm256_loadu_ps(sp.add(j))));
+            j += 8;
+        }
+        let qs = *q.get_unchecked(t);
+        for jj in j..keys {
+            *s.get_unchecked_mut(jj) += qs * f32::from(half::f16::from_bits(*krow.add(jj)));
+        }
+    }
+
+    let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
+    let mut j = 0;
+    while j + 8 <= keys {
+        vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(s.as_ptr().add(j)));
+        j += 8;
+    }
+    let mut mx = if keys >= 8 { hmax256(vmax) } else { f32::NEG_INFINITY };
+    for &x in s[j..keys].iter() {
+        mx = mx.max(x);
+    }
+    let vmx = _mm256_set1_ps(mx);
+    let mut vsum = _mm256_setzero_ps();
+    let mut j = 0;
+    while j + 8 <= keys {
+        let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(s.as_ptr().add(j)), vmx));
+        _mm256_storeu_ps(s.as_mut_ptr().add(j), p);
+        vsum = _mm256_add_ps(vsum, p);
+        j += 8;
+    }
+    let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
+    for x in s[j..keys].iter_mut() {
+        *x = (*x - mx).exp();
+        sum += *x;
+    }
+    let inv = 1.0 / sum;
+
+    let mut a: [__m256; 8] = [_mm256_setzero_ps(); 8];
+    for jj in 0..keys {
+        let w = _mm256_set1_ps(*s.get_unchecked(jj) * inv);
+        let vp = v.as_ptr().add(jj * HD);
+        for (c, acc) in a.iter_mut().enumerate() {
+            let vf = _mm256_cvtph_ps(_mm_loadu_si128(vp.add(c * 8) as *const __m128i));
+            *acc = _mm256_fmadd_ps(w, vf, *acc);
+        }
+    }
+    for (c, acc) in a.iter().enumerate() {
+        _mm256_storeu_ps(out.as_mut_ptr().add(c * 8), *acc);
+    }
 }
 
 /// `S = Q_block @ K_block`, 4 query rows × 16 key columns held in registers

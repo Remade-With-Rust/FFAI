@@ -288,8 +288,16 @@ mod tests {
     use super::*;
 
     /// What matters is the ARGMAX — it is what selects a token.
+    ///
+    /// This asserted plain argmax equality against unseeded `randn` and was
+    /// FLAKY: on random logits the top two can be arbitrarily close, and int8
+    /// legitimately flips them. That is not a defect, so the test must not
+    /// claim it is one. What quantization must actually guarantee is that the
+    /// row it picks is within quantization error of the true best — a wrong
+    /// pick among near-ties is harmless, a wrong pick against a clear winner
+    /// is not.
     #[test]
-    fn argmax_agrees_with_f32() -> CandleResult<()> {
+    fn selects_a_row_within_quantization_error() -> CandleResult<()> {
         let dev = Device::Cpu;
         let (vocab, d) = (4096usize, 384usize);
         let w = Tensor::randn(0f32, 1., (vocab, d), &dev)?;
@@ -304,7 +312,13 @@ mod tests {
         let am = |v: &Vec<f32>| {
             v.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0
         };
-        assert_eq!(am(&ours), am(&want), "int8 selected a different token");
+        let (picked, best) = (am(&ours), am(&want));
+        let scale = want.iter().fold(0f32, |m, &v| m.max(v.abs()));
+        let shortfall = (want[best] - want[picked]) / scale;
+        assert!(
+            shortfall < 0.02,
+            "int8 picked row {picked}, which is {shortfall:.4} of full scale              below the true best (row {best}) — beyond quantization error"
+        );
         Ok(())
     }
 
