@@ -1534,6 +1534,69 @@ now derives the corpus name from the archive it actually extracted.
 **Standing: quality PASS on two corpora, speed FAIL on both, verdict "not
 claimable yet".**
 
+### 6.24 Fused cross-attention — and closing the kv-dtype weakness
+
+After the encoder kernel landed, cross-attention became the largest single
+item: 47 % of decode, ~24 % of total. The shipped `flash_attn` kernel declined
+it — that one tiles 64 query rows behind a 4x16 register block, and the
+decoder has exactly ONE query row. At M=1 there is no reuse to tile, so the
+right kernel is a streaming one: K read once as contiguous rows (AXPY into a
+score buffer, no horizontal reduction), vectorized softmax, V read once.
+
+**2.37x isolated, 41/41 paired rounds, z = +6.4**, exact to 4.5e-6.
+
+#### It delivered nothing in context, twice, for two different reasons
+
+**First: the hook was on a path the code does not take.** `forward_cross`
+*inlines* the three ops so each is separately timed, rather than calling
+`attend_prepared` where the hook sat. The profile's own sub-stage buckets
+(`q@k`, `softmax`, `w@v`) were the evidence — a stage with per-op buckets is
+not going through a shared helper — and I read past them.
+
+**Second: the cache was f16, and the kernel is f32.** Forcing the dtype
+exposed something that had been on the open-weakness list all campaign:
+
+| config | cross-attn | total |
+|---|---:|---:|
+| default (adaptive) | ~0.107 s | ~0.440 s |
+| forced f16 (kernel declines) | 0.083 s | 0.368 s |
+| forced f32 (kernel fires) | 0.075 s | 0.360 s |
+
+**The adaptive path was losing to BOTH of its own options.** Its margin sat at
+~1.0-1.17x against a 1.10 threshold, so it never settled — it kept
+re-deciding. f16's original 1.18x win (§6.16) was earned against a *three-op*
+path by halving traffic; the fused kernel reads K and V exactly once in f32
+and beats the f16 three-op outright. The choice stopped being a balance worth
+calibrating, so `flash_attn::serves()` now decides it: if the kernel can read
+this cache, keep it f32.
+
+**`attention_kv_dtype` instability is CLOSED** — not by better calibration but
+by removing the need to calibrate.
+
+#### Results, both corpora
+
+| | before | after |
+|---|---:|---:|
+| cross-attn (in process) | 0.107 s | **0.069 s** |
+| total (in process) | 0.440 s | **0.350 s** |
+| test-clean WER | 7.93 % | **7.77 %** |
+| test-clean xRT | 23.0x | **24.8x** |
+| test-other WER | 16.83 % | 16.83 % (parity, 16.82 ref) |
+| test-other xRT | 19.6x | **20.7x** |
+
+**Quality improved as a side effect.** The f16 KV cache had been costing
+precision on every cross-attention read; dropping it bought 0.16 pp back while
+also being faster. Speed fix and quality fix were the same change.
+
+**On the gap figure: do not read it.** test-clean's gap reads 1.40x here
+against 1.35x an hour earlier, while our own throughput went 23.0 -> 24.8x and
+nothing got slower. The reference clocked 34.7x this run against a 25.0-36.9x
+observed range. A ratio whose denominator wanders 37 % is not a measurement of
+our code. The defensible numbers are the single-instrument ones above.
+
+**Standing: quality PASS on two corpora, speed FAIL on both, "not claimable
+yet".**
+
 ## 7. Engineering discipline (inherited, non-negotiable)
 
 - **One brick per commit;** revert if the bench says it's not better.

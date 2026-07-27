@@ -442,14 +442,30 @@ impl Attention {
                 // that blocker is gone and the FULL CHAIN now wins 1.18x
                 // (31/41 paired rounds, z = +3.3). The link was never the
                 // problem; the chain was.
-                // Decided on the whole chain, not the q@k link — see
-                // adaptive::attention_kv_dtype.
-                let kv_dtype = super::adaptive::attention_kv_dtype(
-                    k.dim(1)?,
-                    k.dim(3)?,
-                    k.dim(2)?,
-                    k.device(),
-                );
+                // ...and with the fused f32 kernel that argument changes
+                // again. f16 bought its 1.18x by halving traffic through a
+                // three-op path; the fused kernel reads K and V exactly once
+                // in f32 and beats the f16 three-op path outright:
+                //
+                //   default (adaptive)      cross-attn 0.107 s   total 0.440
+                //   forced f16 (no kernel)  cross-attn 0.083 s   total 0.368
+                //   forced f32 (kernel)     cross-attn 0.075 s   total 0.360
+                //
+                // The adaptive path was ALSO losing to both of its own
+                // options — the known run-to-run flip (margin ~1.0-1.17x
+                // against a 1.10 threshold) meant it kept re-deciding. When
+                // the fused kernel can serve this shape the choice is no
+                // longer a balance to calibrate, so stop calibrating it.
+                let kv_dtype = if super::flash_attn::serves(&k, &v) {
+                    DType::F32
+                } else {
+                    super::adaptive::attention_kv_dtype(
+                        k.dim(1)?,
+                        k.dim(3)?,
+                        k.dim(2)?,
+                        k.device(),
+                    )
+                };
                 let (k, v) = if kv_dtype == DType::F16 {
                     (k.to_dtype(DType::F16)?, v.to_dtype(DType::F16)?)
                 } else {
@@ -468,6 +484,17 @@ impl Attention {
         // Inlined from attend_prepared so each step is separately timed in
         // context — the microbenchmark of these same ops disagreed with the
         // stage total by 79 %, and when they disagree the stage wins.
+        // Fused streaming kernel for the decode shape (one query row, many
+        // keys) — 2.37x the three ops below, 41/41, z=+6.4. Declines when the
+        // KV cache is f16, so the fallback stays live.
+        if let Some(ctx) = super::profile::timed(&p.xa_qk, || {
+            super::flash_attn::attend(&q, &k, &v, false)
+        })? {
+            let merged = super::profile::timed(&p.xa_merge, || {
+                ctx.transpose(1, 2)?.flatten_from(2)?.to_dtype(x.dtype())
+            })?;
+            return super::profile::timed(&p.xa_out, || self.out.forward(&merged));
+        }
         let qk = super::profile::timed(&p.xa_qk, || q.matmul(&k))?;
         let w = super::profile::timed(&p.xa_softmax, || fast_softmax(&qk))?;
         let ctx = super::profile::timed(&p.xa_wv, || w.matmul(&v))?;

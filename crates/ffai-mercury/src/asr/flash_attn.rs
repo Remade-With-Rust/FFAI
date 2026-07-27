@@ -54,6 +54,22 @@ fn have_avx2() -> bool {
     false
 }
 
+/// Whether the fused kernel can serve this K/V pair at the decode shape.
+///
+/// Callers use this to decide the cache dtype *before* building it: keeping
+/// the cache f32 is only right if the kernel will actually read it.
+pub fn serves(kt: &Tensor, v: &Tensor) -> bool {
+    if !have_avx2() || !matches!(kt.device(), Device::Cpu) {
+        return false;
+    }
+    match (kt.dims4(), v.dims4()) {
+        (Ok((1, h1, HD, keys)), Ok((1, h2, k2, HD))) => {
+            h1 == h2 && keys == k2 && keys >= MIN_SEQ
+        }
+        _ => false,
+    }
+}
+
 /// Fused attention, or `Ok(None)` when this shape is not one the kernel serves.
 ///
 /// `q` is (1, heads, seq, 64); `kt` is (1, heads, 64, seq) — already
@@ -64,28 +80,37 @@ pub fn attend(q: &Tensor, kt: &Tensor, v: &Tensor, masked: bool) -> CandleResult
     if masked || !have_avx2() || !matches!(q.device(), Device::Cpu) || q.dtype() != DType::F32 {
         return Ok(None);
     }
-    let (b, heads, seq, hd) = match q.dims4() {
+    let (b, heads, qlen, hd) = match q.dims4() {
         Ok(d) => d,
         Err(_) => return Ok(None),
     };
-    if b != 1 || hd != HD || seq < MIN_SEQ {
+    if b != 1 || hd != HD {
         return Ok(None);
     }
-    // kt must be (1, heads, hd, seq) and v (1, heads, seq, hd).
-    if kt.dims4()? != (1, heads, hd, seq) || v.dims4()? != (1, heads, seq, hd) {
+    let keys = match kt.dims4() {
+        Ok((1, h, d, k)) if h == heads && d == HD => k,
+        _ => return Ok(None),
+    };
+    if v.dims4()? != (1, heads, keys, HD) || keys < MIN_SEQ {
         return Ok(None);
+    }
+    // Two shapes, two kernels. The encoder tiles 64 query rows and holds a
+    // 4x16 register block; the decoder has ONE query row, so there is no reuse
+    // to tile and the right kernel is a streaming one instead.
+    match qlen {
+        1 => {}
+        n if n == keys => {}
+        _ => return Ok(None),
     }
 
-    // Marshalling the three operands through `to_vec1()` cost ~12 ms per
-    // layer — more than the kernel itself. `CustomOp3` hands back the CPU
-    // storage directly, so the kernel reads candle's own buffers.
-    let out = q.apply_op3(kt, v, FlashAttnOp { heads, seq })?;
+    let out = q.apply_op3(kt, v, FlashAttnOp { heads, qlen, keys })?;
     Ok(Some(out))
 }
 
 struct FlashAttnOp {
     heads: usize,
-    seq: usize,
+    qlen: usize,
+    keys: usize,
 }
 
 impl CustomOp3 for FlashAttnOp {
@@ -109,22 +134,38 @@ impl CustomOp3 for FlashAttnOp {
         if !l1.is_contiguous() || !l2.is_contiguous() || !l3.is_contiguous() {
             ffai_core::candle::bail!("flash-attn: contiguous operands only")
         }
-        let n = self.heads * self.seq * HD;
-        let q = &q[l1.start_offset()..l1.start_offset() + n];
-        let kt = &kt[l2.start_offset()..l2.start_offset() + n];
-        let v = &v[l3.start_offset()..l3.start_offset() + n];
+        let (heads, qlen, keys) = (self.heads, self.qlen, self.keys);
+        let q = &q[l1.start_offset()..l1.start_offset() + heads * qlen * HD];
+        let kt = &kt[l2.start_offset()..l2.start_offset() + heads * HD * keys];
+        let v = &v[l3.start_offset()..l3.start_offset() + heads * keys * HD];
 
-        let mut out = vec![0f32; n];
-        let per_head = self.seq * HD;
-        let seq = self.seq;
-        out.par_chunks_mut(per_head).enumerate().for_each(|(h, o)| {
-            let r = h * per_head..(h + 1) * per_head;
-            flash_head(&q[r.clone()], &kt[r.clone()], &v[r], o, seq);
-        });
+        let mut out = vec![0f32; heads * qlen * HD];
+        if qlen == 1 {
+            // Decode step: serial over 6 heads, each a streaming pass.
+            let mut scratch = vec![0f32; keys];
+            for h in 0..heads {
+                unsafe {
+                    xattn_head(
+                        &q[h * HD..(h + 1) * HD],
+                        &kt[h * HD * keys..(h + 1) * HD * keys],
+                        &v[h * keys * HD..(h + 1) * keys * HD],
+                        &mut out[h * HD..(h + 1) * HD],
+                        keys,
+                        &mut scratch,
+                    );
+                }
+            }
+        } else {
+            let per_head = keys * HD;
+            out.par_chunks_mut(per_head).enumerate().for_each(|(h, o)| {
+                let r = h * per_head..(h + 1) * per_head;
+                flash_head(&q[r.clone()], &kt[r.clone()], &v[r], o, keys);
+            });
+        }
 
         Ok((
             CpuStorage::F32(out),
-            Shape::from_dims(&[1, self.heads, seq, HD]),
+            Shape::from_dims(&[1, heads, qlen, HD]),
         ))
     }
 }
@@ -172,6 +213,11 @@ fn flash_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], seq: usize) {
             }
         }
     }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn xattn_head(_q: &[f32], _k: &[f32], _v: &[f32], _o: &mut [f32], _n: usize, _s: &mut [f32]) {
+    unreachable!("guarded by have_avx2()")
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -225,6 +271,89 @@ unsafe fn hsum256(v: __m256) -> f32 {
     let s = _mm_add_ps(s, _mm_movehl_ps(s, s));
     let s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
     _mm_cvtss_f32(s)
+}
+
+/// One head. `q` is HD floats (already scaled); `kt` is (HD, keys) head-dim
+/// major; `v` is (keys, HD). `out` is HD floats.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn xattn_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], keys: usize, s: &mut [f32]) {
+    // ---- scores = q @ K, contraction outermost so the inner loop is an AXPY
+    // over keys with no horizontal reduction ----
+    s[..keys].fill(0.0);
+    for t in 0..HD {
+        let qv = _mm256_set1_ps(*q.get_unchecked(t));
+        let krow = kt.as_ptr().add(t * keys);
+        let sp = s.as_mut_ptr();
+        let mut j = 0;
+        while j + 8 <= keys {
+            let acc = _mm256_fmadd_ps(qv, _mm256_loadu_ps(krow.add(j)), _mm256_loadu_ps(sp.add(j)));
+            _mm256_storeu_ps(sp.add(j), acc);
+            j += 8;
+        }
+        let qs = *q.get_unchecked(t);
+        for jj in j..keys {
+            *s.get_unchecked_mut(jj) += qs * *krow.add(jj);
+        }
+    }
+
+    // ---- softmax over the whole key axis ----
+    let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
+    let mut j = 0;
+    while j + 8 <= keys {
+        vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(s.as_ptr().add(j)));
+        j += 8;
+    }
+    let mut mx = if keys >= 8 { hmax256(vmax) } else { f32::NEG_INFINITY };
+    for &x in s[j..keys].iter() {
+        mx = mx.max(x);
+    }
+    let vmx = _mm256_set1_ps(mx);
+    let mut vsum = _mm256_setzero_ps();
+    let mut j = 0;
+    while j + 8 <= keys {
+        let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(s.as_ptr().add(j)), vmx));
+        _mm256_storeu_ps(s.as_mut_ptr().add(j), p);
+        vsum = _mm256_add_ps(vsum, p);
+        j += 8;
+    }
+    let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
+    for x in s[j..keys].iter_mut() {
+        *x = (*x - mx).exp();
+        sum += *x;
+    }
+    let inv = 1.0 / sum;
+
+    // ---- out = weights @ V, AXPY over HD (8 vectors), V read once ----
+    let mut a0 = _mm256_setzero_ps();
+    let mut a1 = _mm256_setzero_ps();
+    let mut a2 = _mm256_setzero_ps();
+    let mut a3 = _mm256_setzero_ps();
+    let mut a4 = _mm256_setzero_ps();
+    let mut a5 = _mm256_setzero_ps();
+    let mut a6 = _mm256_setzero_ps();
+    let mut a7 = _mm256_setzero_ps();
+    for jj in 0..keys {
+        let w = _mm256_set1_ps(*s.get_unchecked(jj) * inv);
+        let vp = v.as_ptr().add(jj * HD);
+        a0 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp), a0);
+        a1 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(8)), a1);
+        a2 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(16)), a2);
+        a3 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(24)), a3);
+        a4 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(32)), a4);
+        a5 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(40)), a5);
+        a6 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(48)), a6);
+        a7 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(56)), a7);
+    }
+    let op = out.as_mut_ptr();
+    _mm256_storeu_ps(op, a0);
+    _mm256_storeu_ps(op.add(8), a1);
+    _mm256_storeu_ps(op.add(16), a2);
+    _mm256_storeu_ps(op.add(24), a3);
+    _mm256_storeu_ps(op.add(32), a4);
+    _mm256_storeu_ps(op.add(40), a5);
+    _mm256_storeu_ps(op.add(48), a6);
+    _mm256_storeu_ps(op.add(56), a7);
 }
 
 /// `S = Q_block @ K_block`, 4 query rows × 16 key columns held in registers
