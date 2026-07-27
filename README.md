@@ -1,4 +1,4 @@
-# FFai
+# FFAI
 
 **The AI media toolkit, remade with rust.** OCR, speech recognition, speech
 synthesis, and vision-language understanding in one pure-Rust toolkit — built
