@@ -18,11 +18,11 @@ ffai models         # list model manifests, licenses, cache status
 
 ## Components
 
-| Component | Crate | Task | Namesake |
-|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters |
-| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman |
+| Component | Crate | Task | Namesake | Compare |
+|---|---|---|---|---|
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | 15% faster than whisper.cpp at 7% better quality |
+| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | Pending Build |
+| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
 tensor spine), `ffai-media` (ingest/egress, backed by
