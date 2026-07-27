@@ -20,7 +20,7 @@ ffai models         # list model manifests, licenses, cache status
 
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | 15% faster than whisper.cpp at 7% better quality |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live: WER 16.79 % vs whisper.cpp's 16.82 % on test-other, 7.77 % vs 7.58 % on test-clean; ~1.12× behind on speed ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | Pending Build |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -85,8 +85,9 @@ plugin is just an engine registered at runtime.
 
 ## Status
 
-**Mercury ASR transcribes today, in pure Rust, at WER parity with whisper.cpp
-and within ~1.12× of its throughput.** `whisper-candle` runs OpenAI Whisper on
+**Mercury ASR transcribes today, in pure Rust, within ~1.12× of whisper.cpp's
+throughput — ahead of it on noisy speech, 0.19 pp behind on clean.**
+`whisper-candle` runs OpenAI Whisper on
 candle with our own mel front-end (STFT + Slaney filterbank), tokenizer
 grammar, decode loop, audio encoder, and four hand-written AVX2 kernels.
 
