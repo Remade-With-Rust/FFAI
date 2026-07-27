@@ -116,31 +116,27 @@ pub enum QLinear {
 }
 
 /// `FFAI_KV_F16=off` keeps the cross-attention cache at f32 — the A/B arm.
+#[inline]
 fn kv_f16_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| std::env::var("FFAI_KV_F16").as_deref() == Ok("off"))
+    super::knobs::KV_F16_DISABLED.get()
 }
 
 /// `FFAI_DEC_F16=off` forces the decoder's single-row projections back to f32.
+#[inline]
 fn dec_f16_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| std::env::var("FFAI_DEC_F16").as_deref() == Ok("off"))
+    super::knobs::DEC_F16_DISABLED.get()
 }
 
 /// `FFAI_MLP_INT8=on` puts the decoder MLP on int8 instead of f16.
+#[inline]
 fn mlp_int8_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("FFAI_MLP_INT8").as_deref() == Ok("on"))
+    super::knobs::MLP_INT8_ENABLED.get()
 }
 
 /// `FFAI_MLP_INT8=off` forces the decoder MLP back to the GEMM path.
+#[inline]
 fn mlp_int8_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| std::env::var("FFAI_MLP_INT8").as_deref() == Ok("off"))
+    super::knobs::MLP_INT8_DISABLED.get()
 }
 
 impl QLinear {
@@ -948,6 +944,30 @@ pub fn matmul_padded(x: &Tensor, w: &Tensor, rows: usize) -> CandleResult<Tensor
 /// K/V cache, because each call is one fresh pass over a whole window.
 pub struct EncoderAttention {
     inner: Attention,
+    /// K's projection weight, pre-scaled, applied TRANSPOSED. Two bricks in
+    /// one tensor (priced in `examples/enc_prep_ceiling.rs`):
+    ///
+    /// 1. **The layout.** `Linear` stores its weight as `(out, in)` and
+    ///    computes `x @ Wᵀ`, giving k as `(seq, d)`. The fused kernel reads
+    ///    `(heads, HD, seq)`, so every layer paid `transpose(2,3).contiguous()`
+    ///    — a strided gather over 2.3 MB, measured at 1.33 ms/layer. But
+    ///    `kᵀ = W @ xᵀ` directly, `x.t()` is a view candle's matmul accepts
+    ///    without materializing, and the result reshapes into the kernel's
+    ///    layout for free: **0.951 ms against 2.265 ms for projection +
+    ///    gather.** The transposed projection is cheaper than the plain one.
+    ///
+    ///    `OPEN.md` §2 refuted fusing ALL of q/k/v into one transposed
+    ///    projection — correctly, because the kernel wants q as `(seq, HD)`,
+    ///    where `q[i*64 + t]` walks 4 contiguous cache lines. That refutation
+    ///    does not reach K, which is the one tensor the kernel genuinely wants
+    ///    transposed, and K alone was never measured.
+    ///
+    /// 2. **The scale.** Attention's `head_dim^-0.5` depends on nothing but
+    ///    the model geometry, yet rode a per-call multiply over 2.3 MB of q.
+    ///    Since k is only ever consumed by `q@k`, scaling k's WEIGHT at load
+    ///    is equivalent and free — the first question
+    ///    `codec-eliminate-redundancy` says to ask of a hot loop.
+    key_wt_scaled: Tensor,
 }
 
 impl EncoderAttention {
@@ -957,7 +977,14 @@ impl EncoderAttention {
         vb: VarBuilder,
         p: Precision,
     ) -> CandleResult<Self> {
-        Ok(EncoderAttention { inner: Attention::load(n_state, n_head, vb, p)? })
+        let inner = Attention::load(n_state, n_head, vb.clone(), p)?;
+        // Whisper's k projection carries no bias (see `load_decode`), so the
+        // fold is a plain scalar multiply with nothing else to carry.
+        let head_dim = n_state / n_head;
+        let scale = (head_dim as f64).powf(-0.25);
+        let key_w = vb.pp("k_proj").get((n_state, n_state), "weight")?;
+        let key_wt_scaled = (key_w * (scale * scale))?.contiguous()?;
+        Ok(EncoderAttention { inner, key_wt_scaled })
     }
 
     /// Inlined from `Attention::attend` so each step is timed IN CONTEXT.
@@ -968,20 +995,42 @@ impl EncoderAttention {
     /// twice called the stage exhausted.
     pub fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
         let p = super::profile::profile();
-        let (q, k, v) = super::profile::timed(&p.ea_proj, || -> CandleResult<_> {
+        let (seq, d) = (x.dim(1)?, x.dim(2)?);
+        let heads = self.inner.n_head;
+        let hd = d / heads;
+        let kt_on = !super::knobs::ENC_KT_DISABLED.get();
+        let (q, kt, v) = super::profile::timed(&p.ea_proj, || -> CandleResult<_> {
             Ok((
                 self.inner.query.forward(x)?,
-                self.inner.key.forward(x)?,
+                // k, already transposed and already scaled — see the field's
+                // documentation. `x.t()` is a view; candle's matmul takes it
+                // strided rather than materializing it.
+                if kt_on {
+                    self.key_wt_scaled.matmul(&x.reshape((seq, d))?.t()?)?
+                } else {
+                    self.inner.key.forward(x)?
+                },
                 self.inner.value.forward(x)?,
             ))
         })?;
 
         let scale = self.inner.scale(&q)?;
         let (q, k, v) = super::profile::timed(&p.ea_prep, || -> CandleResult<_> {
-            // Whole scale on q — see `Attention::attend`.
             Ok((
-                (self.inner.split_heads(&q)? * (scale * scale))?.contiguous()?,
-                self.inner.split_heads(&k)?.transpose(2, 3)?.contiguous()?,
+                if kt_on {
+                    self.inner.split_heads(&q)?.contiguous()?
+                } else {
+                    // Whole scale on q — see `Attention::attend`.
+                    (self.inner.split_heads(&q)? * (scale * scale))?.contiguous()?
+                },
+                if kt_on {
+                    // A contiguous reshape into exactly the layout the kernel
+                    // reads: element (h, j, s) is k[s, h*hd + j], which is what
+                    // `split_heads(k).transpose(2,3)` produced by gathering.
+                    kt.reshape((1, heads, hd, seq))?
+                } else {
+                    self.inner.split_heads(&kt)?.transpose(2, 3)?.contiguous()?
+                },
                 self.inner.split_heads(&v)?.contiguous()?,
             ))
         })?;

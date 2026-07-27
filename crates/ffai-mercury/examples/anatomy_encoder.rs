@@ -61,15 +61,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("shapes: seq={seq} d_model={d} heads={heads} head_dim={head_dim} ff={ff} layers={layers}");
 
     // ---- machine ceilings, measured ----
+    //
+    // BOTH axes of this roofline were wrong, and the table said so for months
+    // without anyone acting on it: ops printed at "220 % of memory peak" and
+    // "158 % of memory peak", which are arithmetically impossible.
+    //
+    // * The MEMORY axis was calibrated with candle's `Tensor::copy`, which is
+    //   SINGLE-THREADED. It reports ~9 GB/s on this box while ggml's own
+    //   `whisper-bench -w 1` measures **30.8 GB/s** across 11-24 threads. Every
+    //   "% of memory peak" was therefore ~3.4x too high, and the ops that
+    //   exceeded 100 % were the instrument announcing the error.
+    // * The COMPUTE axis was a 2048^3 SQUARE matmul. Attention contracts over
+    //   K=64, where candle reaches a fraction of that. Scoring an attention
+    //   kernel against the square peak invented 4.4x of headroom once already
+    //   (mission plan 6.20); it must be scored at its own contraction depth.
     let big = Tensor::randn(0f32, 1., (2048, 2048), &dev)?;
     let mm_secs = best_of(3, || big.matmul(&big).expect("matmul"));
     let peak_gflops = 2.0 * 2048f64.powi(3) / mm_secs / 1e9;
+
+    // Reference rates at the awkward attention shapes, measured AT THE SAME
+    // BATCH the ops use. A single-head probe is not the ceiling for a 6-head
+    // batched matmul — the batched call amortizes better and legitimately
+    // beats it, which is how the first version of this fix printed "112 % of
+    // peak". These are context, not a score: for a candle matmul, candle's own
+    // rate at the same shape is circular. What they show is how far the SHAPE
+    // sits below the hardware, which is the number 6.20 got wrong.
+    let bq = Tensor::randn(0f32, 1., (1, heads, seq, head_dim), &dev)?.contiguous()?;
+    let bk = Tensor::randn(0f32, 1., (1, heads, head_dim, seq), &dev)?.contiguous()?;
+    let k64_secs = best_of(3, || bq.matmul(&bk).expect("k64"));
+    let peak_k64 = 2.0 * (heads * seq * seq * head_dim) as f64 / k64_secs / 1e9;
+
+    // Memory. Calibrate with something other than the system under test:
+    // ggml's `whisper-bench -w 1` measures this box at ~30.8 GB/s, so a probe
+    // reporting double that is measuring cache, not memory. The buffers below
+    // are 128 MB each — far past this CPU's ~30 MB L3 — and the statistic is
+    // the MEDIAN, because min-of-N rewards the run that got the luckiest
+    // residency.
     let buf = Tensor::randn(0f32, 1., (4096, 4096), &dev)?;
     let copy_secs = best_of(5, || buf.copy().expect("copy"));
-    let peak_gbs = 2.0 * 4096.0 * 4096.0 * F32 / copy_secs / 1e9;
+    let serial_gbs = 2.0 * 4096.0 * 4096.0 * F32 / copy_secs / 1e9;
+    let n = 32 * 1024 * 1024; // 128 MB per buffer
+    let src = vec![1f32; n];
+    let mut dst = vec![0f32; n];
+    let mut samples: Vec<f64> = (0..5)
+        .map(|_| {
+            use rayon::prelude::*;
+            let t0 = Instant::now();
+            dst.par_chunks_mut(65536)
+                .zip(src.par_chunks(65536))
+                .for_each(|(d, s)| d.copy_from_slice(s));
+            std::hint::black_box(&dst);
+            t0.elapsed().as_secs_f64()
+        })
+        .collect();
+    samples.sort_by(f64::total_cmp);
+    let peak_gbs = 2.0 * n as f64 * F32 / samples[2] / 1e9;
     println!(
-        "measured ceilings: compute {peak_gflops:.0} GFLOP/s (2048^3 matmul) · \
-         memory {peak_gbs:.0} GB/s (16M copy)\n"
+        "measured ceilings:\n  compute  {peak_gflops:.0} GFLOP/s (2048^3 square, the hardware limit)  \
+         ·  {peak_k64:.0} GFLOP/s (batched K=64 — what the attention SHAPE allows)\n  \
+         memory   {peak_gbs:.1} GB/s (threaded memcpy, 128 MB buffers, median)  \
+         ·  {serial_gbs:.1} GB/s (candle serial copy)\n  \
+         cross-check: ggml `whisper-bench -w 1` reports 30.8 GB/s on this box\n"
     );
 
     let x = Tensor::randn(0f32, 1., (1, seq, d), &dev)?;
@@ -229,13 +281,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
     println!("RANKED BY TOTAL COST PER ENCODER PASS");
-    for (total, name, gflops, gbs, bound) in ranked.iter().take(6) {
-        let headroom = if *bound == "CPU" {
-            format!("{:.0}% of compute peak", gflops / peak_gflops * 100.0)
+    println!(
+        "(% is against the HARDWARE peak. For attention the shape itself caps\n \
+         the reachable rate at {peak_k64:.0} GFLOP/s — {:.0}% of hardware — so a\n \
+         shortfall there is shape, not implementation. The question worth asking\n \
+         of these rows is whether a DIFFERENT kernel beats candle at this exact\n \
+         shape, which is what the fused kernel answers.)",
+        peak_k64 / peak_gflops * 100.0
+    );
+    for (total, name, gflops, gbs, bound) in ranked.iter().take(8) {
+        // Pick the ceiling this op could actually reach. Scoring a K=64
+        // contraction against a 2048^3 square matmul is how 4.4x of imaginary
+        // headroom got into the mission plan once already.
+        let pct = if *bound == "CPU" {
+            gflops / peak_gflops * 100.0
         } else {
-            format!("{:.0}% of memory peak", gbs / peak_gbs * 100.0)
+            gbs / peak_gbs * 100.0
         };
-        println!("  {total:>7.2} ms  {name:<22} {bound}-bound, {headroom}");
+        let of = if *bound == "CPU" { "hardware peak" } else { "memory peak" };
+        // An impossible percentage means the ceiling is wrong, not that the op
+        // is magic. Say so loudly instead of printing it as a curiosity.
+        let flag = if pct > 100.0 { "  <<< IMPOSSIBLE — ceiling is miscalibrated" } else { "" };
+        println!("  {total:>7.2} ms  {name:<22} {bound}-bound, {pct:.0}% of {of}{flag}");
     }
     Ok(())
 }

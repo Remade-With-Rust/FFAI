@@ -68,16 +68,9 @@ struct Shared {
 /// Weights per scale. Overridable with `FFAI_VOCAB_BLK` so the block-vs-row
 /// tradeoff can be measured rather than argued: setting it to `d` reproduces a
 /// single per-row scale exactly.
+#[inline]
 fn blk() -> usize {
-    use std::sync::OnceLock;
-    static B: OnceLock<usize> = OnceLock::new();
-    *B.get_or_init(|| {
-        std::env::var("FFAI_VOCAB_BLK")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&b: &usize| b >= 32 && b % 32 == 0)
-            .unwrap_or(32)
-    })
+    super::knobs::VOCAB_BLK.get_usize()
 }
 
 impl Int8Vocab {

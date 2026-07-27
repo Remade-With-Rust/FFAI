@@ -49,25 +49,15 @@ const MIN_SEQ: usize = 256;
 /// traffic argument that justifies the cross-attention threshold does not
 /// apply here; the case for fusing is collapsing op count, which pays at far
 /// smaller key counts. Tunable so the crossover is measured, not guessed.
+#[inline]
 fn min_decode_keys() -> usize {
-    use std::sync::OnceLock;
-    static K: OnceLock<usize> = OnceLock::new();
-    *K.get_or_init(|| {
-        std::env::var("FFAI_DECODE_MIN_KEYS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            // Measured, not guessed: at this floor the fused kernel wins
-            // 12/15 paired rounds (z=+2.3) on TOTAL transcription time,
-            // 1.104x, with the self-attention stage going 0.051 -> 0.034 s.
-            .unwrap_or(8)
-    })
+    super::knobs::DECODE_MIN_KEYS.get_usize()
 }
 
 /// `FFAI_PAR_HEADS=on` fans the decode-shape heads across cores.
+#[inline]
 fn par_heads() -> bool {
-    use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("FFAI_PAR_HEADS").as_deref() == Ok("on"))
+    super::knobs::PAR_HEADS.get()
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -104,7 +94,22 @@ pub fn serves(kt: &Tensor, v: &Tensor) -> bool {
     }
     match (kt.dims4(), v.dims4()) {
         (Ok((1, h1, HD, keys)), Ok((1, h2, k2, HD))) => {
-            h1 == h2 && keys == k2 && keys >= MIN_SEQ
+            // The floor must be the one the CONSUMER will apply, or this
+            // predicate promises a kernel that then declines.
+            //
+            // It used to be `keys >= MIN_SEQ` alone while `attend_prepared`
+            // gates the decode shape on `min_decode_keys()`. Two predicates
+            // for one decision: callers use `serves` to choose the cache dtype
+            // (f16) AND to leave q in f32, so raising `FFAI_DECODE_MIN_KEYS`
+            // above the key count left an f16 cache being read by the f32
+            // three-op fallback — `dtype mismatch in matmul, lhs: F32,
+            // rhs: F16`. At the shipped default (8) both floors pass at 1500
+            // keys, so this was invisible in production and fatal to the
+            // escape hatch: the A/B that produced the fused self-attention
+            // kernel's 24/25, z = +4.6 could no longer be re-run.
+            //
+            // A toggle that looks available but panics is worse than none.
+            h1 == h2 && keys == k2 && keys >= MIN_SEQ.max(min_decode_keys())
         }
         _ => false,
     }

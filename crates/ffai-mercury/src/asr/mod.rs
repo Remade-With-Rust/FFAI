@@ -16,6 +16,7 @@ pub mod audio_encoder;
 pub mod decoder;
 pub mod f16_gemv;
 pub mod flash_attn;
+pub mod knobs;
 pub mod mel;
 pub mod model;
 pub mod profile;

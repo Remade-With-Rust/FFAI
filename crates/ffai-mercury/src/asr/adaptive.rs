@@ -220,7 +220,7 @@ pub fn matmul_pad_rows(k: usize, n: usize, dtype: DType, device: &Device) -> usi
     // Read at CALIBRATION time only (this function runs once per shape, at
     // load) — never in the per-token path, which is where an earlier version
     // of this override cost more than the optimization saved.
-    if std::env::var("FFAI_GEMV_PAD").as_deref() == Ok("off") {
+    if super::knobs::GEMV_PAD_DISABLED.get() {
         return 1;
     }
     static CACHE: std::sync::OnceLock<Mutex<HashMap<(usize, usize, DType), usize>>> =
