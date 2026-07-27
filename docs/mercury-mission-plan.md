@@ -1476,6 +1476,64 @@ ceilings: a single favourable sample promoted to a finding.
 
 **Standing: 21.7x warm, best recorded; gap ~1.5x; speed gate still FAIL.**
 
+### 6.23 A second corpus — and a prediction that came out backwards
+
+The int8 projection passed test-clean's quality gate by **0.027 pp**. That is
+not a margin to ship a quantized path on, especially since this campaign had
+by then read that same 134-clip holdout ~20 times and made accept/reject calls
+off it each time — the analyzer's own rule is that tuning happens on `train`
+and claims are measured on `holdout`, and I had been using holdout as a
+decision signal. **7.93 % passing by 0.027 pp was plausibly optimistic.**
+
+So: `librispeech-test-other`, the harder half of the same release (noisier
+recordings, harder speakers, same read-audiobook domain), 200 clips / 1214.7 s.
+
+| corpus | ours | whisper.cpp | delta |
+|---|---:|---:|---:|
+| test-clean | 7.93 % | 7.58 % | +0.35 pp |
+| **test-other** | **16.83 %** | **16.82 %** | **+0.01 pp** |
+
+**On the harder corpus we are at parity.** Quality PASS on both; speed FAIL on
+both (19.6x vs 26.4x here, gap 1.35x).
+
+#### The prediction, and why being wrong mattered
+
+I expected harder audio to mean flatter logit distributions, closer top-2
+candidates, and therefore **more** argmax flips from quantization. Measured:
+
+| corpus | argmax flips vs f32 oracle | rate |
+|---|---:|---:|
+| test-clean | 15 / 848 | 1.77 % |
+| test-other | 6 / 560 | **1.07 %** |
+
+**The rate went down, not up.** I do not have a confirmed mechanism for that
+and am not going to invent one — a plausible explanation is not an answer.
+
+What it does establish is the thing the second corpus was run to establish:
+**the int8 projection is not the source of the test-clean deficit.** If
+quantization were driving it, the corpus with flatter logits would show a
+wider gap and a higher flip rate. It shows a narrower gap (+0.35 -> +0.01 pp)
+and a lower flip rate (1.77 -> 1.07 %). The test-clean 0.35 pp has some other
+cause, still unidentified.
+
+#### An instrument bug caught in the act
+
+The first test-other manifest generated was internally labelled
+`name = "librispeech-test-clean"`. A `.replace()` whose pattern did not match
+returned the source unchanged, the build succeeded, 200 clips converted, and
+the manifest lied about its own identity. **A corpus mislabelled as the one it
+is meant to be independent of would have produced "test-clean confirms
+test-clean" and read as validation** — and gone into the append-only ledger
+under the wrong name.
+
+Same class as the A/B harness that ran identical code in both arms and
+reported "inconclusive": a silent no-op dressed as a result. Both were caught
+by inspecting the instrument rather than reading its output. `prepare_librispeech`
+now derives the corpus name from the archive it actually extracted.
+
+**Standing: quality PASS on two corpora, speed FAIL on both, verdict "not
+claimable yet".**
+
 ## 7. Engineering discipline (inherited, non-negotiable)
 
 - **One brick per commit;** revert if the bench says it's not better.
