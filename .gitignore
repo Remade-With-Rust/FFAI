@@ -11,3 +11,4 @@
 *.gguf
 *.onnx
 *.bin
+/.whispercpp/

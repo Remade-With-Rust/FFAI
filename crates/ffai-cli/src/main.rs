@@ -37,6 +37,11 @@ enum Cmd {
         /// Manifest directory
         #[arg(long, default_value = "models")]
         dir: PathBuf,
+        /// Download this model's files into the cache. Do this BEFORE a
+        /// measured run — a download inside a timed region is not a
+        /// measurement (see docs/benchmarking.md).
+        #[arg(long)]
+        fetch: Option<String>,
     },
     /// Transcribe speech to text (Mercury)
     Asr {
@@ -102,6 +107,10 @@ enum Cmd {
         refs: PathBuf,
         #[arg(long)]
         engine: Option<String>,
+        /// Compare against only these references (repeatable). Use to keep a
+        /// run apples-to-apples, e.g. matching decode strategies.
+        #[arg(long = "only")]
+        only: Vec<String>,
         /// Baseline the references only (useful before our engine is live)
         #[arg(long)]
         baseline_only: bool,
@@ -146,9 +155,21 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::Models { dir } => {
+        Cmd::Models { dir, fetch } => {
             let manifests = ffai_models::load_dir(&dir)
                 .with_context(|| format!("reading manifests from {}", dir.display()))?;
+            if let Some(name) = fetch {
+                let manifest = manifests
+                    .iter()
+                    .find(|m| m.name == name)
+                    .with_context(|| format!("no model manifest named `{name}` in {}", dir.display()))?;
+                println!("fetching {} ({})...", manifest.name, manifest.license);
+                let resolved = manifest.fetch()?;
+                for (file, path) in &resolved.files {
+                    println!("  {file} -> {}", path.display());
+                }
+                return Ok(());
+            }
             println!("{:<6} {:<20} {:<14} {:<7} SOURCE", "TASK", "MODEL", "LICENSE", "CACHED");
             for m in &manifests {
                 println!(
@@ -177,6 +198,13 @@ fn main() -> Result<()> {
                 }
                 None => println!("{}", transcript.text()),
             }
+            if ffai_mercury::asr::profile::is_enabled() {
+                eprint!("{}", ffai_mercury::asr::profile::profile().report());
+            }
+            if let Some(audit) = ffai_mercury::asr::vocab_int8::audit_report() {
+                eprintln!("
+{audit}");
+            }
         }
         Cmd::Tts { text, output, engine, voice } => {
             let opts = TtsOptions { voice, ..Default::default() };
@@ -196,18 +224,25 @@ fn main() -> Result<()> {
             let caption = reg.vlm(engine.as_deref())?.describe_image(&image, &opts)?;
             println!("{caption}");
         }
-        Cmd::Bench { task, corpus, refs, engine, baseline_only, runs, ledger } => {
+        Cmd::Bench { task, corpus, refs, engine, only, baseline_only, runs, ledger } => {
             if Task::from_str(&task).map_err(anyhow::Error::msg)? != Task::Asr {
                 anyhow::bail!(
                     "`ffai bench {task}` is not wired yet — asr is the first bench vertical; \
                      tts/ocr/vlm follow their engines (see ROADMAP.md)"
                 );
             }
-            let references = if refs.exists() {
-                ffai_bench::reference::ReferenceFile::load(&refs)?
+            let references: Vec<_> = if refs.exists() {
+                let selected: Vec<_> = ffai_bench::reference::ReferenceFile::load(&refs)?
                     .for_task("asr")
+                    .filter(|r| only.is_empty() || only.contains(&r.name))
                     .cloned()
-                    .collect()
+                    .collect();
+                for name in &only {
+                    if !selected.iter().any(|r| &r.name == name) {
+                        anyhow::bail!("--only {name}: no such reference in {}", refs.display());
+                    }
+                }
+                selected
             } else {
                 eprintln!(
                     "note: no references file at {} — running without world-standard baselines",

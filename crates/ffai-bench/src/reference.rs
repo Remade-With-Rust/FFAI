@@ -64,13 +64,20 @@ pub struct BatchResult {
     pub clips: Vec<ClipResult>,
     /// Model load seconds as reported by the adapter.
     pub load_secs: Option<f64>,
+    /// Total processing seconds for the whole batch, for tools that report
+    /// only an aggregate (whisper.cpp prints one timing block per *run*, not
+    /// per file). Used when per-clip timings are absent — reporting the
+    /// aggregate honestly beats splitting it into per-clip numbers the tool
+    /// never measured.
+    pub batch_transcribe_secs: Option<f64>,
 }
 
 impl BatchResult {
-    /// Sum of adapter-reported per-clip transcription time.
+    /// Adapter-reported processing time for the batch: the sum of per-clip
+    /// timings when available, otherwise the reported aggregate.
     pub fn transcribe_secs(&self) -> Option<f64> {
         let sum: f64 = self.clips.iter().filter_map(|c| c.transcribe_secs).sum();
-        (sum > 0.0).then_some(sum)
+        if sum > 0.0 { Some(sum) } else { self.batch_transcribe_secs }
     }
 
     /// Look up a clip's text by the path the adapter echoed back.
@@ -200,6 +207,9 @@ fn parse_batch_output(stdout: &str, name: &str) -> Result<BatchResult> {
         if let Some(load) = value.get("load_secs").and_then(|v| v.as_f64()) {
             out.load_secs = Some(load);
         }
+        if let Some(total) = value.get("batch_transcribe_secs").and_then(|v| v.as_f64()) {
+            out.batch_transcribe_secs = Some(total);
+        }
         if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
             out.clips.push(ClipResult {
                 path: value.get("path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
@@ -255,6 +265,16 @@ mod tests {
         assert_eq!(r.clips.len(), 2);
         assert_eq!(r.load_secs, Some(1.5));
         assert_eq!(r.transcribe_secs(), Some(1.0));
+
+        // Aggregate-only adapters (whisper.cpp) are supported too.
+        let agg = parse_batch_output(
+            "{\"batch_transcribe_secs\": 4.0}
+{\"path\": \"a.wav\", \"text\": \"hi\"}
+",
+            "agg",
+        )
+        .unwrap();
+        assert_eq!(agg.transcribe_secs(), Some(4.0));
         assert_eq!(r.text_for(Path::new("b.wav")), Some("world"));
     }
 

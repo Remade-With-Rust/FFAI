@@ -23,7 +23,16 @@ ffai-bench = { path = "crates/ffai-bench", version = "0.1.0" }
 # ---- tensor spine ----
 # Candle is FFai's PyTorch: every engine shares its Tensor/Device types so
 # buffers move between models without copies or format conversions.
-candle-core = "0.9"
+# All three MUST move in lockstep — mixing candle-core and candle-transformers
+# across minor versions is a type mismatch, not a warning.
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
+
+# ---- model loading ----
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+rustfft = "6"
+hf-hub = { version = "1", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # ---- ecosystem ----
 thiserror = "2"

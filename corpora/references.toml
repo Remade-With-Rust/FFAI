@@ -43,9 +43,54 @@ task = "asr"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "base.en", "--beam-size", "5", "--compute-type", "int8"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
 
+# ---- GREEDY variants: the apples-to-apples bar for Mercury M1 ----
+# whisper-candle decodes greedily until beam search lands in M2. Comparing a
+# greedy engine against beam_size=5 references measures the decoding strategy,
+# not the implementation — the same trap M0 caught between the two Python
+# references. These rows are the honest M1 comparison; the beam rows above
+# remain the M2 target.
+[[reference]]
+name = "openai-whisper-tiny-greedy"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "1"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
+
+[[reference]]
+name = "openai-whisper-base-greedy"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "base.en", "--beam-size", "1"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
+
+[[reference]]
+name = "faster-whisper-tiny-greedy"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "1", "--compute-type", "int8"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
+
 # ---- OCR (Carmenta, Phase 3) ----
 [[reference]]
 name = "tesseract"
 task = "ocr"
 command = ["tesseract", "{input}", "stdout"]
 version_command = ["tesseract", "--version"]
+
+# ---- whisper.cpp (C++/ggml, BLAS build): the NATIVE no-Python bar ----
+# This is the comparison FFai's pure-Rust thesis is judged against.
+# faster-whisper measures us against CTranslate2, a specialised inference
+# engine; whisper.cpp is a straightforward native implementation and the
+# closer analogue of what we build. Install with docs/benchmarking.md.
+#
+# Two thread configs on purpose: whisper.cpp defaults to 4 threads while
+# candle's rayon default is the core count. Reporting both separates "which
+# implementation is faster" from "which ships a better default".
+[[reference]]
+name = "whisper-cpp-tiny-greedy-t4"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-tiny.en.bin", "--threads", "4", "--beam-size", "1"]
+version_command = [".whispercpp/whisper-cli.exe", "--version"]
+
+[[reference]]
+name = "whisper-cpp-tiny-greedy-t24"
+task = "asr"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-tiny.en.bin", "--threads", "24", "--beam-size", "1"]
+version_command = [".whispercpp/whisper-cli.exe", "--version"]

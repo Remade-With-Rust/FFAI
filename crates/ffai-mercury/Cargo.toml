@@ -10,6 +10,27 @@ authors.workspace = true
 
 [dependencies]
 ffai-core = { workspace = true }
+ffai-models = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+tokenizers = { workspace = true }
+rustfft = { workspace = true }
+rayon = "1"
+half = "2"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+ffai-models = { workspace = true }
+
+[features]
+cuda = ["ffai-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+metal = ["ffai-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
 [lints]
+workspace = true
+
+[dev-dependencies.ffai-bench]
+workspace = true
+
+[dev-dependencies.ffai-media]
 workspace = true

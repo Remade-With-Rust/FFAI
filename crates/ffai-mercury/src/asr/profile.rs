@@ -1,0 +1,252 @@
+//! Stage timing for the ASR path.
+//!
+//! M2 is a performance milestone, and the first rule of performance work is
+//! that you measure before you touch anything (`codec-optimize`: profile
+//! first, always). A 4× gap has several plausible causes — f32 vs int8, an
+//! O(n²) decode loop, unfused matmuls, single-threaded execution — and
+//! optimizing the wrong one is wasted effort that still adds complexity.
+//!
+//! Enable with `FFAI_PROFILE=1`. Overhead when disabled is one relaxed atomic
+//! load per stage, so this can stay compiled into release builds.
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
+
+fn enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FFAI_PROFILE").is_some())
+}
+
+/// One stage's accumulated cost.
+#[derive(Debug, Default)]
+pub struct Stage {
+    nanos: AtomicU64,
+    calls: AtomicU64,
+}
+
+impl Stage {
+    const fn new() -> Self {
+        Stage { nanos: AtomicU64::new(0), calls: AtomicU64::new(0) }
+    }
+
+    fn add(&self, nanos: u64) {
+        self.nanos.fetch_add(nanos, Ordering::Relaxed);
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn secs(&self) -> f64 {
+        self.nanos.load(Ordering::Relaxed) as f64 / 1e9
+    }
+
+    pub fn calls(&self) -> u64 {
+        self.calls.load(Ordering::Relaxed)
+    }
+}
+
+/// The stages of one transcription.
+pub struct Profile {
+    /// PCM → log-mel spectrogram.
+    pub mel: Stage,
+    /// The audio encoder forward pass — once per 30 s window.
+    pub encoder: Stage,
+    /// The decoder forward pass — once per generated token.
+    pub decoder: Stage,
+    /// Logit filtering + argmax, per token.
+    pub sampling: Stage,
+
+    // ---- decoder internals (op-level, Mercury's own decoder only) ----
+    /// Token + positional embedding lookup.
+    pub dec_embed: Stage,
+    /// Self-attention across all layers, including cache append.
+    pub dec_self_attn: Stage,
+    /// Cross-attention across all layers.
+    pub dec_cross_attn: Stage,
+    /// Feed-forward across all layers.
+    pub dec_mlp: Stage,
+    /// The final projection to the ~51k vocabulary.
+    pub dec_final: Stage,
+
+    // ---- encoder internals (op-level, Mercury's own encoder only) ----
+    /// The two convolutional front-end layers.
+    pub enc_conv: Stage,
+    /// Bidirectional self-attention across all encoder layers.
+    pub enc_attn: Stage,
+    /// Feed-forward across all encoder layers.
+    pub enc_mlp: Stage,
+
+    // ---- cross-attention internals (in-context, not microbenched) ----
+    pub xa_qproj: Stage,
+    pub xa_prep: Stage,
+    pub xa_qk: Stage,
+    pub xa_softmax: Stage,
+    pub xa_wv: Stage,
+    pub xa_merge: Stage,
+    pub xa_out: Stage,
+
+    /// Tokens generated, for per-token cost.
+    pub tokens: AtomicU64,
+}
+
+impl Profile {
+    const fn new() -> Self {
+        Profile {
+            mel: Stage::new(),
+            encoder: Stage::new(),
+            decoder: Stage::new(),
+            sampling: Stage::new(),
+            dec_embed: Stage::new(),
+            dec_self_attn: Stage::new(),
+            dec_cross_attn: Stage::new(),
+            dec_mlp: Stage::new(),
+            dec_final: Stage::new(),
+            enc_conv: Stage::new(),
+            enc_attn: Stage::new(),
+            enc_mlp: Stage::new(),
+            xa_qproj: Stage::new(),
+            xa_prep: Stage::new(),
+            xa_qk: Stage::new(),
+            xa_softmax: Stage::new(),
+            xa_wv: Stage::new(),
+            xa_merge: Stage::new(),
+            xa_out: Stage::new(),
+            tokens: AtomicU64::new(0),
+        }
+    }
+
+    pub fn count_tokens(&self, n: usize) {
+        if enabled() {
+            self.tokens.fetch_add(n as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Human-readable breakdown, shares of total.
+    pub fn report(&self) -> String {
+        let stages: [(&str, &Stage); 4] = [
+            ("mel", &self.mel),
+            ("encoder", &self.encoder),
+            ("decoder", &self.decoder),
+            ("sampling", &self.sampling),
+        ];
+        let total: f64 = stages.iter().map(|(_, s)| s.secs()).sum();
+        let tokens = self.tokens.load(Ordering::Relaxed);
+        let mut out = format!(
+            "\n{:<10} {:>10} {:>8} {:>9} {:>12}\n",
+            "STAGE", "SECONDS", "SHARE", "CALLS", "MS/CALL"
+        );
+        for (name, stage) in stages {
+            let secs = stage.secs();
+            let calls = stage.calls().max(1);
+            out.push_str(&format!(
+                "{name:<10} {secs:>10.3} {:>7.1}% {:>9} {:>12.3}\n",
+                if total > 0.0 { secs / total * 100.0 } else { 0.0 },
+                stage.calls(),
+                secs * 1000.0 / calls as f64,
+            ));
+        }
+        out.push_str(&format!("{:<10} {total:>10.3}\n", "total"));
+
+        // Decoder internals, shown as shares of the decoder stage above.
+        let inner: [(&str, &Stage); 5] = [
+            ("  embed", &self.dec_embed),
+            ("  self-attn", &self.dec_self_attn),
+            ("  cross-attn", &self.dec_cross_attn),
+            ("  mlp", &self.dec_mlp),
+            ("  final-proj", &self.dec_final),
+        ];
+        let enc: [(&str, &Stage); 3] = [
+            ("  conv", &self.enc_conv),
+            ("  attn", &self.enc_attn),
+            ("  mlp", &self.enc_mlp),
+        ];
+        let enc_total: f64 = enc.iter().map(|(_, s)| s.secs()).sum();
+        if enc_total > 0.0 {
+            out.push_str(&format!("
+{:<14} {:>10} {:>8} {:>9}
+", "ENCODER OP", "SECONDS", "SHARE", "CALLS"));
+            for (name, stage) in enc {
+                out.push_str(&format!(
+                    "{name:<14} {:>10.3} {:>7.1}% {:>9}
+",
+                    stage.secs(),
+                    stage.secs() / enc_total * 100.0,
+                    stage.calls(),
+                ));
+            }
+        }
+
+        let xa: [(&str, &Stage); 7] = [
+            ("  q proj", &self.xa_qproj),
+            ("  q prep", &self.xa_prep),
+            ("  q@k", &self.xa_qk),
+            ("  softmax", &self.xa_softmax),
+            ("  w@v", &self.xa_wv),
+            ("  merge", &self.xa_merge),
+            ("  out proj", &self.xa_out),
+        ];
+        let xa_total: f64 = xa.iter().map(|(_, s)| s.secs()).sum();
+        if xa_total > 0.0 {
+            out.push_str(&format!("
+{:<14} {:>10} {:>8} {:>9}
+", "CROSS-ATTN OP", "SECONDS", "SHARE", "CALLS"));
+            for (name, stage) in xa {
+                out.push_str(&format!(
+                    "{name:<14} {:>10.3} {:>7.1}% {:>9}
+",
+                    stage.secs(), stage.secs() / xa_total * 100.0, stage.calls(),
+                ));
+            }
+            out.push_str(&format!("{:<14} {:>10.3}   (stage total {:.3})
+",
+                "  SUM", xa_total, self.dec_cross_attn.secs()));
+        }
+
+        let inner_total: f64 = inner.iter().map(|(_, s)| s.secs()).sum();
+        if inner_total > 0.0 {
+            out.push_str(&format!("\n{:<14} {:>10} {:>8} {:>9}\n", "DECODER OP", "SECONDS", "SHARE", "CALLS"));
+            for (name, stage) in inner {
+                out.push_str(&format!(
+                    "{name:<14} {:>10.3} {:>7.1}% {:>9}\n",
+                    stage.secs(),
+                    stage.secs() / inner_total * 100.0,
+                    stage.calls(),
+                ));
+            }
+        }
+        if tokens > 0 {
+            out.push_str(&format!(
+                "\n{tokens} tokens generated · {:.3} ms/token through the decoder\n",
+                self.decoder.secs() * 1000.0 / tokens as f64
+            ));
+        }
+        out
+    }
+}
+
+/// The process-wide profile. One transcription run is the unit of interest,
+/// so the CLI prints and this is not reset between clips.
+pub fn profile() -> &'static Profile {
+    static PROFILE: Profile = Profile::new();
+    &PROFILE
+}
+
+/// True when `FFAI_PROFILE` is set — the CLI checks this to decide whether to
+/// print a report.
+pub fn is_enabled() -> bool {
+    enabled()
+}
+
+/// Time `f` into `stage`, unless profiling is off.
+pub fn timed<T>(stage: &Stage, f: impl FnOnce() -> T) -> T {
+    if !enabled() {
+        return f();
+    }
+    let started = Instant::now();
+    let out = f();
+    stage.add(started.elapsed().as_nanos() as u64);
+    out
+}
+
+/// Marker so `AtomicBool` stays available if a per-run reset lands later.
+#[allow(dead_code)]
+type Unused = AtomicBool;

@@ -116,15 +116,20 @@ cargo run -p ffai-bench --example prepare_librispeech -- \
     --manifest corpora/librispeech-test-clean-v1.toml \
     --count 16
 
-# 3. Warm every model cache OUTSIDE the timed run
+# 3. Warm every model cache OUTSIDE the timed run — ours and the references'
+cargo run -p ffai-cli -- models --fetch whisper-tiny-en
 .venv-bench/Scripts/python corpora/refs/faster_whisper_ref.py \
     --batch one-clip.txt --model tiny.en
 
-# 4. Measure
-cargo run -p ffai-cli -- bench asr \
-    --corpus corpora/librispeech-test-clean-v1.toml \
-    --baseline-only --runs 3
+# 4. Measure — RELEASE BUILD ONLY
+cargo build --release -p ffai-cli
+./target/release/ffai bench asr \
+    --corpus corpora/librispeech-test-clean-v1.toml --runs 3
 ```
+
+**Never benchmark a debug build.** Rust debug builds run 10–100× slower than
+release, and the references are optimized C++ and PyTorch. A debug-build
+comparison isn't a conservative estimate, it's a meaningless one.
 
 Step 2 is deterministic: the same archive and arguments regenerate a
 byte-identical manifest, so a published benchmark can be re-derived from the

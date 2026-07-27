@@ -19,7 +19,7 @@
 //! — `word_timestamps` and `diarize` — and lands as Phase 1.5 on top of any
 //! ASR engine.
 
-mod asr;
+pub mod asr;
 mod tts;
 
 pub use asr::{OxiWhisper, WhisperCandle};
@@ -31,7 +31,24 @@ use ffai_core::registry::EngineRegistry;
 
 /// Install every Mercury engine into a registry.
 pub fn register(reg: &mut EngineRegistry) {
-    reg.register_asr(Arc::new(WhisperCandle));
+    // Named engines are named *configurations*, the way ffmpeg exposes codec
+    // presets: same implementation, different model size.
+    reg.register_asr(Arc::new(WhisperCandle::new()));
+    reg.register_asr(Arc::new(WhisperCandle::with_model(
+        "models",
+        "whisper-tiny-en",
+        asr::text_decoder::Precision::Q8_0,
+    )));
+    reg.register_asr(Arc::new(WhisperCandle::with_model(
+        "models",
+        "whisper-base-en",
+        asr::text_decoder::Precision::F32,
+    )));
+    reg.register_asr(Arc::new(WhisperCandle::with_model(
+        "models",
+        "whisper-base-en",
+        asr::text_decoder::Precision::Q8_0,
+    )));
     reg.register_asr(Arc::new(OxiWhisper));
     reg.register_tts(Arc::new(AnyTts));
     reg.register_tts(Arc::new(Voirs));
@@ -47,7 +64,8 @@ mod tests {
         let mut reg = EngineRegistry::new();
         register(&mut reg);
         let infos = reg.list();
-        assert_eq!(infos.iter().filter(|i| i.task == Task::Asr).count(), 2);
+        // tiny f32/q8_0, base f32/q8_0, oxiwhisper
+        assert_eq!(infos.iter().filter(|i| i.task == Task::Asr).count(), 5);
         assert_eq!(infos.iter().filter(|i| i.task == Task::Tts).count(), 2);
         // default = first registered = the reference engine
         assert_eq!(reg.asr(None).unwrap().info().name, "whisper-candle");
@@ -56,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn stub_reports_not_implemented() {
+    fn remaining_stubs_say_so_instead_of_failing_obscurely() {
         let mut reg = EngineRegistry::new();
         register(&mut reg);
         let audio = ffai_core::types::AudioBuffer {
@@ -65,10 +83,37 @@ mod tests {
             channels: 1,
         };
         let err = reg
-            .asr(Some("whisper-candle"))
+            .asr(Some("oxiwhisper"))
             .unwrap()
             .transcribe(&audio, &Default::default())
             .unwrap_err();
-        assert!(err.to_string().contains("stub"));
+        assert!(err.to_string().contains("stub"), "got: {err}");
+    }
+
+    #[test]
+    fn whisper_candle_is_no_longer_a_stub() {
+        let mut reg = EngineRegistry::new();
+        register(&mut reg);
+        let info = reg.asr(Some("whisper-candle")).unwrap().info();
+        assert_eq!(info.status, ffai_core::engine::EngineStatus::Experimental);
+    }
+
+    #[test]
+    fn whisperx_flags_are_rejected_with_a_pointer_to_their_milestone() {
+        // Silently ignoring --diarize would be worse than refusing it.
+        let mut reg = EngineRegistry::new();
+        register(&mut reg);
+        let audio = ffai_core::types::AudioBuffer {
+            samples: vec![0.0; 160],
+            sample_rate: 16_000,
+            channels: 1,
+        };
+        let opts = ffai_core::engine::AsrOptions { diarize: true, ..Default::default() };
+        let err = reg
+            .asr(Some("whisper-candle"))
+            .unwrap()
+            .transcribe(&audio, &opts)
+            .unwrap_err();
+        assert!(err.to_string().contains("M3"), "got: {err}");
     }
 }

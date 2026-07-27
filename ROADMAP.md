@@ -26,12 +26,18 @@ corpora (Argus).
 
 ## Phase 1 — Mercury ASR goes live
 
-- `whisper-candle` engine on candle-transformers (tiny → large-v3),
-  greedy + beam decode, language detection.
-- `ffai-models` fetcher: Hugging Face hub download, resumable, SHA-256.
-- `ffai-media`: wire **remade_ffmpeg_rs** (`rff-format`/`rff-codec`) so any
+- ✅ `whisper-candle` engine: our own mel front-end (STFT + Slaney
+  filterbank), tokenizer grammar, and greedy decode loop, composed over
+  candle-transformers' Whisper blocks. Transcribes today.
+- ✅ `ffai-models` fetcher: Hugging Face hub download into the shared cache,
+  checksum-verified, license surfaced.
+- ✅ Stage oracles: mel matches openai-whisper to < 1e-3; tokenizer
+  round-trips.
+- ⬜ Beam search + temperature fallback, long-audio seek, all model sizes,
+  quantization, streaming API (M2).
+- ⬜ `ffai-media`: wire **remade_ffmpeg_rs** (`rff-format`/`rff-codec`) so any
   container in = 16 kHz mono out.
-- Oracle gate: WER vs openai-whisper on LibriSpeech test-clean/other.
+- ⬜ whisper.cpp baseline — the native no-Python comparison (M2 blocker).
 
 ## Phase 1.5 — The WhisperX layer
 

@@ -8,10 +8,68 @@
 //! Phase 0 ships manifests + cache resolution; the downloader (Hugging Face
 //! hub, resumable, checksum-verified) lands in Phase 1.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ffai_core::error::{Error, Result};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
+/// A model whose files are all present locally, with their resolved paths.
+#[derive(Debug, Clone)]
+pub struct ResolvedModel {
+    pub name: String,
+    /// The WEIGHTS' license — may be more restrictive than FFai's own.
+    pub license: String,
+    /// Filename → local path.
+    pub files: BTreeMap<String, PathBuf>,
+}
+
+impl ResolvedModel {
+    /// Path of a required file, or a clear error naming what's missing.
+    pub fn file(&self, name: &str) -> Result<&Path> {
+        self.files
+            .get(name)
+            .map(PathBuf::as_path)
+            .ok_or_else(|| Error::Model(format!("model `{}` has no file `{name}`", self.name)))
+    }
+}
+
+/// Resolve one file from the shared Hugging Face cache, downloading it when
+/// `cache_only` is false. Uses the same cache as `transformers` and
+/// `faster-whisper`, so a model either side already has is not fetched twice.
+fn hub_download(repo: &str, filename: &str, cache_only: bool) -> Result<PathBuf> {
+    let (owner, name) = repo
+        .split_once('/')
+        .ok_or_else(|| Error::Model(format!("hf_repo `{repo}` is not in `owner/name` form")))?;
+    let client = hf_hub::HFClientSync::new()
+        .map_err(|e| Error::Model(format!("hugging face client init failed: {e}")))?;
+    client
+        .model(owner, name)
+        .download_file()
+        .filename(filename)
+        .local_files_only(cache_only)
+        .send()
+        .map_err(|e| Error::Model(format!("{repo}/{filename}: {e}")))
+}
+
+/// Verify a downloaded file against its manifest checksum, when one is
+/// declared. A mismatch is an error, never a warning: silently running on
+/// unexpected weights would invalidate every measurement taken with them.
+fn verify_checksum(path: &Path, file: &ModelFile) -> Result<()> {
+    let Some(expected) = &file.sha256 else {
+        return Ok(());
+    };
+    let bytes = std::fs::read(path)?;
+    let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    if actual != expected.to_ascii_lowercase() {
+        return Err(Error::Model(format!(
+            "checksum mismatch for {}: manifest says {expected}, file is {actual}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
 
 /// One weight/config file belonging to a model.
 #[derive(Debug, Clone, Deserialize)]
@@ -48,30 +106,54 @@ impl ModelManifest {
         Self::from_toml(&text)
     }
 
-    /// Directory this model's files live in inside the cache.
+    /// Directory this model's files live in when placed manually.
     pub fn cache_path(&self) -> PathBuf {
         cache_dir().join("models").join(&self.name)
     }
 
-    /// True when every listed file is present in the cache.
+    /// True when every listed file already resolves locally — no network.
     pub fn is_cached(&self) -> bool {
-        !self.files.is_empty()
-            && self
-                .files
-                .iter()
-                .all(|f| self.cache_path().join(&f.name).exists())
+        !self.files.is_empty() && self.files.iter().all(|f| self.local_path(&f.name).is_some())
     }
 
-    /// Download missing files. Lands in Phase 1 (HF hub, resumable,
-    /// SHA-256-verified); manifests and cache layout are stable now so
-    /// engines can already resolve paths.
-    pub fn fetch(&self) -> Result<()> {
-        Err(Error::Model(format!(
-            "downloading `{}` is not implemented in Phase 0 — place files under {} \
-             manually, or wait for the Phase 1 fetcher",
-            self.name,
-            self.cache_path().display()
-        )))
+    /// Resolve one file without touching the network: a manual placement
+    /// under [`Self::cache_path`] wins, otherwise the shared Hugging Face
+    /// cache (the same one `transformers`/`faster-whisper` use, so a model
+    /// downloaded by either side is not downloaded twice).
+    pub fn local_path(&self, name: &str) -> Option<PathBuf> {
+        let manual = self.cache_path().join(name);
+        if manual.exists() {
+            return Some(manual);
+        }
+        hub_download(self.hf_repo.as_ref()?, name, true).ok()
+    }
+
+    /// Resolve every file, downloading from the Hugging Face hub as needed.
+    ///
+    /// Downloads are cached, so this is cheap on repeat calls — but it is
+    /// still network I/O the first time, which is why benchmarks warm the
+    /// cache outside any timed region (see docs/benchmarking.md).
+    pub fn fetch(&self) -> Result<ResolvedModel> {
+        let mut files = BTreeMap::new();
+        for file in &self.files {
+            if let Some(path) = self.local_path(&file.name) {
+                verify_checksum(&path, file)?;
+                files.insert(file.name.clone(), path);
+                continue;
+            }
+            let repo = self.hf_repo.as_ref().ok_or_else(|| {
+                Error::Model(format!(
+                    "model `{}` declares no hf_repo and `{}` is not present under {}",
+                    self.name,
+                    file.name,
+                    self.cache_path().display()
+                ))
+            })?;
+            let path = hub_download(repo, &file.name, false)?;
+            verify_checksum(&path, file)?;
+            files.insert(file.name.clone(), path);
+        }
+        Ok(ResolvedModel { name: self.name.clone(), license: self.license.clone(), files })
     }
 }
 

@@ -154,13 +154,28 @@ fn run_reference(
         )));
     }
 
-    // One invocation over the whole corpus, harness-timed best-of-N.
-    let mut batch = None;
-    let stats = best_of_n(runs, || {
-        batch = Some(spec.run_batch(paths)?);
-        Ok(())
-    })?;
-    let batch = batch.expect("best_of_n ran at least once");
+    // One invocation over the whole corpus, repeated; keep the FASTEST run's
+    // wall clock together with THAT RUN'S per-clip timings.
+    //
+    // Taking the best wall time from one run and the adapter timings from
+    // another produces impossible pairs — warm throughput reading slower than
+    // end-to-end, which cannot happen for a single run. Timing numbers only
+    // compose if they come from the same execution.
+    let mut best: Option<(f64, crate::reference::BatchResult)> = None;
+    for _ in 0..runs.max(1) {
+        let started = std::time::Instant::now();
+        let batch = spec.run_batch(paths)?;
+        let wall = started.elapsed().as_secs_f64();
+        if best.as_ref().is_none_or(|(prev, _)| wall < *prev) {
+            best = Some((wall, batch));
+        }
+    }
+    let (wall_secs, batch) = best.expect("at least one run");
+    let stats = crate::speed::SpeedStats {
+        best_secs: wall_secs,
+        median_secs: wall_secs,
+        runs: runs.max(1),
+    };
 
     let (mut wers, mut cers) = (Vec::new(), Vec::new());
     for (clip, path) in holdout.iter().zip(paths) {
@@ -224,6 +239,19 @@ fn run_engine(
         }
     }
 
+    // Warm-up pass, untimed: engines load weights lazily on first use, and
+    // references report their load separately. Without this the engine's
+    // first timed run would carry model load that no reference's does —
+    // the same class of unfairness as timing Python's startup, pointed the
+    // other way. Its cost is recorded so it isn't invisible.
+    if let Some((_, audio)) = decoded.first() {
+        let t0 = std::time::Instant::now();
+        if let Err(e) = asr.transcribe(audio, &AsrOptions::default()) {
+            summary.notes.push(format!("warm-up failed: {e}"));
+        }
+        summary.load_secs = Some(t0.elapsed().as_secs_f64());
+    }
+
     let (mut wers, mut cers) = (Vec::new(), Vec::new());
     let mut texts: Vec<(String, String)> = Vec::new();
     let mut first_error = None;
@@ -246,11 +274,14 @@ fn run_engine(
         Ok(stats) => {
             summary.clips_ok = texts.len();
             summary.wall_secs = Some(stats.best_secs);
-            summary.rtf_e2e = Some(real_time_factor(media_secs, stats.best_secs));
-            // The engine holds its model across clips, so its harness-timed
-            // run is already steady-state. Model load becomes a separate
-            // measurement when weight loading lands (Mercury M1).
-            summary.rtf_warm = summary.rtf_e2e;
+            // Timed runs are all warm (see the warm-up pass above), so the
+            // harness-timed figure IS steady-state throughput. End-to-end
+            // adds the recorded load, matching how references are scored.
+            summary.rtf_warm = Some(real_time_factor(media_secs, stats.best_secs));
+            summary.rtf_e2e = Some(real_time_factor(
+                media_secs,
+                stats.best_secs + summary.load_secs.unwrap_or(0.0),
+            ));
             for (id, text) in &texts {
                 let clip = holdout.iter().find(|c| &c.id == id);
                 if let Some(clip) = clip {

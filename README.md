@@ -83,19 +83,30 @@ plugin is just an engine registered at runtime.
    [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)
    (`rff-*`), our own pure-Rust ffmpeg.
 
-Baselines are already on the board. On a hash-pinned 11-clip LibriSpeech
-test-clean holdout (best-of-3, `beam_size=5`, CPU), the standards we have to
-beat are 2.99 % WER at 22.1× realtime (faster-whisper tiny.en) and 1.72 % WER
-at 6.5× realtime (openai-whisper base.en) — recorded in
-[`bench/ledger.jsonl`](bench/ledger.jsonl) and detailed in the
-[Mercury mission plan §6.1](docs/mercury-mission-plan.md).
+## Status
 
-## Status: Phase 0 (skeleton)
+**Mercury ASR transcribes today, in pure Rust.** `whisper-candle` runs
+OpenAI Whisper on candle with our own mel front-end (STFT + Slaney
+filterbank), tokenizer grammar, and decode loop. On a hash-pinned 11-clip
+LibriSpeech test-clean holdout, at matched greedy decoding on a CPU:
 
-The workspace compiles, the registry works, WAV I/O works, and every planned
-engine is registered as an honest `stub` visible in `ffai engines`. See
-[ROADMAP.md](ROADMAP.md) for the build-out order — Mercury goes live first,
-per the [Mercury mission plan](docs/mercury-mission-plan.md).
+| Implementation | WER % | ×realtime (warm) |
+|---|---:|---:|
+| **whisper-candle** tiny.en (Rust) | **3.00** | 7.0 |
+| openai-whisper tiny.en (Python) | 3.37 | 21.5 |
+| **whisper-candle-base** base.en (Rust) | **1.72** | 3.3 |
+| openai-whisper base.en (Python) | 3.12 | 13.5 |
+
+Accuracy is at or better than the reference; **speed is roughly 4× behind**,
+which is the honest state of an unoptimized bring-up and the whole subject of
+M2. Note that 11 clips is a smoke corpus — enough to gate a milestone, not
+enough to publish a comparative accuracy claim. Full details, including the
+six methodology and bring-up defects found along the way, are in the
+[Mercury mission plan](docs/mercury-mission-plan.md); every number traces to a
+line in [`bench/ledger.jsonl`](bench/ledger.jsonl).
+
+TTS, OCR (Carmenta), and VLM (Argus) remain honest `stub`s — visible as such
+in `ffai engines`. See [ROADMAP.md](ROADMAP.md) for the build-out order.
 
 ## Build
 
