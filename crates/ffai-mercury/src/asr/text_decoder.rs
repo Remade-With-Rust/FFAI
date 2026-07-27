@@ -115,11 +115,11 @@ pub enum QLinear {
     },
 }
 
-/// `FFAI_KV_F16=on` opts the cross-attention cache into f16.
-fn kv_f16_enabled() -> bool {
+/// `FFAI_KV_F16=off` keeps the cross-attention cache at f32 — the A/B arm.
+fn kv_f16_disabled() -> bool {
     use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("FFAI_KV_F16").as_deref() == Ok("on"))
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("FFAI_KV_F16").as_deref() == Ok("off"))
 }
 
 /// `FFAI_DEC_F16=off` forces the decoder's single-row projections back to f32.
@@ -682,23 +682,22 @@ impl Attention {
                     // is the distinction §6.16's failed f16 K/V chain missed —
                     // it did f16 MATH, and the softmax between the matmuls ran
                     // 82 % slower for it.
-                    // MEASURED AND REVERTED as the default: f16 halved the
-                    // cache read (18.4 -> 9.2 MB/token) and the stage did get
-                    // faster — cross-attn 0.064 -> 0.055 s, 1.16x — but the
-                    // pipeline did not resolve it: **13/21 paired rounds,
-                    // z = +1.1, ratio 1.003x**.
+                    // f16 cache, widened by F16C as it streams so the
+                    // accumulation still happens in f32. Halves the largest
+                    // remaining per-token read in decode, 18.4 -> 9.2 MB.
                     //
-                    // The arithmetic says why, and it is the same shape as the
-                    // int8 MLP: cross-attention is ~18 % of the pipeline, so
-                    // 1.16x there is worth ~2.5 % overall — under this
-                    // harness's noise floor. Reverted because the delta sat
-                    // INSIDE the noise, not because it measured worse.
+                    // NOT the f16 K/V chain that failed in 6.16 — that did f16
+                    // MATH, and the softmax between the matmuls ran 82 %
+                    // slower for it. Here only the bytes are half.
                     //
-                    // The f16 kernel (`xattn_head_f16`) stays, reachable with
-                    // FFAI_KV_F16=on. It also halves cache memory, which will
-                    // matter once the footprint gate is instrumented — that is
-                    // a claim this campaign cannot make yet.
-                    if kv_f16_enabled() { DType::F16 } else { DType::F32 }
+                    // Measured: cross-attn 0.064 -> 0.055 s (1.16x on the
+                    // stage); pipeline 13/21, z = +1.1, ratio 1.003x —
+                    // INCONCLUSIVE at the total level, because cross-attention
+                    // is ~18 % of the pipeline so 1.16x there is ~2.5 %, under
+                    // this harness's noise floor. Kept on the strength of the
+                    // stage measurement and the halved cache memory; the
+                    // pipeline claim is NOT made.
+                    if kv_f16_disabled() { DType::F32 } else { DType::F16 }
                 } else {
                     super::adaptive::attention_kv_dtype(
                         k.dim(1)?,
