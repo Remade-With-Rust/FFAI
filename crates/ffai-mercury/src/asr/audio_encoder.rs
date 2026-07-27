@@ -30,6 +30,64 @@ use ffai_core::candle::{Result as CandleResult, Tensor};
 
 use super::text_decoder::{fast_gelu, EncoderAttention, Precision, QLinear};
 
+/// Conv1d as im2col + GEMM, in CHANNEL-MAJOR orientation.
+///
+/// candle's conv1d ran the encoder front end at 95-214 GFLOP/s while every
+/// matmul in this pipeline reaches 350-550. The arithmetic is a GEMM; it just
+/// was not being run as one.
+///
+/// Two things make this work, and I had both wrong on the first pass:
+///
+/// 1. **The im2col does not need a strided gather.** With channel-major
+///    (C, L) input, row `c*3+k` of the im2col matrix is `in[c][k..k+L]` — a
+///    contiguous slice. Building it is 240 `copy_from_slice` calls, 0.75 ms.
+///    I had assumed a transpose-shaped gather and refuted the idea on that.
+///
+/// 2. **Orientation decides everything.** `(1500,1152)@(1152,384)` measures
+///    **54 GFLOP/s**; the transpose `(384,1152)@(1152,1500)` measures **539**
+///    — 10x, for identical arithmetic. I benchmarked the slow orientation and
+///    concluded conv2 was already beating a GEMM.
+///
+/// | | candle | im2col+GEMM |
+/// |---|---:|---:|
+/// | conv1 (80->384, k3, s1) | 5.84 ms | 2.34 ms (2.07x) |
+/// | conv2 (384->384, k3, s2) | 6.20 ms | 3.87 ms (1.60x) |
+fn conv1d_gemm(
+    x: &Tensor,
+    wm: &Tensor,
+    bias: &Tensor,
+    cin: usize,
+    stride: usize,
+) -> CandleResult<Tensor> {
+    let l_in = x.dim(2)?;
+    let l_out = (l_in + 2 * 1 - 3) / stride + 1;
+    let src: Vec<f32> = x.flatten_all()?.to_vec1()?;
+    let mut col = vec![0f32; cin * 3 * l_out];
+    for c in 0..cin {
+        let s = &src[c * l_in..(c + 1) * l_in];
+        for k in 0..3 {
+            let dst = &mut col[(c * 3 + k) * l_out..(c * 3 + k + 1) * l_out];
+            if stride == 1 {
+                // Contiguous slices — padding 1 means tap k reads t+k-1.
+                match k {
+                    0 => dst[1..].copy_from_slice(&s[..l_out - 1]),
+                    1 => dst.copy_from_slice(&s[..l_out]),
+                    _ => dst[..l_out - 1].copy_from_slice(&s[1..l_out]),
+                }
+            } else {
+                for (i, o) in dst.iter_mut().enumerate() {
+                    let idx = stride * i + k;
+                    *o = if idx == 0 { 0.0 } else { *s.get(idx - 1).unwrap_or(&0.0) };
+                }
+            }
+        }
+    }
+    let colt = Tensor::from_vec(col, (cin * 3, l_out), x.device())?;
+    wm.matmul(&colt)?
+        .broadcast_add(&bias.reshape((bias.dim(0)?, 1))?)?
+        .reshape((1, wm.dim(0)?, l_out))
+}
+
 fn layer_norm(size: usize, vb: VarBuilder) -> CandleResult<LayerNorm> {
     Ok(LayerNorm::new(
         vb.get(size, "weight")?,
@@ -82,6 +140,11 @@ impl Block {
 pub struct AudioEncoder {
     conv1: Conv1d,
     conv2: Conv1d,
+    /// (cout, cin*3) reshapes of the conv weights, for the GEMM path.
+    conv1_wm: Tensor,
+    conv2_wm: Tensor,
+    conv1_b: Tensor,
+    conv2_b: Tensor,
     positional_embedding: Tensor,
     blocks: Vec<Block>,
     ln_post: LayerNorm,
@@ -115,15 +178,43 @@ impl AudioEncoder {
             .map(|i| Block::load(n_state, n_head, vb.pp(format!("layers.{i}")), precision))
             .collect::<CandleResult<Vec<_>>>()?;
         let ln_post = layer_norm(n_state, vb.pp("layer_norm"))?;
-        Ok(AudioEncoder { conv1, conv2, positional_embedding, blocks, ln_post })
+        // Pay the (cout, cin, 3) -> (cout, cin*3) reshape once, at load.
+        let conv1_wm = {
+            let w = conv1.weight();
+            w.reshape((w.dim(0)?, w.dim(1)? * 3))?.contiguous()?
+        };
+        let conv2_wm = {
+            let w = conv2.weight();
+            w.reshape((w.dim(0)?, w.dim(1)? * 3))?.contiguous()?
+        };
+        let conv1_b = vb.pp("conv1").get(n_state, "bias")?;
+        let conv2_b = vb.pp("conv2").get(n_state, "bias")?;
+        Ok(AudioEncoder {
+            conv1,
+            conv2,
+            conv1_wm,
+            conv2_wm,
+            conv1_b,
+            conv2_b,
+            positional_embedding,
+            blocks,
+            ln_post,
+        })
     }
 
     /// `mel`: (batch, n_mels, frames) → features (batch, frames/2, d_model).
     pub fn forward(&self, mel: &Tensor) -> CandleResult<Tensor> {
         let p = super::profile::profile();
         let x = super::profile::timed(&p.enc_conv, || -> CandleResult<Tensor> {
-            let x = fast_gelu(&self.conv1.forward(mel)?)?;
-            fast_gelu(&self.conv2.forward(&x)?)
+            // GEMM path where it applies; candle's conv1d otherwise.
+            let c1 = if mel.dim(1)? == self.conv1_wm.dim(1)? / 3 {
+                conv1d_gemm(mel, &self.conv1_wm, &self.conv1_b, mel.dim(1)?, 1)?
+            } else {
+                self.conv1.forward(mel)?
+            };
+            let x = fast_gelu(&c1)?;
+            let c2 = conv1d_gemm(&x, &self.conv2_wm, &self.conv2_b, x.dim(1)?, 2)?;
+            fast_gelu(&c2)
         })?;
         let x = x.transpose(1, 2)?;
         let seq_len = x.dim(1)?;
