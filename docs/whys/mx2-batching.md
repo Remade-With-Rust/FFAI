@@ -65,6 +65,39 @@ throughput. On CPU at 90 % of peak, the machine is already busy.
 
 ---
 
+## 3b. And measured directly, not just inferred
+
+§3 leaned on the roofline table from mission-plan §6.10 — an existing
+measurement, not one taken *as batching*. A borrowed number is not a probe, so
+`examples/batch_ceiling.rs` measures it: stack B copies of one 30 s mel window
+and time the encoder, best-of-3, three independent probes.
+
+Our own encoder cannot serve as the instrument — `conv1d_gemm` would silently
+return item 0 — so this runs candle's reference encoder, which goes through
+`candle_nn::conv1d` and is genuinely batch-capable. That answers "does this
+machine reward batching this shape" without first committing to a kernel
+rewrite.
+
+**Per-window encoder time, ms:**
+
+| batch | probe 1 | probe 2 | probe 3 |
+|---:|---:|---:|---:|
+| 1 | 288.8 | 291.4 | 293.0 |
+| 2 | 279.8 | 281.2 | 294.5 |
+| 4 | 294.6 | 286.7 | 285.8 |
+| 8 | 285.0 | 283.3 | 286.8 |
+
+Flat from 1 to 8. Best speedup anywhere is **1.036×**, and the response is
+non-monotonic inside every probe (up at 2, down at 4, up at 8) — which by this
+campaign's own rule means noise, not a trade to fit a curve to. The refutation
+bar was set at 1.15× before running; nothing came close.
+
+A fourth run taken from a cold cache read 1.065× / 0.921× / 1.056× — wider
+scatter around the same flat line, and worth recording as the reason the
+probe warms before timing.
+
+**The prune's second leg is now measured, not inferred.**
+
 ## 4. Where the prize actually is, if anywhere
 
 Measured stage split (tiny.en, one clip, `FFAI_PROFILE=1`):
