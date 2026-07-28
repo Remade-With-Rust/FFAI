@@ -147,9 +147,17 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
     // the `fs::write` failure and the poisoned-lock paths both leak a WAV into
     // the temp directory — once per request, forever, on exactly the paths
     // that fire when something is already going wrong.
+    //
+    // FFAI_DEMO_KEEP_AUDIO retains the chunk instead, for the case where the
+    // two panes disagree and the only way to find out why is to replay the
+    // exact audio through both engines offline. Off by default: the demo
+    // promises no storage, and a debug switch should have to be asked for.
     struct TempWav(PathBuf);
     impl Drop for TempWav {
         fn drop(&mut self) {
+            if std::env::var_os("FFAI_DEMO_KEEP_AUDIO").is_some() {
+                return;
+            }
             std::fs::remove_file(&self.0).ok();
         }
     }
@@ -193,6 +201,15 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
     };
     let cpp_ms = t1.elapsed().as_secs_f64() * 1e3;
     drop(guard);
+
+    // Correlating a disagreement to its audio needs all three on one line:
+    // the file, and what each engine made of it.
+    if std::env::var_os("FFAI_DEMO_KEEP_AUDIO").is_some() {
+        eprintln!(
+            "kept {}\n     mercury:     {mercury_text:?}\n     whisper.cpp: {cpp_text:?}",
+            tmp.display()
+        );
+    }
 
     serde_json::json!({
         "mercury": { "text": mercury_text, "ms": mercury_ms, "error": mercury_err },

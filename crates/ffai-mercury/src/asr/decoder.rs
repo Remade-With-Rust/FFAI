@@ -36,6 +36,29 @@ pub struct DecodeConfig {
     /// `no_speech_threshold` in openai-whisper and `-nth` in whisper.cpp.
     /// Set above 1.0 to disable.
     pub no_speech_threshold: f32,
+    /// Apply Whisper's `SuppressTokens` list — the ~90 symbol tokens that
+    /// annotate audio rather than transcribe it (`♪`, `((`, `[`).
+    ///
+    /// **Off by default, matching whisper.cpp** (`--suppress-nst` is opt-in
+    /// there) and diverging from openai-whisper, which applies the list. With
+    /// it on, a cough cannot be written as `(coughs)` — the model is denied
+    /// the tokens and falls through to the nearest phonetic rendering
+    /// (`Hah!`), which reads as a transcription error rather than an
+    /// annotation.
+    ///
+    /// This default is a **priced decision, not a free one**. LibriSpeech
+    /// test-clean, 134 clips, tiny.en:
+    ///
+    ///   suppressed (openai-whisper)   WER 7.77  CER 3.25
+    ///   allowed    (whisper.cpp, us)  WER 7.99  CER 3.27
+    ///
+    /// 0.22 pp — 2.8 % relative — because on clean speech the model sometimes
+    /// spends an annotation where words belong. We take that cost to match the
+    /// reference we benchmark against, and carry recovering it as open quality
+    /// work rather than pretending it is not there. Set this to `true` for
+    /// transcripts that must contain words only; it is the better setting for
+    /// WER and the worse one for reading a live transcript.
+    pub suppress_non_speech: bool,
     /// Retry when the transcript looks like a repetition loop (see
     /// [`repetition_ratio`]).
     pub repetition_threshold: f32,
@@ -53,6 +76,7 @@ impl Default for DecodeConfig {
             temperatures: vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
             logprob_threshold: -1.0,
             no_speech_threshold: 0.6,
+            suppress_non_speech: false,
             repetition_threshold: 2.4,
         }
     }
@@ -224,7 +248,17 @@ fn decode_once(
 
     // Whisper's SuppressTokens list, resolved once per window rather than
     // per token (it is ~90 tokenizer lookups).
-    let non_speech = whisper.tokenizer.non_speech_tokens();
+    // FFAI_ALLOW_NONSPEECH lifts SuppressTokens, which is what separates our
+    // output from whisper.cpp's on non-speech events: they leave these tokens
+    // enabled by default (`--suppress-nst` is opt-in), so their model writes
+    // "[coughing]" where ours, unable to spell it, falls through to the
+    // nearest phonetic rendering ("Hahaha").
+    let non_speech = if cfg.suppress_non_speech && !std::env::var_os("FFAI_ALLOW_NONSPEECH").is_some()
+    {
+        whisper.tokenizer.non_speech_tokens()
+    } else {
+        Vec::new()
+    };
 
     let mut rng: u64 = 0x9E3779B97F4A7C15;
     let mut logprob_sum = 0.0f32;
