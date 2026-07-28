@@ -89,6 +89,7 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
                     clips_ok: 0,
                     clips_total: holdout.len(),
                     notes: vec![e.to_string()],
+                    peak_bytes: None,
                 });
             }
         }
@@ -143,6 +144,7 @@ fn run_reference(
         clips_ok: 0,
         clips_total: holdout.len(),
         notes: Vec::new(),
+        peak_bytes: None,
     };
 
     if !spec.supports_batch() {
@@ -200,6 +202,9 @@ fn run_reference(
         .transcribe_secs()
         .map(|t| real_time_factor(media_secs, t))
         .or(summary.rtf_e2e);
+    // From the same execution the timings came from — `best` keeps one run's
+    // wall clock and that run's batch together, and the peak rides along.
+    summary.peak_bytes = batch.peak_bytes;
     Ok(summary)
 }
 
@@ -226,6 +231,7 @@ fn run_engine(
         clips_ok: 0,
         clips_total: holdout.len(),
         notes: Vec::new(),
+        peak_bytes: None,
     };
 
     // Decode audio ONCE, outside the timed region: every implementation gets
@@ -295,6 +301,30 @@ fn run_engine(
             summary.cer = mean(&cers);
         }
         Err(e) => summary.notes.push(first_error.unwrap_or_else(|| e.to_string())),
+    }
+
+    // Peak resident memory for our process. Taken after the timed loop so it
+    // covers weight loading, the KV caches and every intermediate.
+    //
+    // ONE ASYMMETRY, STATED RATHER THAN BURIED: this process holds every clip
+    // pre-decoded (above, deliberately, so the speed comparison measures
+    // inference and not our WAV reader), while a reference reads its audio one
+    // clip at a time. That buffer is the harness's choice, not the engine's,
+    // and it inflates OUR side only. It is recorded next to the peak so the
+    // number can be read honestly — a footprint claim that quietly counted the
+    // harness would be the memory version of the `-nt` flag.
+    let decoded_bytes: u64 =
+        decoded.iter().map(|(_, a)| (a.samples.len() * size_of::<f32>()) as u64).sum();
+    // Peak WORKING SET — resident memory, the same quantity sampled across the
+    // reference's process tree. Not commit: calibration showed commit counts
+    // address space that is reserved and never faulted in.
+    summary.peak_bytes = crate::footprint::peak_self().map(|p| p.0);
+    if summary.peak_bytes.is_some() && decoded_bytes > 0 {
+        summary.notes.push(format!(
+            "peak includes {:.1} MiB of pre-decoded audio held by the harness, \
+             which the reference does not hold",
+            decoded_bytes as f64 / (1024.0 * 1024.0)
+        ));
     }
     Ok(summary)
 }
@@ -376,10 +406,54 @@ fn fill_gates(gates: &mut GateReport, engine: Option<&RunSummary>, references: &
         _ => GateResult::skipped(GateKind::Speed, "engine produced no timed runs"),
     });
 
-    gates.set(GateResult::skipped(
-        GateKind::Footprint,
-        "peak-memory instrumentation lands in Mercury M2",
-    ));
+    // Footprint: peak resident memory against the leanest reference.
+    //
+    // This gate printed SKIP from Phase 0 until it was built, which was never
+    // neutral — `all_passed` counts a skipped gate as not passed, so no run
+    // could ever clear a verdict, and two shipped optimizations whose entire
+    // value is memory (the int8 decoder variant, the f16 cross-attention
+    // cache) had nothing to be recorded against.
+    //
+    // Compared against the SMALLEST reference rather than the fastest: the
+    // question this gate answers is "does the pure-Rust build cost less to
+    // run", and the honest bar is the leanest thing on the board.
+    let leanest = references
+        .iter()
+        .filter_map(|r| r.peak_bytes.map(|b| (r.name.as_str(), b)))
+        .min_by_key(|(_, b)| *b);
+    const MIB: f64 = 1024.0 * 1024.0;
+    gates.set(match (eng.peak_bytes, leanest) {
+        (Some(ep), Some((rname, rp))) => GateResult {
+            kind: GateKind::Footprint,
+            outcome: if ep <= rp { GateOutcome::Pass } else { GateOutcome::Fail },
+            metric: Some(ep as f64 / MIB),
+            detail: format!(
+                "engine peak {:.0} MiB vs leanest reference {rname} {:.0} MiB ({:.2}x)",
+                ep as f64 / MIB,
+                rp as f64 / MIB,
+                ep as f64 / rp as f64
+            ),
+        },
+        (Some(ep), None) => GateResult::skipped(
+            GateKind::Footprint,
+            format!(
+                "engine peak {:.0} MiB but no reference reported one to compare against",
+                ep as f64 / MIB
+            ),
+        ),
+        _ => GateResult::skipped(
+            GateKind::Footprint,
+            if crate::footprint::supported() {
+                "peak memory was not captured for this run".to_string()
+            } else {
+                format!(
+                    "peak-memory measurement is not implemented on {} — \
+                     see crates/ffai-bench/src/footprint.rs",
+                    std::env::consts::OS
+                )
+            },
+        ),
+    });
 }
 
 fn mean(xs: &[f64]) -> Option<f64> {
@@ -411,13 +485,16 @@ pub fn render(record: &BenchRecord) -> String {
     ));
     let mut row = |s: &RunSummary, marker: &str| {
         out.push_str(&format!(
-            "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>7}\n",
+            "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
             format!("{marker}{}", s.name),
             s.wer.map(|w| format!("{:.2}", w * 100.0)).unwrap_or_else(|| "-".into()),
             s.cer.map(|c| format!("{:.2}", c * 100.0)).unwrap_or_else(|| "-".into()),
             s.rtf_warm.map(|r| format!("{r:.1}x")).unwrap_or_else(|| "-".into()),
             s.rtf_e2e.map(|r| format!("{r:.1}x")).unwrap_or_else(|| "-".into()),
             s.load_secs.map(|l| format!("{l:.2}")).unwrap_or_else(|| "-".into()),
+            s.peak_bytes
+                .map(|b| format!("{:.0}", b as f64 / (1024.0 * 1024.0)))
+                .unwrap_or_else(|| "-".into()),
             format!("{}/{}", s.clips_ok, s.clips_total),
         ));
     };

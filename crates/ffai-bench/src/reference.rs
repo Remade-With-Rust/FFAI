@@ -70,6 +70,12 @@ pub struct BatchResult {
     /// aggregate honestly beats splitting it into per-clip numbers the tool
     /// never measured.
     pub batch_transcribe_secs: Option<f64>,
+    /// Peak working set of the reference's own process, in bytes.
+    ///
+    /// Measured after `wait()` while the `Child` still owns its handle — see
+    /// [`crate::footprint`]. `None` where the platform has no implementation,
+    /// so the footprint gate can skip honestly rather than invent a number.
+    pub peak_bytes: Option<u64>,
 }
 
 impl BatchResult {
@@ -132,9 +138,12 @@ impl ReferenceSpec {
             .iter()
             .map(|a| a.replace("{filelist}", &list_path.to_string_lossy()))
             .collect();
-        let result = self.exec(&argv);
+        let result = self.exec_measured(&argv);
         std::fs::remove_file(&list_path).ok();
-        parse_batch_output(&result?, &self.name)
+        let (stdout, peak) = result?;
+        let mut parsed = parse_batch_output(&stdout, &self.name)?;
+        parsed.peak_bytes = peak;
+        Ok(parsed)
     }
 
     /// Run on one input file, returning stdout as text.
@@ -151,24 +160,103 @@ impl ReferenceSpec {
     }
 
     fn exec(&self, argv: &[String]) -> Result<String> {
+        self.exec_measured(argv).map(|(stdout, _)| stdout)
+    }
+
+    /// Run the reference and also report its peak working set.
+    ///
+    /// `Command::output()` cannot be used here: it consumes the `Child` and
+    /// drops the process handle, and the handle is exactly what the memory
+    /// counters are read through. So this spawns, drains both pipes on their
+    /// own threads (a child that fills a pipe buffer while nobody reads it
+    /// deadlocks), waits, and only then queries — while the `Child` is still
+    /// alive and owns the handle.
+    fn exec_measured(&self, argv: &[String]) -> Result<(String, Option<u64>)> {
+        use std::io::Read;
+        use std::process::Stdio;
+
         let (prog, args) = argv
             .split_first()
             .ok_or_else(|| Error::Other(format!("reference `{}` has an empty command", self.name)))?;
-        let out = Command::new(prog).args(args).output().map_err(|e| {
-            Error::Other(format!(
-                "reference `{}` failed to launch (`{prog}`): {e} — is it installed and on PATH?",
-                self.name
-            ))
+        let mut child = Command::new(prog)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                Error::Other(format!(
+                    "reference `{}` failed to launch (`{prog}`): {e} — is it installed and on PATH?",
+                    self.name
+                ))
+            })?;
+
+        // Scope the measurement to the whole TREE, assigned immediately so the
+        // launcher has not yet forked the process that does the work.
+        //
+        // Most references are two processes deep — this one runs
+        // `python.exe adapter.py --bin whisper-cli.exe`, so measuring the
+        // direct child measures the Python launcher. That reported **5 MiB for
+        // a reference that loads a 77.7 MB model**, and a 127x ratio against
+        // us. Both impossible, both plausible-looking in a table.
+        let job = std::sync::Arc::new(crate::footprint::Job::create());
+        if let Some(j) = job.as_ref() {
+            j.assign(&child);
+        }
+        // Sample the tree's resident memory while it runs and keep the maximum.
+        // Sampling is not optional here: a process's counters die with it, and
+        // the process that matters (the grandchild doing the inference) exits
+        // before we could look.
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let peak_seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let sampler = {
+            let (job, done, peak_seen) = (job.clone(), done.clone(), peak_seen.clone());
+            std::thread::spawn(move || {
+                use std::sync::atomic::Ordering;
+                while !done.load(Ordering::Relaxed) {
+                    if let Some(ws) = job.as_ref().as_ref().and_then(|j| j.working_set_now()) {
+                        peak_seen.fetch_max(ws, Ordering::Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            })
+        };
+
+        let mut out_pipe = child.stdout.take().expect("stdout piped above");
+        let mut err_pipe = child.stderr.take().expect("stderr piped above");
+        let out_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            out_pipe.read_to_end(&mut buf).ok();
+            buf
+        });
+        let err_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            err_pipe.read_to_end(&mut buf).ok();
+            buf
+        });
+
+        let status = child.wait().map_err(|e| {
+            Error::Other(format!("reference `{}` could not be waited on: {e}", self.name))
         })?;
-        if !out.status.success() {
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        sampler.join().ok();
+        // The sampled tree maximum; the direct child's own peak is the
+        // fallback when no job could be created, and is explicitly weaker
+        // because it misses whatever the launcher spawned.
+        let peak = Some(peak_seen.load(std::sync::atomic::Ordering::Relaxed))
+            .filter(|b| *b > 0)
+            .or_else(|| crate::footprint::peak_child(&child).map(|p| p.0));
+
+        let stdout = out_thread.join().unwrap_or_default();
+        let stderr = err_thread.join().unwrap_or_default();
+        if !status.success() {
             return Err(Error::Other(format!(
                 "reference `{}` exited with {}: {}",
                 self.name,
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
+                status,
+                String::from_utf8_lossy(&stderr).trim()
             )));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        Ok((String::from_utf8_lossy(&stdout).into_owned(), peak))
     }
 
     /// The argv this reference invokes, with placeholders left intact — the

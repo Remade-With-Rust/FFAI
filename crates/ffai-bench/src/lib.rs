@@ -29,6 +29,7 @@
 //! | footprint | SMT safety proof | peak memory / binary size budget (instrumented in Phase 1) |
 
 pub mod corpus;
+pub mod footprint;
 pub mod gate;
 pub mod ledger;
 pub mod metrics;

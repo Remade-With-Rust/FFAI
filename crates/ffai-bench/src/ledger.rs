@@ -50,6 +50,14 @@ pub struct RunSummary {
     /// Clips successfully processed / clips attempted.
     pub clips_ok: usize,
     pub clips_total: usize,
+    /// Peak resident memory in bytes over the run — the fourth gate's metric.
+    ///
+    /// For our engine this is our own process; for a reference it is that
+    /// subprocess. `None` where the platform cannot measure it, which makes
+    /// the gate skip rather than guess. Serde-defaulted so ledger lines
+    /// written before this existed still parse.
+    #[serde(default)]
+    pub peak_bytes: Option<u64>,
     /// Per-clip failures or notes, kept short.
     #[serde(default)]
     pub notes: Vec<String>,
@@ -167,6 +175,7 @@ mod tests {
                 clips_ok: 10,
                 clips_total: 10,
                 notes: vec![],
+                peak_bytes: Some(412 * 1024 * 1024),
             }],
             gates: GateReport::new(),
             environment: Environment::capture(),
