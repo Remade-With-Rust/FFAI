@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# The demo UI is a wasm app with its own lockfile and its own target dir.
+# Inside the workspace it would be built for the host by `cargo build
+# --workspace` and fail; excluded, `dx` owns it entirely.
+exclude = ["demo-ui"]
 
 [workspace.package]
 version = "0.1.0"

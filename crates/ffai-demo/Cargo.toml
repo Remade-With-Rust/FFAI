@@ -1,0 +1,20 @@
+[package]
+name = "ffai-demo"
+description = "Side-by-side demo server: Mercury and whisper.cpp transcribing the same audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# A demo, not a library anyone should depend on.
+publish = false
+
+[dependencies]
+ffai-core = { workspace = true }
+ffai-media = { workspace = true }
+ffai-mercury = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

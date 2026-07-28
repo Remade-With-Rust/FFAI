@@ -1118,6 +1118,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ffai-demo"
+version = "0.1.0"
+dependencies = [
+ "ffai-core",
+ "ffai-media",
+ "ffai-mercury",
+ "serde_json",
+]
+
+[[package]]
 name = "ffai-media"
 version = "0.1.0"
 dependencies = [

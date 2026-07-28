@@ -1,0 +1,8 @@
+[application]
+name = "demo-ui"
+
+[web.app]
+title = "FFai — Mercury vs whisper.cpp"
+
+[web.watcher]
+reload_html = true
