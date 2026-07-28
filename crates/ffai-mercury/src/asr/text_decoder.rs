@@ -1006,6 +1006,24 @@ impl EncoderAttention {
     /// the encoder did not, which is how the residue stayed unnamed while I
     /// twice called the stage exhausted.
     pub fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
+        // The fused kernels below are written for a single window: the
+        // transposed-K reshape is `(1, heads, hd, seq)` and the merge writes
+        // `(1, seq, heads*hd)`. Rather than let a batched call silently take
+        // the first item's answer — which is exactly the bug `conv1d_gemm`
+        // carried — run each item through the identical path and stack.
+        //
+        // Nothing is lost by looping: the batching ceiling was measured at
+        // 1.00-1.04x (examples/batch_ceiling.rs), so there is no shared work
+        // between windows here worth restructuring the kernels to capture.
+        let batch = x.dim(0)?;
+        if batch > 1 {
+            let mut outs = Vec::with_capacity(batch);
+            for b in 0..batch {
+                outs.push(self.forward(&x.narrow(0, b, 1)?.contiguous()?)?);
+            }
+            return Tensor::cat(&outs, 0);
+        }
+
         let p = super::profile::profile();
         let (seq, d) = (x.dim(1)?, x.dim(2)?);
         let heads = self.inner.n_head;

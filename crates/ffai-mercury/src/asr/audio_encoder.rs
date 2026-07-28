@@ -59,33 +59,58 @@ fn conv1d_gemm(
     cin: usize,
     stride: usize,
 ) -> CandleResult<Tensor> {
+    let batch = x.dim(0)?;
     let l_in = x.dim(2)?;
     let l_out = (l_in + 2 * 1 - 3) / stride + 1;
     let src: Vec<f32> = x.flatten_all()?.to_vec1()?;
-    let mut col = vec![0f32; cin * 3 * l_out];
-    for c in 0..cin {
-        let s = &src[c * l_in..(c + 1) * l_in];
-        for k in 0..3 {
-            let dst = &mut col[(c * 3 + k) * l_out..(c * 3 + k + 1) * l_out];
-            if stride == 1 {
-                // Contiguous slices — padding 1 means tap k reads t+k-1.
-                match k {
-                    0 => dst[1..].copy_from_slice(&s[..l_out - 1]),
-                    1 => dst.copy_from_slice(&s[..l_out]),
-                    _ => dst[..l_out - 1].copy_from_slice(&s[1..l_out]),
-                }
-            } else {
-                for (i, o) in dst.iter_mut().enumerate() {
-                    let idx = stride * i + k;
-                    *o = if idx == 0 { 0.0 } else { *s.get(idx - 1).unwrap_or(&0.0) };
+
+    // im2col for every batch item into ONE buffer, laid out so the columns of
+    // item b occupy `[b*l_out, (b+1)*l_out)`. That makes the whole batch a
+    // single `(cin*3) x (batch*l_out)` GEMM instead of `batch` small ones —
+    // the weight matrix is read once rather than per item.
+    //
+    // This used to index `src[c*l_in..]` with no batch stride while the
+    // caller's signature advertised `(batch, n_mels, frames)`. With batch > 1
+    // it silently produced item 0's answer for the whole batch: no error, no
+    // shape mismatch, just wrong features for every window after the first.
+    let mut col = vec![0f32; cin * 3 * batch * l_out];
+    let row_stride = batch * l_out;
+    for b in 0..batch {
+        let base = b * cin * l_in;
+        for c in 0..cin {
+            let s = &src[base + c * l_in..base + (c + 1) * l_in];
+            for k in 0..3 {
+                let row = (c * 3 + k) * row_stride + b * l_out;
+                let dst = &mut col[row..row + l_out];
+                if stride == 1 {
+                    // Contiguous slices — padding 1 means tap k reads t+k-1.
+                    match k {
+                        0 => dst[1..].copy_from_slice(&s[..l_out - 1]),
+                        1 => dst.copy_from_slice(&s[..l_out]),
+                        _ => dst[..l_out - 1].copy_from_slice(&s[1..l_out]),
+                    }
+                } else {
+                    for (i, o) in dst.iter_mut().enumerate() {
+                        let idx = stride * i + k;
+                        *o = if idx == 0 { 0.0 } else { *s.get(idx - 1).unwrap_or(&0.0) };
+                    }
                 }
             }
         }
     }
-    let colt = Tensor::from_vec(col, (cin * 3, l_out), x.device())?;
-    wm.matmul(&colt)?
+    let cout = wm.dim(0)?;
+    let colt = Tensor::from_vec(col, (cin * 3, batch * l_out), x.device())?;
+    let y = wm
+        .matmul(&colt)?
         .broadcast_add(&bias.reshape((bias.dim(0)?, 1))?)?
-        .reshape((1, wm.dim(0)?, l_out))
+        // (cout, batch*l_out) -> (cout, batch, l_out) -> (batch, cout, l_out)
+        .reshape((cout, batch, l_out))?;
+    if batch == 1 {
+        // Keep the single-window path allocation-identical to before.
+        y.reshape((1, cout, l_out))
+    } else {
+        y.transpose(0, 1)?.contiguous()
+    }
 }
 
 fn layer_norm(size: usize, vb: VarBuilder) -> CandleResult<LayerNorm> {

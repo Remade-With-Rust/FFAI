@@ -1,8 +1,12 @@
-# M-X2 batched encoder — PRUNED before implementation
+# M-X2 batched encoder — BUILT, correct, and worth ~0 for speed
 
 **Date:** 2026-07-28
-**Verdict:** pruned as specified. Redefinition proposed in §5.
-**Cost to find out:** four profiler runs and a window count. No code written.
+**Verdict:** implemented; correctness and null-arm gates PASS; speed prize
+measured at 1.00-1.06x, i.e. nothing. The milestone's own rule was "must move
+xRT materially or it is pruned like §6.8" — by that rule the *optimisation* is
+pruned, while the *capability* ships because building it fixed a live
+correctness bug (§7).
+**Cost:** four profiler runs, a window count, two probes, and one afternoon.
 
 ---
 
@@ -158,15 +162,17 @@ current corpus, gate, or user-facing claim depends on multi-file throughput.
 
 ---
 
-## 6. What this cost, and the rule it confirms
+## 6. What the analysis cost, and the rule it confirms
 
-Four profiler runs and a window count. No kernel was modified — and the
-modification would have been substantial: `conv1d_gemm` flattens and indexes
+Four profiler runs and a window count, before any kernel was touched. Had the
+prize been real the modification would have been substantial: `conv1d_gemm` flattens and indexes
 as `(cin, l_in)` with no batch stride, and the transposed-K attention path
 reshapes to `(1, heads, hd, seq)`. Both silently assume batch 1 while the
 encoder's `forward` documents `(batch, n_mels, frames)`. Extending four
-hand-written AVX2 kernels to batch, for a measured prize of approximately
-zero, is exactly what the prune-on-arithmetic rule exists to prevent.
+hand-written AVX2 kernels to batch *for speed*, on a measured prize of
+approximately zero, is exactly what the prune-on-arithmetic rule exists to
+prevent — and §7 records what happened when the correctness case for building
+it turned out to be independent of the speed case.
 
 Same outcome as §6.8 (query-tiled attention) and §6.25: **compute the prize
 before writing the code.** The prize here is `stage share × speedup`, and
@@ -178,3 +184,59 @@ dimension. Trusting the signature instead of reading `conv1d_gemm` would have
 produced a batched call that silently returned results for item 0 only — no
 error, no shape mismatch, just wrong transcripts for every window after the
 first.
+
+---
+
+## 7. Built anyway — and it was worth building
+
+The analysis above says batching buys no speed, and that held: our AVX2 path
+measures **136.6 / 140.1 / 128.7 ms per window** at batch 1 / 2 / 4 —
+1.00× / 0.98× / 1.06×, matching the independent ceiling probe.
+
+It was implemented regardless, because §6's near-miss was not hypothetical. It
+was a **live bug**:
+
+```rust
+// before — signature says (batch, n_mels, frames), code says otherwise
+let src: Vec<f32> = x.flatten_all()?.to_vec1()?;
+for c in 0..cin {
+    let s = &src[c * l_in..(c + 1) * l_in];   // no batch stride
+```
+
+Any caller passing batch > 1 received **item 0's features for every item** —
+no error, no shape mismatch, no panic. The encoder's own doc comment promised
+a batch dimension it did not honour. The fused encoder-attention path carried
+the same assumption in `kt.reshape((1, heads, hd, seq))`.
+
+**What shipped:**
+
+- `conv1d_gemm` does one im2col across the batch into a single
+  `(cin·3) × (batch·l_out)` GEMM — the weight matrix is read once for the
+  whole batch rather than per item.
+- Encoder attention loops per item, because the measurement says there is no
+  shared work between windows worth restructuring four AVX2 kernels for.
+- The batch-1 path is unchanged in shape and allocation.
+
+**Both of the milestone's gates pass, on our own kernels:**
+
+| gate | result |
+|---|---|
+| correctness — byte-identical, not "close" | **PASS**, `max |Δ| = 0.000e0` on all 4 windows |
+| null arm — batch of 1 reproduces unbatched | **PASS**, bit-exact |
+
+The correctness gate uses four **distinct** windows on purpose, and asserts
+they are distinct before comparing: with identical inputs, the exact bug being
+guarded against would have passed silently.
+
+`examples/batch_encoder.rs` runs both gates and the speed table.
+
+**The distinction worth keeping.** "Batching is not worth building" and
+"batching is not worth *enabling for throughput*" are different claims, and
+only the second survived. The capability is correct and now provable; the
+optimisation is not there, and the ms/window column says so in the same
+breath. Shipping the first while honestly reporting the second is the
+outcome — not a speed win, and not a silent landmine either.
+
+One incidental datapoint from running both probes: our AVX2 encoder is
+**136.6 ms/window against candle's 285 ms/window**, 2.1× faster on the same
+shape and machine.

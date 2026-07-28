@@ -270,8 +270,41 @@ packing (close a window when adding the next region would exceed
 - **Ablation required:** the no-speech gate's fire count with VAD on. Near
   zero is the expected result and is the evidence VAD is doing its job.
 
-### M-X2 — batched encoder — **PRUNED 2026-07-28, before implementation**
+### M-X2 — batched encoder — **BUILT; both gates PASS; speed prize measured at ~0**
 
+> **Status: implemented and correct, and worth nothing for throughput.** Those
+> are two separate findings and both are load-bearing.
+>
+> **Gate 1 — correctness (byte-identical, not "close"): PASS.** A batch of 4
+> distinct windows is bit-exact against 4 separate calls, `max |Δ| = 0.000e0`
+> on every window. **Gate 2 — null arm: PASS**, batch of 1 reproduces the
+> unbatched result bit-exactly.
+>
+> **Gate 3 — speed: no prize.** Our AVX2 path, ms/window: 136.6 at batch 1,
+> 140.1 at 2, 128.7 at 4 — 1.00×/0.98×/1.06×, matching the independent ceiling
+> probe (1.00–1.04× via candle's batch-capable reference). Flat, and
+> non-monotonic, which is noise rather than a trade.
+>
+> **Implementing it fixed a live correctness bug**, which is the reason to
+> have done it regardless of the speed result. `conv1d_gemm` flattened and
+> indexed as `(cin, l_in)` with **no batch stride** while the encoder's
+> signature advertised `(batch, n_mels, frames)`: any batched call silently
+> returned item 0's features for the whole batch — no error, no shape
+> mismatch. The fused encoder-attention path had the same shape assumption
+> (`(1, heads, hd, seq)`).
+>
+> The convolution now does one im2col across the batch and a single GEMM;
+> attention loops per item, because the measurement says there is no shared
+> work between windows worth restructuring four AVX2 kernels to capture.
+>
+> Two things remain true from the original prune: every corpus clip is a
+> single window, so this changes nothing on the benchmark; and the stage that
+> *would* pay on CPU is the decoder (GEMV, ~80 MB streamed per token), not the
+> encoder. Descent and both probes:
+> [whys/mx2-batching.md](whys/mx2-batching.md). Gates:
+> `examples/batch_encoder.rs`. Ceiling: `examples/batch_ceiling.rs`.
+
+<!-- superseded by the block above; kept for provenance -->
 > Pruned on arithmetic, not on effort. Two independent reasons, either
 > sufficient: **(1)** every corpus clip produces exactly **one** 30 s window,
 > so the applicable batch size is 1 and there is nothing to batch; **(2)** the
@@ -297,9 +330,6 @@ packing (close a window when adding the next region would exceed
 > extending four hand-written AVX2 kernels — `conv1d_gemm` and the
 > transposed-K attention path both silently assume batch 1 while the encoder's
 > signature advertises a batch dimension — for a measured prize of ~0.
-
-<details>
-<summary>Original specification (kept for the record)</summary>
 
 #### M-X2 — batched encoder, on top of VAD
 
