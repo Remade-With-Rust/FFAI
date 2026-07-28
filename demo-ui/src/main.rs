@@ -26,6 +26,9 @@ struct Line {
     text: String,
     ms: f64,
     error: Option<String>,
+    /// A committed line is finished and will not be rewritten; the last
+    /// uncommitted one is the sentence currently being spoken.
+    committed: bool,
 }
 
 /// Capture 16 kHz mono PCM, POST each chunk, and hand the JSON back to Rust.
@@ -38,7 +41,8 @@ const RECORDER_JS: &str = r####"
 (async () => {
   const S = (window.__ffai = window.__ffai || {});
   S.stop = false;
-  const CHUNK = __CHUNK__;
+  const TICK = __TICK__;      // how often we re-transcribe, seconds
+  const WINDOW = __WINDOW__;  // how much trailing audio each pass sees
 
   function flatten(chunks) {
     let n = 0; for (const c of chunks) n += c.length;
@@ -95,28 +99,70 @@ const RECORDER_JS: &str = r####"
   };
   src.connect(node); node.connect(ctx.destination);
 
-  async function flush() {
-    const have = pending.reduce((a, b) => a + b.length, 0);
-    // Below ~0.4 s there is not enough audio to be worth a round trip.
-    if (have < ctx.sampleRate * 0.4) return;
-    const pcm = flatten(pending); pending = [];
-    const wav = encodeWav(resample(pcm, ctx.sampleRate, 16000), 16000);
-    try {
-      const res = await fetch('/transcribe', { method: 'POST', body: wav });
-      dioxus.send(await res.text());
-    } catch (e) {
-      dioxus.send(JSON.stringify({ fatal: 'transcribe request failed: ' + e }));
+  // Root-mean-square, to spot a pause. A cheap stand-in for the real VAD the
+  // roadmap schedules for Phase 1.5 — enough to end a line at a natural break
+  // rather than mid-word, which is what a fixed cadence gets wrong.
+  function rms(a) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / a.length); }
+
+  // Re-transcribe the trailing window every tick and REPLACE the live line.
+  // Affordable only because Whisper pads every window to 30 s regardless: 1 s
+  // of audio costs 213 ms and 10 s costs 311 ms, so a pass WITH full context
+  // is essentially the same price as one without. Sending more audio buys
+  // accuracy for free; sending it more often buys latency.
+  // Drop audio older than the window, EVERY tick, regardless of what the
+  // request did. Bounding this on a successful response was a leak: `pass()`
+  // early-returns while a request is inflight, and the buffer reset sat after
+  // the `await fetch` inside the `try`, so a hung or failing server meant the
+  // recorder kept appending and nothing ever cleared — ~192 KB/s at 48 kHz,
+  // about 690 MB an hour, until the tab died. Transient errors were enough.
+  // Now the cap is structural and the commit only decides what to DISPLAY.
+  function trimToWindow() {
+    let total = 0;
+    for (const c of pending) total += c.length;
+    const cap = Math.floor(ctx.sampleRate * WINDOW);
+    while (pending.length > 1 && total - pending[0].length >= cap) {
+      total -= pending.shift().length;
     }
   }
 
+  let inflight = false;
+  async function pass(commit) {
+    if (inflight) return;
+    inflight = true;
+    try {
+      const pcm = flatten(pending);
+      if (pcm.length >= ctx.sampleRate * 0.3) {
+        const span = Math.floor(ctx.sampleRate * WINDOW);
+        const tail = pcm.length > span ? pcm.subarray(pcm.length - span) : pcm;
+        const wav = encodeWav(resample(tail, ctx.sampleRate, 16000), 16000);
+        const res = await fetch('/transcribe', { method: 'POST', body: wav });
+        const j = JSON.parse(await res.text());
+        j.commit = commit;
+        dioxus.send(JSON.stringify(j));
+      }
+      if (commit) pending = [];
+    } catch (e) {
+      dioxus.send(JSON.stringify({ fatal: 'transcribe request failed: ' + e }));
+    } finally { inflight = false; }
+  }
+
+  let quiet = 0;
   while (!S.stop) {
-    await new Promise((r) => setTimeout(r, 200));
-    const have = pending.reduce((a, b) => a + b.length, 0);
-    if (have >= ctx.sampleRate * CHUNK) await flush();
+    await new Promise((r) => setTimeout(r, TICK * 1000));
+    trimToWindow();
+    const recent = pending.length ? pending[pending.length - 1] : null;
+    const silent = recent ? rms(recent) < 0.008 : true;
+    quiet = silent ? quiet + TICK : 0;
+    const held = pending.reduce((a, b) => a + b.length, 0) / ctx.sampleRate;
+    // End the line on a ~0.8 s pause, or when the window is full and holding
+    // more would start dropping the start of the sentence.
+    const commit = (quiet >= 0.8 && held > 1.0) || held >= WINDOW;
+    await pass(commit);
+    if (commit) quiet = 0;
   }
   // Stop was pressed: send whatever is left rather than dropping the last
   // sentence mid-word.
-  await flush();
+  await pass(true);
   stream.getTracks().forEach((t) => t.stop());
   ctx.close();
   dioxus.send(JSON.stringify({ done: true }));
@@ -139,7 +185,10 @@ fn App() -> Element {
         running.set(true);
         status.set("listening…".into());
         spawn(async move {
-            let js = RECORDER_JS.replace("__CHUNK__", "5");
+            // 1 s cadence, 10 s of context per pass. Nearly free: 1 s of audio
+            // costs 213 ms and 10 s costs 311 ms, because the encoder pads to
+            // 30 s either way.
+            let js = RECORDER_JS.replace("__TICK__", "1").replace("__WINDOW__", "10");
             let mut eval = document::eval(&js);
             // One message per transcribed chunk until the recorder reports
             // done. Each carries BOTH engines' answers for the same audio.
@@ -165,15 +214,41 @@ fn App() -> Element {
                             .and_then(|o| o.get("error"))
                             .and_then(|e| e.as_str())
                             .map(str::to_string),
+                        committed: false,
                     }
                 };
-                let (m, c) = (pull("mercury"), pull("whispercpp"));
-                if !m.text.is_empty() || m.error.is_some() {
-                    mercury.write().push(m);
-                }
-                if !c.text.is_empty() || c.error.is_some() {
-                    cpp.write().push(c);
-                }
+                // Each pass REPLACES the live line; a commit freezes it and the
+                // next pass starts a new one. That is what makes text grow and
+                // self-correct while you speak, instead of arriving in blocks.
+                let committing = v.get("commit").and_then(|c| c.as_bool()).unwrap_or(false);
+                let mut put = |sig: &mut Signal<Vec<Line>>, line: Line| {
+                    if line.text.is_empty() && line.error.is_none() {
+                        return;
+                    }
+                    let mut w = sig.write();
+                    match w.last_mut() {
+                        Some(last) if !last.committed => *last = line,
+                        _ => w.push(line),
+                    }
+                    if committing {
+                        if let Some(last) = w.last_mut() {
+                            last.committed = true;
+                        }
+                    }
+                    // Keep the transcript bounded. One line per utterance is
+                    // slow growth, but nothing pruned it and every line is a
+                    // live DOM node — a long session grew the list and the
+                    // render tree together until scrolling stuttered. A demo
+                    // that degrades after twenty minutes is a demo that fails
+                    // in front of someone.
+                    const KEEP: usize = 200;
+                    if w.len() > KEEP {
+                        let drop_n = w.len() - KEEP;
+                        w.drain(..drop_n);
+                    }
+                };
+                put(&mut mercury, pull("mercury"));
+                put(&mut cpp, pull("whispercpp"));
             }
             running.set(false);
             status.set("stopped".into());
@@ -196,8 +271,19 @@ fn App() -> Element {
             header {
                 h1 { "Mercury vs whisper.cpp" }
                 p { class: "sub",
-                    "Both engines transcribe the same 5-second chunk of your microphone. \
-                     Same audio, same greedy decode settings, same model size (tiny.en)."
+                    "Both engines re-transcribe the same trailing 10 seconds of your \
+                     microphone, once a second — same bytes, same greedy settings, same \
+                     model size (tiny.en). Grey italic text is still being revised; it \
+                     firms up when you pause."
+                }
+                p { class: "warn",
+                    "The millisecond figures are NOT a speed comparison. Mercury runs warm \
+                     in-process; whisper.cpp is a subprocess that reloads its model on \
+                     every pass, so it is charged model load each time. Putting startup \
+                     inside a timed run is the exact defect this project fixed at the \
+                     benchmark level. For real throughput use "
+                    code { "ffai bench asr" }
+                    "."
                 }
             }
             div { class: "bar",
@@ -247,7 +333,10 @@ fn Pane(title: String, accent: String, lines: Vec<Line>) -> Element {
                         if let Some(err) = &line.error {
                             span { class: "err", "{err}" }
                         } else {
-                            span { class: "txt", "{line.text}" }
+                            span {
+                                class: if line.committed { "txt" } else { "txt live" },
+                                "{line.text}"
+                            }
                             span { class: "ms", "{line.ms:.0} ms" }
                         }
                     }
@@ -288,6 +377,7 @@ h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.01em; }
         align-items:baseline; }
 .line:last-child { border-bottom:0; }
 .txt { flex:1; }
+.txt.live { color:#8b949e; font-style:italic; }
 .ms { color:#6e7681; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .err { color:#f85149; font-size:13px; }
 "#;

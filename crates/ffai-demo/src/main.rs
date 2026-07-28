@@ -143,16 +143,28 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
     if wav.len() < 44 {
         return json_error("posted body is not a WAV (too short)");
     }
-    let tmp = std::env::temp_dir().join(format!(
+    // Deleted on EVERY path, including the early returns below. Without this
+    // the `fs::write` failure and the poisoned-lock paths both leak a WAV into
+    // the temp directory — once per request, forever, on exactly the paths
+    // that fire when something is already going wrong.
+    struct TempWav(PathBuf);
+    impl Drop for TempWav {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.0).ok();
+        }
+    }
+
+    let tmp = TempWav(std::env::temp_dir().join(format!(
         "ffai-demo-{}.wav",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
-    ));
-    if let Err(e) = std::fs::write(&tmp, wav) {
+    )));
+    if let Err(e) = std::fs::write(&tmp.0, wav) {
         return json_error(&format!("could not stage audio: {e}"));
     }
+    let tmp = &tmp.0;
 
     let guard = match engines.lock() {
         Ok(g) => g,
@@ -161,7 +173,7 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
 
     // ---- Mercury, in process ----
     let t0 = Instant::now();
-    let (mercury_text, mercury_err) = match ffai_media::load_audio(&tmp) {
+    let (mercury_text, mercury_err) = match ffai_media::load_audio(tmp) {
         Ok(audio) => match guard.mercury.transcribe(&audio, &AsrOptions::default()) {
             Ok(t) => (t.text().trim().to_string(), None),
             Err(e) => (String::new(), Some(e.to_string())),
@@ -173,7 +185,7 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
     // ---- whisper.cpp, as a subprocess on the SAME file ----
     let t1 = Instant::now();
     let (cpp_text, cpp_err) = match (&guard.whisper_cli, guard.model.exists()) {
-        (Some(bin), true) => run_whisper_cpp(bin, &guard.model, &tmp),
+        (Some(bin), true) => run_whisper_cpp(bin, &guard.model, tmp),
         _ => (
             String::new(),
             Some("whisper.cpp not installed (see docs/benchmarking.md)".to_string()),
@@ -181,7 +193,6 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
     };
     let cpp_ms = t1.elapsed().as_secs_f64() * 1e3;
     drop(guard);
-    std::fs::remove_file(&tmp).ok();
 
     serde_json::json!({
         "mercury": { "text": mercury_text, "ms": mercury_ms, "error": mercury_err },
