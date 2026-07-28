@@ -191,6 +191,7 @@ fn decode_with_fallback(
             );
         }
         if no_speech_prob > cfg.no_speech_threshold {
+            NO_SPEECH_DROPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(Vec::new());
         }
 
@@ -206,6 +207,21 @@ fn decode_with_fallback(
         }
     }
     Ok(best.map(|(_, tokens)| tokens).unwrap_or_default())
+}
+
+/// How many windows the no-speech gate has discarded in this process.
+///
+/// Instrumented, not decorative: the ablation that says whether VAD is doing
+/// its job is "with `--vad` on, does this stay near zero?" A gate that keeps
+/// firing means silence is still reaching the model and the detector is
+/// mis-tuned — which is a thing we want to be told, so the gate stays on as
+/// defence in depth rather than being removed once VAD lands.
+pub static NO_SPEECH_DROPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Read the drop counter. See [`NO_SPEECH_DROPS`].
+pub fn no_speech_drops() -> usize {
+    NO_SPEECH_DROPS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A cheap stand-in for Whisper's zlib compression-ratio check: the ratio of

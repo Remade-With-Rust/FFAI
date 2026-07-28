@@ -182,6 +182,10 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
     // ---- Mercury, in process ----
     let t0 = Instant::now();
     let (mercury_text, mercury_err) = match ffai_media::load_audio(tmp) {
+        // VAD comes on by default now, which is what this demo wanted anyway:
+        // a sliding window over a live microphone is mostly silence, and
+        // without segmentation every silent tick costs a full encoder pass to
+        // produce nothing. One captured session ran 7 chunks for 2 lines.
         Ok(audio) => match guard.mercury.transcribe(&audio, &AsrOptions::default()) {
             Ok(t) => (t.text().trim().to_string(), None),
             Err(e) => (String::new(), Some(e.to_string())),

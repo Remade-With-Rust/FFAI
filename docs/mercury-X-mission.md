@@ -129,10 +129,29 @@ alignment gates first; languages are a widening, not a milestone.
 
 ## 4. Flag surface — the user-facing contract
 
-**Every stage is off by default and switched on per call.** Nothing about
-today's output changes for anyone who does not ask for it. This is the
-requirement that shapes the design: the layer is *added capability*, never a
-behaviour change to the existing path.
+**Stages are off by default and switched on per call**, with one earned
+exception. The layer is *added capability*, not a behaviour change to the
+existing path — except where a stage is measured to improve the existing path,
+in which case defaulting it off would be withholding a win to preserve a rule.
+
+**VAD is on by default as of 2026-07-28, on speed evidence only.** 2.2–4.2× on
+audio with trailing silence at a byte-identical transcript, an empty result on
+silence without an encoder pass, and a live sliding window that stops paying
+for chunks containing nothing.
+
+Corpus WER also moves with it on (test-clean 7.99 → 6.79, test-other
+16.79 → 16.43) and that is **not** a quality win. The per-clip decomposition
+is 38 improved / 38 worsened over 400 clips — a sign test of z = 0.00 — and
+`corr(silence trimmed, WER gain)` is −0.09 on both corpora, the opposite sign
+to the mechanism that was proposed. VAD perturbs where speech sits inside the
+fixed 30 s context and re-rolls the decode on ~19 % of clips, half each way.
+The aggregate moved because WER is dominated by a handful of high-delta clips.
+Full descent in [whys/vad-quality.md](whys/vad-quality.md); the transferable
+rule went into the `codec-tune-quality` skill.
+
+`--no-vad` restores the fixed-grid behaviour. Alignment and diarization remain
+opt-in — they add models and change the output's shape, and neither has earned
+anything yet.
 
 ```sh
 ffai asr -i talk.wav                                  # unchanged, today's behaviour

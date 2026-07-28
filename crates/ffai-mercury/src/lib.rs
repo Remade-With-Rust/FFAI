@@ -114,6 +114,13 @@ mod tests {
             .unwrap()
             .transcribe(&audio, &opts)
             .unwrap_err();
-        assert!(err.to_string().contains("M3"), "got: {err}");
+        // Diarization is Mercury-X phase D and still unbuilt. Word timestamps
+        // used to be refused by this same guard and are now implemented, so
+        // the error must name the stage that is actually missing rather than
+        // the pair they used to share.
+        let msg = err.to_string();
+        assert!(msg.contains("diarize"), "got: {msg}");
+        assert!(msg.contains("phase D"), "got: {msg}");
+        assert!(!msg.contains("--word-timestamps and"), "stale joint refusal: {msg}");
     }
 }

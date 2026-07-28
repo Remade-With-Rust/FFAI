@@ -12,6 +12,8 @@
 //! | [`decoder`] | mel → token ids (greedy, with the timestamp grammar) |
 
 pub mod adaptive;
+pub mod align;
+pub mod aligner;
 pub mod audio_encoder;
 pub mod decoder;
 pub mod f16_gemv;
@@ -22,6 +24,8 @@ pub mod model;
 pub mod profile;
 pub mod text_decoder;
 pub mod tokenizer;
+pub mod vad;
+pub mod wav2vec2;
 pub mod vocab_int8;
 
 mod whisper_candle;

@@ -74,7 +74,7 @@ pub struct EngineInfo {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AsrOptions {
     /// Force a language instead of auto-detecting.
     pub language: Option<String>,
@@ -84,6 +84,50 @@ pub struct AsrOptions {
     pub diarize: bool,
     /// Translate to English instead of transcribing.
     pub translate: bool,
+    /// Segment on speech before transcribing, so silence never reaches the
+    /// model.
+    ///
+    /// **On by default, for measured speed — not for quality.**
+    ///
+    /// - Audio with trailing silence: 2.2–4.2× faster, transcript byte-identical.
+    /// - Silent input: empty transcript, with no encoder pass at all.
+    /// - A live sliding window stops spending five encoder passes to produce
+    ///   nothing.
+    ///
+    /// Corpus WER *does* move with this on (test-clean 7.99 → 6.79,
+    /// test-other 16.79 → 16.43), and that is **not** a quality improvement —
+    /// do not cite it as one. Per-clip decomposition over 400 clips gives 38
+    /// improved and 38 worsened, a sign test of z = 0.00. VAD shifts where
+    /// speech sits inside Whisper's fixed 30 s context by ~0.2 s, which
+    /// re-rolls the decode on about a fifth of clips, half each way; the
+    /// aggregate moved because WER is dominated by a few high-delta clips.
+    /// Full descent: `docs/whys/vad-quality.md`.
+    ///
+    /// Set `false` for the unsegmented fixed-30 s-grid behaviour.
+    pub vad: bool,
+    /// Speech threshold, 0..1, higher being stricter. Only read when
+    /// [`Self::vad`] is set.
+    pub vad_threshold: f32,
+    /// Pack speech regions into windows of at most this many seconds.
+    pub vad_chunk_secs: f32,
+}
+
+impl Default for AsrOptions {
+    fn default() -> Self {
+        // Written out rather than derived: `vad_threshold` and
+        // `vad_chunk_secs` have meaningful defaults, and `#[derive(Default)]`
+        // would silently make them 0.0 — a threshold that calls everything
+        // speech and a window width that holds nothing.
+        AsrOptions {
+            language: None,
+            word_timestamps: false,
+            diarize: false,
+            translate: false,
+            vad: true,
+            vad_threshold: 0.5,
+            vad_chunk_secs: 30.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

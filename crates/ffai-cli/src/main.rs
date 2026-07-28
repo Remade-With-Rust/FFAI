@@ -48,7 +48,7 @@ enum Cmd {
         /// Input audio file (Phase 0: WAV)
         #[arg(short, long)]
         input: PathBuf,
-        /// Output file; `.srt` extension selects subtitle format (default: stdout text)
+        /// Output file; `.srt`/`.vtt`/`.json` select the format (default: stdout text)
         #[arg(short, long)]
         output: Option<PathBuf>,
         #[arg(long)]
@@ -62,6 +62,18 @@ enum Cmd {
         /// Speaker diarization
         #[arg(long)]
         diarize: bool,
+        /// Segment on speech first (on by default; this flag is explicit opt-in)
+        #[arg(long)]
+        vad: bool,
+        /// Transcribe the raw fixed 30 s grid instead, without speech segmentation
+        #[arg(long, conflicts_with = "vad")]
+        no_vad: bool,
+        /// VAD speech threshold, 0..1 — higher is stricter
+        #[arg(long, default_value_t = 0.5)]
+        vad_threshold: f32,
+        /// Pack speech into windows of at most this many seconds
+        #[arg(long, default_value_t = 30.0)]
+        vad_chunk_secs: f32,
     },
     /// Synthesize speech from text (Mercury)
     Tts {
@@ -183,13 +195,66 @@ fn main() -> Result<()> {
             }
             println!("\ncache root: {}", ffai_models::cache_dir().display());
         }
-        Cmd::Asr { input, output, engine, language, word_timestamps, diarize } => {
+        Cmd::Asr {
+            input,
+            output,
+            engine,
+            language,
+            word_timestamps,
+            diarize,
+            vad,
+            no_vad,
+            vad_threshold,
+            vad_chunk_secs,
+        } => {
+            if !(0.0..=1.0).contains(&vad_threshold) {
+                anyhow::bail!("--vad-threshold must be in 0..=1, got {vad_threshold}");
+            }
+            if vad_chunk_secs <= 0.0 || vad_chunk_secs > 30.0 {
+                anyhow::bail!(
+                    "--vad-chunk-secs must be in (0, 30]; Whisper's context is 30 s and a \
+                     longer window cannot be represented (got {vad_chunk_secs})"
+                );
+            }
+            // VAD is on by default (it improves WER, not just speed — see
+            // AsrOptions::vad), so `--vad` is now an explicit no-op and
+            // `--no-vad` is the switch that does something. Turning it off
+            // while asking for a stage that needs speech boundaries is still
+            // a contradiction rather than a silent degradation.
+            let _ = vad;
+            if no_vad && (word_timestamps || diarize) {
+                anyhow::bail!(
+                    "--no-vad conflicts with --word-timestamps/--diarize, which need speech \
+                     segmentation to work. Drop --no-vad, or drop the stage."
+                );
+            }
+            let vad_on = !no_vad;
+
             let audio = ffai_media::load_audio(&input)?;
-            let opts = AsrOptions { language, word_timestamps, diarize, translate: false };
+            let opts = AsrOptions {
+                language,
+                word_timestamps,
+                diarize,
+                translate: false,
+                vad: vad_on,
+                vad_threshold,
+                vad_chunk_secs,
+            };
             let transcript = reg.asr(engine.as_deref())?.transcribe(&audio, &opts)?;
             match output {
-                Some(path) if path.extension().and_then(|e| e.to_str()) == Some("srt") => {
-                    std::fs::write(&path, transcript.to_srt())?;
+                // Format follows the extension, as it does for `ffmpeg -o`.
+                Some(path)
+                    if matches!(
+                        path.extension().and_then(|e| e.to_str()),
+                        Some("srt" | "vtt" | "json")
+                    ) =>
+                {
+                    let body = match path.extension().and_then(|e| e.to_str()) {
+                        Some("srt") => transcript.to_srt(),
+                        Some("vtt") => transcript.to_vtt(),
+                        _ => transcript.to_json(),
+                    };
+                    std::fs::write(&path, body)?;
                     println!("wrote {}", path.display());
                 }
                 Some(path) => {

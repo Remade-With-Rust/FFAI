@@ -15,7 +15,9 @@ use ffai_core::types::{AudioBuffer, Transcript};
 use super::decoder::{self, DecodeConfig};
 use super::mel::{self, MelSpectrogram};
 use super::model::LoadedWhisper;
+use super::aligner::{Aligner, DEFAULT_MODEL as ALIGN_MODEL};
 use super::text_decoder::Precision;
+use super::vad;
 
 /// OpenAI Whisper running on candle.
 ///
@@ -29,6 +31,12 @@ pub struct WhisperCandle {
     // Mutex because decoding mutates the KV cache; the engine trait is
     // `Send + Sync` so callers can share one engine across threads.
     state: Mutex<Option<State>>,
+    /// Loaded on first `--word-timestamps` call and never before.
+    ///
+    /// Separate from `state` so the ASR path cannot be blocked behind
+    /// alignment, and lazy so the flag's promise holds: without it, the
+    /// 95M-parameter model is not fetched, not mapped, and not resident.
+    aligner: Mutex<Option<std::sync::Arc<Aligner>>>,
 }
 
 struct State {
@@ -39,6 +47,26 @@ struct State {
 }
 
 impl WhisperCandle {
+    /// The alignment model, loaded on first use.
+    ///
+    /// Held behind an `Arc` so the lock is released before the (slow)
+    /// alignment runs — otherwise one thread asking for word timestamps would
+    /// serialise every other thread's plain transcription behind it.
+    fn aligner(&self) -> Result<std::sync::Arc<Aligner>> {
+        let mut guard = self
+            .aligner
+            .lock()
+            .map_err(|_| Error::Other("aligner lock poisoned by an earlier panic".into()))?;
+        if guard.is_none() {
+            *guard = Some(std::sync::Arc::new(Aligner::from_manifest_dir(
+                &self.manifest_dir,
+                ALIGN_MODEL,
+                ffai_core::best_device(),
+            )?));
+        }
+        Ok(guard.as_ref().expect("initialized above").clone())
+    }
+
     /// Default: `whisper-tiny-en` from the repo's `models/` directory — the
     /// M1 bring-up target, matching the M0 baseline configuration.
     pub fn new() -> Self {
@@ -55,6 +83,7 @@ impl WhisperCandle {
             model_name: model_name.into(),
             precision,
             state: Mutex::new(None),
+            aligner: Mutex::new(None),
         }
     }
 }
@@ -93,10 +122,10 @@ impl AsrEngine for WhisperCandle {
     }
 
     fn transcribe(&self, audio: &AudioBuffer, opts: &AsrOptions) -> Result<Transcript> {
-        if opts.word_timestamps || opts.diarize {
+        if opts.diarize {
             return Err(Error::Other(
-                "--word-timestamps and --diarize are the WhisperX layer, scheduled for Mercury \
-                 M3 (see docs/mercury-mission-plan.md §3.2)"
+                "--diarize is Mercury-X phase D and is not built yet (see \
+                 docs/mercury-X-mission.md). --word-timestamps works today."
                     .into(),
             ));
         }
@@ -143,8 +172,44 @@ impl AsrEngine for WhisperCandle {
         };
         let cfg = DecodeConfig { language, translate: opts.translate, ..Default::default() };
 
+        // Window selection is the whole of the VAD feature. With it off this
+        // is the fixed 30 s grid, byte for byte what it has always been; with
+        // it on the windows are speech-shaped, and stretches of silence longer
+        // than the packing width are never handed to the encoder at all.
+        //
+        // Windows carry their absolute start sample either way, so segment
+        // timestamps land in the original audio's time base with no remapping.
+        // FFAI_VAD overrides the flag in BOTH directions for callers that
+        // cannot set it — the bench harness builds `AsrOptions` itself, and a
+        // feature that is on by default needs an off switch to be measured
+        // against, not just an on switch. `FFAI_VAD=0` restores the
+        // fixed-grid behaviour; anything else forces segmentation. Same A/B
+        // override pattern as FFAI_ALLOW_NONSPEECH; not a user-facing switch.
+        let vad_on = match std::env::var("FFAI_VAD").ok().as_deref() {
+            Some("0" | "off" | "false") => false,
+            Some(_) => true,
+            None => opts.vad,
+        };
+        let windows: Vec<(usize, &[f32])> = if vad_on {
+            let regions = vad::detect(&mono.samples, opts.vad_threshold);
+            vad::pack(&regions, opts.vad_chunk_secs as f64)
+                .into_iter()
+                .map(|w| {
+                    let sr = mel::SAMPLE_RATE as f64;
+                    let start = ((w.start * sr) as usize).min(mono.samples.len());
+                    let end = ((w.end * sr).ceil() as usize).clamp(start, mono.samples.len());
+                    (start, &mono.samples[start..end])
+                })
+                .collect()
+        } else {
+            decoder::windows(&mono.samples).collect()
+        };
+        // No speech found is a valid answer, and the common one on a silent
+        // chunk. It returns an empty transcript without loading the encoder.
+        let did_work = !windows.is_empty();
+
         let mut segments = Vec::new();
-        for (start_sample, window) in decoder::windows(&mono.samples) {
+        for (start_sample, window) in windows {
             let offset_secs = start_sample as f64 / mel::SAMPLE_RATE as f64;
             let window_secs = window.len() as f64 / mel::SAMPLE_RATE as f64;
             // Pad in the sample domain, before the spectrogram — see
@@ -185,8 +250,13 @@ impl AsrEngine for WhisperCandle {
         // because by then the transients have been touched again. Once, here,
         // right after the first pass — never in the decode path, where
         // trimming what you are about to touch again only buys page faults.
-        let first_pass = !state.warmed;
-        state.warmed = true;
+        // Gated on `did_work`: with VAD on, a silent first call decodes
+        // nothing, and trimming then would hand back an arena the first real
+        // inference is about to fault straight back in — the same
+        // timing-is-load-bearing mistake described above, arrived at from the
+        // other direction.
+        let first_pass = !state.warmed && did_work;
+        state.warmed |= did_work;
         let language = opts
             .language
             .clone()
@@ -196,6 +266,16 @@ impl AsrEngine for WhisperCandle {
             ffai_core::release_load_arena();
         }
 
-        Ok(Transcript { language, segments })
+        // `None` when not asked for — an absent result, distinct from an
+        // empty one. Alignment runs after decoding because it needs the text:
+        // it is aligning a known transcript, not recognising one.
+        let words = if opts.word_timestamps {
+            let aligner = self.aligner()?;
+            Some(aligner.align_segments(&mono.samples, &segments))
+        } else {
+            None
+        };
+
+        Ok(Transcript { language, segments, words })
     }
 }
