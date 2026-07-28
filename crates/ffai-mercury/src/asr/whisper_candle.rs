@@ -165,6 +165,20 @@ impl AsrEngine for WhisperCandle {
             )?);
         }
 
+        // TRIED AND REVERTED: `ffai_core::release_load_arena()` here, to hand
+        // back the ~240 MiB of one-time transients the allocator keeps after
+        // weight loading. It measured FLAT — 345.1 MiB held either way — at
+        // both call sites tried (after load, and after the first complete
+        // pass). The trim itself works (resident drops to 0.2 MiB), but the
+        // following passes fault the same pages straight back, so the memory
+        // is evidently touched again rather than being dead.
+        //
+        // That contradicts the standalone probe, where trimming after four
+        // passes and repeating them re-settles at 102 MiB. Both measurements
+        // are real and they disagree about WHICH pages the work touches;
+        // resolving it needs allocation profiling, not another guess. Left
+        // reverted rather than shipped inert, with the numbers here so the
+        // next attempt starts from them (see examples/mem_claims.rs).
         Ok(Transcript {
             language: opts.language.clone().or_else(|| {
                 state.whisper.is_english_only().then(|| "en".to_string())

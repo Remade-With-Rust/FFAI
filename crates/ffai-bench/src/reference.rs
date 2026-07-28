@@ -70,6 +70,9 @@ pub struct BatchResult {
     /// aggregate honestly beats splitting it into per-clip numbers the tool
     /// never measured.
     pub batch_transcribe_secs: Option<f64>,
+    /// Median resident memory across the run — what the tree sits at while
+    /// working, as opposed to its worst instant.
+    pub steady_bytes: Option<u64>,
     /// Peak working set of the reference's own process, in bytes.
     ///
     /// Measured after `wait()` while the `Child` still owns its handle — see
@@ -140,9 +143,10 @@ impl ReferenceSpec {
             .collect();
         let result = self.exec_measured(&argv);
         std::fs::remove_file(&list_path).ok();
-        let (stdout, peak) = result?;
+        let (stdout, peak, steady) = result?;
         let mut parsed = parse_batch_output(&stdout, &self.name)?;
         parsed.peak_bytes = peak;
+        parsed.steady_bytes = steady;
         Ok(parsed)
     }
 
@@ -160,7 +164,7 @@ impl ReferenceSpec {
     }
 
     fn exec(&self, argv: &[String]) -> Result<String> {
-        self.exec_measured(argv).map(|(stdout, _)| stdout)
+        self.exec_measured(argv).map(|(stdout, _, _)| stdout)
     }
 
     /// Run the reference and also report its peak working set.
@@ -171,7 +175,7 @@ impl ReferenceSpec {
     /// own threads (a child that fills a pipe buffer while nobody reads it
     /// deadlocks), waits, and only then queries — while the `Child` is still
     /// alive and owns the handle.
-    fn exec_measured(&self, argv: &[String]) -> Result<(String, Option<u64>)> {
+    fn exec_measured(&self, argv: &[String]) -> Result<(String, Option<u64>, Option<u64>)> {
         use std::io::Read;
         use std::process::Stdio;
 
@@ -208,13 +212,25 @@ impl ReferenceSpec {
         // before we could look.
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let peak_seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        // Samples are kept, not just the maximum: peak is set by the worst
+        // instant (usually model load), while the MEDIAN is what the process
+        // actually sits at while working. Reporting only the peak would
+        // compare our load spike against their load spike and call it
+        // footprint.
+        let samples = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
         let sampler = {
-            let (job, done, peak_seen) = (job.clone(), done.clone(), peak_seen.clone());
+            let (job, done, peak_seen, samples) =
+                (job.clone(), done.clone(), peak_seen.clone(), samples.clone());
             std::thread::spawn(move || {
                 use std::sync::atomic::Ordering;
                 while !done.load(Ordering::Relaxed) {
                     if let Some(ws) = job.as_ref().as_ref().and_then(|j| j.working_set_now()) {
                         peak_seen.fetch_max(ws, Ordering::Relaxed);
+                        if ws > 0 {
+                            if let Ok(mut v) = samples.lock() {
+                                v.push(ws);
+                            }
+                        }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
@@ -245,6 +261,13 @@ impl ReferenceSpec {
         let peak = Some(peak_seen.load(std::sync::atomic::Ordering::Relaxed))
             .filter(|b| *b > 0)
             .or_else(|| crate::footprint::peak_child(&child).map(|p| p.0));
+        let steady = samples.lock().ok().and_then(|mut v| {
+            if v.is_empty() {
+                return None;
+            }
+            v.sort_unstable();
+            Some(v[v.len() / 2])
+        });
 
         let stdout = out_thread.join().unwrap_or_default();
         let stderr = err_thread.join().unwrap_or_default();
@@ -256,7 +279,7 @@ impl ReferenceSpec {
                 String::from_utf8_lossy(&stderr).trim()
             )));
         }
-        Ok((String::from_utf8_lossy(&stdout).into_owned(), peak))
+        Ok((String::from_utf8_lossy(&stdout).into_owned(), peak, steady))
     }
 
     /// The argv this reference invokes, with placeholders left intact — the

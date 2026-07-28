@@ -66,6 +66,12 @@ mod imp {
             cb: u32,
         ) -> i32;
         fn GetCurrentProcess() -> *mut c_void;
+        fn SetProcessWorkingSetSizeEx(
+            process: *mut c_void,
+            min: usize,
+            max: usize,
+            flags: u32,
+        ) -> i32;
     }
 
     fn query(handle: *mut c_void) -> Option<u64> {
@@ -105,6 +111,20 @@ mod imp {
     pub fn peak_child(child: &std::process::Child) -> Option<u64> {
         use std::os::windows::io::AsRawHandle;
         query(child.as_raw_handle() as *mut c_void)
+    }
+
+    /// DIAGNOSTIC ONLY — ask the OS to trim this process's working set.
+    ///
+    /// Never call this to make a footprint number look better: it evicts pages
+    /// that fault straight back in on next use, so it would flatter the metric
+    /// without the process needing less. It exists to answer one question —
+    /// is the resident memory HELD because it is needed, or merely because the
+    /// allocator has not returned it? Trim, then do real work, and see where
+    /// resident settles.
+    pub fn trim_working_set() -> bool {
+        // SAFETY: pseudo-handle; (SIZE_T)-1 for both bounds is the documented
+        // way to request a trim rather than set a quota.
+        unsafe { SetProcessWorkingSetSizeEx(GetCurrentProcess(), usize::MAX, usize::MAX, 0) != 0 }
     }
 
     // ---- process-TREE measurement -------------------------------------
@@ -342,6 +362,10 @@ mod imp {
         peak_self()
     }
 
+    pub fn trim_working_set() -> bool {
+        false
+    }
+
     pub fn current_self() -> Option<u64> {
         let status = std::fs::read_to_string("/proc/self/status").ok()?;
         let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
@@ -372,6 +396,12 @@ mod imp {
 /// Peak resident memory of the current process.
 pub fn peak_self() -> Option<PeakBytes> {
     imp::peak_self().map(PeakBytes)
+}
+
+/// DIAGNOSTIC: trim the working set, to distinguish memory that is HELD
+/// because it is needed from memory the allocator simply has not returned.
+pub fn trim_working_set() -> bool {
+    imp::trim_working_set()
 }
 
 /// Resident memory right now (not the high-water mark).

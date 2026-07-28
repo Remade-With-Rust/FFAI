@@ -58,6 +58,14 @@ pub struct RunSummary {
     /// written before this existed still parse.
     #[serde(default)]
     pub peak_bytes: Option<u64>,
+    /// Median resident memory over the run — what the implementation SITS at
+    /// while working, as opposed to its worst instant (usually model load).
+    ///
+    /// Both are recorded because they answer different questions and quoting
+    /// either alone misleads: peak decides whether it fits, steady decides
+    /// what it costs to keep running.
+    #[serde(default)]
+    pub steady_bytes: Option<u64>,
     /// Per-clip failures or notes, kept short.
     #[serde(default)]
     pub notes: Vec<String>,
@@ -176,6 +184,7 @@ mod tests {
                 clips_total: 10,
                 notes: vec![],
                 peak_bytes: Some(412 * 1024 * 1024),
+                steady_bytes: Some(180 * 1024 * 1024),
             }],
             gates: GateReport::new(),
             environment: Environment::capture(),

@@ -79,9 +79,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for c in &clips {
         engine.transcribe(c, &AsrOptions::default())?;
     }
+    let held_after_work = held_mib();
+
+    // Is this memory NEEDED, or merely not returned? Trim, then do the same
+    // work again: whatever the process faults back in is what it genuinely
+    // requires. Anything that does not come back was the allocator holding on.
+    ffai_bench::footprint::trim_working_set();
+    let after_trim = held_mib();
+    for c in &clips {
+        engine.transcribe(c, &AsrOptions::default())?;
+    }
+    let resettled = held_mib();
+
     println!(
-        "{arm:<12} held {:8.1} MiB   peak {:8.1} MiB   (audio+harness before load: {before:.1})",
-        held_mib(),
+        "{arm:<12} held {held_after_work:7.1}  peak {:7.1}  | trimmed {after_trim:7.1}          -> re-settled {resettled:7.1} MiB   (pre-load {before:.1})",
         peak_mib()
     );
     Ok(())
