@@ -1,5 +1,7 @@
 Here’s how I would structure a feature-rich OCR tool inside FFai so it feels like a first-class FFmpeg-style filter rather than a bolted-on library.
+
 1. Core design principles
+
 Treat OCR as a composable node (or small graph of nodes) that:
 
 Accepts media frames / pages / ROIs
@@ -9,6 +11,7 @@ Supports batch, streaming, and real-time modes
 Has explicit quality/performance trade-offs (model size, backend, resolution)
 
 2. Hierarchical pipeline stages
+
 Make the OCR path modular so users can enable/disable or swap stages:
 textInput (image / PDF page / video frame / ROI)
     ↓
@@ -26,6 +29,7 @@ Post-process        (reading order, merge, confidence filtering, language ID)
     ↓
 Structured Output
 Users should be able to run a minimal path (detect + recognize) or the full document-intelligence path.
+
 3. Modes / presets (the FFmpeg “-preset” idea)
 
 scene – fast scene-text (PaddleOCR-style mobile or EasyOCR-like)
@@ -36,6 +40,7 @@ live – low-latency streaming (keyframe or continuous, ROI support)
 hybrid – classic pipeline + VLM refinement or ensemble
 
 4. Feature set that makes it rich
+
 Input & media integration
 
 Single images, multi-page PDF, video, camera/stream
@@ -68,6 +73,33 @@ Vertical text
 Confidence per character / word / line / block
 Bounding boxes + polygons + baseline
 End-to-end VLM path (PaddleOCR-VL, etc.) alongside classic det+rec
+FUTURE Function: Auto region detection and isolation. Full image detection of live or stored content, then automated slicing and region memory with periodic full image verification
+
+    FUTURE Function: Auto region
+    Here’s a more robust pattern that keeps your core concept:
+
+    Short calibration phase (much shorter than 1000 frames)
+    Run full detection for 30–120 frames (or a few seconds).
+    Or run full detection every N frames in the background while already using provisional ROIs.
+
+    Build a heat map or cluster of text locations
+    Accumulate detection boxes over time.
+    Cluster them spatially (simple grid, DBSCAN, or just quantize to screen regions).
+    Keep regions that fire repeatedly + high-confidence text.
+
+    Promote stable clusters into active ROIs
+    Start with relatively loose boxes around the clusters.
+    Optionally shrink them slowly while monitoring metrics.
+
+    Monitor and adapt
+    Track proxies for quality:
+    Average confidence
+    Number of detections per region
+    How often a region produces new text vs repeating the same text
+    Sudden drop in detections
+
+    If a region goes “quiet” or confidence drops → widen it or temporarily re-enable broader detection.
+    Periodically (every few seconds or on scene change) do a low-frequency full-frame check to catch new UI elements.
 
 Outputs (rich & composable)
 
@@ -96,6 +128,7 @@ Batching, streaming inference, memory limits
 Model management (download, cache, version, hash verification)
 
 5. FFai filtergraph integration examples
+
 Bash# Simple scene OCR
 ffai -i photo.jpg -ocr mode=scene -f json out.json
 
@@ -110,6 +143,7 @@ ffai -i doc.pdf -ocr mode=document -llm summarize -tts voice=alloy out.wav
 
 # Live camera with ROI
 ffai -f v4l2 -i /dev/video0 -ocr mode=live,roi=100:100:800:600 -f json -
+
 6. Internal architecture sketch
 
 OCREngine trait – abstract over backends (Candle VLM, ONNX Paddle, etc.)

@@ -1,0 +1,91 @@
+# Audio containing NO WORDS. Ground truth is the empty string, so any
+# token an engine emits here is an error.
+#
+# This corpus exists because every other corpus in the project is
+# continuous clean read speech, and that blind spot shipped two real
+# defects: Whisper hallucinating "you" on silence, and a cough coming
+# out as "Hah!". Both were found by a browser demo in ten seconds of
+# microphone audio after 268 pinned clips saw neither.
+#
+# Synthesised deterministically by
+#   cargo run --release -p ffai-bench --example prepare_phase_e
+# so the hashes are reproducible. Synthetic audio is banned from a
+# QUALITY verdict (see codec-tune-quality); it is entirely valid for a
+# CORRECTNESS one, which is what this measures: did the engine invent
+# words that were never spoken.
+
+name = "silence-and-nonspeech"
+version = 1
+task = "asr"
+
+[[clips]]
+id = "digital-silence-5s"
+path = "clips/silence-and-nonspeech/audio/digital-silence-5s.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/digital-silence-5s.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "262d1f34f300560a4c82ba8127ddea9e1d72946f187fdbd3e8f70ee096077aec"
+
+[[clips]]
+id = "digital-silence-30s"
+path = "clips/silence-and-nonspeech/audio/digital-silence-30s.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/digital-silence-30s.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "40abc924dc63f75aafb2400bb99fd66741e22eb9ff2450973a18db53a06286ac"
+
+[[clips]]
+id = "room-tone-quiet"
+path = "clips/silence-and-nonspeech/audio/room-tone-quiet.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/room-tone-quiet.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "56d5abee21e6b0930bd58b8493e35b352d71dc1b792a5ccdb163c9d48edca0c9"
+
+[[clips]]
+id = "room-tone-mid"
+path = "clips/silence-and-nonspeech/audio/room-tone-mid.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/room-tone-mid.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "8a9725a36dd35d6565d093fe8b94ea015eb2673012c3ce38b7073189e230f2c5"
+
+[[clips]]
+id = "room-tone-loud"
+path = "clips/silence-and-nonspeech/audio/room-tone-loud.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/room-tone-loud.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "ae2a5e7b58776d1bf677b424d965c3d44af1dc5965a786074e6324e6f77dddbf"
+
+[[clips]]
+id = "tone-440hz"
+path = "clips/silence-and-nonspeech/audio/tone-440hz.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/tone-440hz.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "9f340d1f7486793ff219f1b0e5bd4305c4a2ab6530e2bcb774d347e9250f216e"
+
+[[clips]]
+id = "click"
+path = "clips/silence-and-nonspeech/audio/click.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/click.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "f029229038d34fb205ee5d2ab4593921e7e0f1da44438929a6a3fe8f93ad4227"
+
+[[clips]]
+id = "noise-burst"
+path = "clips/silence-and-nonspeech/audio/noise-burst.wav"
+ground_truth = "clips/silence-and-nonspeech/truth/noise-burst.txt"
+class = "other"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "fc8d5b6701a8fee3824cf5520b072a66364d93a2a1983c3ec9efa19c6292ffae"

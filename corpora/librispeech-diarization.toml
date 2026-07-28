@@ -1,0 +1,83 @@
+# Multi-speaker audio with an EXACT ground truth.
+#
+# Assembled from LibriSpeech clips whose speaker ids are known, so the
+# RTTM is exact by construction rather than annotated. That is how a
+# diarization gate gets bootstrapped without a licence-encumbered
+# conversational corpus.
+#
+# Every speaker takes at least two turns, so a system must RE-IDENTIFY
+# a returning voice rather than merely cut on silence. Cutting on
+# silence alone scores badly here, which is the point.
+#
+# LIMITS, stated here rather than discovered later: speakers never
+# overlap, turns are clean cuts rather than natural interruptions, and
+# the audio is studio-quality read speech with 0.4s of digital silence
+# between turns. A system can score well here and badly on a real
+# meeting. This gates REGRESSION, not READINESS.
+#
+# Rebuild with
+#   cargo run --release -p ffai-bench --example prepare_phase_e
+
+name = "librispeech-diarization"
+version = 1
+task = "asr"
+
+# 2 speakers, 33.4s
+[[clips]]
+id = "conv-01"
+path = "clips/librispeech-diarization/audio/conv-01.wav"
+ground_truth = "clips/librispeech-diarization/truth/conv-01.rttm"
+class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "449548cf7adce95701e3469eada1413119c30c03f212c21f6c8b2e5976ca121b"
+
+# 2 speakers, 56.4s
+[[clips]]
+id = "conv-02"
+path = "clips/librispeech-diarization/audio/conv-02.wav"
+ground_truth = "clips/librispeech-diarization/truth/conv-02.rttm"
+class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "8bf335bdd3bab1f70916003349228de5e3eb1faf265c645d79516eedae471bfd"
+
+# 3 speakers, 60.3s
+[[clips]]
+id = "conv-03"
+path = "clips/librispeech-diarization/audio/conv-03.wav"
+ground_truth = "clips/librispeech-diarization/truth/conv-03.rttm"
+class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "3a2ead53fd4fab15370ee4b463191136075c0f93adec2c4683d806fc414781d1"
+
+# 3 speakers, 72.5s
+[[clips]]
+id = "conv-04"
+path = "clips/librispeech-diarization/audio/conv-04.wav"
+ground_truth = "clips/librispeech-diarization/truth/conv-04.rttm"
+class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "fc2e109e901edbb71296e80cc3649d4120d0996db29c203f40d6887374b92ceb"
+
+# 4 speakers, 89.8s
+[[clips]]
+id = "conv-05"
+path = "clips/librispeech-diarization/audio/conv-05.wav"
+ground_truth = "clips/librispeech-diarization/truth/conv-05.rttm"
+class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "809a29f203bd0164a1c1eac17de5b353dfb596545463e704447e8c85919cbb6c"
+
+# 4 speakers, 99.4s
+[[clips]]
+id = "conv-06"
+path = "clips/librispeech-diarization/audio/conv-06.wav"
+ground_truth = "clips/librispeech-diarization/truth/conv-06.rttm"
+class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "c5b91a0fa849efa5bb2252cbc147a1250e333ad211bd6bc51869326f12cd89ee"
