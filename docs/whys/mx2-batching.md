@@ -1,0 +1,147 @@
+# M-X2 batched encoder — PRUNED before implementation
+
+**Date:** 2026-07-28
+**Verdict:** pruned as specified. Redefinition proposed in §5.
+**Cost to find out:** four profiler runs and a window count. No code written.
+
+---
+
+## 1. What M-X2 specified
+
+> *Independent segments → batch the encoder. Exit gate: transcripts
+> byte-identical to unbatched; speed must move ×RT materially or it is pruned
+> like §6.8.*
+
+The premise, taken from WhisperX: VAD produces independent speech segments,
+those segments batch through the encoder, and the batching is where the
+headline throughput comes from.
+
+---
+
+## 2. The blocker: there is nothing to batch
+
+Encoder invocations per clip, measured across the corpus:
+
+```
+  10.4s -> 1 encoder call      5.4s -> 1 encoder call
+   7.9s -> 1 encoder call      4.8s -> 1 encoder call
+   4.0s -> 1 encoder call      9.0s -> 1 encoder call
+   4.4s -> 1 encoder call     11.2s -> 1 encoder call
+```
+
+Every clip is **one** 30 s window. Mean clip duration is 7.5 s and Whisper's
+context is 30 s, so VAD packing puts each clip's speech into a single window —
+by design, since `pack()` closes a window only when adding the next region
+would exceed the context.
+
+A batch of one is not a batch. **On this corpus the applicable work is zero,
+whatever the implementation.**
+
+---
+
+## 3. And the target stage is already saturated
+
+Even where multiple windows exist — long-form audio — the encoder is the wrong
+place to look. From §6.10's anatomy, its dominant ops at batch 1:
+
+| op | bound |
+|---|---|
+| mlp fc1 / fc2 | **CPU-bound, 87–94 % of compute peak** |
+| qkv / out projection | **CPU-bound, 84 % of compute peak** |
+
+Batching raises arithmetic intensity: more work per weight load. That helps an
+op starved of work. It cannot help an op already issuing FLOPs at 90 % of what
+the machine can retire — the headroom to 100 % *is* the ceiling, ~1.11×, and
+only on part of the stage.
+
+The reason is shape. The encoder's matmuls are already large: `(1500 × 384) @
+(384 × 1536)`. Batching takes M from 1500 to B·1500, and GEMM efficiency at
+M = 1500 is already at its asymptote. **Nothing about batching changes a
+well-shaped large GEMM.**
+
+This is where WhisperX's number comes from and why it does not transfer: on a
+GPU, batch 1 leaves most of the device idle, so batching is close to free
+throughput. On CPU at 90 % of peak, the machine is already busy.
+
+---
+
+## 4. Where the prize actually is, if anywhere
+
+Measured stage split (tiny.en, one clip, `FFAI_PROFILE=1`):
+
+```
+mel 2.6 %   encoder 47.8 %   decoder 45.8 %   sampling 3.8 %
+```
+
+and inside the decoder:
+
+| op | share of decoder | of total |
+|---|---:|---:|
+| cross-attn | 44.2 % | 20.2 % |
+| mlp | 25.2 % | 11.5 % |
+| self-attn | 17.6 % | 8.1 % |
+| final-proj | 12.7 % | 5.8 % |
+
+The decoder is where batching pays on a CPU, and it is the **opposite** of the
+encoder's situation: every decoder op is a GEMV — one token, M = 1 — which
+streams the full weight matrix per token. The vocabulary projection alone
+moves ~80 MB per token (§6.13). Those are memory-bound, so batching B windows
+amortises one weight read across B tokens.
+
+Rough ceiling if B windows could decode in lockstep: `mlp` + `final-proj` is
+17.3 % of total, going perhaps 2–3× → **~11 % of total**, plus some of the
+projections inside attention.
+
+Two things make that harder than it sounds, and neither is addressed by the
+milestone as written:
+
+- **Windows decode different numbers of tokens.** Lockstep batching needs
+  padding, masking and per-item early exit. That is real machinery, and it
+  changes the decode path — precisely where the byte-identical gate is
+  hardest to hold.
+- **It still needs ≥ 2 windows**, so §2's blocker applies unchanged.
+
+---
+
+## 5. Proposed redefinition
+
+M-X2 as written targets the encoder, which is saturated, using a batch size
+that on this corpus is always 1. Both halves are wrong. What survives:
+
+**M-X2′ — throughput across *files*, not windows.** Decode N independent
+clips concurrently, sharing weight reads in the decoder. This is the workload
+that actually has parallelism (a transcription queue, a batch job), and it is
+the honest version of WhisperX's claim on a CPU.
+
+It cannot be gated by the current harness, which measures per-clip ×realtime
+and would show nothing. That is a harness change, and it raises a fairness
+question worth settling *before* building: whisper.cpp is not batching, so a
+batched-versus-unbatched comparison measures a different thing than the
+per-clip gates do. It belongs beside them as a throughput number, not inside
+them.
+
+**Recommendation: defer M-X2′ until there is a workload that needs it.** No
+current corpus, gate, or user-facing claim depends on multi-file throughput.
+
+---
+
+## 6. What this cost, and the rule it confirms
+
+Four profiler runs and a window count. No kernel was modified — and the
+modification would have been substantial: `conv1d_gemm` flattens and indexes
+as `(cin, l_in)` with no batch stride, and the transposed-K attention path
+reshapes to `(1, heads, hd, seq)`. Both silently assume batch 1 while the
+encoder's `forward` documents `(batch, n_mels, frames)`. Extending four
+hand-written AVX2 kernels to batch, for a measured prize of approximately
+zero, is exactly what the prune-on-arithmetic rule exists to prevent.
+
+Same outcome as §6.8 (query-tiled attention) and §6.25: **compute the prize
+before writing the code.** The prize here is `stage share × speedup`, and
+`speedup` was capped at 1.11× by a roofline measurement that already existed
+in the mission plan, on a stage whose applicable batch size was 1.
+
+Worth noting the near-miss: the encoder's signature *says* it takes a batch
+dimension. Trusting the signature instead of reading `conv1d_gemm` would have
+produced a batched call that silently returned results for item 0 only — no
+error, no shape mismatch, just wrong transcripts for every window after the
+first.

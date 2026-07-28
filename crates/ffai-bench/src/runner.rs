@@ -78,7 +78,8 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
                 references.push(RunSummary {
                     name: spec.name.clone(),
                     version: spec.version(),
-        command: Some(spec.command_line()),
+                    command: Some(spec.command_line()),
+                    config: decode_config(spec.config.as_deref()),
                     wer: None,
                     cer: None,
                     rtf_warm: None,
@@ -135,6 +136,7 @@ fn run_reference(
         name: spec.name.clone(),
         version: spec.version(),
         command: Some(spec.command_line()),
+        config: decode_config(spec.config.as_deref()),
         wer: None,
         cer: None,
         rtf_warm: None,
@@ -220,10 +222,20 @@ fn run_engine(
     runs: usize,
 ) -> Result<RunSummary> {
     let asr = reg.asr(engine)?;
+    // Named rather than constructed inline at each call site, so what the
+    // ledger records is provably the same options object the engine ran with.
+    let opts = AsrOptions::default();
     let mut summary = RunSummary {
         name: asr.info().name,
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
         command: None,
+        config: {
+            let mut c = engine_config(&opts);
+            if let Some(key) = engine_comparison_key(&asr.info().name) {
+                c.insert(DECODE_KEY.to_string(), key);
+            }
+            c
+        },
         wer: None,
         cer: None,
         rtf_warm: None,
@@ -256,7 +268,7 @@ fn run_engine(
     // other way. Its cost is recorded so it isn't invisible.
     if let Some((_, audio)) = decoded.first() {
         let t0 = std::time::Instant::now();
-        if let Err(e) = asr.transcribe(audio, &AsrOptions::default()) {
+        if let Err(e) = asr.transcribe(audio, &opts) {
             summary.notes.push(format!("warm-up failed: {e}"));
         }
         summary.load_secs = Some(t0.elapsed().as_secs_f64());
@@ -288,7 +300,7 @@ fn run_engine(
     let stats = best_of_n(runs, || {
         texts.clear();
         for (clip, audio) in &decoded {
-            match asr.transcribe(audio, &AsrOptions::default()) {
+            match asr.transcribe(audio, &opts) {
                 Ok(t) => texts.push((clip.id.clone(), t.text())),
                 Err(e) => {
                     first_error.get_or_insert(format!("{}: {e}", clip.id));
@@ -391,25 +403,65 @@ fn fill_gates(gates: &mut GateReport, engine: Option<&RunSummary>, references: &
         }
     });
 
-    let best_ref = references
+    // The quality gate asks ONE question: is our implementation as good as
+    // other implementations of the same thing? It therefore compares only
+    // against references declaring the engine's own configuration.
+    //
+    // It used to take the lowest WER of everything that ran, which for a 39M
+    // greedy engine meant being judged against openai-whisper-base — a 74M
+    // beam-search model. That gate read FAIL for months for reasons having
+    // nothing to do with implementation quality, and "are we as good as the
+    // best ASR available?" was being reported under the same label. That is a
+    // real and harder question; it belongs in the record as context, not as
+    // this gate's verdict.
+    let engine_key = eng.config.get(DECODE_KEY);
+    let matched: Vec<(&str, f64)> = references
+        .iter()
+        .filter(|r| engine_key.is_some() && r.config.get(DECODE_KEY) == engine_key)
+        .filter_map(|r| r.wer.map(|w| (r.name.as_str(), w)))
+        .collect();
+    let best_matched = matched.iter().copied().min_by(|a, b| a.1.total_cmp(&b.1));
+    let best_any = references
         .iter()
         .filter_map(|r| r.wer.map(|w| (r.name.as_str(), w)))
         .min_by(|a, b| a.1.total_cmp(&b.1));
-    gates.set(match (eng.wer, best_ref) {
+
+    // Context, never a verdict: where the engine sits against the strongest
+    // thing that ran, whatever size or decoding it used.
+    let open = match best_any {
+        Some((n, w)) => format!(" [open field: best is {n} {:.2}%]", w * 100.0),
+        None => String::new(),
+    };
+
+    gates.set(match (eng.wer, best_matched) {
         (Some(ew), Some((rname, rw))) => GateResult {
             kind: GateKind::Quality,
-            outcome: if ew <= rw * QUALITY_PARITY_BAND { GateOutcome::Pass } else { GateOutcome::Fail },
+            outcome: if ew <= rw * QUALITY_PARITY_BAND {
+                GateOutcome::Pass
+            } else {
+                GateOutcome::Fail
+            },
             metric: Some(ew),
             detail: format!(
-                "engine WER {:.2}% vs best reference {rname} {:.2}% (band +{:.0}% relative)",
+                "engine WER {:.2}% vs best matched reference {rname} {:.2}% \
+                 ({} config, band +{:.0}% relative){open}",
                 ew * 100.0,
                 rw * 100.0,
+                engine_key.map(String::as_str).unwrap_or("?"),
                 QUALITY_PARITY_BAND * 100.0 - 100.0
             ),
         },
+        // No comparable reference is a SKIP, never a pass. Falling back to the
+        // open field here would quietly restore the defect this split exists
+        // to remove.
         (Some(ew), None) => GateResult::skipped(
             GateKind::Quality,
-            format!("engine WER {:.2}% but no reference ran to compare against", ew * 100.0),
+            format!(
+                "engine WER {:.2}% but no reference declares its configuration ({}) — \
+                 declare one in corpora/references.toml{open}",
+                ew * 100.0,
+                engine_key.map(String::as_str).unwrap_or("unknown")
+            ),
         ),
         _ => GateResult::skipped(GateKind::Quality, "engine produced no scored output"),
     });
@@ -569,4 +621,218 @@ pub fn render(record: &BenchRecord) -> String {
         if record.gates.all_passed() { "ALL GATES PASS — claimable" } else { "not claimable yet" }
     ));
     out
+}
+
+/// Everything that can change this engine's output, captured for the ledger.
+///
+/// References record their argv; an in-process engine has none, and that
+/// asymmetry cost a real defect. When speech segmentation became a default,
+/// `whisper-candle` produced 7.99 % WER one day and 6.79 % the next with
+/// nothing in the record to distinguish the two runs — and two READMEs and a
+/// crates.io release were cut from those numbers.
+///
+/// Two classes go in. The `AsrOptions` the harness actually passed, and every
+/// `FFAI_*` environment override that is set: those exist to A/B behaviour
+/// from outside the process, which makes them precisely the thing a reader
+/// cannot reconstruct afterwards. Compile-time defaults are pinned by the
+/// crate version already recorded alongside.
+///
+/// Absent knobs are absent, not `"unset"` — a key that appears only when it
+/// is doing something keeps the common line short and makes an override
+/// impossible to miss.
+fn engine_config(opts: &AsrOptions) -> std::collections::BTreeMap<String, String> {
+    let mut config = std::collections::BTreeMap::new();
+    config.insert("vad".to_string(), opts.vad.to_string());
+    config.insert("vad_threshold".to_string(), format!("{:.3}", opts.vad_threshold));
+    config.insert("vad_chunk_secs".to_string(), format!("{:.1}", opts.vad_chunk_secs));
+    config.insert("word_timestamps".to_string(), opts.word_timestamps.to_string());
+    config.insert("diarize".to_string(), opts.diarize.to_string());
+    config.insert("translate".to_string(), opts.translate.to_string());
+    config.insert(
+        "language".to_string(),
+        opts.language.clone().unwrap_or_else(|| "auto".to_string()),
+    );
+
+    // Behaviour-changing overrides only. FFAI_CACHE relocates the weight
+    // cache and FFAI_DEBUG_TOKENS / FFAI_PROFILE only print, so none of them
+    // alter a transcript; listing them would be noise in every record.
+    const OVERRIDES: &[&str] = &[
+        "FFAI_VAD",
+        "FFAI_ALLOW_NONSPEECH",
+        "FFAI_PRECISION",
+        "FFAI_CANDLE_DECODER",
+        "FFAI_CANDLE_ENCODER",
+        "FFAI_KV_F16",
+        "FFAI_DEC_F16",
+        "FFAI_MLP_INT8",
+        "FFAI_PAR_HEADS",
+        "FFAI_DECODE_MIN_KEYS",
+        "FFAI_VOCAB_BLK",
+        "FFAI_GEMV_PAD",
+        "FFAI_ENC_KT",
+    ];
+    for key in OVERRIDES {
+        if let Ok(value) = std::env::var(key) {
+            config.insert(key.to_ascii_lowercase(), value);
+        }
+    }
+    config
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn records_the_setting_that_was_missing() {
+        // The specific regression this field exists to prevent: two runs whose
+        // only difference is segmentation must not serialise identically.
+        let on = engine_config(&AsrOptions { vad: true, ..Default::default() });
+        let off = engine_config(&AsrOptions { vad: false, ..Default::default() });
+        assert_eq!(on["vad"], "true");
+        assert_eq!(off["vad"], "false");
+        assert_ne!(on, off);
+    }
+
+    #[test]
+    fn unset_overrides_do_not_appear() {
+        let config = engine_config(&AsrOptions::default());
+        assert!(!config.contains_key("ffai_vad"), "{config:?}");
+        assert!(!config.contains_key("ffai_allow_nonspeech"), "{config:?}");
+    }
+
+    #[test]
+    fn thresholds_are_recorded_not_just_the_on_off() {
+        // "vad: true" is not reproducible on its own — the threshold changes
+        // which audio survives.
+        let config = engine_config(&AsrOptions { vad_threshold: 0.25, ..Default::default() });
+        assert_eq!(config["vad_threshold"], "0.250");
+    }
+}
+
+/// Key under which both sides record the decode configuration they represent.
+pub const DECODE_KEY: &str = "decode";
+
+/// A reference's declared configuration, as a one-entry config map.
+fn decode_config(config: Option<&str>) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
+    if let Some(c) = config {
+        map.insert(DECODE_KEY.to_string(), c.to_string());
+    }
+    map
+}
+
+/// The engine's comparison key, in the same vocabulary references use.
+///
+/// This reads the model size out of the engine's own name, which is a
+/// convention rather than a declaration — but it is *our* convention, defined
+/// and documented in `WhisperCandle::info` (bare `whisper-candle` is tiny.en,
+/// larger sizes carry a suffix), not a guess about somebody else's naming.
+/// An unrecognised engine returns `None` and its quality gate SKIPS rather
+/// than silently comparing against something it does not match.
+///
+/// Precision suffixes (`-q8_0`, `-f16`) are deliberately ignored: they change
+/// memory and speed, not the decoding strategy, so they do not change which
+/// references the output is comparable to.
+fn engine_comparison_key(name: &str) -> Option<String> {
+    let size = if name.starts_with("whisper-candle-base") {
+        "base.en"
+    } else if name.starts_with("whisper-candle-small") {
+        "small.en"
+    } else if name.starts_with("whisper-candle") {
+        "tiny.en"
+    } else {
+        return None;
+    };
+    // Mercury decodes greedily: the temperature ladder starts at 0.0 and only
+    // rises on a low-confidence retry. There is no beam search.
+    Some(format!("{size}/greedy"))
+}
+
+#[cfg(test)]
+mod gate_split_tests {
+    use super::*;
+
+    fn summary(name: &str, wer: f64, decode: Option<&str>) -> RunSummary {
+        RunSummary {
+            name: name.into(),
+            version: None,
+            command: None,
+            config: decode_config(decode),
+            wer: Some(wer),
+            cer: None,
+            rtf_warm: Some(30.0),
+            rtf_e2e: Some(30.0),
+            load_secs: None,
+            wall_secs: None,
+            media_secs: Some(100.0),
+            clips_ok: 10,
+            clips_total: 10,
+            notes: Vec::new(),
+            peak_bytes: None,
+            steady_bytes: None,
+        }
+    }
+
+    fn engine(wer: f64) -> RunSummary {
+        let mut e = summary("whisper-candle", wer, Some("tiny.en/greedy"));
+        e.config.insert("vad".into(), "true".into());
+        e
+    }
+
+    #[test]
+    fn a_bigger_model_no_longer_decides_the_gate() {
+        // The exact historical defect: 6.79% engine failed against
+        // openai-whisper-base's 5.96%, a 74M beam-search model.
+        let refs = vec![
+            summary("openai-whisper-base", 0.0596, Some("base.en/beam5")),
+            summary("whisper-cpp-tiny-greedy", 0.0758, Some("tiny.en/greedy")),
+        ];
+        let mut gates = GateReport::new();
+        fill_gates(&mut gates, Some(&engine(0.0679)), &refs);
+        let q = gates.get(GateKind::Quality).expect("quality gate set");
+        assert_eq!(q.outcome, GateOutcome::Pass, "{}", q.detail);
+        assert!(q.detail.contains("whisper-cpp-tiny-greedy"), "{}", q.detail);
+    }
+
+    #[test]
+    fn the_open_field_is_still_reported_as_context() {
+        let refs = vec![
+            summary("openai-whisper-base", 0.0596, Some("base.en/beam5")),
+            summary("whisper-cpp-tiny-greedy", 0.0758, Some("tiny.en/greedy")),
+        ];
+        let mut gates = GateReport::new();
+        fill_gates(&mut gates, Some(&engine(0.0679)), &refs);
+        let q = gates.get(GateKind::Quality).expect("set");
+        assert!(q.detail.contains("open field"), "{}", q.detail);
+        assert!(q.detail.contains("openai-whisper-base"), "{}", q.detail);
+    }
+
+    #[test]
+    fn a_matched_reference_can_still_fail_us() {
+        // The gate must retain its teeth against comparable implementations.
+        let refs = vec![summary("whisper-cpp-tiny-greedy", 0.0600, Some("tiny.en/greedy"))];
+        let mut gates = GateReport::new();
+        fill_gates(&mut gates, Some(&engine(0.0900)), &refs);
+        assert_eq!(gates.get(GateKind::Quality).expect("set").outcome, GateOutcome::Fail);
+    }
+
+    #[test]
+    fn no_matched_reference_skips_rather_than_passes() {
+        // A skipped gate is never a pass — and must not fall back to the open
+        // field, which would restore the defect.
+        let refs = vec![summary("openai-whisper-base", 0.0596, Some("base.en/beam5"))];
+        let mut gates = GateReport::new();
+        fill_gates(&mut gates, Some(&engine(0.0679)), &refs);
+        let q = gates.get(GateKind::Quality).expect("set");
+        assert_eq!(q.outcome, GateOutcome::Skipped, "{}", q.detail);
+        assert!(!gates.all_passed());
+    }
+
+    #[test]
+    fn precision_variants_compare_against_the_same_references() {
+        assert_eq!(engine_comparison_key("whisper-candle-q8_0").as_deref(), Some("tiny.en/greedy"));
+        assert_eq!(engine_comparison_key("whisper-candle-base").as_deref(), Some("base.en/greedy"));
+        assert_eq!(engine_comparison_key("oxi-whisper"), None);
+    }
 }

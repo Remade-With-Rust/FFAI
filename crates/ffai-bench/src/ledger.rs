@@ -14,7 +14,12 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const LEDGER_SCHEMA: u32 = 1;
+/// Schema 2 adds `RunSummary::config` — the in-process engine's effective
+/// decode configuration. Schema-1 lines remain readable (`serde(default)`),
+/// but they carry no config, so a line with `schema: 1` cannot be assumed to
+/// share defaults with a current run. That is the point of the bump: it makes
+/// the older lines' ambiguity explicit instead of silent.
+pub const LEDGER_SCHEMA: u32 = 2;
 
 /// Summary of one implementation's run over the holdout split.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +33,22 @@ pub struct RunSummary {
     /// rather than an assumption. `None` for in-process engines.
     #[serde(default)]
     pub command: Option<String>,
+    /// Effective decode configuration, as sorted `key -> value` pairs.
+    ///
+    /// **The in-process counterpart of `command`, and it exists because its
+    /// absence produced a real defect.** References record their argv, so a
+    /// change in beam size or compute type is visible in the ledger. An
+    /// in-process engine had no equivalent, so when speech segmentation
+    /// became a default on 2026-07-28 the lines before and after described
+    /// materially different engines under one name — `whisper-candle`, WER
+    /// 7.99 then 6.79, with nothing in the record to say why. Two published
+    /// READMEs and a crates.io release were cut from those numbers.
+    ///
+    /// A ledger line has to be sufficient on its own to reproduce the run.
+    /// Anything that changes the output belongs here, not in the reader's
+    /// memory of what the defaults were that week.
+    #[serde(default)]
+    pub config: std::collections::BTreeMap<String, String>,
     /// Mean word error rate over scored clips (ASR/OCR-word), if computed.
     pub wer: Option<f64>,
     /// Mean character error rate, if computed.
@@ -173,6 +194,7 @@ mod tests {
                 name: "whisper-cpp".into(),
                 version: Some("v1.7".into()),
                 command: Some("whisper-cli --batch {filelist}".into()),
+                config: Default::default(),
                 wer: Some(0.042),
                 cer: None,
                 rtf_warm: Some(31.0),

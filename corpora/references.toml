@@ -21,12 +21,14 @@
 [[reference]]
 name = "openai-whisper-tiny"
 task = "asr"
+config = "tiny.en/beam5"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "5"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
 
 [[reference]]
 name = "openai-whisper-base"
 task = "asr"
+config = "base.en/beam5"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "base.en", "--beam-size", "5"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
 
@@ -34,12 +36,14 @@ version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.met
 [[reference]]
 name = "faster-whisper-tiny"
 task = "asr"
+config = "tiny.en/beam5"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "5", "--compute-type", "int8"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
 
 [[reference]]
 name = "faster-whisper-base"
 task = "asr"
+config = "base.en/beam5"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "base.en", "--beam-size", "5", "--compute-type", "int8"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
 
@@ -52,18 +56,21 @@ version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whispe
 [[reference]]
 name = "openai-whisper-tiny-greedy"
 task = "asr"
+config = "tiny.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "1"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
 
 [[reference]]
 name = "openai-whisper-base-greedy"
 task = "asr"
+config = "base.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/openai_whisper_ref.py", "--batch", "{filelist}", "--model", "base.en", "--beam-size", "1"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('openai-whisper', m.version('openai-whisper'))"]
 
 [[reference]]
 name = "faster-whisper-tiny-greedy"
 task = "asr"
+config = "tiny.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "1", "--compute-type", "int8"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
 
@@ -86,11 +93,13 @@ version_command = ["tesseract", "--version"]
 [[reference]]
 name = "whisper-cpp-tiny-greedy-t4"
 task = "asr"
+config = "tiny.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-tiny.en.bin", "--threads", "4", "--beam-size", "1"]
 version_command = [".whispercpp/whisper-cli.exe", "--version"]
 
 [[reference]]
 name = "whisper-cpp-tiny-greedy-t24"
 task = "asr"
+config = "tiny.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-tiny.en.bin", "--threads", "24", "--beam-size", "1"]
 version_command = [".whispercpp/whisper-cli.exe", "--version"]

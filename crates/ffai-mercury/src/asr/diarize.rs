@@ -1,0 +1,391 @@
+//! Speaker diarization — who spoke when.
+//!
+//! The pipeline is four stages, and **only the third needs a neural model**:
+//!
+//! 1. [`subsegment`] — cut speech regions into short overlapping windows.
+//! 2. embed each window (an acoustic model: [`super::speaker`]).
+//! 3. [`cluster`] — group windows by voice.
+//! 4. [`turns_from_labels`] then [`assign`] — turn labels into speaker turns
+//!    and attach them to transcript segments.
+//!
+//! Stages 1, 3 and 4 live here and are model-free. That is deliberate and it
+//! is the same split that paid off in [`super::align`]: the algorithm can be
+//! written, tested and argued about against synthetic embeddings before the
+//! expensive port exists, and a bug in the port cannot hide inside the
+//! clustering.
+//!
+//! **Licence note, because it shaped the design.** The obvious embedding model
+//! is pyannote's. It is MIT-licensed and **gated** — a licence that permits
+//! use sitting behind an acceptance wall that prevents fetching, which cannot
+//! go in a manifest under principle 4 ("weights are data, fetched from
+//! manifests that surface each model's own licence"). SpeechBrain's
+//! ECAPA-TDNN is Apache-2.0 and ungated, so that is what
+//! [`super::speaker`] targets.
+
+use ffai_core::types::TimedSegment;
+
+/// Window length for embedding, in seconds. Long enough for a voice to be
+/// characterised, short enough that a window rarely straddles a speaker
+/// change — the two failure modes pull in opposite directions and 1.5 s is
+/// the usual compromise.
+pub const WINDOW_SECS: f64 = 1.5;
+
+/// Hop between windows. Half the window, so a speaker change is at worst
+/// half a window from a boundary.
+pub const HOP_SECS: f64 = 0.75;
+
+/// Cosine-distance threshold for merging clusters.
+///
+/// Not a tuned value — a starting point. It is meaningless until measured as
+/// DER against a diarization corpus, which does not exist yet (Phase E), and
+/// this file must not pretend otherwise.
+pub const DEFAULT_THRESHOLD: f32 = 0.55;
+
+/// A stretch of audio attributed to one speaker.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpeakerTurn {
+    pub start: f64,
+    pub end: f64,
+    /// Cluster index; rendered as `SPEAKER_00`, `SPEAKER_01`, ...
+    pub speaker: usize,
+}
+
+/// Conventional label for a cluster index.
+pub fn speaker_label(index: usize) -> String {
+    format!("SPEAKER_{index:02}")
+}
+
+/// Cut speech regions into overlapping fixed-length windows for embedding.
+///
+/// Windows never cross a region boundary: a gap in speech is exactly where a
+/// speaker change is most likely, so a window spanning one would blend two
+/// voices into a single embedding and produce a cluster belonging to neither.
+///
+/// A region shorter than one window still yields one window covering it —
+/// dropping it would silently leave that speech unattributed.
+pub fn subsegment(regions: &[TimedSegment<()>], window: f64, hop: f64) -> Vec<(f64, f64)> {
+    let window = if window > 0.0 { window } else { WINDOW_SECS };
+    let hop = if hop > 0.0 { hop } else { HOP_SECS };
+    let mut out = Vec::new();
+    for region in regions {
+        let span = region.end - region.start;
+        if span <= 0.0 {
+            continue;
+        }
+        if span <= window {
+            out.push((region.start, region.end));
+            continue;
+        }
+        let mut start = region.start;
+        while start < region.end {
+            let end = (start + window).min(region.end);
+            out.push((start, end));
+            if end >= region.end {
+                break;
+            }
+            start += hop;
+        }
+    }
+    out
+}
+
+/// Cosine distance, `1 - cos(a, b)`, in `[0, 2]`.
+///
+/// A zero-norm embedding is maximally distant from everything rather than
+/// NaN: a silent or degenerate window should fail to join a cluster, not
+/// poison every comparison it takes part in.
+pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na <= f32::EPSILON || nb <= f32::EPSILON {
+        return 2.0;
+    }
+    1.0 - (dot / (na * nb)).clamp(-1.0, 1.0)
+}
+
+/// Agglomerative clustering with average linkage over cosine distance.
+///
+/// Merges the closest pair of clusters until either the closest pair is
+/// further apart than `threshold`, or `max_speakers` clusters remain. Average
+/// linkage rather than single linkage because single linkage chains: one
+/// ambiguous window between two speakers merges both into one cluster, which
+/// is the characteristic diarization failure.
+///
+/// `max_speakers` is the caller's prior knowledge ("this is an interview, two
+/// people"). When given it overrides the threshold, because a known speaker
+/// count is stronger evidence than a distance cut-off nobody has tuned.
+pub fn cluster(
+    embeddings: &[Vec<f32>],
+    threshold: f32,
+    max_speakers: Option<usize>,
+) -> Vec<usize> {
+    let n = embeddings.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![0];
+    }
+
+    // Each item starts in its own cluster; `members` tracks live clusters.
+    let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    let target = max_speakers.unwrap_or(1).max(1);
+
+    loop {
+        if members.len() <= 1 || (max_speakers.is_some() && members.len() <= target) {
+            break;
+        }
+        // Closest pair by average linkage.
+        let mut best: Option<(usize, usize, f32)> = None;
+        for i in 0..members.len() {
+            for j in (i + 1)..members.len() {
+                let mut sum = 0.0f32;
+                let mut count = 0usize;
+                for &a in &members[i] {
+                    for &b in &members[j] {
+                        sum += cosine_distance(&embeddings[a], &embeddings[b]);
+                        count += 1;
+                    }
+                }
+                let d = if count > 0 { sum / count as f32 } else { f32::MAX };
+                if best.as_ref().is_none_or(|(_, _, bd)| d < *bd) {
+                    best = Some((i, j, d));
+                }
+            }
+        }
+        let Some((i, j, d)) = best else { break };
+        // With a speaker count given, merge regardless of distance until the
+        // count is reached; otherwise stop at the threshold.
+        if max_speakers.is_none() && d > threshold {
+            break;
+        }
+        let moved = members.remove(j);
+        members[i].extend(moved);
+    }
+
+    // Label by first appearance, so SPEAKER_00 is whoever spoke first — a
+    // stable, explainable ordering rather than whatever the merge order left.
+    let mut order: Vec<(usize, usize)> = members
+        .iter()
+        .enumerate()
+        .map(|(ci, m)| (*m.iter().min().expect("clusters are non-empty"), ci))
+        .collect();
+    order.sort_unstable();
+
+    let mut labels = vec![0usize; n];
+    for (speaker, (_, ci)) in order.into_iter().enumerate() {
+        for &item in &members[ci] {
+            labels[item] = speaker;
+        }
+    }
+    labels
+}
+
+/// Collapse per-window labels into contiguous speaker turns.
+///
+/// Adjacent windows sharing a label become one turn. Because windows overlap,
+/// a turn's end is the max end seen, not the last window's start plus a hop.
+pub fn turns_from_labels(windows: &[(f64, f64)], labels: &[usize]) -> Vec<SpeakerTurn> {
+    let mut turns: Vec<SpeakerTurn> = Vec::new();
+    for (&(start, end), &speaker) in windows.iter().zip(labels.iter()) {
+        match turns.last_mut() {
+            Some(last) if last.speaker == speaker && start <= last.end => {
+                last.end = last.end.max(end);
+            }
+            _ => turns.push(SpeakerTurn { start, end, speaker }),
+        }
+    }
+    turns
+}
+
+/// Attach a speaker to each transcript segment by greatest temporal overlap.
+///
+/// Overlap rather than midpoint: a segment spanning a speaker change belongs
+/// to whoever holds more of it, and a midpoint test would hand the whole
+/// segment to whoever happened to own one instant. A segment overlapping no
+/// turn gets `None` — unattributed, not guessed.
+pub fn assign(
+    segments: &[TimedSegment<String>],
+    turns: &[SpeakerTurn],
+) -> Vec<Option<usize>> {
+    segments
+        .iter()
+        .map(|seg| {
+            let mut best: Option<(usize, f64)> = None;
+            for turn in turns {
+                let overlap = seg.end.min(turn.end) - seg.start.max(turn.start);
+                if overlap <= 0.0 {
+                    continue;
+                }
+                match best {
+                    Some((_, bo)) if bo >= overlap => {}
+                    _ => best = Some((turn.speaker, overlap)),
+                }
+            }
+            best.map(|(s, _)| s)
+        })
+        .collect()
+}
+
+/// Speaker turns as timed segments, ready to hang on a [`Transcript`].
+pub fn labelled_turns(turns: &[SpeakerTurn]) -> Vec<TimedSegment<String>> {
+    turns
+        .iter()
+        .map(|t| TimedSegment {
+            start: t.start,
+            end: t.end,
+            value: speaker_label(t.speaker),
+            confidence: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn region(start: f64, end: f64) -> TimedSegment<()> {
+        TimedSegment { start, end, value: (), confidence: None }
+    }
+
+    fn seg(start: f64, end: f64) -> TimedSegment<String> {
+        TimedSegment { start, end, value: "x".into(), confidence: None }
+    }
+
+    /// Two well-separated directions in embedding space stand in for two
+    /// voices; no model needed to test the clustering.
+    fn voice_a() -> Vec<f32> {
+        vec![1.0, 0.0, 0.0, 0.0]
+    }
+    fn voice_b() -> Vec<f32> {
+        vec![0.0, 1.0, 0.0, 0.0]
+    }
+    fn near(v: &[f32], jitter: f32) -> Vec<f32> {
+        v.iter().map(|x| x + jitter).collect()
+    }
+
+    #[test]
+    fn subsegment_never_spans_a_gap() {
+        // The gap 2.0-5.0 is where a speaker change is most likely; no window
+        // may cover it.
+        let windows = subsegment(&[region(0.0, 2.0), region(5.0, 7.0)], 1.5, 0.75);
+        assert!(windows.iter().all(|(s, e)| (*e <= 2.0) || (*s >= 5.0)), "{windows:?}");
+    }
+
+    #[test]
+    fn short_region_still_produces_one_window() {
+        let windows = subsegment(&[region(0.0, 0.4)], 1.5, 0.75);
+        assert_eq!(windows, vec![(0.0, 0.4)]);
+    }
+
+    #[test]
+    fn windows_cover_a_long_region_to_its_end() {
+        let windows = subsegment(&[region(0.0, 5.0)], 1.5, 0.75);
+        assert!(windows.first().expect("some").0 == 0.0);
+        assert!((windows.last().expect("some").1 - 5.0).abs() < 1e-9, "{windows:?}");
+    }
+
+    #[test]
+    fn zero_norm_embedding_is_distant_not_nan() {
+        let d = cosine_distance(&[0.0, 0.0], &[1.0, 0.0]);
+        assert!(d.is_finite() && d >= 2.0 - 1e-6, "{d}");
+    }
+
+    #[test]
+    fn identical_voices_have_zero_distance() {
+        assert!(cosine_distance(&voice_a(), &voice_a()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn two_voices_separate_into_two_clusters() {
+        let e = vec![
+            voice_a(),
+            near(&voice_a(), 0.05),
+            voice_b(),
+            near(&voice_b(), 0.05),
+        ];
+        let labels = cluster(&e, DEFAULT_THRESHOLD, None);
+        assert_eq!(labels[0], labels[1], "same voice split: {labels:?}");
+        assert_eq!(labels[2], labels[3], "same voice split: {labels:?}");
+        assert_ne!(labels[0], labels[2], "different voices merged: {labels:?}");
+    }
+
+    #[test]
+    fn one_voice_stays_one_cluster() {
+        let e = vec![voice_a(), near(&voice_a(), 0.02), near(&voice_a(), 0.04)];
+        let labels = cluster(&e, DEFAULT_THRESHOLD, None);
+        assert_eq!(labels.iter().collect::<std::collections::HashSet<_>>().len(), 1, "{labels:?}");
+    }
+
+    #[test]
+    fn a_known_speaker_count_overrides_the_threshold() {
+        // Four distinct directions; the threshold would keep four clusters,
+        // but the caller says there are two people in the room.
+        let e = vec![
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0],
+            vec![0.0, 0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 1.0],
+        ];
+        let labels = cluster(&e, DEFAULT_THRESHOLD, Some(2));
+        assert_eq!(labels.iter().collect::<std::collections::HashSet<_>>().len(), 2, "{labels:?}");
+    }
+
+    #[test]
+    fn speaker_zero_is_whoever_spoke_first() {
+        // Item 0 is voice B here; it must still be labelled SPEAKER_00.
+        let e = vec![voice_b(), voice_a(), near(&voice_b(), 0.05)];
+        let labels = cluster(&e, DEFAULT_THRESHOLD, None);
+        assert_eq!(labels[0], 0, "{labels:?}");
+        assert_eq!(labels[2], 0, "{labels:?}");
+        assert_eq!(labels[1], 1, "{labels:?}");
+    }
+
+    #[test]
+    fn empty_input_is_empty_output() {
+        assert!(cluster(&[], DEFAULT_THRESHOLD, None).is_empty());
+        assert!(subsegment(&[], 1.5, 0.75).is_empty());
+        assert!(turns_from_labels(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn turns_merge_adjacent_windows_of_one_speaker() {
+        let windows = vec![(0.0, 1.5), (0.75, 2.25), (1.5, 3.0)];
+        let turns = turns_from_labels(&windows, &[0, 0, 0]);
+        assert_eq!(turns.len(), 1);
+        assert_eq!((turns[0].start, turns[0].end), (0.0, 3.0));
+    }
+
+    #[test]
+    fn turns_break_at_a_speaker_change() {
+        let windows = vec![(0.0, 1.5), (1.5, 3.0), (3.0, 4.5)];
+        let turns = turns_from_labels(&windows, &[0, 1, 1]);
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        assert_eq!(turns[0].speaker, 0);
+        assert_eq!(turns[1].speaker, 1);
+        assert_eq!(turns[1].end, 4.5);
+    }
+
+    #[test]
+    fn a_segment_goes_to_whoever_holds_more_of_it() {
+        // Segment 0.0-1.0: speaker 0 holds 0.2, speaker 1 holds 0.8.
+        let turns = vec![
+            SpeakerTurn { start: 0.0, end: 0.2, speaker: 0 },
+            SpeakerTurn { start: 0.2, end: 1.0, speaker: 1 },
+        ];
+        assert_eq!(assign(&[seg(0.0, 1.0)], &turns), vec![Some(1)]);
+    }
+
+    #[test]
+    fn a_segment_overlapping_nothing_is_unattributed() {
+        let turns = vec![SpeakerTurn { start: 10.0, end: 11.0, speaker: 0 }];
+        assert_eq!(assign(&[seg(0.0, 1.0)], &turns), vec![None]);
+    }
+
+    #[test]
+    fn labels_render_conventionally() {
+        assert_eq!(speaker_label(0), "SPEAKER_00");
+        assert_eq!(speaker_label(11), "SPEAKER_11");
+    }
+}

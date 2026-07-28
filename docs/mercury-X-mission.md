@@ -270,7 +270,38 @@ packing (close a window when adding the next region would exceed
 - **Ablation required:** the no-speech gate's fire count with VAD on. Near
   zero is the expected result and is the evidence VAD is doing its job.
 
-### M-X2 — batched encoder, on top of VAD
+### M-X2 — batched encoder — **PRUNED 2026-07-28, before implementation**
+
+> Pruned on arithmetic, not on effort. Two independent reasons, either
+> sufficient: **(1)** every corpus clip produces exactly **one** 30 s window,
+> so the applicable batch size is 1 and there is nothing to batch; **(2)** the
+> encoder's dominant matmuls already run at **84–94 % of compute peak** at
+> batch 1 on matrices that are already large (`1500 × 384 @ 384 × 1536`), so
+> raising arithmetic intensity cannot help — the ceiling is ~1.11× on part of
+> one stage.
+>
+> WhisperX's batching number comes from GPU occupancy, where batch 1 leaves
+> the device idle. It does not transfer to a CPU already at 90 % of peak.
+>
+> The stage that *would* pay on CPU is the **decoder** — every op is a GEMV
+> streaming full weights per token, ~80 MB per token on the vocabulary
+> projection — but that needs ≥ 2 windows too, and lockstep decoding across
+> windows of different lengths is real machinery in exactly the path where the
+> byte-identical gate is hardest to hold.
+>
+> Full descent, including the proposed redefinition (M-X2′: throughput across
+> *files* rather than windows) and why it should wait for a workload that
+> needs it: [whys/mx2-batching.md](whys/mx2-batching.md).
+>
+> Cost to find out: four profiler runs and a window count. The alternative was
+> extending four hand-written AVX2 kernels — `conv1d_gemm` and the
+> transposed-K attention path both silently assume batch 1 while the encoder's
+> signature advertises a batch dimension — for a measured prize of ~0.
+
+<details>
+<summary>Original specification (kept for the record)</summary>
+
+#### M-X2 — batched encoder, on top of VAD
 
 The speed milestone. Independent segments → batch the encoder.
 
@@ -284,6 +315,8 @@ The speed milestone. Independent segments → batch the encoder.
   peak and state the batch size.
 - Null arm required (the parent plan's standing rule): a batch size of 1
   must reproduce the unbatched number.
+
+</details>
 
 ### M-X3 — word-level timestamps
 

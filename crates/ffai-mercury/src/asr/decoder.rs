@@ -59,6 +59,27 @@ pub struct DecodeConfig {
     /// transcripts that must contain words only; it is the better setting for
     /// WER and the worse one for reading a live transcript.
     pub suppress_non_speech: bool,
+    /// Conditional annotations: allow the `SuppressTokens` list **only** when
+    /// `P(<|nospeech|>)` at the first decode position reaches this value.
+    ///
+    /// The all-or-nothing choice above is a bad trade in both directions.
+    /// Suppressing always turns a cough into `Hah!` — a transcription error
+    /// wearing the costume of a word. Allowing always lets the model spend an
+    /// annotation where words belong on clean speech, which measured at
+    /// 0.22 pp WER on test-clean.
+    ///
+    /// The model already tells us which case it is, and we already compute
+    /// the number for the no-speech gate and then throw it away. Measured on
+    /// tiny.en:
+    ///
+    ///   clean speech      0.004 - 0.032
+    ///   cough / laughter  0.288 - 0.454
+    ///   digital silence   0.949   (dropped outright by `no_speech_threshold`)
+    ///
+    /// A threshold of 0.10 sits ~3x above the loudest speech reading and ~3x
+    /// below the quietest non-speech event. `None` keeps the binary
+    /// behaviour; `Some(t)` overrides [`Self::suppress_non_speech`].
+    pub annotation_threshold: Option<f32>,
     /// Retry when the transcript looks like a repetition loop (see
     /// [`repetition_ratio`]).
     pub repetition_threshold: f32,
@@ -77,6 +98,15 @@ impl Default for DecodeConfig {
             logprob_threshold: -1.0,
             no_speech_threshold: 0.6,
             suppress_non_speech: false,
+            // Off until the corpus says otherwise. This is Q1 in the open
+            // campaign, and a knob that has not been through the gate does
+            // not become a default on the strength of six probe clips —
+            // which is precisely the mistake logged four times already.
+            // FFAI_ANNOT_THRESHOLD turns it on for the A/B.
+            annotation_threshold: std::env::var("FFAI_ANNOT_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|t| (0.0..=1.0).contains(t)),
             repetition_threshold: 2.4,
         }
     }
@@ -269,9 +299,16 @@ fn decode_once(
     // enabled by default (`--suppress-nst` is opt-in), so their model writes
     // "[coughing]" where ours, unable to spell it, falls through to the
     // nearest phonetic rendering ("Hahaha").
-    let non_speech = if cfg.suppress_non_speech && !std::env::var_os("FFAI_ALLOW_NONSPEECH").is_some()
+    // Mutable because the *conditional* mode decides it at step 0, once
+    // `P(<|nospeech|>)` is known. Starts suppressed so the gate has to be
+    // opened deliberately rather than defaulting open.
+    let mut non_speech = if cfg.suppress_non_speech
+        || (cfg.annotation_threshold.is_some()
+            && !std::env::var_os("FFAI_ALLOW_NONSPEECH").is_some())
     {
         whisper.tokenizer.non_speech_tokens()
+    } else if std::env::var_os("FFAI_ALLOW_NONSPEECH").is_some() {
+        Vec::new()
     } else {
         Vec::new()
     };
@@ -318,6 +355,37 @@ fn decode_once(
                     .map_err(|e| Error::Model(format!("decoder forward: {e}")))
             })?
         };
+        // `P(<|nospeech|>)` at the first position, read from UNFILTERED logits
+        // — `apply_logit_filters` drives that token to -inf, so reading it
+        // afterwards always yields zero. Position 0 is the only place it is
+        // defined.
+        //
+        // It is read HERE rather than inside the sampling closure because the
+        // conditional annotation gate has to act on it *before* the first
+        // token is filtered: the annotation opens with `[` or `(`, so a
+        // decision made one step later is a decision made too late.
+        let step0_no_speech = if step == 0 {
+            let values: Vec<f32> = logits
+                .to_dtype(ffai_core::candle::DType::F32)
+                .and_then(|t| t.to_vec1())
+                .map_err(tensor_err)?;
+            let denom = logsumexp(&values);
+            values.get(no_speech_tok).map_or(0.0, |&v| (v - denom).exp())
+        } else {
+            0.0
+        };
+        if step == 0 {
+            if let Some(threshold) = cfg.annotation_threshold {
+                // Open the gate only when the model itself says this is not
+                // ordinary speech. Measured on tiny.en: clean speech reads
+                // 0.004-0.032, a cough or laugh 0.29-0.45, silence 0.95 (and
+                // silence never gets here — the no-speech gate drops it).
+                if step0_no_speech >= threshold {
+                    non_speech.clear();
+                }
+            }
+        }
+
         let (next, token_logprob, ns_prob) =
             super::profile::timed(&p.sampling, || -> Result<(u32, f32, f32)> {
             // Logit filtering and sampling always run in f32, whatever the
@@ -327,16 +395,10 @@ fn decode_once(
                 .to_dtype(ffai_core::candle::DType::F32)
                 .and_then(|t| t.to_vec1())
                 .map_err(tensor_err)?;
-            // Read `<|nospeech|>` at the first position, from logits that have
-            // not been filtered yet — `apply_logit_filters` suppresses this
-            // token to -inf, so reading it afterwards would always give zero.
-            // Position 0 is the only one it is defined at.
-            let ns = if step == 0 {
-                let denom = logsumexp(&values);
-                values.get(no_speech_tok).map_or(0.0, |&v| (v - denom).exp())
-            } else {
-                0.0
-            };
+            // `<|nospeech|>` is read for the caller's benefit only when the
+            // conditional gate is off; with it on the value is needed BEFORE
+            // filtering (see the block above this closure) and is passed in.
+            let ns = if step == 0 { step0_no_speech } else { 0.0 };
             apply_logit_filters(
                 &mut values,
                 &tokens[prompt_len..],

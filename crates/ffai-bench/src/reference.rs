@@ -46,6 +46,22 @@ pub struct ReferenceSpec {
     pub command: Option<Vec<String>>,
     /// Optional argv printing a version string (recorded in the ledger).
     pub version_command: Option<Vec<String>>,
+    /// What this reference is *configured as* — e.g. `"tiny.en/greedy"`.
+    ///
+    /// **Declared, never inferred.** The quality gate needs to know which
+    /// references are comparable to the engine, and deriving that by looking
+    /// for "tiny" or "greedy" in `name` would make a benchmark's meaning
+    /// depend on a naming convention nobody is enforcing.
+    ///
+    /// Without it the gate answers only "is our output as good as the best
+    /// ASR available?", by picking the lowest WER of everything that ran —
+    /// which for a 39M greedy engine meant being failed against
+    /// `openai-whisper-base`, a 74M beam-search model. That is a real
+    /// question, but it is not "is our implementation good", and the two were
+    /// being reported under one label. References that leave this unset are
+    /// scored in the open comparison only.
+    #[serde(default)]
+    pub config: Option<String>,
 }
 
 /// One clip's result from a batch run.
