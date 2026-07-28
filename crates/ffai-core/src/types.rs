@@ -97,6 +97,14 @@ pub struct Transcript {
     /// which is the same class of mistake as a skipped gate reading as a
     /// pass.
     pub words: Option<Vec<TimedSegment<String>>>,
+    /// Speaker turns from diarization, each value a label like `SPEAKER_00`.
+    ///
+    /// `None` when not requested, exactly as [`Self::words`]. Turns are kept
+    /// as their own timeline rather than stamped onto segments because the
+    /// two do not align: one segment can span a speaker change, and one
+    /// speaker turn can cover several segments. Collapsing them would force a
+    /// lossy choice at the wrong moment.
+    pub speakers: Option<Vec<TimedSegment<String>>>,
 }
 
 impl Transcript {
@@ -184,6 +192,18 @@ impl Transcript {
                     out.push_str(&json_timed(w, 4));
                 }
                 out.push_str(if ws.is_empty() { "]" } else { "\n  ]" });
+            }
+        }
+        out.push_str(",\n  \"speakers\": ");
+        match &self.speakers {
+            None => out.push_str("null"),
+            Some(ts) => {
+                out.push('[');
+                for (i, t) in ts.iter().enumerate() {
+                    out.push_str(if i == 0 { "\n" } else { ",\n" });
+                    out.push_str(&json_timed(t, 4));
+                }
+                out.push_str(if ts.is_empty() { "]" } else { "\n  ]" });
             }
         }
         out.push_str("\n}\n");
@@ -304,6 +324,7 @@ mod tests {
                 confidence: None,
             }],
             words: None,
+            speakers: None,
         };
         let srt = t.to_srt();
         assert!(srt.contains("00:00:01,500 --> 00:00:03,250"));
@@ -329,6 +350,7 @@ mod transcript_output_tests {
             language: Some("en".into()),
             segments: vec![seg(1.5, 3.25, "hello world")],
             words: None,
+            speakers: None,
         };
         let vtt = t.to_vtt();
         assert!(vtt.starts_with("WEBVTT"), "{vtt}");
@@ -343,6 +365,7 @@ mod transcript_output_tests {
             language: Some("en".into()),
             segments: vec![seg(1.0, 3.0, "hello world")],
             words: Some(vec![word(1.0, 1.4, "hello"), word(2.0, 2.5, "world")]),
+            speakers: None,
         };
         let vtt = t.to_vtt();
         assert!(vtt.contains("<00:00:01.000>hello"), "{vtt}");
@@ -357,6 +380,7 @@ mod transcript_output_tests {
             language: None,
             segments: vec![seg(0.0, 2.0, "a"), seg(2.0, 4.0, "b")],
             words: Some(vec![word(2.0, 2.5, "boundary")]),
+            speakers: None,
         };
         let vtt = t.to_vtt();
         assert_eq!(vtt.matches("boundary").count(), 1, "{vtt}");
@@ -364,10 +388,10 @@ mod transcript_output_tests {
 
     #[test]
     fn json_distinguishes_not_requested_from_found_nothing() {
-        let absent = Transcript { language: None, segments: vec![], words: None };
+        let absent = Transcript { language: None, segments: vec![], words: None, speakers: None };
         assert!(absent.to_json().contains("\"words\": null"), "{}", absent.to_json());
 
-        let empty = Transcript { language: None, segments: vec![], words: Some(vec![]) };
+        let empty = Transcript { language: None, segments: vec![], words: Some(vec![]), speakers: None };
         assert!(empty.to_json().contains("\"words\": []"), "{}", empty.to_json());
     }
 
@@ -377,6 +401,7 @@ mod transcript_output_tests {
             language: None,
             segments: vec![seg(0.0, 1.0, "he said \"hi\"\\ok\u{7}")],
             words: None,
+            speakers: None,
         };
         let j = t.to_json();
         assert!(j.contains(r#"\"hi\""#), "{j}");
@@ -392,10 +417,40 @@ mod transcript_output_tests {
             language: Some("en".into()),
             segments: vec![seg(0.0, 1.0, "hi")],
             words: Some(vec![word(0.1, 0.4, "hi")]),
+            speakers: None,
         };
         let j = t.to_json();
         assert!(j.contains("\"start\": 0.100"), "{j}");
         assert!(j.contains("\"end\": 0.400"), "{j}");
         assert!(j.contains("\"confidence\": 0.9000"), "{j}");
+    }
+}
+
+#[cfg(test)]
+mod speaker_output_tests {
+    use super::*;
+
+    #[test]
+    fn json_distinguishes_diarization_not_requested_from_no_turns_found() {
+        let absent = Transcript::default();
+        assert!(absent.to_json().contains("\"speakers\": null"), "{}", absent.to_json());
+
+        let empty = Transcript { speakers: Some(vec![]), ..Default::default() };
+        assert!(empty.to_json().contains("\"speakers\": []"), "{}", empty.to_json());
+    }
+
+    #[test]
+    fn json_carries_speaker_turns() {
+        let t = Transcript {
+            speakers: Some(vec![
+                TimedSegment { start: 0.0, end: 2.5, value: "SPEAKER_00".into(), confidence: None },
+                TimedSegment { start: 2.5, end: 5.0, value: "SPEAKER_01".into(), confidence: None },
+            ]),
+            ..Default::default()
+        };
+        let j = t.to_json();
+        assert!(j.contains("SPEAKER_00"), "{j}");
+        assert!(j.contains("SPEAKER_01"), "{j}");
+        assert!(j.contains("\"end\": 5.000"), "{j}");
     }
 }

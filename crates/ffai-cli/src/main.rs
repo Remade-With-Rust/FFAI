@@ -59,9 +59,15 @@ enum Cmd {
         /// Word-level timestamps (WhisperX-style alignment)
         #[arg(long)]
         word_timestamps: bool,
-        /// Speaker diarization
+        /// Speaker diarization — label who spoke when
         #[arg(long)]
         diarize: bool,
+        /// Known number of speakers; overrides the clustering threshold
+        #[arg(long)]
+        max_speakers: Option<usize>,
+        /// Speaker clustering distance threshold, 0..2 (higher = fewer speakers)
+        #[arg(long, default_value_t = 0.55)]
+        diarize_threshold: f32,
         /// Segment on speech first (on by default; this flag is explicit opt-in)
         #[arg(long)]
         vad: bool,
@@ -202,11 +208,21 @@ fn main() -> Result<()> {
             language,
             word_timestamps,
             diarize,
+            max_speakers,
+            diarize_threshold,
             vad,
             no_vad,
             vad_threshold,
             vad_chunk_secs,
         } => {
+            if let Some(0) = max_speakers {
+                anyhow::bail!("--max-speakers must be at least 1");
+            }
+            if !(0.0..=2.0).contains(&diarize_threshold) {
+                anyhow::bail!(
+                    "--diarize-threshold is a cosine distance and must be in 0..=2, got                      {diarize_threshold}"
+                );
+            }
             if !(0.0..=1.0).contains(&vad_threshold) {
                 anyhow::bail!("--vad-threshold must be in 0..=1, got {vad_threshold}");
             }
@@ -235,6 +251,8 @@ fn main() -> Result<()> {
                 language,
                 word_timestamps,
                 diarize,
+                max_speakers,
+                diarize_threshold,
                 translate: false,
                 vad: vad_on,
                 vad_threshold,

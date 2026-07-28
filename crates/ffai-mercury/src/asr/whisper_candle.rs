@@ -16,6 +16,8 @@ use super::decoder::{self, DecodeConfig};
 use super::mel::{self, MelSpectrogram};
 use super::model::LoadedWhisper;
 use super::aligner::{Aligner, DEFAULT_MODEL as ALIGN_MODEL};
+use super::diarize;
+use super::diarizer::{Diarizer, DEFAULT_MODEL as DIARIZE_MODEL};
 use super::text_decoder::Precision;
 use super::vad;
 
@@ -31,6 +33,12 @@ pub struct WhisperCandle {
     // Mutex because decoding mutates the KV cache; the engine trait is
     // `Send + Sync` so callers can share one engine across threads.
     state: Mutex<Option<State>>,
+    /// Loaded on first `--diarize` call and never before.
+    ///
+    /// Separate lock from `aligner` so requesting one stage never serialises
+    /// the other, and lazy so the flag's promise holds: without `--diarize`
+    /// the 83 MB speaker model is not fetched, not read, and not resident.
+    diarizer: Mutex<Option<std::sync::Arc<Diarizer>>>,
     /// Loaded on first `--word-timestamps` call and never before.
     ///
     /// Separate from `state` so the ASR path cannot be blocked behind
@@ -67,6 +75,23 @@ impl WhisperCandle {
         Ok(guard.as_ref().expect("initialized above").clone())
     }
 
+    /// The speaker model, loaded on first use. See [`Self::aligner`] for why
+    /// this hands back an `Arc` rather than holding the lock across the work.
+    fn diarizer(&self) -> Result<std::sync::Arc<Diarizer>> {
+        let mut guard = self
+            .diarizer
+            .lock()
+            .map_err(|_| Error::Other("diarizer lock poisoned by an earlier panic".into()))?;
+        if guard.is_none() {
+            *guard = Some(std::sync::Arc::new(Diarizer::from_manifest_dir(
+                &self.manifest_dir,
+                DIARIZE_MODEL,
+                ffai_core::best_device(),
+            )?));
+        }
+        Ok(guard.as_ref().expect("initialized above").clone())
+    }
+
     /// Default: `whisper-tiny-en` from the repo's `models/` directory — the
     /// M1 bring-up target, matching the M0 baseline configuration.
     pub fn new() -> Self {
@@ -84,6 +109,7 @@ impl WhisperCandle {
             precision,
             state: Mutex::new(None),
             aligner: Mutex::new(None),
+            diarizer: Mutex::new(None),
         }
     }
 }
@@ -122,14 +148,6 @@ impl AsrEngine for WhisperCandle {
     }
 
     fn transcribe(&self, audio: &AudioBuffer, opts: &AsrOptions) -> Result<Transcript> {
-        if opts.diarize {
-            return Err(Error::Other(
-                "--diarize is Mercury-X phase D and is not built yet (see \
-                 docs/mercury-X-mission.md). --word-timestamps works today."
-                    .into(),
-            ));
-        }
-
         let mut guard = self.state.lock().map_err(|_| {
             Error::Other("whisper-candle state lock poisoned by an earlier panic".into())
         })?;
@@ -190,8 +208,16 @@ impl AsrEngine for WhisperCandle {
             Some(_) => true,
             None => opts.vad,
         };
+        // Detected once and kept: diarization needs the same speech regions
+        // the windows were cut from. Recomputing them there would let the two
+        // drift apart under a threshold change and attribute speaker turns to
+        // audio the transcript never saw.
+        let regions = if vad_on || opts.diarize {
+            vad::detect(&mono.samples, opts.vad_threshold)
+        } else {
+            Vec::new()
+        };
         let windows: Vec<(usize, &[f32])> = if vad_on {
-            let regions = vad::detect(&mono.samples, opts.vad_threshold);
             vad::pack(&regions, opts.vad_chunk_secs as f64)
                 .into_iter()
                 .map(|w| {
@@ -276,6 +302,22 @@ impl AsrEngine for WhisperCandle {
             None
         };
 
-        Ok(Transcript { language, segments, words })
+        // Diarization runs last: it needs the speech regions (above) and is
+        // independent of the text, so a failure here cannot corrupt a
+        // transcript that already succeeded.
+        let speakers = if opts.diarize {
+            let diarizer = self.diarizer()?;
+            let turns = diarizer.diarize(
+                &mono.samples,
+                &regions,
+                opts.diarize_threshold,
+                opts.max_speakers,
+            );
+            Some(diarize::labelled_turns(&turns))
+        } else {
+            None
+        };
+
+        Ok(Transcript { language, segments, words, speakers })
     }
 }

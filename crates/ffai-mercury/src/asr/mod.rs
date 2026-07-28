@@ -17,6 +17,7 @@ pub mod aligner;
 pub mod audio_encoder;
 pub mod decoder;
 pub mod diarize;
+pub mod diarizer;
 pub mod f16_gemv;
 pub mod fbank;
 pub mod flash_attn;

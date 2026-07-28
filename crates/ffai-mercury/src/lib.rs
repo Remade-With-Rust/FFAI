@@ -99,8 +99,11 @@ mod tests {
     }
 
     #[test]
-    fn whisperx_flags_are_rejected_with_a_pointer_to_their_milestone() {
-        // Silently ignoring --diarize would be worse than refusing it.
+    fn diarization_no_longer_refuses_and_reaches_the_model() {
+        // Both WhisperX stages used to be refused here. Word timestamps
+        // landed first, then diarization; what is left to assert is that the
+        // flag is HONOURED rather than silently ignored — the failure mode
+        // that would be worse than an error.
         let mut reg = EngineRegistry::new();
         register(&mut reg);
         let audio = ffai_core::types::AudioBuffer {
@@ -114,13 +117,11 @@ mod tests {
             .unwrap()
             .transcribe(&audio, &opts)
             .unwrap_err();
-        // Diarization is Mercury-X phase D and still unbuilt. Word timestamps
-        // used to be refused by this same guard and are now implemented, so
-        // the error must name the stage that is actually missing rather than
-        // the pair they used to share.
+        // 160 samples of silence: too short for the speaker model to embed,
+        // so this exercises the wiring rather than the network. Whatever it
+        // reports, it must not be the old "not built yet" refusal.
         let msg = err.to_string();
-        assert!(msg.contains("diarize"), "got: {msg}");
-        assert!(msg.contains("phase D"), "got: {msg}");
-        assert!(!msg.contains("--word-timestamps and"), "stale joint refusal: {msg}");
+        assert!(!msg.contains("not built yet"), "stale refusal still present: {msg}");
+        assert!(!msg.contains("phase D"), "stale refusal still present: {msg}");
     }
 }

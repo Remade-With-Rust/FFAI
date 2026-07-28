@@ -114,10 +114,15 @@ impl TdnnBlock {
                 dilation,
                 ..Default::default()
             },
-            vb.pp("conv"),
+            // `conv.conv`, not `conv`. SpeechBrain's `Conv1d` and
+            // `BatchNorm1d` are wrapper classes that hold the torch module as
+            // a field, so every parameter sits one level deeper than the
+            // attribute name suggests. Read from the checkpoint, not guessed:
+            // `blocks.0.conv.conv.weight`, `blocks.0.norm.norm.weight`.
+            vb.pp("conv").pp("conv"),
         )
         .map_err(|e| model_err("tdnn conv", e))?;
-        Ok(TdnnBlock { conv, norm: batch_norm_1d(out_ch, vb.pp("norm"))? })
+        Ok(TdnnBlock { conv, norm: batch_norm_1d(out_ch, vb.pp("norm").pp("norm"))? })
     }
 
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
@@ -189,9 +194,9 @@ struct SeBlock {
 impl SeBlock {
     fn load(channels: usize, se_channels: usize, vb: VarBuilder) -> Result<Self> {
         Ok(SeBlock {
-            conv1: candle_nn::conv1d(channels, se_channels, 1, Default::default(), vb.pp("conv1"))
+            conv1: candle_nn::conv1d(channels, se_channels, 1, Default::default(), vb.pp("conv1").pp("conv"))
                 .map_err(|e| model_err("se conv1", e))?,
-            conv2: candle_nn::conv1d(se_channels, channels, 1, Default::default(), vb.pp("conv2"))
+            conv2: candle_nn::conv1d(se_channels, channels, 1, Default::default(), vb.pp("conv2").pp("conv"))
                 .map_err(|e| model_err("se conv2", e))?,
         })
     }
@@ -266,7 +271,7 @@ impl AttentiveStatsPooling {
             // Input is 3x channels: the features plus broadcast global mean
             // and std (SpeechBrain's `global_context=True`, its default).
             tdnn: TdnnBlock::load(channels * 3, attention_channels, 1, 1, vb.pp("tdnn"))?,
-            conv: candle_nn::conv1d(attention_channels, channels, 1, Default::default(), vb.pp("conv"))
+            conv: candle_nn::conv1d(attention_channels, channels, 1, Default::default(), vb.pp("conv").pp("conv"))
                 .map_err(|e| model_err("asp conv", e))?,
         })
     }
@@ -339,8 +344,11 @@ impl EcapaTdnn {
             vb.pp("mfa"),
         )?;
         let asp = AttentiveStatsPooling::load(mfa_out, cfg.attention_channels, vb.pp("asp"))?;
-        let asp_bn = batch_norm_1d(mfa_out * 2, vb.pp("asp_bn"))?;
-        let fc = candle_nn::conv1d(mfa_out * 2, cfg.embedding_dim, 1, Default::default(), vb.pp("fc"))
+        // `asp_bn.norm` and `fc.conv` are only ONE level deep — the wrapper
+        // is the attribute itself here rather than a field inside a block.
+        // Uniformly applying the double nesting above would miss both.
+        let asp_bn = batch_norm_1d(mfa_out * 2, vb.pp("asp_bn").pp("norm"))?;
+        let fc = candle_nn::conv1d(mfa_out * 2, cfg.embedding_dim, 1, Default::default(), vb.pp("fc").pp("conv"))
             .map_err(|e| model_err("fc", e))?;
         Ok(EcapaTdnn { cfg, blocks, first, mfa, asp, asp_bn, fc, device })
     }

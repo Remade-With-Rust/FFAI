@@ -82,6 +82,13 @@ pub struct AsrOptions {
     pub word_timestamps: bool,
     /// Speaker diarization (WhisperX-style).
     pub diarize: bool,
+    /// Known speaker count, when the caller has one ("this is an interview,
+    /// two people"). Overrides the clustering threshold, because a known
+    /// count is stronger evidence than a distance cut-off nobody has tuned.
+    pub max_speakers: Option<usize>,
+    /// Cosine-distance threshold for merging speaker clusters. Untuned until
+    /// DER can be measured against a diarization corpus.
+    pub diarize_threshold: f32,
     /// Translate to English instead of transcribing.
     pub translate: bool,
     /// Segment on speech before transcribing, so silence never reaches the
@@ -122,6 +129,8 @@ impl Default for AsrOptions {
             language: None,
             word_timestamps: false,
             diarize: false,
+            max_speakers: None,
+            diarize_threshold: 0.55,
             translate: false,
             vad: true,
             vad_threshold: 0.5,

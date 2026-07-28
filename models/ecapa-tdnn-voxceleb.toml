@@ -1,0 +1,32 @@
+# Speaker embeddings for `--diarize`.
+#
+# Turns a 1.5 s window of audio into a 192-dim vector whose direction
+# identifies a voice; clustering those vectors is what produces speaker turns.
+# It performs no recognition and never touches the transcript's words.
+#
+# LICENCE IS WHY THIS MODEL AND NOT THE OBVIOUS ONE. The reference
+# implementation (WhisperX) uses pyannote's embedding model, which is
+# MIT-licensed and **gated** — permission granted in the licence, access
+# walled behind a browser terms-acceptance step. A model that cannot be
+# fetched without a human clicking through cannot live in a manifest, which is
+# what principle 4 ("weights are data, fetched from manifests that surface
+# each model's own licence") actually requires. SpeechBrain's ECAPA-TDNN is
+# Apache-2.0 AND ungated, so it goes in cleanly.
+#
+# Format note: the weights are a PyTorch `.ckpt` (a pickled state dict), not
+# safetensors. candle reads it via `VarBuilder::from_pth`. The parameter names
+# are double-nested — `blocks.0.conv.conv.weight`, because SpeechBrain's
+# `Conv1d` wraps `nn.Conv1d` as a field — with `fc.conv` and `asp_bn.norm`
+# single-nested. Those paths were read out of the checkpoint rather than
+# inferred from the class names.
+name = "ecapa-tdnn-voxceleb"
+task = "asr"
+description = "speechbrain/spkrec-ecapa-voxceleb (22M params) — ECAPA-TDNN speaker embeddings for diarization"
+license = "Apache-2.0"
+hf_repo = "speechbrain/spkrec-ecapa-voxceleb"
+
+[[files]]
+name = "embedding_model.ckpt"
+
+[[files]]
+name = "hyperparams.yaml"
