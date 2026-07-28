@@ -9,6 +9,7 @@ Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 
 ```text
 ffai asr -i talk.wav -o talk.srt --engine whisper-candle
+ffai asr -i talk.wav -o talk.json --word-timestamps   # per-word times (CTC alignment)
 ffai tts "hello world" -o hello.wav --voice kokoro
 ffai ocr -i receipt.png --engine easy-ocr
 ffai caption -i frame.png --prompt "what is happening here?"
@@ -20,7 +21,7 @@ ffai models         # list model manifests, licenses, cache status
 
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live: memory gate PASS vs whisper.cpp (167–183 vs 194 MiB), ahead on noisy speech, ~1.12× behind on speed ([Status](#status)) |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live: ahead of whisper.cpp on WER+CER on both holdouts and on memory (167–183 vs 194 MiB), 1.01–1.09× on speed ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | Pending Build |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -85,8 +86,10 @@ plugin is just an engine registered at runtime.
 
 ## Status
 
-**Mercury ASR transcribes today, in pure Rust, within ~1.12× of whisper.cpp's
-throughput — ahead of it on noisy speech, 0.41 pp behind on clean.**
+**Mercury ASR transcribes today, in pure Rust, ahead of whisper.cpp on WER and
+CER on both holdouts, at 1.01–1.09× its throughput — with one caveat about
+where part of that quality margin comes from, stated below rather than
+buried.**
 `whisper-candle` runs OpenAI Whisper on
 candle with our own mel front-end (STFT + Slaney filterbank), tokenizer
 grammar, decode loop, audio encoder, and four hand-written AVX2 kernels.
@@ -96,35 +99,55 @@ decoding, CPU only, tiny.en:
 
 | Corpus | Implementation | WER % | CER % | ×realtime (warm) | steady MiB |
 |---|---|---:|---:|---:|---:|
-| test-clean | **whisper-candle** (Rust) | 7.99 | 3.27 | 28.1–33.1 | **183** |
-| test-clean | whisper.cpp (C++/ggml) | **7.58** | **2.87** | **35.5–36.6** | 194 |
-| test-other | **whisper-candle** (Rust) | **16.79** | **8.34** | 23.4–26.7 | **167** |
-| test-other | whisper.cpp (C++/ggml) | 16.82 | 8.41 | **27.3–29.5** | 194 |
+| test-clean | **whisper-candle** (Rust) | **6.79** | **2.74** | 32.9 | **183** |
+| test-clean | whisper.cpp (C++/ggml) | 7.58 | 2.87 | **33.2–36.6** | 194 |
+| test-other | **whisper-candle** (Rust) | **16.43** | **8.07** | 26.7 | **167** |
+| test-other | whisper.cpp (C++/ggml) | 16.82 | 8.41 | **29.0–29.5** | 194 |
 
-**Quality: split, and the split is a decision we made on purpose.** On the
-noisy half we are **ahead** of whisper.cpp (16.79 % vs 16.82 %). On the
-clean half we are 0.41 pp behind — **5.4 % relative, outside the 5 % band**.
-0.22 pp of that gap is bought, not inherited: Mercury annotates non-speech
-events (`[Laughs]`, `(coughs)`) the way whisper.cpp does, instead of
-suppressing those tokens the way openai-whisper does. Suppressing them
-returns test-clean to 7.77 % / 3.25 % and moves nothing on test-other, so
-the cost is real, priced, and one flag away —
-`DecodeConfig::suppress_non_speech`. We take it to match the reference we
-benchmark against, and carry recovering it as open quality work.
+**Quality: ahead of whisper.cpp on both corpora, and here is the asterisk.**
+6.79 vs 7.58 on clean, 16.43 vs 16.82 on noisy, better on CER on both. Those
+are the shipped default's real numbers.
+
+Part of that margin comes from **speech segmentation being on by default**,
+which whisper.cpp does not do — and segmentation is **not** a quality
+mechanism. Turning it off moves us to 7.99 / 16.79. That looks like a 1.20 pp
+quality win and is not one: decomposed per clip over 400 clips it is **38
+improved, 38 worsened, a sign test of z = 0.00**, with correlation −0.09
+between silence removed and WER gained — the opposite sign to the mechanism
+originally proposed for it. It shifts where speech sits inside Whisper's fixed
+30 s context and re-rolls the decode on about a fifth of clips, half each way.
+The aggregate moved because WER is dominated by a handful of high-delta clips.
+**Do not expect this margin to transfer to your audio.** Full descent:
+[docs/whys/vad-quality.md](docs/whys/vad-quality.md).
+
+Segmentation ships for its speed, which *is* a mechanism: 2.2–4.2× on audio
+with trailing silence at a byte-identical transcript, and silence producing an
+empty transcript with no encoder pass.
+
+A second deliberate cost sits in these numbers: Mercury annotates non-speech
+events (`[Laughs]`, `(coughs)`) the way whisper.cpp does rather than
+suppressing those tokens the way openai-whisper does. That costs 0.22 pp on
+test-clean and nothing on test-other, and is one flag away —
+`DecodeConfig::suppress_non_speech`.
 
 **Footprint: PASS — 167–183 MiB steady against whisper.cpp's 194 MiB
-(0.86–0.94×)**, and ~49–63 MiB of ours is audio the harness holds for the
-speed comparison, so the engine itself sits near 120 MiB. **Speed: FAIL at
-~1.12×** (1.088–1.137× across repeat runs, corroborated by a 21-round paired
-test at z = −4.15).
+(0.86–0.95×)**, and ~49–63 MiB of ours is audio the harness holds for the
+speed comparison, so the engine itself sits near 120 MiB. **Speed: still
+behind, but close** — 32.9 vs 33.2 ×RT on clean (1.01×) and 26.7 vs 29.0 on
+noisy (1.09×). Single-run ratios on this machine are worthless (the same code
+has read 1.01×–1.29× across six ledger runs), so read the throughput, not the
+ratio.
 
-So the standing is a **Pareto position rather than a deficit**: behind on
-speed, ahead on memory, ahead on noisy speech, behind on clean. The verdict
-is **not claimable yet** — all four gates must pass, and speed does not.
-Note that the harness judges quality against the *best* reference of all
-those it runs (openai-whisper-base, 5.96 % / 12.14 %), not against
-whisper.cpp, so its own verdict line reads `quality FAIL` on both corpora.
-The comparison above is the narrower one against whisper.cpp specifically.
+So the standing is **ahead on quality against whisper.cpp, ahead on memory,
+marginally behind on speed** — with the segmentation asterisk above attached
+to the quality half. The verdict is still **not claimable**, for two reasons
+worth stating plainly. The harness judges quality against the *best* reference
+it runs — `openai-whisper-base` at 5.96 % / 12.14 %, a 74M beam-search model —
+not against whisper.cpp, so its own verdict line reads `quality FAIL` on both
+corpora. Against **matched** references (tiny, greedy) our 6.79 % is first,
+ahead of faster-whisper-tiny-greedy 7.04 %, openai-whisper-tiny-greedy 7.41 %
+and whisper.cpp 7.58 %. Those are two different questions and the harness
+currently conflates them; splitting the gate is open work.
 
 Footprint is judged on **steady** resident memory with peak recorded beside
 it, sampled the same way on both sides. Peak is dominated by model load — a
@@ -140,11 +163,12 @@ against its *unfused* encoder ours is **1.38× faster**.
 Two cautions this project keeps on the record. Single-run gap ratios are
 worthless here: across six ledger runs of the same code the test-clean gap
 reads 1.01×–1.29× purely on machine state, so progress is reported as our own
-throughput (22.9 → 33.1 ×RT) and the ratio only as standing. And the widest
-quality signal is not WER but **test-clean CER — 3.27 % vs 2.87 %, 14 %
-relative** — a deficit that does not appear on test-other and is only
-partly explained by the annotation decision above (suppressing annotations
-moves CER just 3.27 → 3.25, so ~13 % of the gap remains unexplained).
+throughput (22.9 → 32.9 ×RT) and the ratio only as standing. And the
+long-standing **test-clean CER deficit (3.27 % vs 2.87 %) is now a lead
+(2.74 %)** — but by the same segmentation change whose per-clip effect is
+z = 0.00, so the deficit is better described as *displaced* than as
+explained. It went unexplained through int8, the f16 cache and every kernel
+change since §6.7, and nothing since has said what caused it.
 
 Full details, including every reverted experiment and the methodology defects
 found along the way, are in the [Mercury mission plan](docs/mercury-mission-plan.md)
