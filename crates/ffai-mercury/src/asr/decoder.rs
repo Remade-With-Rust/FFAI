@@ -29,6 +29,13 @@ pub struct DecodeConfig {
     pub temperatures: Vec<f32>,
     /// Retry when the mean per-token log-probability falls below this.
     pub logprob_threshold: f32,
+    /// Drop a window entirely when P(`<|nospeech|>`) exceeds this *and* the
+    /// transcript is also low-confidence. Whisper hallucinates fluent text on
+    /// silence ("you", "Thank you.") — the model tells you it is silence via
+    /// this token, and without reading it there is no way to know. Matches
+    /// `no_speech_threshold` in openai-whisper and `-nth` in whisper.cpp.
+    /// Set above 1.0 to disable.
+    pub no_speech_threshold: f32,
     /// Retry when the transcript looks like a repetition loop (see
     /// [`repetition_ratio`]).
     pub repetition_threshold: f32,
@@ -45,6 +52,7 @@ impl Default for DecodeConfig {
             // openai-whisper's default ladder.
             temperatures: vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
             logprob_threshold: -1.0,
+            no_speech_threshold: 0.6,
             repetition_threshold: 2.4,
         }
     }
@@ -130,7 +138,38 @@ fn decode_with_fallback(
     let mut best: Option<(f32, Vec<u32>)> = None;
 
     for &temperature in ladder {
-        let (tokens, avg_logprob) = decode_once(whisper, audio_features, cfg, temperature)?;
+        let (tokens, avg_logprob, no_speech_prob) =
+            decode_once(whisper, audio_features, cfg, temperature)?;
+
+        // The no-speech gate, and a *deliberate divergence* from the
+        // reference. openai-whisper requires BOTH a high `<|nospeech|>`
+        // probability and a poor `avg_logprob`, vetoing the skip whenever the
+        // transcript scores well. On silence that veto always fires: the
+        // hallucination is two tokens long ("you"), and short outputs score
+        // well by construction — measured -0.72 against a -1.0 bar. The
+        // reference's own gate cannot catch the case it exists for.
+        //
+        // Measured on tiny.en, 12 LibriSpeech clips vs digital silence:
+        //
+        //   no_speech_prob   speech 0.010..0.076   silence 0.949
+        //   avg_logprob      speech -0.24..-0.48   silence -0.72
+        //
+        // The first separates cleanly, with the 0.6 threshold sitting 8x above
+        // the loudest speech reading; the second does not separate at all. So
+        // we gate on the variable that carries the signal and drop the one
+        // that does not. `no_speech_prob` comes from raw logits and does not
+        // move with temperature, so the first rung decides it.
+        if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() {
+            eprintln!(
+                "[gate] no_speech_prob={no_speech_prob:.4} avg_logprob={avg_logprob:.4} \
+                 (thresholds {} / {})",
+                cfg.no_speech_threshold, cfg.logprob_threshold
+            );
+        }
+        if no_speech_prob > cfg.no_speech_threshold {
+            return Ok(Vec::new());
+        }
+
         let text = whisper.tokenizer.decode(&tokens).unwrap_or_default();
         let looping = repetition_ratio(&text) > cfg.repetition_threshold;
         let confident = avg_logprob > cfg.logprob_threshold;
@@ -164,8 +203,9 @@ fn decode_once(
     audio_features: &Tensor,
     cfg: &DecodeConfig,
     temperature: f32,
-) -> Result<(Vec<u32>, f32)> {
+) -> Result<(Vec<u32>, f32, f32)> {
     let eot = whisper.tokenizer.eot;
+    let no_speech_tok = whisper.tokenizer.no_speech as usize;
     let english_only = whisper.is_english_only();
     let mut tokens = whisper.tokenizer.initial_tokens(
         cfg.language,
@@ -189,6 +229,7 @@ fn decode_once(
     let mut rng: u64 = 0x9E3779B97F4A7C15;
     let mut logprob_sum = 0.0f32;
     let mut generated = 0usize;
+    let mut no_speech_prob = 0.0f32;
 
     let p = super::profile::profile();
     for step in 0..cfg.max_tokens {
@@ -227,7 +268,8 @@ fn decode_once(
                     .map_err(|e| Error::Model(format!("decoder forward: {e}")))
             })?
         };
-        let (next, token_logprob) = super::profile::timed(&p.sampling, || -> Result<(u32, f32)> {
+        let (next, token_logprob, ns_prob) =
+            super::profile::timed(&p.sampling, || -> Result<(u32, f32, f32)> {
             // Logit filtering and sampling always run in f32, whatever the
             // weights are stored as: the vocabulary softmax is where
             // half-precision rounding would actually change a token choice.
@@ -235,6 +277,16 @@ fn decode_once(
                 .to_dtype(ffai_core::candle::DType::F32)
                 .and_then(|t| t.to_vec1())
                 .map_err(tensor_err)?;
+            // Read `<|nospeech|>` at the first position, from logits that have
+            // not been filtered yet — `apply_logit_filters` suppresses this
+            // token to -inf, so reading it afterwards would always give zero.
+            // Position 0 is the only one it is defined at.
+            let ns = if step == 0 {
+                let denom = logsumexp(&values);
+                values.get(no_speech_tok).map_or(0.0, |&v| (v - denom).exp())
+            } else {
+                0.0
+            };
             apply_logit_filters(
                 &mut values,
                 &tokens[prompt_len..],
@@ -250,8 +302,11 @@ fn decode_once(
             // log P(chosen) = logit - logsumexp(logits), the quantity the
             // fallback threshold is defined on.
             let lp = values[chosen as usize] - logsumexp(&values);
-            Ok((chosen, lp))
-        })?;
+                Ok((chosen, lp, ns))
+            })?;
+        if step == 0 {
+            no_speech_prob = ns_prob;
+        }
         tokens.push(next);
         logprob_sum += token_logprob;
         generated += 1;
@@ -261,7 +316,7 @@ fn decode_once(
     }
     p.count_tokens(tokens.len() - prompt_len);
     let avg = if generated > 0 { logprob_sum / generated as f32 } else { f32::NEG_INFINITY };
-    Ok((tokens[prompt_len..].to_vec(), avg))
+    Ok((tokens[prompt_len..].to_vec(), avg, no_speech_prob))
 }
 
 /// Temperature sampling from raw logits, with a deterministic RNG so a run is
