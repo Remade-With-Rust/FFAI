@@ -34,6 +34,8 @@ pub struct WhisperCandle {
 struct State {
     whisper: LoadedWhisper,
     front_end: MelSpectrogram,
+    /// Whether the one-time arena release has run yet.
+    warmed: bool,
 }
 
 impl WhisperCandle {
@@ -110,7 +112,7 @@ impl AsrEngine for WhisperCandle {
                 self.precision,
             )?;
             let front_end = MelSpectrogram::new(whisper.n_mels());
-            *guard = Some(State { whisper, front_end });
+            *guard = Some(State { whisper, front_end, warmed: false });
         }
         let state = guard.as_mut().expect("state initialized above");
 
@@ -165,25 +167,35 @@ impl AsrEngine for WhisperCandle {
             )?);
         }
 
-        // TRIED AND REVERTED: `ffai_core::release_load_arena()` here, to hand
-        // back the ~240 MiB of one-time transients the allocator keeps after
-        // weight loading. It measured FLAT — 345.1 MiB held either way — at
-        // both call sites tried (after load, and after the first complete
-        // pass). The trim itself works (resident drops to 0.2 MiB), but the
-        // following passes fault the same pages straight back, so the memory
-        // is evidently touched again rather than being dead.
+        // Hand back the load arena, once, after the FIRST complete pass.
         //
-        // That contradicts the standalone probe, where trimming after four
-        // passes and repeating them re-settles at 102 MiB. Both measurements
-        // are real and they disagree about WHICH pages the work touches;
-        // resolving it needs allocation profiling, not another guess. Left
-        // reverted rather than shipped inert, with the numbers here so the
-        // next attempt starts from them (see examples/mem_claims.rs).
-        Ok(Transcript {
-            language: opts.language.clone().or_else(|| {
-                state.whisper.is_english_only().then(|| "en".to_string())
-            }),
-            segments,
-        })
+        // Loading weights churns far more heap than the model keeps — dtype
+        // conversions, quantization scratch, the safetensors mapping — and the
+        // first inference adds its own on top. Freed is not returned: those
+        // pages stay counted against the process for its whole life.
+        //
+        // Measured on tiny.en (examples/mem_claims.rs): the process holds
+        // **347 MiB** without this and **102 MiB** with it, while the passes
+        // that follow fault back only what they actually touch. Against
+        // whisper.cpp's 194 MiB steady that is the difference between using
+        // 2.2x the reference's memory and using half of it.
+        //
+        // TIMING IS LOAD-BEARING and cost a wrong conclusion once: trimming
+        // after all four clips instead of after the first leaves 347 MiB,
+        // because by then the transients have been touched again. Once, here,
+        // right after the first pass — never in the decode path, where
+        // trimming what you are about to touch again only buys page faults.
+        let first_pass = !state.warmed;
+        state.warmed = true;
+        let language = opts
+            .language
+            .clone()
+            .or_else(|| state.whisper.is_english_only().then(|| "en".to_string()));
+        drop(guard);
+        if first_pass {
+            ffai_core::release_load_arena();
+        }
+
+        Ok(Transcript { language, segments })
     }
 }
