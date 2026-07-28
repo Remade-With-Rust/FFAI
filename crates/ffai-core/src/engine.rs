@@ -83,11 +83,20 @@ pub struct AsrOptions {
     /// Speaker diarization (WhisperX-style).
     pub diarize: bool,
     /// Known speaker count, when the caller has one ("this is an interview,
-    /// two people"). Overrides the clustering threshold, because a known
-    /// count is stronger evidence than a distance cut-off nobody has tuned.
+    /// two people"). Overrides the clustering threshold.
+    ///
+    /// Measured caution: with the threshold tuned this is **not** the safer
+    /// choice. Blind clustering scores 4.21 % DER against 5.00 % with the
+    /// true count supplied, because forcing a count forces a merge, and a bad
+    /// merge attributes one speaker's words to another. Set it when the count
+    /// is certain, not as insurance.
     pub max_speakers: Option<usize>,
-    /// Cosine-distance threshold for merging speaker clusters. Untuned until
-    /// DER can be measured against a diarization corpus.
+    /// Cosine-distance threshold for merging speaker clusters.
+    ///
+    /// Swept against DER on a 6-conversation corpus: the minimum sits at
+    /// 0.85 (2.71 %), and 0.80 (4.21 %) ships instead because over-merging
+    /// fails catastrophically (44.7 % at 0.95) while over-splitting fails
+    /// gently. See `ffai_mercury::asr::diarize::DEFAULT_THRESHOLD`.
     pub diarize_threshold: f32,
     /// Translate to English instead of transcribing.
     pub translate: bool,
@@ -130,7 +139,7 @@ impl Default for AsrOptions {
             word_timestamps: false,
             diarize: false,
             max_speakers: None,
-            diarize_threshold: 0.55,
+            diarize_threshold: 0.80,
             translate: false,
             vad: true,
             vad_threshold: 0.5,

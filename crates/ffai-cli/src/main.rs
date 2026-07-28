@@ -66,7 +66,7 @@ enum Cmd {
         #[arg(long)]
         max_speakers: Option<usize>,
         /// Speaker clustering distance threshold, 0..2 (higher = fewer speakers)
-        #[arg(long, default_value_t = 0.55)]
+        #[arg(long, default_value_t = 0.80)]
         diarize_threshold: f32,
         /// Segment on speech first (on by default; this flag is explicit opt-in)
         #[arg(long)]

@@ -36,10 +36,36 @@ pub const HOP_SECS: f64 = 0.75;
 
 /// Cosine-distance threshold for merging clusters.
 ///
-/// Not a tuned value — a starting point. It is meaningless until measured as
-/// DER against a diarization corpus, which does not exist yet (Phase E), and
-/// this file must not pretend otherwise.
-pub const DEFAULT_THRESHOLD: f32 = 0.55;
+/// **Measured, and deliberately NOT the in-sample optimum.** Swept against
+/// DER on `corpora/librispeech-diarization.toml`, 6 conversations, 0.25 s
+/// collar (`examples/diarize_gate.rs sweep`):
+///
+/// ```text
+///   0.55  34.00%   0.70   5.62%   0.85   2.71%  <- minimum
+///   0.60  21.34%   0.75   5.20%   0.90   9.25%
+///   0.65   8.60%   0.80   4.21%   0.95  44.65%   1.00+ 57.80%
+/// ```
+///
+/// The minimum is 0.85. **0.80 ships instead**, because the curve is
+/// violently asymmetric and the two directions fail differently:
+///
+/// - **Too low** over-splits. One speaker becomes two, and DER degrades
+///   gently — 8.6 % at 0.65, still under 6 % at 0.70.
+/// - **Too high** over-merges. Two speakers become one, every word of the
+///   second is attributed to the first, and DER explodes — 9.3 % at 0.90,
+///   **44.7 % at 0.95**, 57.8 % once everything collapses to a single
+///   cluster.
+///
+/// Taking 0.85 would put the shipped default 0.05 from a 3.4x degradation on
+/// audio that is not this corpus. 0.80 costs 1.5 pp in sample and buys a far
+/// wider margin on everything else — the right trade when the penalty for
+/// being wrong in one direction is six times the penalty in the other.
+///
+/// **This is in-sample.** Tuned on six conversations and reported on the same
+/// six. The curve's shape is strong evidence the minimum is real rather than
+/// a fluke — it is smooth and monotone on both sides, not scattered — but the
+/// VALUE needs a holdout before it is a claim rather than a setting.
+pub const DEFAULT_THRESHOLD: f32 = 0.80;
 
 /// A stretch of audio attributed to one speaker.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -113,8 +139,18 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// is the characteristic diarization failure.
 ///
 /// `max_speakers` is the caller's prior knowledge ("this is an interview, two
-/// people"). When given it overrides the threshold, because a known speaker
-/// count is stronger evidence than a distance cut-off nobody has tuned.
+/// people"). When given it overrides the threshold — but note that this is
+/// **not automatically the better option**, and measurement says so: with the
+/// threshold tuned, blind clustering scores 4.21 % DER against 5.00 % when the
+/// true count is supplied.
+///
+/// The reason is that forcing the count forces a MERGE. Hitting "exactly 4"
+/// on a conversation the embeddings want to split 6 ways means joining two
+/// clusters that should not join, and every word of one speaker is then
+/// attributed to another — 8.87 s of confusion on the worst conversation
+/// versus 2.89 s when left alone. Extra clusters are cheap under DER's
+/// optimal mapping; a bad merge is not. Supply the count when it is certain,
+/// not as a safety measure.
 pub fn cluster(
     embeddings: &[Vec<f32>],
     threshold: f32,
