@@ -98,7 +98,6 @@ pub enum QLinear {
     Int8 {
         q: super::vocab_int8::Int8Vocab,
         bias: Option<Tensor>,
-        full: Linear,
     },
     /// f16 weights, pre-transposed, for layers fed ONE row at a time.
     ///
@@ -111,7 +110,6 @@ pub enum QLinear {
     Half {
         k: super::f16_gemv::F16Gemv,
         bias: Option<Tensor>,
-        full: Linear,
     },
 }
 
@@ -137,6 +135,35 @@ fn mlp_int8_enabled() -> bool {
 #[inline]
 fn mlp_int8_disabled() -> bool {
     super::knobs::MLP_INT8_DISABLED.get()
+}
+
+/// Apply a single-row kernel over `rows` rows.
+///
+/// These layers previously kept `full: Linear` — a second, f32 copy of the
+/// whole weight — purely to serve inputs wider than one row. That fallback
+/// made quantization ADD memory instead of replacing it: measured, `q8_0` held
+/// 373 MiB against f32's 392, a 4.7 % saving where the variant is sold on
+/// "~4x smaller weights". The vocabulary projection alone kept ~80 MB of f32
+/// beside ~20 MB of int8.
+///
+/// Every caller of these constructors feeds ONE row (a decoder step projects a
+/// single token; the 1500-row cross-attention K/V projections take the plain
+/// `Linear` path via `linear_no_bias`), so the fallback was cold weight. The
+/// multi-row case still works — it loops the kernel — it is simply no longer
+/// paid for in resident memory by every model that never uses it.
+fn gemv_rows(
+    rows: usize,
+    flat: &Tensor,
+    mut f: impl FnMut(&Tensor) -> CandleResult<Tensor>,
+) -> CandleResult<Tensor> {
+    if rows == 1 {
+        return f(flat);
+    }
+    let mut outs = Vec::with_capacity(rows);
+    for r in 0..rows {
+        outs.push(f(&flat.narrow(0, r, 1)?)?);
+    }
+    Tensor::cat(&outs, 0)
 }
 
 impl QLinear {
@@ -182,11 +209,7 @@ impl QLinear {
         }
         // Weight is already (out, in) row-major — the layout the kernel reads.
         match super::vocab_int8::Int8Vocab::new(&weight)? {
-            Some(q) => Ok(QLinear::Int8 {
-                q,
-                bias: bias.clone(),
-                full: Linear::new(weight, bias),
-            }),
+            Some(q) => Ok(QLinear::Int8 { q, bias }),
             None => Self::new(weight, bias, precision),
         }
     }
@@ -207,11 +230,7 @@ impl QLinear {
             return Self::new(weight, bias, precision);
         }
         match super::f16_gemv::F16Gemv::new(&weight)? {
-            Some(k) => Ok(QLinear::Half {
-                k,
-                bias: bias.clone(),
-                full: Linear::new(weight, bias),
-            }),
+            Some(k) => Ok(QLinear::Half { k, bias }),
             None => Self::new(weight, bias, precision),
         }
     }
@@ -240,14 +259,11 @@ impl QLinear {
                     None => Ok(y),
                 }
             }
-            QLinear::Half { k, bias, full } => {
+            QLinear::Half { k, bias } => {
                 let dims = x.dims();
                 let rows: usize = dims[..dims.len() - 1].iter().product();
-                if rows != 1 {
-                    return full.forward(x);
-                }
-                let flat = x.reshape((1, dims[dims.len() - 1]))?;
-                let y = k.forward(&flat)?;
+                let flat = x.reshape((rows, dims[dims.len() - 1]))?;
+                let y = gemv_rows(rows, &flat, |r| k.forward(r))?;
                 let y = match bias {
                     Some(b) => y.broadcast_add(b)?,
                     None => y,
@@ -257,15 +273,11 @@ impl QLinear {
                 out[n - 1] = y.dim(1)?;
                 y.reshape(out)
             }
-            QLinear::Int8 { q, bias, full } => {
-                // One row only; anything wider goes to the GEMM.
+            QLinear::Int8 { q, bias } => {
                 let dims = x.dims();
                 let rows: usize = dims[..dims.len() - 1].iter().product();
-                if rows != 1 {
-                    return full.forward(x);
-                }
-                let flat = x.reshape((1, dims[dims.len() - 1]))?;
-                let y = q.forward(&flat)?;
+                let flat = x.reshape((rows, dims[dims.len() - 1]))?;
+                let y = gemv_rows(rows, &flat, |r| q.forward(r))?;
                 let y = match bias {
                     Some(b) => y.broadcast_add(b)?,
                     None => y,

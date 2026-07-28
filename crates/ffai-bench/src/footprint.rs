@@ -87,6 +87,21 @@ mod imp {
         query(unsafe { GetCurrentProcess() })
     }
 
+    /// Resident memory RIGHT NOW, as opposed to the high-water mark.
+    ///
+    /// Peak alone cannot tell a large steady allocation from a large transient
+    /// spike, and those want opposite fixes: one is memory you hold, the other
+    /// is scratch you free.
+    pub fn current_self() -> Option<u64> {
+        let mut c = ProcessMemoryCounters {
+            cb: size_of::<ProcessMemoryCounters>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: as in `query` — pseudo-handle, correctly-sized struct.
+        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
+        (ok != 0).then_some(c.working_set_size as u64)
+    }
+
     pub fn peak_child(child: &std::process::Child) -> Option<u64> {
         use std::os::windows::io::AsRawHandle;
         query(child.as_raw_handle() as *mut c_void)
@@ -327,6 +342,13 @@ mod imp {
         peak_self()
     }
 
+    pub fn current_self() -> Option<u64> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+        let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+        Some(kb * 1024)
+    }
+
     /// No cgroup/job equivalent wired up here yet, so a tree measurement is
     /// not available and the gate skips rather than reporting a partial one.
     pub struct Job;
@@ -350,6 +372,11 @@ mod imp {
 /// Peak resident memory of the current process.
 pub fn peak_self() -> Option<PeakBytes> {
     imp::peak_self().map(PeakBytes)
+}
+
+/// Resident memory right now (not the high-water mark).
+pub fn current_self() -> Option<PeakBytes> {
+    imp::current_self().map(PeakBytes)
 }
 
 /// Peak resident memory of a child process.
