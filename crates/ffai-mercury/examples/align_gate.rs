@@ -109,6 +109,45 @@ fn main() {
                     .any(|s| w.start >= s.start - 0.05 && w.end <= s.end + 0.05)
             })
             .count();
+        // Diagnostic: where exactly do the escapees land?
+        if std::env::args().any(|a| a == "why") {
+            for w in &words {
+                let inside = spans
+                    .iter()
+                    .any(|s| w.start >= s.start - 0.05 && w.end <= s.end + 0.05);
+                if inside {
+                    continue;
+                }
+                // Nearest span, and how far outside it this word sits.
+                let near = spans
+                    .iter()
+                    .min_by(|a, b| {
+                        let da = (w.start - a.start).abs().min((w.start - a.end).abs());
+                        let db = (w.start - b.start).abs().min((w.start - b.end).abs());
+                        da.total_cmp(&db)
+                    })
+                    .expect("spans non-empty");
+                let before = near.start - w.start;
+                let after = w.end - near.end;
+                let in_gap = spans.iter().all(|s| w.start >= s.end || w.end <= s.start);
+                println!(
+                    "    {:>7.2}-{:>7.2} {:<14} span {:>7.2}-{:>7.2}  {}{}",
+                    w.start,
+                    w.end,
+                    w.value,
+                    near.start,
+                    near.end,
+                    if in_gap { "IN GAP  " } else { "straddles " },
+                    if before > 0.0 {
+                        format!("{:.2}s early", before)
+                    } else if after > 0.0 {
+                        format!("{:.2}s late", after)
+                    } else {
+                        "overlaps".to_string()
+                    }
+                );
+            }
+        }
         let monotone = words.windows(2).all(|p| p[0].start <= p[1].start + 1e-9);
         all_monotone &= monotone;
 

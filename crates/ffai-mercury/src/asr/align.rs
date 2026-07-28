@@ -199,8 +199,25 @@ pub fn forced_align(
     // neighbour.
     let mut emitted = vec![false; t_n * j_n];
 
-    trellis[0] = emissions.at(0, tokens[0]);
-    emitted[0] = true;
+    // At frame 0 the path sits on token 0, but it may be emitting the token
+    // OR the blank — audio almost never begins exactly on a phoneme.
+    //
+    // Forcing `emitted[0] = true` here made the first token's span always
+    // start at frame 0, so the first word absorbed every leading silent frame
+    // in its segment. Measured on the long-form corpus, that placed first
+    // words a consistent 0.16-0.24 s early: VAD pads each speech region by
+    // SPEECH_PAD_MS (150 ms) and one alignment frame is 20 ms, which is
+    // exactly the offset observed. A systematic bias, not scatter — and
+    // invisible on a single short clip with no leading pad.
+    let first_token = emissions.at(0, tokens[0]);
+    let first_blank = emissions.at(0, blank);
+    if first_token >= first_blank {
+        trellis[0] = first_token;
+        emitted[0] = true;
+    } else {
+        trellis[0] = first_blank;
+        emitted[0] = false;
+    }
 
     for t in 1..t_n {
         for j in 0..j_n.min(t + 1) {
@@ -380,6 +397,22 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!((spans[0].start, spans[0].end), (0, 2), "{spans:?}");
         assert_eq!((spans[1].start, spans[1].end), (3, 5), "{spans:?}");
+    }
+
+    #[test]
+    fn leading_silence_is_not_absorbed_by_the_first_word() {
+        // Regression: the first token used to be FORCED to emit at frame 0,
+        // so a word always started at the beginning of its segment however
+        // much silence preceded it. On real audio that placed every
+        // segment-initial word ~0.17 s early — VAD's 150 ms pad plus a frame.
+        let plan = [0, 0, 0, 0, 0, 1, 1, 2, 2];
+        let e = emissions_for(&plan, 4, 0.02);
+        let spans = forced_align(&e, &[1, 2], 0).expect("alignable");
+        assert!(
+            spans[0].start >= 4,
+            "first word absorbed {} leading blank frames: {spans:?}",
+            spans[0].start
+        );
     }
 
     #[test]

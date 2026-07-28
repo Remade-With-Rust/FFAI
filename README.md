@@ -10,6 +10,8 @@ Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 ```text
 ffai asr -i talk.wav -o talk.srt --engine whisper-candle
 ffai asr -i talk.wav -o talk.json --word-timestamps   # per-word times (CTC alignment)
+ffai asr -i meeting.wav --diarize --max-speakers 3    # who spoke when
+ffai asr -i talk.wav -o talk.vtt --word-timestamps    # VTT with inline word timing
 ffai tts "hello world" -o hello.wav --voice kokoro
 ffai ocr -i receipt.png --engine easy-ocr
 ffai caption -i frame.png --prompt "what is happening here?"
@@ -21,7 +23,7 @@ ffai models         # list model manifests, licenses, cache status
 
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live: ahead of whisper.cpp on WER+CER on both holdouts and on memory (167–183 vs 194 MiB), 1.01–1.09× on speed ([Status](#status)) |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live, with the full WhisperX layer (VAD · word timestamps · diarization) in pure Rust: ahead of whisper.cpp on WER+CER on both holdouts and on memory, 1.01–1.09× on speed ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | Pending Build |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -170,8 +172,42 @@ z = 0.00, so the deficit is better described as *displaced* than as
 explained. It went unexplained through int8, the f16 cache and every kernel
 change since §6.7, and nothing since has said what caused it.
 
+### The WhisperX layer, in pure Rust
+
+Everything WhisperX does, without Python, CUDA, a HuggingFace token, or a
+single gated weight — as flags on the same engine rather than a fork.
+
+| Flag | What it adds | Model | Gate |
+|---|---|---|---|
+| *(default)* | speech segmentation before transcription | none — energy VAD | silence corpus **8/8 empty** |
+| `--word-timestamps` | per-word times by CTC forced alignment | wav2vec2-base-960h, Apache-2.0 | containment **100 %**, 1105 words |
+| `--diarize` | speaker turns (`SPEAKER_00`…) | ECAPA-TDNN, Apache-2.0 | **DER 4.21 %** |
+
+Segmentation is **on by default for measured speed** — 2.2–4.2× on audio with
+trailing silence at a byte-identical transcript, and an empty result on
+silence with no encoder pass. It also moves corpus WER, and that is **not** a
+quality win: 38 improved / 38 worsened across 400 clips, a sign test of
+z = 0.00 ([why](docs/whys/vad-quality.md)). The other two stages are opt-in:
+they add models and change the output's shape, and nothing that has not
+earned a default gets one.
+
+**Licences shaped the design, not just the paperwork.** WhisperX's diarization
+depends on pyannote weights that are MIT-licensed *and gated* — permission
+granted, access walled behind a browser click. That cannot live in a manifest
+under principle 4, so Mercury uses SpeechBrain's ECAPA-TDNN, which is
+Apache-2.0 and ungated. Every model FFai fetches is fetchable without an
+account.
+
+Three corpora gate this layer, and all three were written **after** the code
+they gate — the wrong order, recorded as such. Two found real defects the
+moment they ran: the clustering threshold over-splitting five-fold (DER
+34 % → 4.21 %), and forced alignment placing every segment-initial word a
+systematic 0.17 s early (containment 97.8 % → 100 %). Neither was visible on
+the short-clip corpora.
+
 Full details, including every reverted experiment and the methodology defects
-found along the way, are in the [Mercury mission plan](docs/mercury-mission-plan.md)
+found along the way, are in the [Mercury mission plan](docs/mercury-mission-plan.md),
+the [Mercury-X plan](docs/mercury-X-mission.md)
 and [docs/whys/](docs/whys/); every number traces to a line in
 [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
