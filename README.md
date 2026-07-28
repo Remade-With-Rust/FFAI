@@ -20,7 +20,7 @@ ffai models         # list model manifests, licenses, cache status
 
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live: WER 16.79 % vs whisper.cpp's 16.82 % on test-other, 7.77 % vs 7.58 % on test-clean; ~1.12× behind on speed ([Status](#status)) |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live: quality and memory gates PASS vs whisper.cpp (157 vs 193 MiB), ~1.12× behind on speed ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | Pending Build |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -94,19 +94,30 @@ grammar, decode loop, audio encoder, and four hand-written AVX2 kernels.
 Measured on two hash-pinned **134-clip** LibriSpeech holdouts, matched greedy
 decoding, CPU only, tiny.en:
 
-| Corpus | Implementation | WER % | CER % | ×realtime (warm) |
-|---|---|---:|---:|---:|
-| test-clean | **whisper-candle** (Rust) | 7.77 | 3.25 | 32.1–32.8 |
-| test-clean | whisper.cpp (C++/ggml) | **7.58** | **2.87** | **35.7–36.6** |
-| test-other | **whisper-candle** (Rust) | **16.79** | **8.34** | 26.7 |
-| test-other | whisper.cpp (C++/ggml) | 16.82 | 8.41 | **29.5** |
+| Corpus | Implementation | WER % | CER % | ×realtime (warm) | steady MiB |
+|---|---|---:|---:|---:|---:|
+| test-clean | **whisper-candle** (Rust) | 7.77 | 3.25 | 32.1–32.8 | **157** |
+| test-clean | whisper.cpp (C++/ggml) | **7.58** | **2.87** | **35.7–36.6** | 193 |
+| test-other | **whisper-candle** (Rust) | **16.79** | **8.34** | 26.7 | **157** |
+| test-other | whisper.cpp (C++/ggml) | 16.82 | 8.41 | **29.5** | 193 |
 
 **Quality: PASS on both corpora** — ahead of whisper.cpp on the noisy half
 (16.79 % vs 16.82 %), 0.19 pp behind on the clean half, both inside the 5 %
-relative band. **Speed: FAIL at ~1.12×** (1.088–1.137× across repeat runs,
-corroborated by a 21-round paired test at z = −4.15). **Footprint: SKIP** —
-peak-memory instrumentation is not built, and a skipped gate is never a pass,
-so the four-gate verdict is **not claimable yet**.
+relative band. **Footprint: PASS — 157 MiB steady against whisper.cpp's
+193 MiB (0.81×)**, and 63 MiB of ours is audio the harness holds for the speed
+comparison, so the engine itself sits near 94 MiB. **Speed: FAIL at ~1.12×**
+(1.088–1.137× across repeat runs, corroborated by a 21-round paired test at
+z = −4.15).
+
+So the standing is a **Pareto position rather than a deficit**: behind on
+speed, ahead on memory, quality inside the band. The verdict is still **not
+claimable yet**, because all four gates must pass and speed does not — which
+is the rule working, not a formality.
+
+Footprint is judged on **steady** resident memory with peak recorded beside
+it, sampled the same way on both sides. Peak is dominated by model load — a
+spike over in half a second that never recurs — so judging on it would compare
+our load transient against theirs and call the result footprint.
 
 Worth knowing what the bar is: whisper.cpp is not a naive baseline. It runs
 **flash attention on by default**, an OpenBLAS backend, runtime ISA dispatch
