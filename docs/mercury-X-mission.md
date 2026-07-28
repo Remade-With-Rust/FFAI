@@ -230,7 +230,43 @@ The four-gate discipline applies unchanged: **correctness / quality / speed /
 footprint**, and a skipped gate is never a pass. Each milestone appends a
 ledger line.
 
-### M-X0 — the corpora, before any code
+### M-X0 — the corpora — **DONE 2026-07-28** (built last, not first)
+
+> Built at the END of the layer rather than the start, which was the wrong
+> order and is worth recording as such. Every gate below was written after the
+> code it gates, and two of the three found something the moment it ran.
+>
+> | corpus | clips | what it gates | result |
+> |---|---:|---|---|
+> | `silence-and-nonspeech` | 8 | words invented from nothing | **8/8 empty** |
+> | `librispeech-diarization` | 6 | DER, speaker re-identification | **4.21 %** after tuning |
+> | `librispeech-longform` | 4 | multi-window, alignment containment | **PASS**, 97.8 % |
+>
+> **What they caught immediately.** The diarization gate found the clustering
+> threshold over-splitting five-fold — 20 speakers where there were 4 — which
+> the earlier "verification" could not see because it supplied
+> `--max-speakers`. Sweeping it took DER from **34.00 % to 4.21 %**. It also
+> showed that supplying the true speaker count is *worse* than a tuned
+> threshold (5.00 % vs 4.21 %), because forcing a count forces a bad merge.
+>
+> **The long-form corpus measured a path nothing had touched.** Every clip in
+> every other corpus is one 30 s window; these are 3–7. Word timestamps stay
+> monotone and 97.8 % contained across 185 s, and throughput reads **59.8 ×RT
+> against 32.9 ×** on the short-clip corpus — the benchmark understates
+> real-world speed by ~1.8× because it is three-quarters padding.
+>
+> **Still open, and named rather than quietly dropped:** word-level timestamp
+> error (containment is utterance-granular; finer needs a reference aligner),
+> speaker overlap and natural turn-taking (the diarization corpus has neither,
+> so it gates regression rather than readiness), and the long-form WER of
+> 10.55 % which is most likely an artifact of concatenating unrelated
+> utterances rather than a long-form weakness — untangling those needs real
+> continuous audio.
+
+<details>
+<summary>Original specification (kept for the record)</summary>
+
+#### M-X0 — the corpora, before any code
 
 This layer cannot be gated on what we already have. LibriSpeech test-clean
 and test-other are continuous read speech: **they cannot fail a VAD, cannot
@@ -253,6 +289,8 @@ Required before M-X1 starts:
 
 Exit: three corpus TOMLs with hashes, and every existing reference scored on
 them so we know the bar before we build.
+
+</details>
 
 ### M-X1 — VAD segmentation
 

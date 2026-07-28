@@ -93,6 +93,145 @@ fn secs(n: f64) -> usize {
 fn main() -> std::io::Result<()> {
     build_silence_corpus()?;
     build_diarization_corpus()?;
+    build_longform_corpus()?;
+    Ok(())
+}
+
+/// Long-form audio with exact utterance boundaries.
+///
+/// Two gaps close at once here.
+///
+/// **Multi-window.** Every clip in every existing corpus is 7.5 s of speech
+/// inside one 30 s Whisper context — the profiler reports exactly one encoder
+/// call per clip. So VAD packing across windows, timestamp offsets past the
+/// first window, and the whole multi-window path have never been touched by a
+/// gate. These files run 60-180 s, which is 3-7 windows.
+///
+/// **Alignment truth without an external aligner.** Word-level ground truth
+/// would need a forced aligner (torchaudio's, or a licence-encumbered corpus),
+/// and comparing our aligner to another aligner measures agreement, not truth.
+/// Instead the ground truth here is what IS exactly known: each source
+/// utterance's span, by construction. Every aligned word must fall inside the
+/// utterance it came from. That will not catch a 50 ms word boundary error,
+/// and it will catch drift, offset bugs and misordering — the failures that
+/// actually break a caption file. Written as RTTM with the utterance id in
+/// the speaker field, so the existing parser reads it.
+fn build_longform_corpus() -> std::io::Result<()> {
+    let src = PathBuf::from("corpora/clips/librispeech-test-clean/audio");
+    let truth_dir = PathBuf::from("corpora/clips/librispeech-test-clean/truth");
+    if !src.exists() {
+        eprintln!("skipping long-form corpus: {} not found", src.display());
+        return Ok(());
+    }
+    let mut files: Vec<PathBuf> = fs::read_dir(&src)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("wav"))
+        .collect();
+    files.sort();
+    if files.len() < 40 {
+        eprintln!("skipping long-form corpus: only {} source clips", files.len());
+        return Ok(());
+    }
+
+    let root = PathBuf::from("corpora/clips/librispeech-longform");
+    let gap = vec![0.0f32; secs(0.5)];
+    let mut clips = Vec::new();
+
+    // Four files of rising length: 8, 12, 16 and 20 utterances.
+    for (n, count) in [8usize, 12, 16, 20].into_iter().enumerate() {
+        let id = format!("longform-{:02}", n + 1);
+        let mut samples: Vec<f32> = Vec::new();
+        let mut text = String::new();
+        let mut rttm = String::new();
+
+        // Stride through the source so each file draws different speakers.
+        for k in 0..count {
+            let idx = (n * 23 + k * 7) % files.len();
+            let file = &files[idx];
+            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+            let audio = read_wav(file)?;
+            if audio.is_empty() {
+                continue;
+            }
+            let utt_text = fs::read_to_string(truth_dir.join(format!("{stem}.txt")))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if utt_text.is_empty() {
+                continue;
+            }
+            let start = samples.len() as f64 / SR as f64;
+            samples.extend_from_slice(&audio);
+            let end = samples.len() as f64 / SR as f64;
+            samples.extend_from_slice(&gap);
+
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(&utt_text);
+            rttm.push_str(&format!(
+                "SPEAKER {id} 1 {:.3} {:.3} <NA> <NA> {stem} <NA> <NA>
+",
+                start,
+                end - start
+            ));
+        }
+
+        let audio_path = root.join("audio").join(format!("{id}.wav"));
+        let text_path = root.join("truth").join(format!("{id}.txt"));
+        let span_path = root.join("truth").join(format!("{id}.rttm"));
+        write_wav(&audio_path, &samples)?;
+        fs::create_dir_all(text_path.parent().expect("has parent"))?;
+        fs::write(&text_path, &text)?;
+        fs::write(&span_path, &rttm)?;
+
+        clips.push(format!(
+            "# {:.0}s, {} utterances (~{} Whisper windows)
+[[clips]]
+id = \"{id}\"
+             path = \"clips/librispeech-longform/audio/{id}.wav\"
+             ground_truth = \"clips/librispeech-longform/truth/{id}.txt\"
+             class = \"clean_speech\"
+split = \"holdout\"
+license = \"CC-BY-4.0\"
+             sha256 = \"{}\"
+",
+            samples.len() as f64 / SR as f64,
+            count,
+            (samples.len() as f64 / SR as f64 / 30.0).ceil() as usize,
+            sha256_of(&audio_path)?
+        ));
+    }
+
+    let manifest = format!(
+        "# Long-form audio: the multi-window path, which nothing else gates.
+         #
+         # Every clip in every other corpus is ~7.5s of speech inside one 30s
+         # Whisper context — one encoder call each. VAD packing across windows,
+         # timestamp offsets past the first window, and long-run decoder
+         # behaviour have therefore never been measured. These files are 3-7
+         # windows each.
+         #
+         # The sidecar .rttm carries each source utterance's EXACT span (its id
+         # in the speaker field). Word timestamps are gated against it by
+         # containment — every aligned word must fall inside the utterance it
+         # came from. That is truth by construction rather than agreement with
+         # another aligner, at the cost of not resolving errors finer than an
+         # utterance.
+         #
+         # Rebuild with
+         #   cargo run --release -p ffai-bench --example prepare_phase_e
+
+         name = \"librispeech-longform\"
+version = 1
+task = \"asr\"
+
+{}",
+        clips.join("
+")
+    );
+    fs::write("corpora/librispeech-longform.toml", manifest)?;
+    println!("wrote corpora/librispeech-longform.toml ({} files)", clips.len());
     Ok(())
 }
 

@@ -1,0 +1,61 @@
+# Long-form audio: the multi-window path, which nothing else gates.
+         #
+         # Every clip in every other corpus is ~7.5s of speech inside one 30s
+         # Whisper context — one encoder call each. VAD packing across windows,
+         # timestamp offsets past the first window, and long-run decoder
+         # behaviour have therefore never been measured. These files are 3-7
+         # windows each.
+         #
+         # The sidecar .rttm carries each source utterance's EXACT span (its id
+         # in the speaker field). Word timestamps are gated against it by
+         # containment — every aligned word must fall inside the utterance it
+         # came from. That is truth by construction rather than agreement with
+         # another aligner, at the cost of not resolving errors finer than an
+         # utterance.
+         #
+         # Rebuild with
+         #   cargo run --release -p ffai-bench --example prepare_phase_e
+
+         name = "librispeech-longform"
+version = 1
+task = "asr"
+
+# 83s, 8 utterances (~3 Whisper windows)
+[[clips]]
+id = "longform-01"
+             path = "clips/librispeech-longform/audio/longform-01.wav"
+             ground_truth = "clips/librispeech-longform/truth/longform-01.txt"
+             class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+             sha256 = "978f5bc4f818516cb6d537c13d369195847930b0edf9e117f66a62461602d2dd"
+
+# 96s, 12 utterances (~4 Whisper windows)
+[[clips]]
+id = "longform-02"
+             path = "clips/librispeech-longform/audio/longform-02.wav"
+             ground_truth = "clips/librispeech-longform/truth/longform-02.txt"
+             class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+             sha256 = "024b4cb20eb75e35d8bdd211a852236e7d327d66db54ffe14f11e0f4c91d3b01"
+
+# 101s, 16 utterances (~4 Whisper windows)
+[[clips]]
+id = "longform-03"
+             path = "clips/librispeech-longform/audio/longform-03.wav"
+             ground_truth = "clips/librispeech-longform/truth/longform-03.txt"
+             class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+             sha256 = "94aa0cc41355562bcc1facee4021c65579735373b3bf599d0f8dd500fe8366c3"
+
+# 185s, 20 utterances (~7 Whisper windows)
+[[clips]]
+id = "longform-04"
+             path = "clips/librispeech-longform/audio/longform-04.wav"
+             ground_truth = "clips/librispeech-longform/truth/longform-04.txt"
+             class = "clean_speech"
+split = "holdout"
+license = "CC-BY-4.0"
+             sha256 = "a2e284556fdba91f08b0e726dd06d2251ebbd4f18142c659e6dd9ea422872956"
