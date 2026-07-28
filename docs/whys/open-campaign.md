@@ -142,3 +142,53 @@ may spawn siblings; refuted hypotheses keep their number.
 - **STATUS:** closed. Same class as the two wrong ceilings and the retracted
   WER win: **a single favourable sample promoted to a finding.** Third instance
   in this campaign, first one caught before it drove any work.
+
+---
+
+## Open: quality debts carried out of the demo campaign (2026-07-28)
+
+Two separate quality gaps, different causes, tracked apart so neither hides
+the other. Both surfaced from the side-by-side demo, not from the corpora —
+which is itself the finding.
+
+### Q1 — the annotation cost (0.22 pp, priced and chosen)
+
+- **WHAT:** `suppress_non_speech: false` ships as the default, matching
+  whisper.cpp. Cost on LibriSpeech test-clean: WER 7.77 → 7.99, CER
+  3.25 → 3.27. Cost on test-other: **zero** (16.79 / 8.34 both ways).
+- **WHY IT COSTS:** on clean read speech the model occasionally spends an
+  annotation token where words belong. On noisy speech the annotation never
+  wins argmax, which is why the corpora disagree.
+- **WHY IT MATTERS MORE THAN 0.22 PP LOOKS:** it moves test-clean from 2.5 %
+  to 5.4 % relative against whisper.cpp — from inside the 5 % band to
+  outside it. The gate criterion flips on a change that reads small.
+- **THE OPEN QUESTION:** all-or-nothing is not the only rule available.
+  Allowing annotation tokens *only when `no_speech_prob` is elevated* would
+  plausibly keep `(coughs)` on real non-speech events while denying the
+  model an annotation mid-sentence on clean speech. That is a testable
+  hypothesis with an existing signal — `no_speech_prob` is already computed
+  at position 0 for the §6.31 gate and currently thrown away after one
+  comparison.
+- **FIRST EXPERIMENT:** condition the suppression list on the same
+  probability the no-speech gate reads. Null arm: current behaviour. Gate:
+  test-clean WER returns toward 7.77 while the demo's cough still annotates.
+- **STATUS:** open. Cheap, well-posed, and the signal is already in hand.
+
+### Q2 — the test-clean CER deficit (~13 %, unexplained since §6.7)
+
+- **WHAT:** CER 3.27 % vs whisper.cpp 2.87 %. Suppressing annotations moves
+  it only 3.27 → 3.25, so Q1 explains ~1 pp of a 14 pp relative gap and
+  **~13 % remains unexplained.**
+- **WHY IT IS THE MORE INTERESTING ONE:** it is character-level, it does not
+  appear on test-other, and it has survived int8 (§6.23 cleared the
+  projection as the source), the f16 cache, and every kernel change since.
+  A deficit that is corpus-specific and metric-specific is a clue, not noise.
+- **NOT YET ASKED:** what the *character* errors actually are. No one has
+  looked at the confusion classes — substitutions vs insertions, digits,
+  casing, punctuation, hyphenation. The campaign has measured this gap
+  repeatedly and never once inspected it.
+- **FIRST EXPERIMENT:** dump per-clip CER deltas, take the worst 20, and
+  read them. Before any hypothesis.
+- **STATUS:** open, and explicitly **not** to be folded into the Mercury-X
+  milestones ([mercury-X-mission.md](../mercury-X-mission.md)) — that layer
+  does not address it and would obscure it.

@@ -106,6 +106,11 @@ ffai asr -i talk.mp4 --word-timestamps --diarize       # full WhisperX mode
 `AsrOptions` already carries `word_timestamps` / `diarize` (Phase 0); `vad`
 is added alongside. The engine trait does not change.
 
+**Execution plan for this layer: [mercury-X-mission.md](mercury-X-mission.md)**
+— upstream analysis, flag contract, milestones M-X0…M-X4 and their exit
+gates. Note M-X0 is corpus work: none of the existing corpora can fail a
+VAD, score a word timestamp, or contain a second speaker.
+
 ### 3.3 ASR world-standard references (non-Rust)
 
 Declared in `corpora/references.toml`; versions recorded per ledger line.
