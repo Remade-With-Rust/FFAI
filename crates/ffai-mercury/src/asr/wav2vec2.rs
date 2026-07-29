@@ -25,6 +25,7 @@
 use candle_nn::ops::softmax_last_dim;
 use candle_nn::{Conv1d, Conv1dConfig, GroupNorm, LayerNorm, Linear, Module, VarBuilder};
 
+use ffai_core::candle::quantized::{GgmlDType, QMatMul, QTensor};
 use ffai_core::candle::{DType, Device, Result as CandleResult, Tensor};
 use ffai_core::error::{Error, Result};
 
@@ -92,6 +93,56 @@ impl Config {
             len = if len < *k { 0 } else { (len - k) / s + 1 };
         }
         len
+    }
+}
+
+/// A projection that is either plain f32 or int8-quantized.
+///
+/// **Why only the projections.** The transformer stack is ~85M of this
+/// model's 95M parameters; the convolutional front end is the other 10M and
+/// stays f32. Quantizing 90 % of the weights gets essentially all of the
+/// saving without touching the part whose activations have the widest range.
+///
+/// **Why Q8_0 and not f16.** f16 was tried first and refuted: the forward
+/// pass runs but emissions go degenerate, because wav2vec2-base was not
+/// trained for half precision and its conv-stack activations do not survive
+/// the range. Q8_0 carries a per-32-element scale, so the representable range
+/// follows the data instead of being fixed — which is the property f16 lacked.
+enum Projection {
+    Plain(Linear),
+    Quantized { w: QMatMul, bias: Option<Tensor> },
+}
+
+impl Projection {
+    fn load(in_dim: usize, out_dim: usize, vb: VarBuilder, quantized: bool) -> Result<Self> {
+        if !quantized {
+            return candle_nn::linear(in_dim, out_dim, vb)
+                .map(Projection::Plain)
+                .map_err(|e| model_err("linear", e));
+        }
+        let weight = vb
+            .get((out_dim, in_dim), "weight")
+            .map_err(|e| model_err("quantized weight", e))?;
+        let bias = vb.get(out_dim, "bias").ok();
+        // Quantization needs f32 input whatever the VarBuilder was opened as.
+        let weight = weight.to_dtype(DType::F32).map_err(|e| model_err("weight dtype", e))?;
+        let q = QTensor::quantize(&weight, GgmlDType::Q8_0)
+            .map_err(|e| model_err("quantize", e))?;
+        let w = QMatMul::from_qtensor(q).map_err(|e| model_err("qmatmul", e))?;
+        Ok(Projection::Quantized { w, bias })
+    }
+
+    fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
+        match self {
+            Projection::Plain(l) => l.forward(x),
+            Projection::Quantized { w, bias } => {
+                let y = w.forward(x)?;
+                match bias {
+                    Some(b) => y.broadcast_add(b),
+                    None => Ok(y),
+                }
+            }
+        }
     }
 }
 
@@ -169,21 +220,21 @@ impl FeatureExtractor {
 }
 
 struct Attention {
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    out: Linear,
+    q: Projection,
+    k: Projection,
+    v: Projection,
+    out: Projection,
     heads: usize,
     head_dim: usize,
     scale: f64,
 }
 
 impl Attention {
-    fn load(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn load(cfg: &Config, vb: VarBuilder, quantized: bool) -> Result<Self> {
         let h = cfg.hidden;
         let head_dim = h / cfg.heads;
         let lin = |name: &str, vb: &VarBuilder| {
-            candle_nn::linear(h, h, vb.pp(name)).map_err(|e| model_err(name, e))
+            Projection::load(h, h, vb.pp(name), quantized)
         };
         Ok(Attention {
             q: lin("q_proj", &vb)?,
@@ -216,30 +267,30 @@ impl Attention {
 struct EncoderLayer {
     attn: Attention,
     attn_norm: LayerNorm,
-    ff_in: Linear,
-    ff_out: Linear,
+    ff_in: Projection,
+    ff_out: Projection,
     final_norm: LayerNorm,
     stable: bool,
 }
 
 impl EncoderLayer {
-    fn load(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn load(cfg: &Config, vb: VarBuilder, quantized: bool) -> Result<Self> {
         Ok(EncoderLayer {
-            attn: Attention::load(cfg, vb.pp("attention"))?,
+            attn: Attention::load(cfg, vb.pp("attention"), quantized)?,
             attn_norm: candle_nn::layer_norm(cfg.hidden, cfg.layer_norm_eps, vb.pp("layer_norm"))
                 .map_err(|e| model_err("layer_norm", e))?,
-            ff_in: candle_nn::linear(
+            ff_in: Projection::load(
                 cfg.hidden,
                 cfg.intermediate,
                 vb.pp("feed_forward").pp("intermediate_dense"),
-            )
-            .map_err(|e| model_err("intermediate_dense", e))?,
-            ff_out: candle_nn::linear(
+                quantized,
+            )?,
+            ff_out: Projection::load(
                 cfg.intermediate,
                 cfg.hidden,
                 vb.pp("feed_forward").pp("output_dense"),
-            )
-            .map_err(|e| model_err("output_dense", e))?,
+                quantized,
+            )?,
             final_norm: candle_nn::layer_norm(
                 cfg.hidden,
                 cfg.layer_norm_eps,
@@ -365,6 +416,16 @@ pub struct Wav2Vec2Ctc {
 
 impl Wav2Vec2Ctc {
     pub fn load(cfg: Config, vb: VarBuilder, device: Device) -> Result<Self> {
+        Self::load_with(cfg, vb, device, false)
+    }
+
+    /// `quantized` puts the transformer projections through Q8_0.
+    pub fn load_with(
+        cfg: Config,
+        vb: VarBuilder,
+        device: Device,
+        quantized: bool,
+    ) -> Result<Self> {
         let root = vb.pp("wav2vec2");
         let features = FeatureExtractor::load(&cfg, root.pp("feature_extractor"))?;
         let last_conv = *cfg.conv_dim.last().expect("conv_dim is never empty");
@@ -388,7 +449,7 @@ impl Wav2Vec2Ctc {
                 .map_err(|e| model_err("encoder.layer_norm", e))?;
         let mut layers = Vec::with_capacity(cfg.layers);
         for i in 0..cfg.layers {
-            layers.push(EncoderLayer::load(&cfg, enc.pp("layers").pp(i.to_string()))?);
+            layers.push(EncoderLayer::load(&cfg, enc.pp("layers").pp(i.to_string()), quantized)?);
         }
         let lm_head = candle_nn::linear(cfg.hidden, cfg.vocab, vb.pp("lm_head"))
             .map_err(|e| model_err("lm_head", e))?;

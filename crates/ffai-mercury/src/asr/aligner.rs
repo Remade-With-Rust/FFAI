@@ -39,9 +39,26 @@ impl Aligner {
         let resolved = manifest.fetch()?;
         let weights = resolved.file("model.safetensors")?.to_path_buf();
 
-        // FFAI_ALIGN_DTYPE=f16 halves the resident cost of a 95M-parameter
-        // model that exists only to feed the aligner. It is kept as a
-        // documented DEAD END rather than a default:
+        // FFAI_ALIGN_DTYPE selects how the 95M-parameter alignment model is
+        // stored. Both alternatives to f32 were measured.
+        //
+        // `q8_0` — WORKS, and is a real trade rather than a free win:
+        //
+        //     steady   509 -> 266 MiB  (-48 %)
+        //     peak     725 -> 500 MiB  (-31 %)
+        //     quality  identical: 1105/1105 words contained, 100 % coverage
+        //     speed    63.8 -> 183.7 s over the four-file gate (2.9x SLOWER)
+        //
+        // Per-file it measures at parity (11.9 vs 12.0 s on one 83 s file;
+        // 28.8 vs 28.8 s on one 185 s file), and only the multi-file run in a
+        // single process shows the cost. That discrepancy is NOT explained —
+        // an arena trim was suspected and removing it changed nothing — and it
+        // is recorded as open rather than smoothed over.
+        //
+        // So it is opt-in: halve the memory when memory is what binds, keep
+        // f32 when time is. Neither is the obviously right default.
+        //
+        // `f16` — a documented DEAD END:
         //
         //   f16 emissions go degenerate and forced alignment finds no valid
         //   path on any segment. Not a wiring fault — the input-dtype cast
@@ -54,10 +71,11 @@ impl Aligner {
         // accumulation) or int8 with per-channel scales, not a blanket dtype
         // switch. Left switchable so that work starts from a measurement
         // rather than repeating this one.
-        let dtype = match std::env::var("FFAI_ALIGN_DTYPE").ok().as_deref() {
-            Some("f16") => DType::F16,
-            _ => DType::F32,
-        };
+        let mode = std::env::var("FFAI_ALIGN_DTYPE").unwrap_or_default();
+        // Weights are read as f32 whatever the mode: Q8_0 quantizes FROM f32,
+        // and f16 is only kept as the documented dead end above.
+        let dtype = if mode == "f16" { DType::F16 } else { DType::F32 };
+        let quantized = mode == "q8_0";
 
         // SAFETY: as in `model.rs` — the Hugging Face cache blob is immutable
         // and never written by FFai, which is the condition mmap requires.
@@ -66,7 +84,23 @@ impl Aligner {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[weights], dtype, &device)
                 .map_err(|e| Error::Model(format!("mapping alignment weights: {e}")))?
         };
-        let model = Wav2Vec2Ctc::load(Config::base_960h(), vb, device)?;
+        if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() {
+            eprintln!("[align] dtype={dtype:?} quantized={quantized}");
+        }
+        let model = Wav2Vec2Ctc::load_with(Config::base_960h(), vb, device, quantized)?;
+        // NO arena trim here, and the reason is worth keeping.
+        //
+        // The f32 weights are dead once quantized, so handing their pages back
+        // looks obviously right. It is not: a trim before any work means every
+        // subsequent forward re-faults the quantized weights it is about to
+        // use. Measured on the long-form gate — four files in one process —
+        // that cost 66s -> 185s, a 2.8x slowdown, while per-file CLI runs
+        // (one trim, one file) showed parity and hid it completely.
+        //
+        // This is the same rule whisper_candle already documents: trim after
+        // the first COMPLETE pass, never before work, "where trimming what you
+        // are about to touch again only buys page faults". The Whisper path
+        // gets it right; this one had to learn it twice.
         Ok(Aligner {
             model,
             alphabet: CtcAlphabet::wav2vec2_english(),
