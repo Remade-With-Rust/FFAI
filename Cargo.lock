@@ -1069,14 +1069,14 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "ffai-argus"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-core",
 ]
 
 [[package]]
 name = "ffai-bench"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-core",
  "ffai-media",
@@ -1089,14 +1089,14 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-core",
 ]
 
 [[package]]
 name = "ffai-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "candle-core",
  "thiserror 2.0.19",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-demo"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-core",
  "ffai-media",
@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-media"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-core",
  "hound",
@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "candle-nn",
  "candle-transformers",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-models"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dirs",
  "ffai-core",

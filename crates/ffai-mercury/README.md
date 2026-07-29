@@ -6,9 +6,9 @@ Mercury is [FFai](https://github.com/Remade-With-Rust/FFAI)'s voice component. S
 
 ```toml
 [dependencies]
-ffai-mercury = "0.3"
-ffai-core = "0.3"
-ffai-media = "0.3"
+ffai-mercury = "0.4"
+ffai-core = "0.4"
+ffai-media = "0.4"
 ```
 
 ## Transcribe
@@ -35,6 +35,7 @@ Weights download once, into a local cache, from hash-verified manifests.
 | `vad` *(on by default)* | speech segmentation before transcription | none — energy VAD |
 | `word_timestamps` | per-word times by CTC forced alignment | wav2vec2-base-960h (Apache-2.0) |
 | `diarize` | speaker turns, `SPEAKER_00`… | ECAPA-TDNN (Apache-2.0) |
+| `persist_speakers` | keeps those labels stable **across calls** | — |
 
 ```rust
 let opts = AsrOptions {
@@ -54,6 +55,24 @@ for turn in t.speakers.iter().flatten() {
 ```
 
 The extra stages are **lazy**: without the flag, their models are not fetched, not read, and not resident.
+
+## Streaming
+
+Diarization labels are, by convention, arbitrary names for clusters *within one call* — `SPEAKER_00` in two separate calls need not be the same person. That is fine for a file and useless for a live stream, where the same voice would be renamed every chunk.
+
+`persist_speakers` keeps a speaker registry between calls:
+
+```rust
+let opts = AsrOptions { diarize: true, persist_speakers: true, ..Default::default() };
+
+for chunk in microphone_chunks {
+    let t = engine.transcribe(&chunk, &opts)?;   // SPEAKER_00 means the same
+    // ...                                        // person in every chunk
+}
+engine.reset_speakers();                          // a new recording is new people
+```
+
+Measured on conversations fed as 8 s chunks, scoring DER over the whole concatenated timeline: **53.58 % without it, 5.68 % with it.** Matching is deliberately stricter than in-call clustering, because a registry merge is permanent — two people who share a centroid stay merged for the session.
 
 ## Things measurement taught us, which you may want
 
