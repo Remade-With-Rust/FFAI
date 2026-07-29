@@ -31,7 +31,9 @@ Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
 tensor spine), `ffai-media` (ingest/egress, backed by
 [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)),
 `ffai-models` (weight manifests + cache), `ffai-bench` (the analyzer — see
-below), `ffai-cli` (the `ffai` binary).
+below), `ffai-cli` (the `ffai` binary), `ffai-demo` + `demo-ui` (a live
+side-by-side demo — speak into the mic and read Mercury and whisper.cpp
+transcribing the same audio in real time: `cargo run --release -p ffai-demo`).
 
 ## The analyzer: `ffai bench`
 
@@ -206,15 +208,27 @@ systematic 0.17 s early (containment 97.8 % → 100 %). Neither was visible on
 the short-clip corpora.
 
 Full details, including every reverted experiment and the methodology defects
-found along the way, are in the [Mercury mission plan](docs/mercury-mission-plan.md),
-the [Mercury-X plan](docs/mercury-X-mission.md)
+found along the way, are in the [Mercury mission plan](docs/finished/mercury-mission-plan.md),
+the [Mercury-X plan](docs/finished/mercury-X-mission.md)
 and [docs/whys/](docs/whys/); every number traces to a line in
 [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
 TTS, OCR (Carmenta), and VLM (Argus) remain honest `stub`s — visible as such
 in `ffai engines`. See [ROADMAP.md](ROADMAP.md) for the build-out order.
 
-## Build
+## Install
+
+All crates are on [crates.io](https://crates.io/crates/ffai-cli) as of 0.4.0:
+
+```sh
+cargo install ffai-cli      # the `ffai` binary
+cargo add ffai-mercury      # or embed a component as a library
+```
+
+Weights are never bundled — they are fetched into a local cache on first use
+(or ahead of time with `ffai models --fetch <name>`).
+
+## Build from source
 
 ```sh
 cargo build --release

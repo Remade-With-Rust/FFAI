@@ -68,7 +68,7 @@ enum Cmd {
         /// Speaker clustering distance threshold, 0..2 (higher = fewer speakers)
         #[arg(long, default_value_t = 0.80)]
         diarize_threshold: f32,
-        /// Segment on speech first (on by default; this flag is explicit opt-in)
+        /// Speech segmentation is on by default; this flag is an accepted no-op
         #[arg(long)]
         vad: bool,
         /// Transcribe the raw fixed 30 s grid instead, without speech segmentation
@@ -220,7 +220,8 @@ fn main() -> Result<()> {
             }
             if !(0.0..=2.0).contains(&diarize_threshold) {
                 anyhow::bail!(
-                    "--diarize-threshold is a cosine distance and must be in 0..=2, got                      {diarize_threshold}"
+                    "--diarize-threshold is a cosine distance and must be in 0..=2, got \
+                     {diarize_threshold}"
                 );
             }
             if !(0.0..=1.0).contains(&vad_threshold) {
@@ -232,8 +233,9 @@ fn main() -> Result<()> {
                      longer window cannot be represented (got {vad_chunk_secs})"
                 );
             }
-            // VAD is on by default (it improves WER, not just speed — see
-            // AsrOptions::vad), so `--vad` is now an explicit no-op and
+            // VAD is on by default for its measured speed (its WER movement
+            // is z = 0.00 per clip, NOT a quality mechanism — see
+            // AsrOptions::vad), so `--vad` is an accepted no-op and
             // `--no-vad` is the switch that does something. Turning it off
             // while asking for a stage that needs speech boundaries is still
             // a contradiction rather than a silent degradation.

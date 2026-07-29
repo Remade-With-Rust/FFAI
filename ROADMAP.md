@@ -22,7 +22,7 @@ LibriSpeech (ASR), public OCR ground-truth sets (Carmenta), and caption
 corpora (Argus).
 
 > Mercury (Phases 1–2) now has a dedicated mission plan with per-milestone
-> exit gates: [docs/mercury-mission-plan.md](docs/mercury-mission-plan.md).
+> exit gates: [docs/finished/mercury-mission-plan.md](docs/finished/mercury-mission-plan.md).
 
 ## Phase 1 — Mercury ASR goes live
 

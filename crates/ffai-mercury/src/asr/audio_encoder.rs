@@ -251,3 +251,101 @@ impl AudioEncoder {
         self.ln_post.forward(&x)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ffai_core::candle::{DType, Device, IndexOp};
+
+    /// The M-X2 regression test, and the reason this module now has tests at
+    /// all: it had none when a live batch bug was found in it.
+    ///
+    /// `conv1d_gemm` used to index `src[c * l_in..]` with no batch stride
+    /// while its caller's signature advertised `(batch, n_mels, frames)`. With
+    /// `batch > 1` it produced **item 0's answer for every item** — no error,
+    /// no shape mismatch, no panic, because the output shape was correct and
+    /// only the contents were wrong. A shape assertion would have passed.
+    ///
+    /// So this asserts on CONTENT: two batch items given deliberately
+    /// different inputs must produce different outputs. Under the old code
+    /// they were bit-identical.
+    #[test]
+    fn each_batch_item_gets_its_own_features() {
+        let dev = Device::Cpu;
+        let (cin, cout, frames) = (4usize, 6usize, 12usize);
+
+        // Item 0 is all 0.25; item 1 is all -0.75. Nothing about the shapes
+        // distinguishes them, only the values.
+        let mut data = vec![0.25f32; cin * frames];
+        data.extend(std::iter::repeat(-0.75f32).take(cin * frames));
+        let x = Tensor::from_vec(data, (2, cin, frames), &dev).expect("input");
+
+        // Weights laid out as the GEMM path expects: (cout, cin*3).
+        let wm = Tensor::from_vec(
+            (0..cout * cin * 3).map(|i| (i as f32 % 7.0 - 3.0) / 11.0).collect::<Vec<f32>>(),
+            (cout, cin * 3),
+            &dev,
+        )
+        .expect("weights");
+        let bias = Tensor::zeros(cout, DType::F32, &dev).expect("bias");
+
+        let y = conv1d_gemm(&x, &wm, &bias, cin, 1).expect("conv runs");
+        assert_eq!(y.dim(0).expect("batch"), 2, "batch dimension lost");
+
+        let a: Vec<f32> = y.i(0).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("item 0");
+        let b: Vec<f32> = y.i(1).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("item 1");
+        assert_eq!(a.len(), b.len());
+        assert_ne!(
+            a, b,
+            "batch items are identical — item 0's features were copied across \
+             the batch, which is the bug this test exists for"
+        );
+    }
+
+    /// Batching must be an arithmetic reordering and nothing else: item `i` of
+    /// a batched call must equal the same item convolved alone. This is the
+    /// M-X2 exit criterion (byte-identical, not "close") reduced to one op.
+    #[test]
+    fn a_batched_item_equals_the_same_item_alone() {
+        let dev = Device::Cpu;
+        let (cin, cout, frames) = (3usize, 5usize, 10usize);
+        let one: Vec<f32> = (0..cin * frames).map(|i| (i as f32).sin()).collect();
+        let two: Vec<f32> = (0..cin * frames).map(|i| (i as f32).cos()).collect();
+
+        let wm = Tensor::from_vec(
+            (0..cout * cin * 3).map(|i| (i as f32 % 5.0 - 2.0) / 9.0).collect::<Vec<f32>>(),
+            (cout, cin * 3),
+            &dev,
+        )
+        .expect("weights");
+        let bias = Tensor::from_vec(
+            (0..cout).map(|i| i as f32 / 100.0).collect::<Vec<f32>>(),
+            cout,
+            &dev,
+        )
+        .expect("bias");
+
+        let mut both = one.clone();
+        both.extend_from_slice(&two);
+        let batched = Tensor::from_vec(both, (2, cin, frames), &dev).expect("batched input");
+        let solo = Tensor::from_vec(two.clone(), (1, cin, frames), &dev).expect("solo input");
+
+        // Stride 2 as well as 1: the stride enters the column index, which is
+        // exactly where a batch-offset error would hide.
+        for stride in [1usize, 2] {
+            let yb = conv1d_gemm(&batched, &wm, &bias, cin, stride).expect("batched");
+            let ys = conv1d_gemm(&solo, &wm, &bias, cin, stride).expect("solo");
+            let from_batch: Vec<f32> =
+                yb.i(1).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("item 1");
+            let alone: Vec<f32> =
+                ys.i(0).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("alone");
+            assert_eq!(from_batch.len(), alone.len(), "stride {stride}: length differs");
+            for (i, (p, q)) in from_batch.iter().zip(alone.iter()).enumerate() {
+                assert!(
+                    (p - q).abs() < 1e-6,
+                    "stride {stride}, element {i}: batched {p} vs alone {q}"
+                );
+            }
+        }
+    }
+}

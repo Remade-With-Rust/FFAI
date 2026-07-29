@@ -190,7 +190,7 @@ which is itself the finding.
 - **FIRST EXPERIMENT:** dump per-clip CER deltas, take the worst 20, and
   read them. Before any hypothesis.
 - **STATUS:** open, and explicitly **not** to be folded into the Mercury-X
-  milestones ([mercury-X-mission.md](../mercury-X-mission.md)) — that layer
+  milestones ([mercury-X-mission.md](../finished/mercury-X-mission.md)) — that layer
   does not address it and would obscure it.
 
 ---
