@@ -313,7 +313,7 @@ impl AsrEngine for WhisperCandle {
         // it is aligning a known transcript, not recognising one.
         let words = if opts.word_timestamps {
             let aligner = self.aligner()?;
-            Some(aligner.align_segments(&mono.samples, &segments))
+            Some(aligner.align_segments(&mono.samples, &segments)?)
         } else {
             None
         };

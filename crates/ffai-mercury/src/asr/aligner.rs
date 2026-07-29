@@ -39,11 +39,31 @@ impl Aligner {
         let resolved = manifest.fetch()?;
         let weights = resolved.file("model.safetensors")?.to_path_buf();
 
+        // FFAI_ALIGN_DTYPE=f16 halves the resident cost of a 95M-parameter
+        // model that exists only to feed the aligner. It is kept as a
+        // documented DEAD END rather than a default:
+        //
+        //   f16 emissions go degenerate and forced alignment finds no valid
+        //   path on any segment. Not a wiring fault — the input-dtype cast
+        //   that used to make this fail as "dtype mismatch in conv1d" is
+        //   fixed — but a numerical one. wav2vec2-base was not trained for
+        //   half precision and its conv-stack activations do not survive the
+        //   range.
+        //
+        // The next attempt at C3 should be mixed precision (f16 storage, f32
+        // accumulation) or int8 with per-channel scales, not a blanket dtype
+        // switch. Left switchable so that work starts from a measurement
+        // rather than repeating this one.
+        let dtype = match std::env::var("FFAI_ALIGN_DTYPE").ok().as_deref() {
+            Some("f16") => DType::F16,
+            _ => DType::F32,
+        };
+
         // SAFETY: as in `model.rs` — the Hugging Face cache blob is immutable
         // and never written by FFai, which is the condition mmap requires.
         #[allow(unsafe_code)]
         let vb = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device)
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[weights], dtype, &device)
                 .map_err(|e| Error::Model(format!("mapping alignment weights: {e}")))?
         };
         let model = Wav2Vec2Ctc::load(Config::base_960h(), vb, device)?;
@@ -65,13 +85,23 @@ impl Aligner {
     /// emissions that go degenerate — is **skipped, not faked**. Its words are
     /// absent from the output rather than being assigned the segment's own
     /// bounds, which would look like a successful alignment and be wrong.
+    ///
+    /// But skipping *every* segment is a broken model, not a quiet edge case,
+    /// and this used to return an empty list for it. That is how an f16 build
+    /// producing nothing at all looked like "no words" instead of a failure —
+    /// and it is only the gate's **coverage** column that caught it, because
+    /// containment over zero words is trivially 100 %. If nothing aligns, say
+    /// so.
     pub fn align_segments(
         &self,
         samples: &[f32],
         segments: &[TimedSegment<String>],
-    ) -> Vec<TimedSegment<String>> {
+    ) -> Result<Vec<TimedSegment<String>>> {
         let sr = self.sample_rate as f64;
         let mut words = Vec::new();
+        let mut attempted = 0usize;
+        let mut failed = 0usize;
+        let mut first_error: Option<String> = None;
         for seg in segments {
             let start = ((seg.start.max(0.0) * sr) as usize).min(samples.len());
             let end = ((seg.end.max(0.0) * sr).ceil() as usize).clamp(start, samples.len());
@@ -79,13 +109,46 @@ impl Aligner {
             if self.model.config().output_frames(slice.len()) == 0 {
                 continue;
             }
-            let Ok(emissions) = self.model.emissions(slice, self.sample_rate) else {
-                continue;
-            };
-            if let Ok(mut w) = align_words(&emissions, &seg.value, &self.alphabet, seg.start) {
-                words.append(&mut w);
+            attempted += 1;
+            match self
+                .model
+                .emissions(slice, self.sample_rate)
+                .map_err(|e| e.to_string())
+                .and_then(|e| align_words(&e, &seg.value, &self.alphabet, seg.start))
+            {
+                Ok(mut w) => words.append(&mut w),
+                Err(e) => {
+                    failed += 1;
+                    first_error.get_or_insert(e);
+                }
             }
         }
-        words
+
+        if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() {
+            eprintln!(
+                "[align] segments={} attempted={attempted} failed={failed} words={} first_err={:?}",
+                segments.len(),
+                words.len(),
+                first_error
+            );
+        }
+
+        // Segments present but none even attempted means every one was too
+        // short for a single frame — a configuration error, not a hard clip.
+        if !segments.is_empty() && attempted == 0 {
+            return Err(Error::Model(format!(
+                "alignment attempted no segments: all {} were shorter than one model frame",
+                segments.len()
+            )));
+        }
+        // Every segment failing is a broken model. One or two failing is a
+        // hard segment, which is what the skip is for.
+        if attempted > 0 && failed == attempted {
+            return Err(Error::Model(format!(
+                "alignment failed on all {attempted} segments — the model produced nothing                  usable. First error: {}",
+                first_error.as_deref().unwrap_or("(none reported)")
+            )));
+        }
+        Ok(words)
     }
 }

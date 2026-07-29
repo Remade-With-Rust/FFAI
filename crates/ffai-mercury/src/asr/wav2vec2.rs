@@ -357,6 +357,10 @@ pub struct Wav2Vec2Ctc {
     layers: Vec<EncoderLayer>,
     lm_head: Linear,
     device: Device,
+    /// The weights' dtype. Inputs are built in f32 and must be cast to match:
+    /// candle's conv1d refuses a dtype mismatch rather than promoting, which
+    /// is the right call and made an f16 build fail on every segment.
+    dtype: DType,
 }
 
 impl Wav2Vec2Ctc {
@@ -389,7 +393,9 @@ impl Wav2Vec2Ctc {
         let lm_head = candle_nn::linear(cfg.hidden, cfg.vocab, vb.pp("lm_head"))
             .map_err(|e| model_err("lm_head", e))?;
 
+        let dtype = vb.dtype();
         Ok(Wav2Vec2Ctc {
+            dtype,
             cfg,
             features,
             feat_norm,
@@ -416,6 +422,7 @@ impl Wav2Vec2Ctc {
             )));
         }
         let x = Tensor::from_slice(samples, (1, samples.len()), &self.device)
+            .and_then(|t| t.to_dtype(self.dtype))
             .map_err(|e| model_err("input tensor", e))?;
 
         let feats = self.features.forward(&x).map_err(|e| model_err("feature extractor", e))?;
