@@ -150,8 +150,18 @@ impl OcrEngine for CraftCrnn {
         if opts.single_line && self.rec == RecStage::Crnn {
             let gray = crate::profile::timed(|p| &p.det_pre, || image::to_gray_f32(img))?;
             let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
+            // Ink-extent x-trim: CRNN cost is linear in strip WIDTH (the
+            // LSTM walks the columns), and a full-width band is mostly
+            // margin. The extent is measured on the CURRENT pixels (column
+            // deviation from the strip's median background), never on cached
+            // geometry — cached extents clip text that just grew longer.
+            let (x0, x1) = if std::env::var("FFAI_NO_TRIM").is_ok() {
+                (0, w)
+            } else {
+                image::ink_extent(&gray, w, h)
+            };
             let crop = crate::profile::timed(|p| &p.rec_pre, || {
-                image::crnn_input(&gray, w, h, 0, 0, w, h, &m.device)
+                image::crnn_input(&gray, w, h, x0, 0, x1, h, &m.device)
             })?;
             let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
                 .map_err(image::candle_err)?;

@@ -24,7 +24,6 @@ use ffai_core::engine::{OcrEngine, OcrOptions};
 use ffai_core::error::Result;
 use ffai_core::types::{ImageBuffer, OcrOutput, TimedSegment};
 
-use crate::image::to_gray_f32;
 
 #[derive(Debug, Clone)]
 pub struct LiveConfig {
@@ -55,6 +54,10 @@ pub struct LiveConfig {
     /// Every Nth OCR call runs full-frame anyway (new-element sweep, and the
     /// band set is rebuilt from its result).
     pub full_sweep_every: usize,
+    /// Also dispatch a background sweep when the last one is older than this
+    /// many seconds — call-count cadence alone lets a quiet-then-busy stream
+    /// serve stale geometry.
+    pub sweep_max_age_secs: f64,
 }
 
 impl Default for LiveConfig {
@@ -66,6 +69,7 @@ impl Default for LiveConfig {
             auto_roi: false,
             calib_calls: 8,
             full_sweep_every: 10,
+            sweep_max_age_secs: 10.0,
         }
     }
 }
@@ -93,6 +97,9 @@ pub struct LiveStats {
     pub full_secs: Vec<f64>,
     /// Background sweeps completed (band geometry refreshes).
     pub sweeps_landed: usize,
+    /// Wall seconds from session start to the first non-empty output — the
+    /// plan's time-to-first-text metric.
+    pub first_text_secs: Option<f64>,
 }
 
 impl LiveStats {
@@ -120,6 +127,10 @@ pub struct LiveSession {
     /// result replaces the band set when it lands; it is NEVER on the
     /// serving path — that is what moves full-frame cost out of steady p95.
     pending_sweep: Option<std::thread::JoinHandle<Result<OcrOutput>>>,
+    /// Wall time of the last dispatched sweep (or session start).
+    last_sweep: std::time::Instant,
+    /// Session start, for time-to-first-text.
+    started: std::time::Instant,
     /// Auto-ROI bands with cached per-band output blocks (absolute coords),
     /// rebuilt on every full-frame call. The dirty-band gate re-recognizes
     /// ONLY bands whose pixels moved: on single-slot HUD changes that is 1/N
@@ -140,11 +151,15 @@ struct Band {
 /// loose +-8 px unions of line y-bands (the harvest's construction), output
 /// lines assigned to their band for the dirty-band cache.
 fn calibrate_bands(full: &OcrOutput, frame_h: usize) -> Vec<Band> {
+    // Merge only when RAW line ranges overlap — padding used to glue close
+    // neighbours into multi-line bands, which locked them out of the
+    // single-line fast path. Pads are clamped to the gap midpoint after, so
+    // bands stay disjoint (the diff pass attributes each row to one band).
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for l in full.lines() {
         if let Some(b) = &l.bbox {
-            let (y0, y1) = ((b.y - 8.0).max(0.0) as usize, ((b.y + b.height + 8.0) as usize).min(frame_h));
-            if let Some(x) = spans.iter_mut().find(|x| y0 <= x.1 && y1 >= x.0) {
+            let (y0, y1) = (b.y.max(0.0) as usize, ((b.y + b.height) as usize).min(frame_h));
+            if let Some(x) = spans.iter_mut().find(|x| y0 < x.1 && y1 > x.0) {
                 x.0 = x.0.min(y0);
                 x.1 = x.1.max(y1);
             } else {
@@ -153,6 +168,13 @@ fn calibrate_bands(full: &OcrOutput, frame_h: usize) -> Vec<Band> {
         }
     }
     spans.sort_unstable();
+    let raw = spans.clone();
+    for i in 0..spans.len() {
+        let lo = if i == 0 { 0 } else { raw[i - 1].1.midpoint(raw[i].0) };
+        let hi = if i + 1 == spans.len() { frame_h } else { raw[i].1.midpoint(raw[i + 1].0) };
+        spans[i].0 = spans[i].0.saturating_sub(8).max(lo);
+        spans[i].1 = (spans[i].1 + 8).min(hi);
+    }
     spans
         .into_iter()
         .map(|(y0, y1)| {
@@ -169,6 +191,29 @@ fn calibrate_bands(full: &OcrOutput, frame_h: usize) -> Vec<Band> {
             Band { y0, y1, cached: vec![ffai_core::types::OcrBlock { lines, bbox: None }] }
         })
         .collect()
+}
+
+/// 2x2-decimated grayscale plane for the change gate (see push_frame).
+fn decimated_gray(img: &ImageBuffer) -> Result<Vec<f32>> {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let bpp = img.format.bytes_per_pixel();
+    let (ws, hs) = (w.div_ceil(2), h.div_ceil(2));
+    let mut out = Vec::with_capacity(ws * hs);
+    for y in (0..h).step_by(2) {
+        for x in (0..w).step_by(2) {
+            let i = (y * w + x) * bpp;
+            let v = match img.format {
+                ffai_core::types::PixelFormat::Gray8 => img.data[i] as f32,
+                _ => {
+                    0.299 * img.data[i] as f32
+                        + 0.587 * img.data[i + 1] as f32
+                        + 0.114 * img.data[i + 2] as f32
+                }
+            };
+            out.push(v);
+        }
+    }
+    Ok(out)
 }
 
 /// Copy a horizontal band of rows out of a frame (any pixel format).
@@ -201,6 +246,8 @@ impl LiveSession {
             open: None,
             segments: Vec::new(),
             pending_sweep: None,
+            last_sweep: std::time::Instant::now(),
+            started: std::time::Instant::now(),
             bands: Vec::new(),
             stats: LiveStats::default(),
         }
@@ -216,11 +263,15 @@ impl LiveSession {
             return Ok(&self.prev_out);
         }
 
-        let gray = to_gray_f32(img)?;
-        // One diff pass feeds three decisions: the global gate, per-band
-        // dirtiness, and the outside-band escape (a change where no band is
-        // means a NEW element: full sweep now, not at the next scheduled one).
+        // DECIMATED diff (2x2): the gate is the every-frame cost, and at a
+        // real 30 fps it must be sub-millisecond. Sampling every 2nd pixel
+        // in both axes is 4x cheaper in convert+diff+memory; the metric is a
+        // FRACTION, so thresholds carry over unchanged (a one-line change
+        // still moves thousands of sampled pixels; +-1 noise still moves
+        // none past pixel_delta).
         let w = img.width as usize;
+        let gray = decimated_gray(img)?;
+        let ws = w.div_ceil(2);
         let (mut global_changed, mut outside_changed) = (0usize, 0usize);
         let mut band_changed = vec![0usize; self.bands.len()];
         if let Some(prev) = self.prev_gray.as_ref().filter(|p| p.len() == gray.len()) {
@@ -228,7 +279,7 @@ impl LiveSession {
             for (i, (a, b)) in prev.iter().zip(&gray).enumerate() {
                 if (a - b).abs() > delta {
                     global_changed += 1;
-                    let y = i / w;
+                    let y = (i / ws) * 2; // decimated row -> frame row
                     match self.bands.iter().position(|bd| y >= bd.y0 && y < bd.y1) {
                         Some(k) => band_changed[k] += 1,
                         None => outside_changed += 1,
@@ -285,10 +336,13 @@ impl LiveSession {
 
         // Periodic sweep: dispatched in the BACKGROUND on its schedule; the
         // serving path below stays on bands. At most one in flight.
+        let sweep_stale =
+            self.last_sweep.elapsed().as_secs_f64() > self.cfg.sweep_max_age_secs.max(0.1);
         if use_bands
             && self.pending_sweep.is_none()
-            && (self.stats.ocr_calls + 1) % self.cfg.full_sweep_every.max(1) == 0
+            && ((self.stats.ocr_calls + 1) % self.cfg.full_sweep_every.max(1) == 0 || sweep_stale)
         {
+            self.last_sweep = std::time::Instant::now();
             let engine = self.engine.clone();
             let opts = self.opts.clone();
             let frame = img.clone();
@@ -305,7 +359,8 @@ impl LiveSession {
             use rayon::prelude::*;
             let dirty: Vec<usize> = (0..self.bands.len())
                 .filter(|&k| {
-                    let band_px = (self.bands[k].y1 - self.bands[k].y0) * w;
+                    // Decimated grid: a band's sampled population is 1/4.
+                    let band_px = (self.bands[k].y1 - self.bands[k].y0) * w / 4;
                     (band_changed[k] as f64) >= (band_px as f64 * frac).max(1.0)
                 })
                 .collect();
@@ -357,6 +412,9 @@ impl LiveSession {
         self.stats.ocr_calls += 1;
 
         let text = out.text();
+        if self.stats.first_text_secs.is_none() && !text.is_empty() {
+            self.stats.first_text_secs = Some(self.started.elapsed().as_secs_f64());
+        }
         if text != self.prev_text {
             if let Some((start, prev)) = self.open.take() {
                 if !prev.is_empty() {

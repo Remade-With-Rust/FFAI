@@ -179,6 +179,35 @@ fn det_scale() -> f32 {
     })
 }
 
+/// Horizontal ink extent of a single-line strip: columns whose maximum
+/// deviation from the strip's median level exceeds a small threshold, padded
+/// by one strip-height each side (context for the recognizer). Falls back to
+/// the full width when nothing exceeds the threshold.
+pub fn ink_extent(gray: &[f32], w: usize, h: usize) -> (usize, usize) {
+    let mut sample: Vec<f32> = gray.iter().copied().step_by(97).collect();
+    sample.sort_by(|a, b| a.total_cmp(b));
+    let median = sample.get(sample.len() / 2).copied().unwrap_or(128.0);
+    const DEV: f32 = 25.0;
+    let mut first = None;
+    let mut last = None;
+    for x in 0..w {
+        let ink = (0..h).any(|y| (gray[y * w + x] - median).abs() > DEV);
+        if ink {
+            if first.is_none() {
+                first = Some(x);
+            }
+            last = Some(x);
+        }
+    }
+    match (first, last) {
+        (Some(a), Some(b)) => {
+            let pad = 2 * h; // two strip-heights of context each side
+            (a.saturating_sub(pad), (b + 1 + pad).min(w))
+        }
+        _ => (0, w),
+    }
+}
+
 pub fn candle_err(e: candle_core::Error) -> Error {
     Error::Other(format!("candle: {e}"))
 }

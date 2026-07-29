@@ -50,27 +50,39 @@ fn main() {
     let first = ffai_media::load_image(&paths[0]).expect("frame 0");
     engine.recognize(&first, &OcrOptions::default()).expect("warm-up");
 
-    // ---- the live session ----
-    let mut session =
-        LiveSession::new(engine.clone(), OcrOptions::default(), LiveConfig {
+    // ---- the live session, BEST-OF-N (benchmarking.md: the minimum is the
+    // run least perturbed; gate verdicts stop depending on machine mood).
+    // Outputs are deterministic across runs; only timing varies.
+    const RUNS: usize = 3;
+    let run_session = || {
+        let mut session = LiveSession::new(engine.clone(), OcrOptions::default(), LiveConfig {
             auto_roi: std::env::var("FFAI_AUTO_ROI").is_ok(),
             ..LiveConfig::default()
         });
-    let mut outputs: Vec<String> = Vec::with_capacity(paths.len());
-    let mut line_bands: Vec<Vec<(f32, f32)>> = Vec::new(); // per frame: line y-bands
-    let t0 = std::time::Instant::now();
-    for (i, path) in paths.iter().enumerate() {
-        let img = ffai_media::load_image(path).expect("frame");
-        let out = session.push_frame(&img, i as f64 / FPS).expect("push_frame");
-        outputs.push(out.text());
-        line_bands.push(
-            out.lines()
-                .filter_map(|l| l.bbox.as_ref().map(|b| (b.y, b.y + b.height)))
-                .collect(),
-        );
-    }
-    let wall = t0.elapsed().as_secs_f64();
-    let (segments, stats) = session.finish(paths.len() as f64 / FPS);
+        let mut outputs: Vec<String> = Vec::with_capacity(paths.len());
+        let mut line_bands: Vec<Vec<(f32, f32)>> = Vec::new();
+        let t0 = std::time::Instant::now();
+        for (i, path) in paths.iter().enumerate() {
+            let img = ffai_media::load_image(path).expect("frame");
+            let out = session.push_frame(&img, i as f64 / FPS).expect("push_frame");
+            outputs.push(out.text());
+            line_bands.push(
+                out.lines()
+                    .filter_map(|l| l.bbox.as_ref().map(|b| (b.y, b.y + b.height)))
+                    .collect(),
+            );
+        }
+        let wall = t0.elapsed().as_secs_f64();
+        let (segments, stats) = session.finish(paths.len() as f64 / FPS);
+        (outputs, line_bands, segments, stats, wall)
+    };
+    let mut runs: Vec<_> = (0..RUNS).map(|_| run_session()).collect();
+    let p95_of = |st: &ffai_carmenta::live::LiveStats| st.percentile(0.95).unwrap_or(f64::MAX);
+    runs.sort_by(|a, b| p95_of(&a.3).total_cmp(&p95_of(&b.3)));
+    let all_p95: Vec<String> =
+        runs.iter().map(|r| format!("{:.0}", p95_of(&r.3) * 1000.0)).collect();
+    let (outputs, line_bands, segments, stats, wall) = runs.swap_remove(0);
+    println!("  best-of-{RUNS} engine p95s: [{}] ms (best kept)", all_p95.join(", "));
 
     // ---- churn: unchanged-GT pairs must produce unchanged output ----
     let mut churn = 0usize;
@@ -136,7 +148,15 @@ fn main() {
     let refs = ffai_bench::reference::ReferenceFile::load(Path::new("corpora/references.toml"))
         .expect("references.toml");
     let tess = refs.for_task("ocr").find(|r| r.name == "tesseract").expect("tesseract ref");
-    let batch = tess.run_batch(&paths).expect("tesseract batch");
+    // Same best-of-N for the reference: keep the run with the lowest p95.
+    let mut batches: Vec<_> = (0..RUNS).map(|_| tess.run_batch(&paths).expect("tesseract batch")).collect();
+    let batch_p95 = |b: &ffai_bench::reference::BatchResult| {
+        let mut t: Vec<f64> = b.clips.iter().filter_map(|c| c.transcribe_secs).collect();
+        t.sort_by(|a, b| a.total_cmp(b));
+        t.get(((t.len().max(1) - 1) as f64 * 0.95).round() as usize).copied().unwrap_or(f64::MAX)
+    };
+    batches.sort_by(|a, b| batch_p95(a).total_cmp(&batch_p95(b)));
+    let batch = batches.swap_remove(0);
     let mut tess_churn = 0usize;
     let mut tess_times: Vec<f64> = Vec::new();
     let mut prev_tess: Option<String> = None;
@@ -165,6 +185,10 @@ fn main() {
     let (t50, t95) = (pct(&tess_times, 0.50) * 1000.0, pct(&tess_times, 0.95) * 1000.0);
     println!("LIVE bench — carmenta-screencast-v1 ({} frames @ {FPS} fps, wall {wall:.1}s)", paths.len());
     println!("  segments emitted:       {}", segments.len());
+    println!(
+        "  time-to-first-text:     {:.0} ms",
+        stats.first_text_secs.unwrap_or(f64::NAN) * 1000.0
+    );
     println!("  ocr calls / gated / roi: {} / {} / {}", stats.ocr_calls, stats.gated, stats.roi_calls);
     let mut fulls = stats.full_secs.clone();
     fulls.sort_by(|a, b| a.total_cmp(b));
