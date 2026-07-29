@@ -192,3 +192,78 @@ which is itself the finding.
 - **STATUS:** open, and explicitly **not** to be folded into the Mercury-X
   milestones ([mercury-X-mission.md](../mercury-X-mission.md)) — that layer
   does not address it and would obscure it.
+
+---
+
+## CLOSED 2026-07-28 — Q1 and Q2, both by per-clip decomposition
+
+Both were closed by the same instrument, `examples/ab_clips.rs` and
+`examples/cer_anatomy.rs`, and both closed as **nulls**. The campaign had
+carried them as open questions about the implementation; they were questions
+about a handful of clips.
+
+### Q1 — conditional annotations: NO EFFECT
+
+Conditioning the `SuppressTokens` list on `P(<|nospeech|>)` was built,
+measured and left off. Per clip over the full 200-clip test-clean set:
+
+```
+  WER   improved 1   worsened 2   unchanged 197   z = -0.58
+  CER   improved 2   worsened 3   unchanged 195   z = -0.45
+  aggregate  WER 0.0628 -> 0.0651   CER 0.0228 -> 0.0258   (both worse)
+```
+
+**Three clips out of two hundred move at all.** The knob barely fires,
+because on clean read speech `no_speech_prob` sits at 0.004-0.032 and never
+approaches any useful threshold — the separation that made the gate look
+promising (speech 0.03, cough 0.29) exists only on audio this corpus does not
+contain.
+
+**The direction flips with the clip set.** The 134-clip holdout read
+6.79 -> 6.66 (better); all 200 read 6.28 -> 6.51 (worse). An effect whose
+sign depends on which clips you include is a tail artifact. Same shape as the
+VAD "quality win".
+
+**STATUS: closed, measured null.** The knob stays behind
+`FFAI_ANNOT_THRESHOLD` as a documented dead end rather than being deleted —
+it is cheap, and the next person to have this idea should find the
+measurement rather than repeat it.
+
+### Q2 — the test-clean CER deficit: NEVER SYSTEMATIC
+
+Open since §6.7 and described in the README as "the widest quality signal".
+Decomposed against whisper.cpp's own per-clip output:
+
+```
+  we are better on 14   worse on 7   tied 113
+  sign test  z = +1.53   not significant
+  net +0.168; top 5 clips carry +0.391 (233% of net)
+  aggregate  ours 0.0231  theirs 0.0241
+```
+
+**113 of 134 clips are exactly tied.** Of the 21 that differ, five carry more
+than the entire net. There is no systematic character-level weakness to find,
+and the sign test does not even establish a direction.
+
+**And the errors are not character-class at all.** The campaign assumed a CER
+gap meant something about characters — digits, casing, punctuation,
+hyphenation. Reading them:
+
+```
+  decency -> distances     tallow -> taro       seem -> seam
+  hydras -> high dressed   (theirs: hydra is)
+```
+
+Ordinary acoustic confusions, on clips where whisper.cpp makes its own
+(`larder -> louder`, `fees -> beads`). Word substitutions that happen to move
+CER, not a character-handling defect.
+
+**STATUS: closed.** The deficit was a handful of clips throughout. The item
+survived int8, the f16 cache and every kernel change since §6.7 not because
+it was robust but because nothing it was tested against could have moved it.
+
+**The transferable point, for the fourth time in this campaign:** the metric
+moved, the mechanism was assumed, and the distribution was never looked at.
+Q2 sat open for milestones as "unexplained" when ten minutes of decomposition
+showed there was nothing to explain. `ab_clips.rs` exists so the next one
+takes ten minutes rather than a milestone.
