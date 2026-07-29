@@ -30,11 +30,46 @@ use super::diarize::cosine_distance;
 /// How much closer than the batch threshold a match must be before an
 /// existing speaker claims a new cluster.
 ///
-/// Batch clustering merges at distance < 0.80. A registry match is permanent,
+/// Batch clustering merges at distance < 0.80; a registry match is permanent,
 /// so it demands `0.80 - ENROL_MARGIN`. The gap is the price of
-/// irreversibility, and it is a starting point rather than a calibration —
-/// E5 sweeps it against streaming DER.
-pub const ENROL_MARGIN: f32 = 0.15;
+/// irreversibility.
+///
+/// **Measured, and deliberately not the minimum.** Swept against streaming
+/// DER on `corpora/librispeech-diarization.toml`, 6 conversations fed as 8 s
+/// chunks (`examples/streaming_gate.rs sweep`):
+///
+/// ```text
+///   margin  match      DER    labels emitted / true
+///     0.00   0.80   10.94%    2/2 2/2 3/3 4/3 4/4 4/4
+///     0.05   0.75    4.70%    3/2 2/2 3/3 4/3 5/4 5/4   <- minimum
+///     0.10   0.70    5.68%
+///     0.15   0.65    5.81%
+///     0.20   0.60    5.81%
+///     0.25   0.55    6.65%
+///     0.40   0.40   11.34%
+/// ```
+///
+/// The minimum is 0.05. **0.10 ships**, because the two directions fail very
+/// differently and only one of them is recoverable:
+///
+/// - **Below** the minimum, matching is loose and two people merge into one
+///   centroid. Permanent, and it costs 10.94 % at margin 0.00 — a 2.3x
+///   degradation 0.05 away from the optimum.
+/// - **Above** it, matching is strict and one person splits across labels.
+///   Ugly, survivable, and the curve is nearly flat: 5.68 / 5.81 / 5.81
+///   across 0.10-0.20, and still under 7 % at 0.35.
+///
+/// 0.10 costs 0.98 pp against the minimum and doubles the distance from the
+/// cliff, on a plateau rather than a point.
+///
+/// **The row worth reading twice is margin 0.00.** It produces the most
+/// accurate speaker COUNTS in the table (2/2 2/2 3/3 4/3 4/4 4/4) and the
+/// second-worst DER. Loose matching merges the wrong people, and the count
+/// comes out right through compensating errors — which is why the gate prints
+/// the count beside the rate instead of folding it in.
+///
+/// **In-sample:** tuned on six conversations and reported on the same six.
+pub const ENROL_MARGIN: f32 = 0.10;
 
 /// One remembered voice.
 #[derive(Debug, Clone)]
@@ -62,11 +97,19 @@ impl SpeakerRegistry {
     /// the registry tightens it by [`ENROL_MARGIN`] itself, so callers pass
     /// one threshold and do not have to remember the relationship.
     pub fn new(batch_threshold: f32, max_speakers: Option<usize>) -> Self {
-        SpeakerRegistry {
-            known: Vec::new(),
-            match_threshold: (batch_threshold - ENROL_MARGIN).max(0.05),
-            max_speakers,
-        }
+        // FFAI_ENROL_MARGIN overrides the margin for calibration, the same
+        // A/B convention the other knobs use. Not a user-facing switch.
+        let margin = std::env::var("FFAI_ENROL_MARGIN")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|m| (0.0..=1.0).contains(m))
+            .unwrap_or(ENROL_MARGIN);
+        Self::with_match_threshold((batch_threshold - margin).max(0.05), max_speakers)
+    }
+
+    /// Explicit matching distance, bypassing the margin derivation.
+    pub fn with_match_threshold(match_threshold: f32, max_speakers: Option<usize>) -> Self {
+        SpeakerRegistry { known: Vec::new(), match_threshold, max_speakers }
     }
 
     pub fn len(&self) -> usize {

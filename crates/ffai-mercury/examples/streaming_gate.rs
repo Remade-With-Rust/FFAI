@@ -49,6 +49,75 @@ fn main() {
     };
     let engine = WhisperCandle::new();
 
+    // `sweep` calibrates ENROL_MARGIN, the one knob the streaming arm turns
+    // and the one that has never been measured.
+    if std::env::args().any(|a| a == "sweep") {
+        println!("{:>7} {:>6} {:>10} {:>28}", "margin", "match", "DER", "labels emitted / true");
+        println!("{}", "-".repeat(56));
+        let mut margin = 0.00f32;
+        while margin <= 0.401 {
+            // SAFETY: single-threaded here, set before the engine is used.
+            unsafe { std::env::set_var("FFAI_ENROL_MARGIN", format!("{margin}")) };
+            let (mut err, mut refs) = (0.0, 0.0);
+            let mut counts = Vec::new();
+            for clip in &manifest.clips {
+                let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
+                let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+                let reference = parse_rttm(&truth);
+                let true_n = reference
+                    .iter()
+                    .map(|t| t.speaker.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
+                let mono = audio.to_mono();
+                let per_chunk = (CHUNK_SECS * SR as f64) as usize;
+                engine.reset_speakers();
+                let mut turns: Vec<Turn> = Vec::new();
+                for c in 0..mono.samples.len().div_ceil(per_chunk) {
+                    let a = c * per_chunk;
+                    let b = ((c + 1) * per_chunk).min(mono.samples.len());
+                    if b <= a {
+                        continue;
+                    }
+                    let chunk = AudioBuffer {
+                        samples: mono.samples[a..b].to_vec(),
+                        sample_rate: SR as u32,
+                        channels: 1,
+                    };
+                    let opts = AsrOptions {
+                        diarize: true,
+                        persist_speakers: true,
+                        max_speakers: None,
+                        diarize_threshold: diarize::DEFAULT_THRESHOLD,
+                        ..Default::default()
+                    };
+                    let Ok(t) = engine.transcribe(&chunk, &opts) else { continue };
+                    let offset = a as f64 / SR as f64;
+                    for s in t.speakers.iter().flatten() {
+                        turns.push(Turn::new(s.start + offset, s.end + offset, s.value.clone()));
+                    }
+                }
+                let labels = turns
+                    .iter()
+                    .map(|t| t.speaker.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
+                counts.push(format!("{labels}/{true_n}"));
+                let (b, _) = diarization_error_rate(&reference, &turns, COLLAR);
+                err += b.missed_secs + b.false_alarm_secs + b.confusion_secs;
+                refs += b.reference_secs;
+            }
+            println!(
+                "{margin:>7.2} {:>6.2} {:>9.2}% {:>28}",
+                diarize::DEFAULT_THRESHOLD - margin,
+                100.0 * err / refs.max(1e-9),
+                counts.join(" ")
+            );
+            margin += 0.05;
+        }
+        return;
+    }
+
     println!(
         "{:<10} {:>6} {:>8} {:>10} {:>8} {:>10}",
         "clip", "chunks", "batch", "batch lbls", "stream", "stream lbls"

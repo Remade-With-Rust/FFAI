@@ -399,6 +399,50 @@ wav2vec2-CTC alignment, English first. Trellis forward pass + backtrace.
 - speed: alignment is a second model over the same audio; its cost is
   reported separately so the flag's price is visible.
 
+### M-X5 — online diarization — **DONE 2026-07-28**
+
+> Added after a review caught that the inability to persist a speaker across
+> calls was being described as a demo limitation when it was a **feature
+> failure**. "We would need a registry" is a description of the missing
+> feature, not a reason not to have it.
+>
+> It also contradicted principle 5 — *"streaming-first: engines process
+> chunks; whole-file is the degenerate case"*. Diarization that works only
+> whole-file inverts that. WhisperX has the same gap; WhisperX does not claim
+> streaming-first.
+>
+> **Measured, so it is not a matter of opinion.** Each corpus conversation fed
+> in as sequential 8 s chunks, labels concatenated into one timeline, DER's
+> optimal mapping computed **once** over the whole conversation so a system
+> that renames a speaker halfway cannot hide behind a per-chunk remap:
+>
+> | arm | DER |
+> |---|---|
+> | batch (`persist_speakers: false`) — the shipped default | **53.58 %** |
+> | streaming (`persist_speakers: true`) | **5.68 %** |
+>
+> 53.58 % is the correct *batch* answer on a *streaming* workload. The
+> whole-file 4.21 % says nothing about it, because one call has no "across"
+> to fail at.
+>
+> **`asr/registry.rs`** — persistent centroids, cosine match, enrol-or-match.
+> 10 tests, no model required. Two decisions carry it: matching is **stricter
+> than in-call clustering**, because batch clustering may reconsider and a
+> registry cannot; and centroid updates are **weighted by cluster size**,
+> because eight agreeing windows are better evidence than one 1.5 s fragment.
+> Clusters are matched, never individual windows — the first window of a new
+> voice is when the decision is least reliable and most permanent.
+>
+> **`ENROL_MARGIN` = 0.10, swept not guessed.** The minimum is 0.05 (4.70 %);
+> 0.10 ships because below the minimum two people merge permanently
+> (10.94 % at 0.00) while above it one person merely splits across labels
+> (flat 5.68–5.81 % across 0.10–0.20). The most instructive row is margin
+> 0.00: it produces the most accurate speaker **counts** in the sweep and the
+> second-worst DER, because loose matching merges the wrong people and the
+> count comes out right through compensating errors.
+>
+> Still open: in-sample on six conversations, and no speaker overlap.
+
 ### M-X4 — diarization
 
 Speaker embeddings + clustering. Scored as **DER** against a diarization
