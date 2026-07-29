@@ -163,3 +163,46 @@ mod tests {
         assert_eq!((boxes[0].x0, boxes[0].y0, boxes[0].x1, boxes[0].y1), (2, 2, 7, 4));
     }
 }
+
+/// Split one line's bbox into word segments by column projection: a run of
+/// map columns whose peak region score stays below `LOW_TEXT` for more than
+/// ~35% of the line height is a word gap. Exists for word-level recognizers
+/// (PARSeq): CRAFT's affinity links characters ACROSS word gaps at tight
+/// rendering spacing, so connected components are line-level here — measured
+/// as one box per line on the render corpus.
+pub fn split_words(region: &[f32], affinity: &[f32], w: usize, line: &DetBox) -> Vec<DetBox> {
+    let height = line.y1.saturating_sub(line.y0).max(1);
+    let min_gap = ((height as f32) * 0.35).max(1.0) as usize;
+    // Peak of max(region, affinity): region is per-CHARACTER gaussians, so
+    // it dips between letters of one word; affinity exists to fill exactly
+    // those gaps. Splitting on region alone cut words mid-glyph (measured:
+    // "October" -> "Oo"+"ccober").
+    let col_peak: Vec<f32> = (line.x0..line.x1)
+        .map(|x| {
+            (line.y0..line.y1)
+                .map(|y| region[y * w + x].max(affinity[y * w + x]))
+                .fold(0f32, f32::max)
+        })
+        .collect();
+    let mut words = Vec::new();
+    let (mut start, mut gap) = (None::<usize>, 0usize);
+    for (i, &p) in col_peak.iter().enumerate() {
+        if p >= LOW_TEXT {
+            if start.is_none() {
+                start = Some(i);
+            }
+            gap = 0;
+        } else if let Some(s) = start {
+            gap += 1;
+            if gap >= min_gap {
+                words.push(DetBox { x0: line.x0 + s, y0: line.y0, x1: line.x0 + i + 1 - gap, y1: line.y1, score: line.score });
+                start = None;
+                gap = 0;
+            }
+        }
+    }
+    if let Some(s) = start {
+        words.push(DetBox { x0: line.x0 + s, y0: line.y0, x1: line.x1, y1: line.y1, score: line.score });
+    }
+    if words.is_empty() { vec![*line] } else { words }
+}

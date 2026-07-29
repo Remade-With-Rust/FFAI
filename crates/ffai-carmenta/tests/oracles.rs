@@ -103,3 +103,33 @@ fn crnn_ids_match_pytorch_reference_exactly() {
     eprintln!("crnn oracle: {text:?} (conf {conf:?})");
     assert_eq!(text, expected_text);
 }
+
+#[test]
+fn parseq_ids_match_pytorch_reference() {
+    let fixture = fixtures().join("parseq_fixture.json");
+    let Some(weights) = model_file("parseq-tiny", "parseq-tiny.safetensors") else {
+        eprintln!("SKIP parseq oracle: weights not in cache (run tools/carmenta_parseq_prepare.py)");
+        return;
+    };
+    if !fixture.exists() {
+        eprintln!("SKIP parseq oracle: fixture missing (run tools/carmenta_parseq_oracle.py)");
+        return;
+    }
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap()).unwrap();
+    let expected_text = meta["text"].as_str().unwrap();
+
+    let input: Vec<f32> = std::fs::read(fixtures().join(meta["input"].as_str().unwrap()))
+        .unwrap()
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let x = Tensor::from_vec(input, (1, 3, 32, 128), &Device::Cpu).unwrap();
+
+    let vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &Device::Cpu) }.unwrap();
+    let parseq = ffai_carmenta::parseq::Parseq::new(vb).unwrap();
+    let (text, conf) = parseq.recognize(&x).unwrap();
+    eprintln!("parseq oracle: {text:?} (conf {conf:?}) vs reference {expected_text:?}");
+    assert_eq!(text, expected_text, "AR-greedy decode must match the reference");
+}

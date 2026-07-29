@@ -23,9 +23,20 @@ use crate::image;
 const PAD_Y: f32 = 0.35;
 const PAD_X: f32 = 0.25;
 
+/// Which recognition stage this engine composes over CRAFT detection.
+#[derive(Clone, Copy, PartialEq)]
+pub enum RecStage {
+    /// english_g2 CRNN: LINE-level crops (arbitrary width, CTC).
+    Crnn,
+    /// PARSeq-tiny: WORD-level 32x128 crops (25-char AR decoder), joined
+    /// with spaces within each detected line.
+    Parseq,
+}
+
 struct Models {
     craft: Craft,
-    crnn: Crnn,
+    crnn: Option<Crnn>,
+    parseq: Option<crate::parseq::Parseq>,
     device: Device,
 }
 
@@ -34,6 +45,7 @@ pub struct CraftCrnn {
     /// (the bench harness warms and records this separately).
     models: OnceLock<std::result::Result<Mutex<Models>, String>>,
     manifest_dir: std::path::PathBuf,
+    rec: RecStage,
 }
 
 impl CraftCrnn {
@@ -41,12 +53,24 @@ impl CraftCrnn {
         Self::with_manifest_dir(Path::new("models"))
     }
 
+    /// The `craft-parseq` variant: same detection, PARSeq-tiny recognition.
+    pub fn new_parseq() -> Self {
+        CraftCrnn {
+            models: OnceLock::new(),
+            manifest_dir: Path::new("models").to_path_buf(),
+            rec: RecStage::Parseq,
+        }
+    }
+
     pub fn with_manifest_dir(dir: &Path) -> Self {
-        CraftCrnn { models: OnceLock::new(), manifest_dir: dir.to_path_buf() }
+        CraftCrnn { models: OnceLock::new(), manifest_dir: dir.to_path_buf(), rec: RecStage::Crnn }
     }
 
     fn models(&self) -> Result<&Mutex<Models>> {
-        let loaded = self.models.get_or_init(|| load_models(&self.manifest_dir).map(Mutex::new).map_err(|e| e.to_string()));
+        let rec = self.rec;
+        let loaded = self
+            .models
+            .get_or_init(|| load_models(&self.manifest_dir, rec).map(Mutex::new).map_err(|e| e.to_string()));
         match loaded {
             Ok(m) => Ok(m),
             Err(e) => Err(Error::Model(e.clone())),
@@ -60,7 +84,7 @@ impl Default for CraftCrnn {
     }
 }
 
-fn load_models(dir: &Path) -> Result<Models> {
+fn load_models(dir: &Path, rec: RecStage) -> Result<Models> {
     let device = Device::Cpu;
     let manifests = ffai_models::load_dir(dir)?;
     let find = |name: &str| {
@@ -69,34 +93,47 @@ fn load_models(dir: &Path) -> Result<Models> {
             .find(|m| m.name == name)
             .ok_or_else(|| Error::Model(format!("no model manifest named `{name}` in {}", dir.display())))
     };
+    let load_vb = |file: std::path::PathBuf| {
+        unsafe { VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device) }
+            .map_err(image::candle_err)
+    };
     let craft_file = find("craft-mlt")?.fetch()?;
-    let crnn_file = find("crnn-english-g2")?.fetch()?;
-
-    let craft = {
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[craft_file.file("craft.safetensors")?], DType::F32, &device)
-        }
+    let craft = Craft::new(load_vb(craft_file.file("craft.safetensors")?.to_path_buf())?)
         .map_err(image::candle_err)?;
-        Craft::new(vb).map_err(image::candle_err)?
-    };
-    let crnn = {
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[crnn_file.file("crnn.safetensors")?], DType::F32, &device)
+    let (crnn, parseq) = match rec {
+        RecStage::Crnn => {
+            let f = find("crnn-english-g2")?.fetch()?;
+            let m = Crnn::new(load_vb(f.file("crnn.safetensors")?.to_path_buf())?)
+                .map_err(image::candle_err)?;
+            (Some(m), None)
         }
-        .map_err(image::candle_err)?;
-        Crnn::new(vb).map_err(image::candle_err)?
+        RecStage::Parseq => {
+            let f = find("parseq-tiny")?.fetch()?;
+            let m = crate::parseq::Parseq::new(load_vb(f.file("parseq-tiny.safetensors")?.to_path_buf())?)
+                .map_err(image::candle_err)?;
+            (None, Some(m))
+        }
     };
-    Ok(Models { craft, crnn, device })
+    Ok(Models { craft, crnn, parseq, device })
 }
 
 impl OcrEngine for CraftCrnn {
     fn info(&self) -> EngineInfo {
+        let (name, description) = match self.rec {
+            RecStage::Crnn => (
+                "craft-crnn",
+                "CRAFT detection + english_g2 CRNN recognition (EasyOCR lineage), pure Rust on candle",
+            ),
+            RecStage::Parseq => (
+                "craft-parseq",
+                "CRAFT detection + PARSeq-tiny recognition (word-level AR decoder), pure Rust on candle",
+            ),
+        };
         EngineInfo {
-            name: "craft-crnn".into(),
+            name: name.into(),
             task: Task::Ocr,
             status: EngineStatus::Experimental,
-            description: "CRAFT detection + english_g2 CRNN recognition (EasyOCR lineage), pure Rust on candle"
-                .into(),
+            description: description.into(),
         }
     }
 
@@ -117,7 +154,7 @@ impl OcrEngine for CraftCrnn {
         )?;
         let maps = crate::profile::timed(|p| &p.det_fwd, || m.craft.forward(&input))
             .map_err(image::candle_err)?;
-        let lines = crate::profile::timed(
+        let (lines, region, affinity, mw) = crate::profile::timed(
             |p| &p.boxes,
             || -> Result<_> {
                 let (mh, mw, _) = image::ok(maps.dims3())?;
@@ -126,7 +163,7 @@ impl OcrEngine for CraftCrnn {
                 let region: Vec<f32> = flat.iter().step_by(2).copied().collect();
                 let affinity: Vec<f32> = flat.iter().skip(1).step_by(2).copied().collect();
                 let word_boxes = boxes::extract_boxes(&region, &affinity, mw, mh);
-                Ok(boxes::group_lines(word_boxes))
+                Ok((boxes::group_lines(word_boxes), region, affinity, mw))
             },
         )?;
 
@@ -143,16 +180,65 @@ impl OcrEngine for CraftCrnn {
             let x1 = (to_img(lb.x1) + px) as usize;
             let y1 = (to_img(lb.y1) + py) as usize;
 
-            let crop = match crate::profile::timed(|p| &p.rec_pre, || {
-                image::crnn_input(&gray, w, h, x0, y0, x1, y1, &m.device)
-            }) {
-                Ok(c) => c,
-                Err(_) => continue, // degenerate box: skip, don't fail the page
+            let (text, confidence) = match self.rec {
+                RecStage::Crnn => {
+                    let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
+                    let crop = match crate::profile::timed(|p| &p.rec_pre, || {
+                        image::crnn_input(&gray, w, h, x0, y0, x1, y1, &m.device)
+                    }) {
+                        Ok(c) => c,
+                        Err(_) => continue, // degenerate box: skip, don't fail the page
+                    };
+                    let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
+                        .map_err(image::candle_err)?;
+                    crate::profile::timed(|p| &p.decode, || ctc_greedy(&logits))
+                        .map_err(image::candle_err)?
+                }
+                RecStage::Parseq => {
+                    // Word-level: recognize each CRAFT box, join with spaces.
+                    let parseq = m.parseq.as_ref().expect("parseq loaded for RecStage::Parseq");
+                    let mut words = Vec::new();
+                    let mut confs = Vec::new();
+                    let lb_map = boxes::line_bbox(line);
+                    let word_boxes = boxes::split_words(&region, &affinity, mw, &lb_map);
+                    for b in word_boxes.iter() {
+                        let bh = to_img(b.y1) - to_img(b.y0);
+                        let (wpx, wpy) = (bh * 0.08, bh * 0.12); // tight: PARSeq is trained on snug scene-text boxes
+                        let bx0 = (to_img(b.x0) - wpx).max(0.0) as usize;
+                        let by0 = (to_img(b.y0) - wpy).max(0.0) as usize;
+                        let bx1 = ((to_img(b.x1) + wpx) as usize).min(w);
+                        let by1 = ((to_img(b.y1) + wpy) as usize).min(h);
+                        if bx1 <= bx0 + 1 || by1 <= by0 + 1 {
+                            continue;
+                        }
+                        let (cw, ch) = (bx1 - bx0, by1 - by0);
+                        let mut crop = vec![0f32; cw * ch];
+                        for y in 0..ch {
+                            crop[y * cw..(y + 1) * cw]
+                                .copy_from_slice(&gray[(by0 + y) * w + bx0..(by0 + y) * w + bx1]);
+                        }
+                        let x = crate::profile::timed(|p| &p.rec_pre, || {
+                            crate::parseq::parseq_input(&crop, cw, ch, &m.device)
+                        })
+                        .map_err(image::candle_err)?;
+                        let (wtext, wconf) =
+                            crate::profile::timed(|p| &p.rec_fwd, || parseq.recognize(&x))
+                                .map_err(image::candle_err)?;
+                        if !wtext.is_empty() {
+                            words.push(wtext);
+                            if let Some(c) = wconf {
+                                confs.push(c);
+                            }
+                        }
+                    }
+                    let conf = if confs.is_empty() {
+                        None
+                    } else {
+                        Some(confs.iter().sum::<f32>() / confs.len() as f32)
+                    };
+                    (words.join(" "), conf)
+                }
             };
-            let logits = crate::profile::timed(|p| &p.rec_fwd, || m.crnn.forward(&crop))
-                .map_err(image::candle_err)?;
-            let (text, confidence) =
-                crate::profile::timed(|p| &p.decode, || ctc_greedy(&logits)).map_err(image::candle_err)?;
             if text.is_empty() {
                 continue;
             }

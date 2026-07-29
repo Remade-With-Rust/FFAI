@@ -34,6 +34,7 @@ pub mod crnn;
 pub mod engine;
 pub mod image;
 pub mod live;
+pub mod parseq;
 pub mod profile;
 
 use std::sync::Arc;
@@ -43,6 +44,7 @@ use ffai_core::registry::EngineRegistry;
 /// Install every Carmenta engine into a registry.
 pub fn register(reg: &mut EngineRegistry) {
     reg.register_ocr(Arc::new(engine::CraftCrnn::new()));
+    reg.register_ocr(Arc::new(engine::CraftCrnn::new_parseq()));
 }
 
 #[cfg(test)]

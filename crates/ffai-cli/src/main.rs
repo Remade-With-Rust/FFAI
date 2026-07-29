@@ -92,6 +92,21 @@ enum Cmd {
         engine: Option<String>,
         #[arg(long)]
         voice: Option<String>,
+        /// Playback-rate multiplier (1.0 = normal)
+        #[arg(long, default_value_t = 1.0)]
+        speed: f32,
+        /// Acoustic variation, 0.0 = fully deterministic (default: the voice's own)
+        #[arg(long)]
+        noise_scale: Option<f32>,
+        /// Duration variation, 0.0 = deterministic timing (default: the voice's own)
+        #[arg(long)]
+        noise_w: Option<f32>,
+        /// Noise seed — same seed + same text = byte-identical audio
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Silence between sentences of long-form input, seconds
+        #[arg(long, default_value_t = 0.2)]
+        sentence_silence: f32,
     },
     /// Recognize text in an image, or stream a frame sequence (Carmenta)
     Ocr {
@@ -314,8 +329,25 @@ fn main() -> Result<()> {
 {audit}");
             }
         }
-        Cmd::Tts { text, output, engine, voice } => {
-            let opts = TtsOptions { voice, ..Default::default() };
+        Cmd::Tts {
+            text,
+            output,
+            engine,
+            voice,
+            speed,
+            noise_scale,
+            noise_w,
+            seed,
+            sentence_silence,
+        } => {
+            let opts = TtsOptions {
+                voice,
+                speed,
+                noise_scale,
+                noise_w,
+                seed,
+                sentence_silence_s: sentence_silence,
+            };
             let audio = reg.tts(engine.as_deref())?.synthesize(&text, &opts)?;
             ffai_media::save_wav(&output, &audio)?;
             println!("wrote {}", output.display());
