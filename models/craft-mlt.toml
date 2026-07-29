@@ -1,0 +1,20 @@
+# CRAFT text detection (Baek et al. 2019), weights `craft_mlt_25k`.
+#
+# License: MIT (clovaai/CRAFT-pytorch). The AUTHORS' official weight links
+# are Google Drive (click-gated — disqualified as a fetch source, plan
+# §7.1); the clean ungated host is JaidedAI/EasyOCR's GitHub release, which
+# is where these bytes come from.
+#
+# The safetensors file is converted locally from the released .pth by
+# `tools/carmenta_m_c1_prepare.py` (strips the DataParallel `module.`
+# prefix, verified under load_state_dict(strict=True)). A hosted safetensors
+# mirror so end users skip the torch conversion is open work tracked for
+# Carmenta `stable` (M-C6).
+name = "craft-mlt"
+task = "ocr"
+description = "CRAFT text detector (VGG16-BN U-Net, region+affinity maps) — craft_mlt_25k"
+license = "MIT"
+
+[[files]]
+name = "craft.safetensors"
+sha256 = "131c7db96edeb7ae49c4ce31f43261aab4e80006eb124ef8fbb134755fc3f604"

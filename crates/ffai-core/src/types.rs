@@ -273,27 +273,78 @@ pub struct BoundingBox {
     pub height: f32,
 }
 
-/// One recognized run of text (a word, line, or block depending on engine).
+/// One recognized word.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TextSpan {
+pub struct OcrWord {
     pub text: String,
+    pub bbox: Option<BoundingBox>,
+    /// Recognition confidence in 0..1, when the engine reports one.
+    pub confidence: Option<f32>,
+}
+
+/// One text line: the recognition unit of most OCR stacks.
+///
+/// `text` is authoritative; `words` is optional detail (empty when the
+/// engine recognizes whole lines without word segmentation, as line-level
+/// transformer decoders do).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OcrLine {
+    pub text: String,
+    pub words: Vec<OcrWord>,
     pub bbox: Option<BoundingBox>,
     pub confidence: Option<f32>,
 }
 
-/// OCR output: spans in reading order as produced by the engine.
+/// One block: lines that belong together (a paragraph, a column cell, a HUD
+/// element). Region classification (title/table/figure…) arrives as typed
+/// payloads with the DOCUMENT milestone — deliberately absent from v1 (see
+/// carmenta-mission-plan §2.1).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OcrBlock {
+    pub lines: Vec<OcrLine>,
+    pub bbox: Option<BoundingBox>,
+}
+
+/// OCR output for one page/frame: blocks in reading order.
+///
+/// **Reading order is the Vec order at every level** — blocks within the
+/// output, lines within a block, words within a line. An explicit sequence,
+/// not a geometric convention, so a future layout stage can reorder without
+/// changing the type. LIVE wraps this in `TimedSegment<OcrOutput>` for timed
+/// tracks; the hierarchy (page → block → line → word) is the AVFrame of the
+/// Carmenta mission and every engine and the bench harness build against it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OcrOutput {
-    pub spans: Vec<TextSpan>,
+    pub blocks: Vec<OcrBlock>,
 }
 
 impl OcrOutput {
+    /// Flat text: lines joined with `\n`, blocks separated by a blank line.
     pub fn text(&self) -> String {
-        self.spans
+        self.blocks
             .iter()
-            .map(|s| s.text.as_str())
+            .map(|b| b.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n"))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n\n")
+    }
+
+    /// Convenience constructor: one block per line, no geometry — the
+    /// degenerate shape for engines (or tests) without layout information.
+    pub fn from_lines<I: IntoIterator<Item = String>>(lines: I) -> Self {
+        OcrOutput {
+            blocks: vec![OcrBlock {
+                lines: lines
+                    .into_iter()
+                    .map(|text| OcrLine { text, ..Default::default() })
+                    .collect(),
+                bbox: None,
+            }],
+        }
+    }
+
+    /// Every line in reading order, across blocks.
+    pub fn lines(&self) -> impl Iterator<Item = &OcrLine> {
+        self.blocks.iter().flat_map(|b| b.lines.iter())
     }
 }
 

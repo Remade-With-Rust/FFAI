@@ -1,4 +1,5 @@
 /target
+/target-tts
 **/*.rs.bk
 # benchmarking scratch: corpora audio is fetched, never committed (the
 # hash-pinned manifest in corpora/*.toml is the committed artifact)
@@ -12,3 +13,10 @@
 *.onnx
 *.bin
 /.whispercpp/
+/.tools-bench/
+/corpora/fonts/
+# TTS bench artifacts: generated audio is reproducible from the ledger line
+# (voice hash + argv + corpus); the piper voice cache is fetched, never committed
+/bench/tts-out/
+/bench/mt1-substitution/
+/.piper-voices/

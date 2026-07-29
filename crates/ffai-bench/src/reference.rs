@@ -354,6 +354,164 @@ fn parse_batch_output(stdout: &str, name: &str) -> Result<BatchResult> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// TTS batch mode
+// ---------------------------------------------------------------------------
+
+/// One utterance's result from a TTS batch run: the adapter read a text file
+/// and wrote a WAV.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TtsClipResult {
+    /// The input text path the adapter echoed back.
+    pub path: String,
+    /// The generated WAV's path.
+    pub wav: PathBuf,
+    /// Synthesis-only seconds (model loaded, WAV writing excluded).
+    pub synth_secs: Option<f64>,
+    /// Time-to-first-audio: synthesize() call to first chunk. For a
+    /// single-sentence input a non-streaming engine reports ttfa == synth.
+    pub ttfa_secs: Option<f64>,
+}
+
+/// The parsed output of one TTS batch invocation.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TtsBatchResult {
+    pub clips: Vec<TtsClipResult>,
+    pub load_secs: Option<f64>,
+    /// Adapter-reported metadata worth carrying into the ledger notes —
+    /// voice name + sha256 and the effective synthesis knobs. The voice file
+    /// is not corpus-pinned, so its hash rides in the record instead.
+    pub meta: Vec<String>,
+    pub steady_bytes: Option<u64>,
+    pub peak_bytes: Option<u64>,
+}
+
+impl TtsBatchResult {
+    /// Look up an utterance's result by input text path.
+    pub fn clip_for(&self, path: &Path) -> Option<&TtsClipResult> {
+        let want = path.to_string_lossy().replace('\\', "/");
+        self.clips.iter().find(|c| c.path.replace('\\', "/") == want)
+    }
+
+    /// Adapter-reported synthesis time for the whole batch.
+    pub fn synth_secs(&self) -> Option<f64> {
+        let sum: f64 = self.clips.iter().filter_map(|c| c.synth_secs).sum();
+        if sum > 0.0 { Some(sum) } else { None }
+    }
+}
+
+impl ReferenceSpec {
+    /// Run a whole TTS corpus in one invocation. `{filelist}` is replaced by
+    /// a temp file of text paths, `{outdir}` by the directory the adapter
+    /// must write WAVs into. JSONL contract: a `{"load_secs": ...}` line,
+    /// optional metadata lines (any object with a `"voice"` key), and one
+    /// `{"path": ..., "wav": ..., "synth_secs": ..., "ttfa_secs": ...}` per
+    /// utterance. See corpora/refs/piper_ref.py for the working example.
+    pub fn run_batch_tts(&self, inputs: &[PathBuf], outdir: &Path) -> Result<TtsBatchResult> {
+        let argv = self
+            .batch_command
+            .as_ref()
+            .ok_or_else(|| Error::Other(format!("reference `{}` has no batch_command", self.name)))?;
+
+        std::fs::create_dir_all(outdir)?;
+        let listing: String = inputs
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let list_path = std::env::temp_dir().join(format!("ffai-bench-{}.filelist", self.name));
+        std::fs::write(&list_path, listing)?;
+
+        let argv: Vec<String> = argv
+            .iter()
+            .map(|a| {
+                a.replace("{filelist}", &list_path.to_string_lossy())
+                    .replace("{outdir}", &outdir.to_string_lossy())
+            })
+            .collect();
+        let result = self.exec_measured(&argv);
+        std::fs::remove_file(&list_path).ok();
+        let (stdout, peak, steady) = result?;
+        let mut parsed = parse_tts_batch_output(&stdout, &self.name)?;
+        parsed.peak_bytes = peak;
+        parsed.steady_bytes = steady;
+        Ok(parsed)
+    }
+}
+
+/// Parse a TTS adapter's JSONL stdout. Same tolerance rules as the ASR
+/// parser: non-JSON lines are ignored, a line with `wav` is an utterance, a
+/// line with `load_secs` is timing metadata, a line with `voice` is carried
+/// into the ledger notes verbatim.
+fn parse_tts_batch_output(stdout: &str, name: &str) -> Result<TtsBatchResult> {
+    let mut out = TtsBatchResult::default();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(load) = value.get("load_secs").and_then(|v| v.as_f64()) {
+            out.load_secs = Some(load);
+        }
+        if value.get("voice").is_some() {
+            out.meta.push(line.to_string());
+        }
+        if let Some(wav) = value.get("wav").and_then(|v| v.as_str()) {
+            out.clips.push(TtsClipResult {
+                path: value.get("path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                wav: PathBuf::from(wav),
+                synth_secs: value.get("synth_secs").and_then(|v| v.as_f64()),
+                ttfa_secs: value.get("ttfa_secs").and_then(|v| v.as_f64()),
+            });
+        }
+    }
+    if out.clips.is_empty() {
+        return Err(Error::Other(format!(
+            "reference `{name}` produced no parseable JSONL utterance results — check the TTS \
+             adapter contract in crates/ffai-bench/src/reference.rs"
+        )));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tts_tests {
+    use super::*;
+
+    #[test]
+    fn parses_tts_jsonl_and_carries_voice_metadata() {
+        let stdout = concat!(
+            "some progress noise\n",
+            "{\"load_secs\": 2.1}\n",
+            "{\"voice\": \"en_US-lessac-medium\", \"voice_sha256\": \"abc\"}\n",
+            "{\"path\": \"a.txt\", \"wav\": \"out/a.wav\", \"synth_secs\": 0.07, \"ttfa_secs\": 0.07}\n",
+            "{\"path\": \"b.txt\", \"wav\": \"out/b.wav\", \"synth_secs\": 0.05}\n",
+        );
+        let r = parse_tts_batch_output(stdout, "piper").unwrap();
+        assert_eq!(r.clips.len(), 2);
+        assert_eq!(r.load_secs, Some(2.1));
+        assert_eq!(r.meta.len(), 1);
+        assert!(r.meta[0].contains("voice_sha256"));
+        assert!((r.synth_secs().unwrap() - 0.12).abs() < 1e-9);
+        assert_eq!(r.clip_for(Path::new("b.txt")).unwrap().wav, PathBuf::from("out/b.wav"));
+        // Windows paths from the adapter still match POSIX-style queries.
+        let win = parse_tts_batch_output(
+            "{\"path\": \"corpora\\\\texts\\\\a.txt\", \"wav\": \"o.wav\"}\n",
+            "p",
+        )
+        .unwrap();
+        assert!(win.clip_for(Path::new("corpora/texts/a.txt")).is_some());
+    }
+
+    #[test]
+    fn tts_empty_output_is_an_error_not_a_silent_zero() {
+        assert!(parse_tts_batch_output("nothing\n", "piper").is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

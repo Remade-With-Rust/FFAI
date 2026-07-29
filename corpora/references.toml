@@ -74,12 +74,42 @@ config = "tiny.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/faster_whisper_ref.py", "--batch", "{filelist}", "--model", "tiny.en", "--beam-size", "1", "--compute-type", "int8"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"]
 
-# ---- OCR (Carmenta, Phase 3) ----
+# ---- OCR (Carmenta M-C0): the three named performance competitors ----
+# Configuration is pinned the same way beam_size is for ASR: tesseract's
+# --psm/--oem change the work done, so they are explicit argv, and the whole
+# argv lands in every ledger line. All three declare config = "en/printed"
+# so the matched-tier quality gate can compare them as one field.
+#
+# tesseract: portable extraction at .tools-bench/tesseract (no admin install;
+# see docs/benchmarking.md), eng.traineddata from tessdata_fast. Its adapter
+# spawns one process per image — the spawn tax is inside its per-page times,
+# stated in corpora/refs/tesseract_ref.py rather than discovered later.
 [[reference]]
 name = "tesseract"
 task = "ocr"
-command = ["tesseract", "{input}", "stdout"]
-version_command = ["tesseract", "--version"]
+config = "en/printed"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/tesseract_ref.py", "--batch", "{filelist}", "--bin", ".tools-bench/tesseract/tesseract.exe", "--tessdata", ".tools-bench/tesseract/tessdata", "--lang", "eng", "--psm", "3", "--oem", "1"]
+version_command = [".tools-bench/tesseract/tesseract.exe", "--version"]
+
+[[reference]]
+name = "easyocr"
+task = "ocr"
+config = "en/printed"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/easyocr_ref.py", "--batch", "{filelist}", "--lang", "en"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import easyocr; print('easyocr', easyocr.__version__)"]
+
+# paddleocr: pinned to the PP-OCRv5 MOBILE tier — the per-frame LIVE
+# competitor (server tier is ~10x slower and belongs to the DOCUMENT
+# comparison once a box with working oneDNN exists). --mkldnn off is a
+# measured constraint of paddlepaddle 3.3.1 on this machine, not a choice —
+# see the note in corpora/refs/paddleocr_ref.py. It handicaps Paddle's CPU
+# speed; read its speed rows with that attached.
+[[reference]]
+name = "paddleocr-mobile"
+task = "ocr"
+config = "en/printed"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/paddleocr_ref.py", "--batch", "{filelist}", "--lang", "en", "--det-model", "PP-OCRv5_mobile_det", "--rec-model", "PP-OCRv5_mobile_rec", "--mkldnn", "off"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import paddleocr; print('paddleocr', paddleocr.__version__)"]
 
 # ---- whisper.cpp (C++/ggml, BLAS build): the NATIVE no-Python bar ----
 # This is the comparison FFai's pure-Rust thesis is judged against.
@@ -102,4 +132,39 @@ name = "whisper-cpp-tiny-greedy-t24"
 task = "asr"
 config = "tiny.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-tiny.en.bin", "--threads", "24", "--beam-size", "1"]
+version_command = [".whispercpp/whisper-cli.exe", "--version"]
+
+# ---- TTS (Mercury M-T0+): piper1-gpl, the fast-local-TTS world standard ----
+# Batch contract: {filelist} of text paths in, WAVs written to {outdir},
+# JSONL timings out — see corpora/refs/piper_ref.py and
+# crates/ffai-bench/src/reference.rs (TTS batch mode).
+# Synthesis runs the VOICE CONFIG'S OWN defaults (noise_scale 0.667,
+# length_scale 1.0, noise_w 0.8) — piper's shipped behaviour is the baseline,
+# and our engine will pin the same values for the matched comparison.
+# Voice: en_US-lessac-medium (22.05 kHz), fetched by
+#   .venv-bench/Scripts/python -m piper.download_voices en_US-lessac-medium --data-dir .piper-voices
+# sha256 5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f —
+# also echoed into every ledger line by the adapter.
+[[reference]]
+name = "piper1-gpl"
+task = "tts"
+config = "en_US-lessac-medium/defaults"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/piper_ref.py", "--batch", "{filelist}", "--model", ".piper-voices/en_US-lessac-medium.onnx", "--outdir", "{outdir}"]
+version_command = [".venv-bench/Scripts/python.exe", "-c", "import importlib.metadata as m; print('piper-tts', m.version('piper-tts'))"]
+
+# ---- The TTS round-trip judge: a FROZEN third-party ASR, never ours ----
+# Every implementation's audio (piper's and, later, piper-candle's) is
+# resampled to 16 kHz mono by the harness and transcribed by THIS judge; WER
+# between input text and transcript is the quality metric. base.en at beam 5
+# rather than tiny.en/greedy: the judge's own error floor is shared noise on
+# both sides, and a lower floor leaves more resolution for the comparison.
+# Exactly one tts-judge may be declared (two judges = two error floors in one
+# table). Never a Mercury engine — no self-grading.
+# Model: .whispercpp/ggml-base.en.bin,
+# sha256 a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002.
+[[reference]]
+name = "tts-judge-whisper-cpp-base"
+task = "tts-judge"
+config = "base.en/beam5/judge"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-base.en.bin", "--threads", "24", "--beam-size", "5"]
 version_command = [".whispercpp/whisper-cli.exe", "--version"]

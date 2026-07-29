@@ -12,20 +12,43 @@
 
 use std::path::PathBuf;
 
-use ffai_core::engine::AsrOptions;
+use ffai_core::engine::{AsrOptions, OcrOptions};
 use ffai_core::error::{Error, Result};
 use ffai_core::registry::EngineRegistry;
 
 use crate::corpus::{ClipEntry, Manifest};
 use crate::gate::{GateKind, GateOutcome, GateReport, GateResult};
 use crate::ledger::{append, BenchRecord, Environment, RunSummary, LEDGER_SCHEMA};
-use crate::metrics::{cer, wer};
+use crate::metrics::{cer_with, wer_with};
+use crate::normalize::Mode;
 use crate::reference::ReferenceSpec;
 use crate::speed::{best_of_n, real_time_factor};
+
+/// Which metric the quality gate verdicts on. Both are always recorded; this
+/// only chooses the headline. ASR gates on WER (the field's standard); OCR
+/// gates on CER — character accuracy is what OCR benchmarks rank by, and word
+/// boundaries in OCR output are partly a segmentation artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QualityMetric {
+    Wer,
+    Cer,
+}
 
 /// Parity band for the quality gate: engine WER may exceed the best
 /// reference's WER by at most this factor (1.05 = within 5% relative).
 pub const QUALITY_PARITY_BAND: f64 = 1.05;
+
+/// Absolute floor for the parity band, in error-rate units (0.25 pp).
+///
+/// A pure relative band degenerates when the best reference sits at ~0 %
+/// error — 1.05 × 0.00 is 0.00, and the gate would demand perfection to the
+/// character. Tesseract scores 0.00 % CER on the synthetic render corpus
+/// (M-C0), which is exactly this case. The gate therefore passes on
+/// `engine <= best * band` OR `engine <= best + floor`, and the detail line
+/// says which bound applied. The floor is deliberately small: a quarter
+/// point of CER is roughly one wrong character per 400 — parity for
+/// practical purposes, not a loophole.
+pub const QUALITY_ABS_FLOOR: f64 = 0.0025;
 
 pub struct BenchConfig {
     /// Engine to bench; `None` = registry default. Set `skip_engine` to
@@ -71,7 +94,8 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     let mut references = Vec::new();
     for spec in &cfg.references {
         eprintln!("running reference `{}` over {} clips ...", spec.name, holdout.len());
-        match run_reference(spec, &manifest, &holdout, &paths, media_secs, cfg.runs) {
+        match run_reference(spec, &manifest, &holdout, &paths, media_secs, cfg.runs, Mode::English, None)
+        {
             Ok(summary) => references.push(summary),
             Err(e) => {
                 eprintln!("  reference `{}` failed: {e}", spec.name);
@@ -104,7 +128,7 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     };
 
     let mut gates = GateReport::new();
-    fill_gates(&mut gates, engine_summary.as_ref(), &references);
+    fill_gates(&mut gates, engine_summary.as_ref(), &references, QualityMetric::Wer);
 
     let (id, appended_at) = BenchRecord::now_id("asr");
     let record = BenchRecord {
@@ -124,6 +148,247 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     Ok(record)
 }
 
+/// Run an OCR bench end-to-end and append the record to the ledger.
+///
+/// Differences from ASR, all deliberate:
+/// - **The media unit is the page.** `media_secs` carries the page count, so
+///   the RTF fields read as pages/second (warm and end-to-end). Same schema,
+///   task-scoped meaning, labeled per task by [`render`].
+/// - **Scoring uses [`Mode::Ocr`]** — whitespace-collapsed, case- and
+///   punctuation-preserving. The ASR normalizer would score OCR's hardest
+///   parts (case, digits, punctuation) as free.
+/// - **The quality gate verdicts on CER** (see [`QualityMetric`]).
+/// - **Per-page latency percentiles are recorded per reference** — the view a
+///   LIVE streaming loop experiences, kept beside the corpus mean from day
+///   one so the M-C2 latency gate has baselines waiting.
+pub fn run_ocr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
+    let manifest = Manifest::load(&cfg.corpus)?;
+    if manifest.task != "ocr" {
+        return Err(Error::Other(format!(
+            "corpus `{}` is a {} corpus, not ocr",
+            manifest.name, manifest.task
+        )));
+    }
+    let bad = manifest.verify()?;
+    if !bad.is_empty() {
+        return Err(Error::Other(format!(
+            "corpus verification failed for clips {bad:?} — bytes on disk don't match the \
+             manifest's pinned SHA-256; results on drifted data are not valid claims"
+        )));
+    }
+    let holdout: Vec<&ClipEntry> = manifest.holdout().collect();
+    if holdout.is_empty() {
+        return Err(Error::Other("corpus has no holdout clips — nothing to measure".into()));
+    }
+    let paths: Vec<PathBuf> = holdout.iter().map(|c| manifest.clip_path(c)).collect();
+    let pages = holdout.len() as f64;
+
+    let mut references = Vec::new();
+    for spec in &cfg.references {
+        eprintln!("running reference `{}` over {} pages ...", spec.name, holdout.len());
+        match run_reference(spec, &manifest, &holdout, &paths, pages, cfg.runs, Mode::Ocr, Some("page"))
+        {
+            Ok(summary) => references.push(summary),
+            Err(e) => {
+                eprintln!("  reference `{}` failed: {e}", spec.name);
+                references.push(RunSummary {
+                    name: spec.name.clone(),
+                    version: spec.version(),
+                    command: Some(spec.command_line()),
+                    config: decode_config(spec.config.as_deref()),
+                    wer: None,
+                    cer: None,
+                    rtf_warm: None,
+                    rtf_e2e: None,
+                    load_secs: None,
+                    wall_secs: None,
+                    media_secs: Some(pages),
+                    clips_ok: 0,
+                    clips_total: holdout.len(),
+                    notes: vec![e.to_string()],
+                    peak_bytes: None,
+                    steady_bytes: None,
+                });
+            }
+        }
+    }
+
+    let engine_summary = if cfg.skip_engine {
+        None
+    } else {
+        Some(run_ocr_engine(reg, cfg.engine.as_deref(), &manifest, &holdout, pages, cfg.runs)?)
+    };
+
+    let mut gates = GateReport::new();
+    fill_gates(&mut gates, engine_summary.as_ref(), &references, QualityMetric::Cer);
+
+    let (id, appended_at) = BenchRecord::now_id("ocr");
+    let record = BenchRecord {
+        schema: LEDGER_SCHEMA,
+        id,
+        task: "ocr".into(),
+        corpus: manifest.name.clone(),
+        corpus_manifest_hash: manifest.manifest_hash(),
+        engine: engine_summary,
+        references,
+        gates,
+        environment: Environment::capture(),
+        notes: String::new(),
+        appended_at,
+    };
+    append(&cfg.ledger, &record)?;
+    Ok(record)
+}
+
+/// The in-process OCR engine's run. Compact by design: the memory sampler and
+/// pre-decode asymmetry accounting from [`run_engine`] land at M-C1 when a
+/// real engine exists to measure — at M-C0 every registered OCR engine is an
+/// honest stub, and this exists so `ffai bench ocr` (without
+/// `--baseline-only`) records that failure rather than hiding it.
+fn run_ocr_engine(
+    reg: &EngineRegistry,
+    engine: Option<&str>,
+    manifest: &Manifest,
+    holdout: &[&ClipEntry],
+    pages: f64,
+    runs: usize,
+) -> Result<RunSummary> {
+    let ocr = reg.ocr(engine)?;
+    let opts = OcrOptions::default();
+    let mut summary = RunSummary {
+        name: ocr.info().name,
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        command: None,
+        config: {
+            let mut c = std::collections::BTreeMap::new();
+            // Carmenta engines share the OCR references' comparison key: all
+            // are English printed-text stacks at default configuration. This
+            // is a declaration (the same contract references make in
+            // references.toml), not an inference from the name.
+            c.insert(DECODE_KEY.to_string(), "en/printed".to_string());
+            c
+        },
+        wer: None,
+        cer: None,
+        rtf_warm: None,
+        rtf_e2e: None,
+        load_secs: None,
+        wall_secs: None,
+        media_secs: Some(pages),
+        clips_ok: 0,
+        clips_total: holdout.len(),
+        notes: Vec::new(),
+        peak_bytes: None,
+        steady_bytes: None,
+    };
+
+    // Decode images ONCE, outside the timed region — same rationale as ASR:
+    // the comparison measures inference, not our PNG reader.
+    let mut decoded = Vec::new();
+    for clip in holdout {
+        match ffai_media::load_image(&manifest.clip_path(clip)) {
+            Ok(image) => decoded.push((*clip, image)),
+            Err(e) => summary.notes.push(format!("{}: {e}", clip.id)),
+        }
+    }
+    if decoded.is_empty() {
+        summary
+            .notes
+            .push("no holdout image could be decoded — engine run not attempted".to_string());
+        return Ok(summary);
+    }
+
+    // Warm-up pass, untimed, load recorded — identical contract to ASR.
+    if let Some((_, image)) = decoded.first() {
+        let t0 = std::time::Instant::now();
+        if let Err(e) = ocr.recognize(image, &opts) {
+            summary.notes.push(format!("warm-up failed: {e}"));
+        }
+        summary.load_secs = Some(t0.elapsed().as_secs_f64());
+    }
+
+    // Sample OUR resident memory the same way the reference tree is sampled
+    // (same discipline as `run_engine`): steady = median, peak beside it.
+    let sampling = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let our_samples = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let sampler = {
+        let (sampling, out) = (sampling.clone(), our_samples.clone());
+        std::thread::spawn(move || {
+            while sampling.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(b) = crate::footprint::current_self() {
+                    if let Ok(mut v) = out.lock() {
+                        v.push(b.0);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        })
+    };
+
+    let mut texts: Vec<(String, String)> = Vec::new();
+    let mut first_error = None;
+    let stats = best_of_n(runs, || {
+        texts.clear();
+        for (clip, image) in &decoded {
+            match ocr.recognize(image, &opts) {
+                Ok(out) => texts.push((clip.id.clone(), out.text())),
+                Err(e) => {
+                    first_error.get_or_insert(format!("{}: {e}", clip.id));
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    });
+
+    sampling.store(false, std::sync::atomic::Ordering::Relaxed);
+    sampler.join().ok();
+    summary.steady_bytes = our_samples.lock().ok().and_then(|mut v| {
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_unstable();
+        Some(v[v.len() / 2])
+    });
+    summary.peak_bytes = crate::footprint::peak_self().map(|p| p.0);
+    // The pre-decoded image buffers are the harness's choice, not the
+    // engine's — same asymmetry note as ASR, recorded so the number reads
+    // honestly.
+    let decoded_bytes: u64 = decoded.iter().map(|(_, i)| i.data.len() as u64).sum();
+    if summary.peak_bytes.is_some() && decoded_bytes > 0 {
+        summary.notes.push(format!(
+            "peak includes {:.1} MiB of pre-decoded images held by the harness",
+            decoded_bytes as f64 / (1024.0 * 1024.0)
+        ));
+    }
+
+    match stats {
+        Ok(stats) => {
+            summary.clips_ok = texts.len();
+            summary.wall_secs = Some(stats.best_secs);
+            summary.rtf_warm = Some(real_time_factor(pages, stats.best_secs));
+            summary.rtf_e2e = Some(real_time_factor(
+                pages,
+                stats.best_secs + summary.load_secs.unwrap_or(0.0),
+            ));
+            let (mut wers, mut cers) = (Vec::new(), Vec::new());
+            for (id, text) in &texts {
+                if let Some(clip) = holdout.iter().find(|c| &c.id == id) {
+                    if let Some(truth) = manifest.ground_truth(clip)? {
+                        wers.push(wer_with(&truth, text, Mode::Ocr));
+                        cers.push(cer_with(&truth, text, Mode::Ocr));
+                    }
+                }
+            }
+            summary.wer = mean(&wers);
+            summary.cer = mean(&cers);
+        }
+        Err(e) => summary.notes.push(first_error.unwrap_or_else(|| e.to_string())),
+    }
+    Ok(summary)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_reference(
     spec: &ReferenceSpec,
     manifest: &Manifest,
@@ -131,6 +396,12 @@ fn run_reference(
     paths: &[PathBuf],
     media_secs: f64,
     runs: usize,
+    mode: Mode,
+    // When set (e.g. `Some("page")`), per-item latency percentiles from the
+    // adapter's own timings are recorded as a note — the LIVE-relevant view
+    // of the same run, since a streaming loop experiences the per-frame
+    // distribution, not the corpus mean.
+    per_item_unit: Option<&str>,
 ) -> Result<RunSummary> {
     let mut summary = RunSummary {
         name: spec.name.clone(),
@@ -189,8 +460,8 @@ fn run_reference(
             Some(hypothesis) => {
                 summary.clips_ok += 1;
                 if let Some(truth) = manifest.ground_truth(clip)? {
-                    wers.push(wer(&truth, hypothesis));
-                    cers.push(cer(&truth, hypothesis));
+                    wers.push(wer_with(&truth, hypothesis, mode));
+                    cers.push(cer_with(&truth, hypothesis, mode));
                 }
             }
             None => summary.notes.push(format!("{}: no result returned", clip.id)),
@@ -199,6 +470,20 @@ fn run_reference(
 
     summary.wer = mean(&wers);
     summary.cer = mean(&cers);
+
+    if let Some(unit) = per_item_unit {
+        let mut times: Vec<f64> = batch.clips.iter().filter_map(|c| c.transcribe_secs).collect();
+        if !times.is_empty() {
+            times.sort_by(|a, b| a.total_cmp(b));
+            let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
+            summary.notes.push(format!(
+                "per-{unit} latency p50 {:.0} ms / p95 {:.0} ms over {} {unit}s (adapter-timed, warm)",
+                pct(0.50) * 1000.0,
+                pct(0.95) * 1000.0,
+                times.len()
+            ));
+        }
+    }
     summary.load_secs = batch.load_secs;
     summary.wall_secs = Some(stats.best_secs);
     summary.rtf_e2e = Some(real_time_factor(media_secs, stats.best_secs));
@@ -327,8 +612,8 @@ fn run_engine(
                 let clip = holdout.iter().find(|c| &c.id == id);
                 if let Some(clip) = clip {
                     if let Some(truth) = manifest.ground_truth(clip)? {
-                        wers.push(wer(&truth, text));
-                        cers.push(cer(&truth, text));
+                        wers.push(wer_with(&truth, text, Mode::English));
+                        cers.push(cer_with(&truth, text, Mode::English));
                     }
                 }
             }
@@ -374,7 +659,20 @@ fn run_engine(
     Ok(summary)
 }
 
-fn fill_gates(gates: &mut GateReport, engine: Option<&RunSummary>, references: &[RunSummary]) {
+pub(crate) fn fill_gates(
+    gates: &mut GateReport,
+    engine: Option<&RunSummary>,
+    references: &[RunSummary],
+    quality: QualityMetric,
+) {
+    let metric_of = |r: &RunSummary| match quality {
+        QualityMetric::Wer => r.wer,
+        QualityMetric::Cer => r.cer,
+    };
+    let metric_label = match quality {
+        QualityMetric::Wer => "WER",
+        QualityMetric::Cer => "CER",
+    };
     let Some(eng) = engine else {
         for kind in GateKind::ALL {
             gates.set(GateResult::skipped(kind, "baseline-only run (no engine)"));
@@ -418,12 +716,12 @@ fn fill_gates(gates: &mut GateReport, engine: Option<&RunSummary>, references: &
     let matched: Vec<(&str, f64)> = references
         .iter()
         .filter(|r| engine_key.is_some() && r.config.get(DECODE_KEY) == engine_key)
-        .filter_map(|r| r.wer.map(|w| (r.name.as_str(), w)))
+        .filter_map(|r| metric_of(r).map(|w| (r.name.as_str(), w)))
         .collect();
     let best_matched = matched.iter().copied().min_by(|a, b| a.1.total_cmp(&b.1));
     let best_any = references
         .iter()
-        .filter_map(|r| r.wer.map(|w| (r.name.as_str(), w)))
+        .filter_map(|r| metric_of(r).map(|w| (r.name.as_str(), w)))
         .min_by(|a, b| a.1.total_cmp(&b.1));
 
     // Context, never a verdict: where the engine sits against the strongest
@@ -433,22 +731,23 @@ fn fill_gates(gates: &mut GateReport, engine: Option<&RunSummary>, references: &
         None => String::new(),
     };
 
-    gates.set(match (eng.wer, best_matched) {
+    gates.set(match (metric_of(eng), best_matched) {
         (Some(ew), Some((rname, rw))) => GateResult {
             kind: GateKind::Quality,
-            outcome: if ew <= rw * QUALITY_PARITY_BAND {
+            outcome: if ew <= rw * QUALITY_PARITY_BAND || ew <= rw + QUALITY_ABS_FLOOR {
                 GateOutcome::Pass
             } else {
                 GateOutcome::Fail
             },
             metric: Some(ew),
             detail: format!(
-                "engine WER {:.2}% vs best matched reference {rname} {:.2}% \
-                 ({} config, band +{:.0}% relative){open}",
+                "engine {metric_label} {:.2}% vs best matched reference {rname} {:.2}% \
+                 ({} config, band +{:.0}% relative or +{:.2} pp absolute){open}",
                 ew * 100.0,
                 rw * 100.0,
                 engine_key.map(String::as_str).unwrap_or("?"),
-                QUALITY_PARITY_BAND * 100.0 - 100.0
+                QUALITY_PARITY_BAND * 100.0 - 100.0,
+                QUALITY_ABS_FLOOR * 100.0
             ),
         },
         // No comparable reference is a SKIP, never a pass. Falling back to the
@@ -457,7 +756,7 @@ fn fill_gates(gates: &mut GateReport, engine: Option<&RunSummary>, references: &
         (Some(ew), None) => GateResult::skipped(
             GateKind::Quality,
             format!(
-                "engine WER {:.2}% but no reference declares its configuration ({}) — \
+                "engine {metric_label} {:.2}% but no reference declares its configuration ({}) — \
                  declare one in corpora/references.toml{open}",
                 ew * 100.0,
                 engine_key.map(String::as_str).unwrap_or("unknown")
@@ -569,31 +868,44 @@ fn mean(xs: &[f64]) -> Option<f64> {
 
 /// Render a bench record as a human table (the CLI's output).
 pub fn render(record: &BenchRecord) -> String {
+    // The media unit and rate labels are task-scoped: ASR media is seconds of
+    // audio and the rate is ×realtime; OCR media is pages and the rate is
+    // pages/second. Same ledger fields either way (see `run_ocr`).
+    let ocr = record.task == "ocr";
+    let media = record
+        .engine
+        .as_ref()
+        .and_then(|e| e.media_secs)
+        .or_else(|| record.references.first().and_then(|r| r.media_secs))
+        .unwrap_or(0.0);
     let mut out = String::new();
     out.push_str(&format!(
-        "bench {} · corpus {} ({}) · {:.1}s audio\n\n",
+        "bench {} · corpus {} ({}) · {}\n\n",
         record.id,
         record.corpus,
         &record.corpus_manifest_hash[..12.min(record.corpus_manifest_hash.len())],
-        record
-            .engine
-            .as_ref()
-            .and_then(|e| e.media_secs)
-            .or_else(|| record.references.first().and_then(|r| r.media_secs))
-            .unwrap_or(0.0),
+        if ocr { format!("{media:.0} pages") } else { format!("{media:.1}s audio") },
     ));
     out.push_str(&format!(
-        "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>7}\n",
-        "IMPLEMENTATION", "WER%", "CER%", "xRT_WARM", "xRT_E2E", "LOAD_S", "CLIPS"
+        "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
+        "IMPLEMENTATION",
+        "WER%",
+        "CER%",
+        if ocr { "PG/S_WARM" } else { "xRT_WARM" },
+        if ocr { "PG/S_E2E" } else { "xRT_E2E" },
+        "LOAD_S",
+        "PEAK_MiB",
+        "CLIPS"
     ));
+    let rate = |r: f64| if ocr { format!("{r:.2}") } else { format!("{r:.1}x") };
     let mut row = |s: &RunSummary, marker: &str| {
         out.push_str(&format!(
             "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
             format!("{marker}{}", s.name),
             s.wer.map(|w| format!("{:.2}", w * 100.0)).unwrap_or_else(|| "-".into()),
             s.cer.map(|c| format!("{:.2}", c * 100.0)).unwrap_or_else(|| "-".into()),
-            s.rtf_warm.map(|r| format!("{r:.1}x")).unwrap_or_else(|| "-".into()),
-            s.rtf_e2e.map(|r| format!("{r:.1}x")).unwrap_or_else(|| "-".into()),
+            s.rtf_warm.map(&rate).unwrap_or_else(|| "-".into()),
+            s.rtf_e2e.map(&rate).unwrap_or_else(|| "-".into()),
             s.load_secs.map(|l| format!("{l:.2}")).unwrap_or_else(|| "-".into()),
             s.peak_bytes
                 .map(|b| format!("{:.0}", b as f64 / (1024.0 * 1024.0)))
@@ -789,7 +1101,7 @@ mod gate_split_tests {
             summary("whisper-cpp-tiny-greedy", 0.0758, Some("tiny.en/greedy")),
         ];
         let mut gates = GateReport::new();
-        fill_gates(&mut gates, Some(&engine(0.0679)), &refs);
+        fill_gates(&mut gates, Some(&engine(0.0679)), &refs, QualityMetric::Wer);
         let q = gates.get(GateKind::Quality).expect("quality gate set");
         assert_eq!(q.outcome, GateOutcome::Pass, "{}", q.detail);
         assert!(q.detail.contains("whisper-cpp-tiny-greedy"), "{}", q.detail);
@@ -802,7 +1114,7 @@ mod gate_split_tests {
             summary("whisper-cpp-tiny-greedy", 0.0758, Some("tiny.en/greedy")),
         ];
         let mut gates = GateReport::new();
-        fill_gates(&mut gates, Some(&engine(0.0679)), &refs);
+        fill_gates(&mut gates, Some(&engine(0.0679)), &refs, QualityMetric::Wer);
         let q = gates.get(GateKind::Quality).expect("set");
         assert!(q.detail.contains("open field"), "{}", q.detail);
         assert!(q.detail.contains("openai-whisper-base"), "{}", q.detail);
@@ -813,7 +1125,7 @@ mod gate_split_tests {
         // The gate must retain its teeth against comparable implementations.
         let refs = vec![summary("whisper-cpp-tiny-greedy", 0.0600, Some("tiny.en/greedy"))];
         let mut gates = GateReport::new();
-        fill_gates(&mut gates, Some(&engine(0.0900)), &refs);
+        fill_gates(&mut gates, Some(&engine(0.0900)), &refs, QualityMetric::Wer);
         assert_eq!(gates.get(GateKind::Quality).expect("set").outcome, GateOutcome::Fail);
     }
 
@@ -823,7 +1135,7 @@ mod gate_split_tests {
         // field, which would restore the defect.
         let refs = vec![summary("openai-whisper-base", 0.0596, Some("base.en/beam5"))];
         let mut gates = GateReport::new();
-        fill_gates(&mut gates, Some(&engine(0.0679)), &refs);
+        fill_gates(&mut gates, Some(&engine(0.0679)), &refs, QualityMetric::Wer);
         let q = gates.get(GateKind::Quality).expect("set");
         assert_eq!(q.outcome, GateOutcome::Skipped, "{}", q.detail);
         assert!(!gates.all_passed());

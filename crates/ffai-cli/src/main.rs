@@ -93,8 +93,10 @@ enum Cmd {
         #[arg(long)]
         voice: Option<String>,
     },
-    /// Recognize text in an image (Carmenta)
+    /// Recognize text in an image, or stream a frame sequence (Carmenta)
     Ocr {
+        /// An image file — or, with --live, a directory of frames (sorted by
+        /// filename). Video containers arrive with the rff frame iterator.
         #[arg(short, long)]
         input: PathBuf,
         #[arg(long)]
@@ -102,6 +104,24 @@ enum Cmd {
         /// Language hints, repeatable
         #[arg(long)]
         language: Vec<String>,
+        /// LIVE mode: treat the input as a frame sequence and emit a timed
+        /// text track (mission plan §4.1)
+        #[arg(long)]
+        live: bool,
+        /// Frame rate of the input sequence (LIVE timing)
+        #[arg(long, default_value_t = 3.0)]
+        fps: f64,
+        /// Change-gate: fraction of pixels that must move > 8 grey levels
+        /// for a frame to count as changed (below it, the previous result is
+        /// reused at zero model cost)
+        #[arg(long, default_value_t = 0.0005)]
+        change_fraction: f32,
+        /// Process every Nth frame
+        #[arg(long, default_value_t = 1)]
+        sample_every: usize,
+        /// Output for LIVE mode; `.srt`/`.vtt` select the format
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Caption / describe an image (Argus)
     Caption {
@@ -115,7 +135,7 @@ enum Cmd {
     },
     /// Benchmark an engine against world standards on a pinned corpus
     Bench {
-        /// Task to bench (Phase 0: asr)
+        /// Task to bench: asr or ocr (tts/vlm follow their engines)
         task: String,
         /// Corpus manifest (corpora/*.toml)
         #[arg(long)]
@@ -300,11 +320,58 @@ fn main() -> Result<()> {
             ffai_media::save_wav(&output, &audio)?;
             println!("wrote {}", output.display());
         }
-        Cmd::Ocr { input, engine, language } => {
-            let image = ffai_media::load_image(&input)?;
+        Cmd::Ocr { input, engine, language, live, fps, change_fraction, sample_every, output } => {
             let opts = OcrOptions { languages: language };
-            let out = reg.ocr(engine.as_deref())?.recognize(&image, &opts)?;
-            println!("{}", out.text());
+            let eng = reg.ocr(engine.as_deref())?;
+            if live {
+                if fps <= 0.0 {
+                    anyhow::bail!("--fps must be positive");
+                }
+                let mut frames: Vec<PathBuf> = std::fs::read_dir(&input)
+                    .with_context(|| format!("reading frame dir {}", input.display()))?
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
+                    .collect();
+                frames.sort();
+                if frames.is_empty() {
+                    anyhow::bail!("no .png frames in {}", input.display());
+                }
+                let cfg = ffai_carmenta::live::LiveConfig { change_fraction, sample_every, ..Default::default() };
+                let mut session = ffai_carmenta::live::LiveSession::new(eng.as_ref(), opts, cfg);
+                for (i, frame) in frames.iter().enumerate() {
+                    let img = ffai_media::load_image(frame)?;
+                    session.push_frame(&img, i as f64 / fps)?;
+                }
+                let n = frames.len();
+                let (segments, stats) = session.finish(n as f64 / fps);
+                eprintln!(
+                    "{n} frames: {} OCR calls, {} change-gated, {} sampled out; \
+                     p50 {:.0} ms / p95 {:.0} ms per call",
+                    stats.ocr_calls,
+                    stats.gated,
+                    stats.sampled_out,
+                    stats.percentile(0.50).unwrap_or(0.0) * 1000.0,
+                    stats.percentile(0.95).unwrap_or(0.0) * 1000.0,
+                );
+                let body = match output.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                    Some("vtt") => ffai_carmenta::live::to_vtt(&segments),
+                    _ => ffai_carmenta::live::to_srt(&segments),
+                };
+                match output {
+                    Some(path) => {
+                        std::fs::write(&path, body)?;
+                        println!("wrote {}", path.display());
+                    }
+                    None => print!("{body}"),
+                }
+            } else {
+                let image = ffai_media::load_image(&input)?;
+                let out = eng.recognize(&image, &opts)?;
+                println!("{}", out.text());
+            }
+            if ffai_carmenta::profile::is_enabled() {
+                eprint!("{}", ffai_carmenta::profile::profile().report());
+            }
         }
         Cmd::Caption { input, prompt, engine } => {
             let image = ffai_media::load_image(&input)?;
@@ -313,15 +380,18 @@ fn main() -> Result<()> {
             println!("{caption}");
         }
         Cmd::Bench { task, corpus, refs, engine, only, baseline_only, runs, ledger } => {
-            if Task::from_str(&task).map_err(anyhow::Error::msg)? != Task::Asr {
+            let task = Task::from_str(&task).map_err(anyhow::Error::msg)?;
+            if !matches!(task, Task::Asr | Task::Ocr | Task::Tts) {
                 anyhow::bail!(
-                    "`ffai bench {task}` is not wired yet — asr is the first bench vertical; \
-                     tts/ocr/vlm follow their engines (see ROADMAP.md)"
+                    "`ffai bench {task}` is not wired yet — asr, ocr and tts are the live bench \
+                     verticals; vlm follows its engine (see ROADMAP.md)"
                 );
             }
+            let task_name = task.to_string();
             let references: Vec<_> = if refs.exists() {
-                let selected: Vec<_> = ffai_bench::reference::ReferenceFile::load(&refs)?
-                    .for_task("asr")
+                let file = ffai_bench::reference::ReferenceFile::load(&refs)?;
+                let mut selected: Vec<_> = file
+                    .for_task(&task_name)
                     .filter(|r| only.is_empty() || only.contains(&r.name))
                     .cloned()
                     .collect();
@@ -329,6 +399,11 @@ fn main() -> Result<()> {
                     if !selected.iter().any(|r| &r.name == name) {
                         anyhow::bail!("--only {name}: no such reference in {}", refs.display());
                     }
+                }
+                // The TTS round-trip judge is harness infrastructure, not a
+                // compared implementation — `--only` never filters it out.
+                if task == Task::Tts {
+                    selected.extend(file.for_task("tts-judge").cloned());
                 }
                 selected
             } else {
@@ -346,7 +421,12 @@ fn main() -> Result<()> {
                 runs,
                 ledger: ledger.clone(),
             };
-            let record = ffai_bench::runner::run_asr(&reg, &cfg)?;
+            let record = match task {
+                Task::Asr => ffai_bench::runner::run_asr(&reg, &cfg)?,
+                Task::Ocr => ffai_bench::runner::run_ocr(&reg, &cfg)?,
+                Task::Tts => ffai_bench::tts::run_tts(&reg, &cfg)?,
+                _ => unreachable!("guarded above"),
+            };
             print!("{}", ffai_bench::runner::render(&record));
             println!("appended to {}", ledger.display());
         }

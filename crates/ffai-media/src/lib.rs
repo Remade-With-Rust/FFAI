@@ -79,13 +79,49 @@ pub fn save_wav(path: &Path, audio: &AudioBuffer) -> Result<()> {
     Ok(())
 }
 
-/// Decode a still image. Pending the rff image decoders (PNG/JPEG/WebP/…).
+/// Decode a still image. PNG today (Carmenta M-C1); JPEG/WebP follow.
+///
+/// Backend note, honestly: this uses the pure-Rust `png` crate as an
+/// interim. Principle 7 routes codec work through remade_ffmpeg_rs, but
+/// rff's PNG decoder (`rff-codec-png`) is not yet published and is coupled
+/// to rff's codec registry; when it publishes, the backend swaps behind this
+/// unchanged signature. Pure-Rust either way — the promise that cannot wait
+/// is Principle 1, and it doesn't.
 pub fn load_image(path: &Path) -> Result<ImageBuffer> {
-    Err(Error::Media(format!(
-        "image decode for `{}` is not wired yet — lands with the remade_ffmpeg_rs \
-         image decoders (Phase 3, ahead of Carmenta OCR going live)",
-        path.display()
-    )))
+    use ffai_core::types::PixelFormat;
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+    if ext != "png" {
+        return Err(Error::Media(format!(
+            "`.{ext}` decode is not wired yet — PNG is the Carmenta M-C1 format; JPEG/WebP \
+             arrive with the rff image decoders. Convert with `ffmpeg -i in.{ext} out.png`"
+        )));
+    }
+    let file = std::fs::File::open(path).map_err(|e| Error::Media(format!("open failed: {e}")))?;
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut reader = decoder.read_info().map_err(|e| Error::Media(format!("PNG header: {e}")))?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).map_err(|e| Error::Media(format!("PNG decode: {e}")))?;
+    buf.truncate(info.buffer_size());
+
+    // 16-bit depths and palettes are expanded by the png crate only with the
+    // right transformations; keep v1 strict and honest about what it read.
+    if info.bit_depth != png::BitDepth::Eight {
+        return Err(Error::Media(format!("PNG bit depth {:?} unsupported (8-bit only for now)", info.bit_depth)));
+    }
+    let format = match info.color_type {
+        png::ColorType::Grayscale => PixelFormat::Gray8,
+        png::ColorType::Rgb => PixelFormat::Rgb8,
+        png::ColorType::Rgba => PixelFormat::Rgba8,
+        png::ColorType::GrayscaleAlpha => {
+            // Drop alpha: OCR reads luminance.
+            buf = buf.chunks_exact(2).map(|p| p[0]).collect();
+            PixelFormat::Gray8
+        }
+        png::ColorType::Indexed => {
+            return Err(Error::Media("indexed PNG unsupported (expand the palette first)".into()))
+        }
+    };
+    Ok(ImageBuffer { width: info.width, height: info.height, format, data: buf })
 }
 
 /// Sample frames from a video at `fps` frames/second (for Argus video

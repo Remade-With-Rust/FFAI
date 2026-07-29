@@ -54,9 +54,15 @@ corpora (Argus).
 
 ## Phase 3 — Carmenta OCR
 
+> Carmenta now has a dedicated mission plan with per-milestone exit gates:
+> [docs/carmenta-mission-plan.md](docs/carmenta-mission-plan.md). Four
+> functions over one det+rec core — LIVE, DOCUMENT, LONG, FORMULA — with
+> LIVE first, each benchmarked against its non-Rust world standard
+> (Tesseract as the C++ bar).
+
 - Detection → recognition pipeline on candle.
 - `unlimited-ocr` (document/layout tier) and `easy-ocr` (CRAFT+CRNN
-  scene-text tier) as user-selectable engines.
+  scene-text tier) as user-selectable engines (names reconciled at M-C1).
 - Evaluate pure-Rust `ocrs` as a zero-setup baseline engine.
 - rff image decoders (PNG/JPEG/WebP) land here.
 - Oracle gate: CER/WER on public ground-truth sets vs EasyOCR/Tesseract.

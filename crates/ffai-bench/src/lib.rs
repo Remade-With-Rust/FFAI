@@ -36,5 +36,7 @@ pub mod ledger;
 pub mod metrics;
 pub mod normalize;
 pub mod reference;
+pub mod resample;
 pub mod runner;
 pub mod speed;
+pub mod tts;

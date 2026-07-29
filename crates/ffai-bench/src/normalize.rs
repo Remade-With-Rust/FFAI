@@ -47,6 +47,16 @@ pub enum Mode {
     /// Whisper's `EnglishTextNormalizer`: the default for English corpora.
     #[default]
     English,
+    /// OCR scoring: whitespace runs (including line breaks) collapse to one
+    /// space, everything else is preserved.
+    ///
+    /// Deliberately NOT the ASR normalizer: reading case, punctuation, and
+    /// digits correctly is OCR's job, so folding them away would score the
+    /// task's hardest parts as free. Whitespace is collapsed because engines
+    /// legitimately disagree about line-break placement, and the corpus keeps
+    /// reading order unambiguous (single-column, top-to-bottom) so a flat
+    /// comparison is fair.
+    Ocr,
 }
 
 /// Normalize `text` under `mode`.
@@ -55,6 +65,7 @@ pub fn normalize(text: &str, mode: Mode) -> String {
         Mode::None => text.to_string(),
         Mode::Basic => basic(text),
         Mode::English => english(text),
+        Mode::Ocr => collapse_whitespace(text),
     }
 }
 
