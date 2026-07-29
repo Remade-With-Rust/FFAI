@@ -17,9 +17,9 @@ fn main() {
     clips.sort_by(|a, b| a.id.cmp(&b.id));
     let frames: Vec<_> = clips.iter().map(|c| ffai_media::load_image(&manifest.clip_path(c)).unwrap()).collect();
 
-    let engine = ffai_carmenta::engine::CraftCrnn::new();
+    let engine = std::sync::Arc::new(ffai_carmenta::engine::CraftCrnn::new());
     engine.recognize(&frames[0], &OcrOptions::default()).unwrap();
-    let mut session = LiveSession::new(&engine, OcrOptions::default(), LiveConfig { auto_roi: true, ..Default::default() });
+    let mut session = LiveSession::new(engine, OcrOptions::default(), LiveConfig { auto_roi: true, ..Default::default() });
 
     let t0 = std::time::Instant::now();
     let mut samples: Vec<(f64, u64)> = Vec::new();

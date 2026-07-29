@@ -137,6 +137,12 @@ enum Cmd {
         /// Output for LIVE mode; `.srt`/`.vtt` select the format
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Watch the input directory in REAL TIME: process frames as any
+        /// capture tool writes them (OBS, `ffmpeg -f gdigrab`, ...); stop
+        /// after this many seconds of no new frames. The v1 live source —
+        /// rff video ingest slots in behind ffai-media later.
+        #[arg(long)]
+        watch: Option<f64>,
     },
     /// Caption / describe an image (Argus)
     Caption {
@@ -352,30 +358,58 @@ fn main() -> Result<()> {
             ffai_media::save_wav(&output, &audio)?;
             println!("wrote {}", output.display());
         }
-        Cmd::Ocr { input, engine, language, live, fps, change_fraction, sample_every, output } => {
+        Cmd::Ocr { input, engine, language, live, fps, change_fraction, sample_every, output, watch } => {
             let opts = OcrOptions { languages: language };
             let eng = reg.ocr(engine.as_deref())?;
             if live {
                 if fps <= 0.0 {
                     anyhow::bail!("--fps must be positive");
                 }
-                let mut frames: Vec<PathBuf> = std::fs::read_dir(&input)
-                    .with_context(|| format!("reading frame dir {}", input.display()))?
-                    .filter_map(|e| e.ok().map(|e| e.path()))
-                    .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
-                    .collect();
-                frames.sort();
-                if frames.is_empty() {
+                let list_frames = |seen: usize| -> Result<Vec<PathBuf>> {
+                    let mut frames: Vec<PathBuf> = std::fs::read_dir(&input)
+                        .with_context(|| format!("reading frame dir {}", input.display()))?
+                        .filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
+                        .collect();
+                    frames.sort();
+                    Ok(frames.split_off(seen.min(frames.len())))
+                };
+                let cfg = ffai_carmenta::live::LiveConfig { change_fraction, sample_every, ..Default::default() };
+                let mut session = ffai_carmenta::live::LiveSession::new(eng.clone(), opts, cfg);
+                let mut n = 0usize;
+                let started = std::time::Instant::now();
+                let mut last_new = std::time::Instant::now();
+                loop {
+                    let fresh = list_frames(n)?;
+                    if fresh.is_empty() {
+                        match watch {
+                            // Watch mode: wait for the capture tool, stop
+                            // after `idle` seconds without new frames.
+                            Some(idle) if last_new.elapsed().as_secs_f64() < idle => {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                continue;
+                            }
+                            _ => break,
+                        }
+                    }
+                    for frame in &fresh {
+                        let img = ffai_media::load_image(frame)?;
+                        // Watch mode timestamps from the wall clock (frames
+                        // arrive in real time); batch mode from --fps.
+                        let t = if watch.is_some() { started.elapsed().as_secs_f64() } else { n as f64 / fps };
+                        session.push_frame(&img, t)?;
+                        n += 1;
+                    }
+                    last_new = std::time::Instant::now();
+                    if n > 0 && watch.is_none() && list_frames(n)?.is_empty() {
+                        break;
+                    }
+                }
+                if n == 0 {
                     anyhow::bail!("no .png frames in {}", input.display());
                 }
-                let cfg = ffai_carmenta::live::LiveConfig { change_fraction, sample_every, ..Default::default() };
-                let mut session = ffai_carmenta::live::LiveSession::new(eng.as_ref(), opts, cfg);
-                for (i, frame) in frames.iter().enumerate() {
-                    let img = ffai_media::load_image(frame)?;
-                    session.push_frame(&img, i as f64 / fps)?;
-                }
-                let n = frames.len();
-                let (segments, stats) = session.finish(n as f64 / fps);
+                let end_t = if watch.is_some() { started.elapsed().as_secs_f64() } else { n as f64 / fps };
+                let (segments, stats) = session.finish(end_t);
                 eprintln!(
                     "{n} frames: {} OCR calls, {} change-gated, {} sampled out; \
                      p50 {:.0} ms / p95 {:.0} ms per call",

@@ -3,7 +3,7 @@
 //! crop → recognize — with each stage independently oracle-tested.
 
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
@@ -43,7 +43,7 @@ struct Models {
 pub struct CraftCrnn {
     /// Lazy: weights load on first `recognize`, matching Mercury's contract
     /// (the bench harness warms and records this separately).
-    models: OnceLock<std::result::Result<Mutex<Models>, String>>,
+    models: OnceLock<std::result::Result<Models, String>>,
     manifest_dir: std::path::PathBuf,
     rec: RecStage,
 }
@@ -66,11 +66,11 @@ impl CraftCrnn {
         CraftCrnn { models: OnceLock::new(), manifest_dir: dir.to_path_buf(), rec: RecStage::Crnn }
     }
 
-    fn models(&self) -> Result<&Mutex<Models>> {
+    fn models(&self) -> Result<&Models> {
         let rec = self.rec;
         let loaded = self
             .models
-            .get_or_init(|| load_models(&self.manifest_dir, rec).map(Mutex::new).map_err(|e| e.to_string()));
+            .get_or_init(|| load_models(&self.manifest_dir, rec).map_err(|e| e.to_string()));
         match loaded {
             Ok(m) => Ok(m),
             Err(e) => Err(Error::Model(e.clone())),
@@ -138,8 +138,7 @@ impl OcrEngine for CraftCrnn {
     }
 
     fn recognize(&self, img: &ImageBuffer, _opts: &OcrOptions) -> Result<OcrOutput> {
-        let models = self.models()?;
-        let m = models.lock().map_err(|_| Error::Other("model lock poisoned".into()))?;
+        let m = self.models()?;
 
         let (w, h) = (img.width as usize, img.height as usize);
 
@@ -167,93 +166,107 @@ impl OcrEngine for CraftCrnn {
             },
         )?;
 
-        // ---- recognize, line by line ----
+        // ---- recognize, line by line, ACROSS CORES ----
+        // Lines are independent; recognition was the serial half of the
+        // frame after detection banding. Models hold only candle tensors
+        // (Send+Sync), so rayon fans lines out with zero locking; profile
+        // stages accumulate atomically.
         // Map coords are at (input/2); input coords are original * scale.
+        use rayon::prelude::*;
         let to_img = |v: usize| (v as f32 * 2.0 / scale).round();
-        let mut out_lines = Vec::new();
-        for line in &lines {
-            let lb = boxes::line_bbox(line);
-            let line_h = to_img(lb.y1) - to_img(lb.y0);
-            let (px, py) = (line_h * PAD_X, line_h * PAD_Y);
-            let x0 = (to_img(lb.x0) - px).max(0.0) as usize;
-            let y0 = (to_img(lb.y0) - py).max(0.0) as usize;
-            let x1 = (to_img(lb.x1) + px) as usize;
-            let y1 = (to_img(lb.y1) + py) as usize;
+        // Parallel across lines ONLY when there are enough to amortize the
+        // pool contention with candle's internal rayon: measured, a 1-line
+        // band strip pays 177 ms/line under par_iter vs 82 ms serial, while
+        // a 7-line frame wins 2.07s -> 1.65s. Threshold 3 splits the cases.
+        let recognize_line = |line: &Vec<boxes::DetBox>| -> Result<Option<OcrLine>> {
+                let lb = boxes::line_bbox(line);
+                let line_h = to_img(lb.y1) - to_img(lb.y0);
+                let (px, py) = (line_h * PAD_X, line_h * PAD_Y);
+                let x0 = (to_img(lb.x0) - px).max(0.0) as usize;
+                let y0 = (to_img(lb.y0) - py).max(0.0) as usize;
+                let x1 = (to_img(lb.x1) + px) as usize;
+                let y1 = (to_img(lb.y1) + py) as usize;
 
-            let (text, confidence) = match self.rec {
-                RecStage::Crnn => {
-                    let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
-                    let crop = match crate::profile::timed(|p| &p.rec_pre, || {
-                        image::crnn_input(&gray, w, h, x0, y0, x1, y1, &m.device)
-                    }) {
-                        Ok(c) => c,
-                        Err(_) => continue, // degenerate box: skip, don't fail the page
-                    };
-                    let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
-                        .map_err(image::candle_err)?;
-                    crate::profile::timed(|p| &p.decode, || ctc_greedy(&logits))
-                        .map_err(image::candle_err)?
-                }
-                RecStage::Parseq => {
-                    // Word-level: recognize each CRAFT box, join with spaces.
-                    let parseq = m.parseq.as_ref().expect("parseq loaded for RecStage::Parseq");
-                    let mut words = Vec::new();
-                    let mut confs = Vec::new();
-                    let lb_map = boxes::line_bbox(line);
-                    let word_boxes = boxes::split_words(&region, &affinity, mw, &lb_map);
-                    for b in word_boxes.iter() {
-                        let bh = to_img(b.y1) - to_img(b.y0);
-                        let (wpx, wpy) = (bh * 0.08, bh * 0.12); // tight: PARSeq is trained on snug scene-text boxes
-                        let bx0 = (to_img(b.x0) - wpx).max(0.0) as usize;
-                        let by0 = (to_img(b.y0) - wpy).max(0.0) as usize;
-                        let bx1 = ((to_img(b.x1) + wpx) as usize).min(w);
-                        let by1 = ((to_img(b.y1) + wpy) as usize).min(h);
-                        if bx1 <= bx0 + 1 || by1 <= by0 + 1 {
-                            continue;
-                        }
-                        let (cw, ch) = (bx1 - bx0, by1 - by0);
-                        let mut crop = vec![0f32; cw * ch];
-                        for y in 0..ch {
-                            crop[y * cw..(y + 1) * cw]
-                                .copy_from_slice(&gray[(by0 + y) * w + bx0..(by0 + y) * w + bx1]);
-                        }
-                        let x = crate::profile::timed(|p| &p.rec_pre, || {
-                            crate::parseq::parseq_input(&crop, cw, ch, &m.device)
-                        })
-                        .map_err(image::candle_err)?;
-                        let (wtext, wconf) =
-                            crate::profile::timed(|p| &p.rec_fwd, || parseq.recognize(&x))
-                                .map_err(image::candle_err)?;
-                        if !wtext.is_empty() {
-                            words.push(wtext);
-                            if let Some(c) = wconf {
-                                confs.push(c);
+                let (text, confidence) = match self.rec {
+                    RecStage::Crnn => {
+                        let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
+                        let crop = match crate::profile::timed(|p| &p.rec_pre, || {
+                            image::crnn_input(&gray, w, h, x0, y0, x1, y1, &m.device)
+                        }) {
+                            Ok(c) => c,
+                            Err(_) => return Ok(None), // degenerate box: skip, not fail
+                        };
+                        let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
+                            .map_err(image::candle_err)?;
+                        crate::profile::timed(|p| &p.decode, || ctc_greedy(&logits))
+                            .map_err(image::candle_err)?
+                    }
+                    RecStage::Parseq => {
+                        // Word-level: recognize each split box, join with spaces.
+                        let parseq = m.parseq.as_ref().expect("parseq loaded for RecStage::Parseq");
+                        let mut words = Vec::new();
+                        let mut confs = Vec::new();
+                        let lb_map = boxes::line_bbox(line);
+                        let word_boxes = boxes::split_words(&region, &affinity, mw, &lb_map);
+                        for b in word_boxes.iter() {
+                            let bh = to_img(b.y1) - to_img(b.y0);
+                            let (wpx, wpy) = (bh * 0.08, bh * 0.12);
+                            let bx0 = (to_img(b.x0) - wpx).max(0.0) as usize;
+                            let by0 = (to_img(b.y0) - wpy).max(0.0) as usize;
+                            let bx1 = ((to_img(b.x1) + wpx) as usize).min(w);
+                            let by1 = ((to_img(b.y1) + wpy) as usize).min(h);
+                            if bx1 <= bx0 + 1 || by1 <= by0 + 1 {
+                                continue;
+                            }
+                            let (cw, ch) = (bx1 - bx0, by1 - by0);
+                            let mut crop = vec![0f32; cw * ch];
+                            for y in 0..ch {
+                                crop[y * cw..(y + 1) * cw]
+                                    .copy_from_slice(&gray[(by0 + y) * w + bx0..(by0 + y) * w + bx1]);
+                            }
+                            let x = crate::profile::timed(|p| &p.rec_pre, || {
+                                crate::parseq::parseq_input(&crop, cw, ch, &m.device)
+                            })
+                            .map_err(image::candle_err)?;
+                            let (wtext, wconf) =
+                                crate::profile::timed(|p| &p.rec_fwd, || parseq.recognize(&x))
+                                    .map_err(image::candle_err)?;
+                            if !wtext.is_empty() {
+                                words.push(wtext);
+                                if let Some(c) = wconf {
+                                    confs.push(c);
+                                }
                             }
                         }
+                        let conf = if confs.is_empty() {
+                            None
+                        } else {
+                            Some(confs.iter().sum::<f32>() / confs.len() as f32)
+                        };
+                        (words.join(" "), conf)
                     }
-                    let conf = if confs.is_empty() {
-                        None
-                    } else {
-                        Some(confs.iter().sum::<f32>() / confs.len() as f32)
-                    };
-                    (words.join(" "), conf)
+                };
+                if text.is_empty() {
+                    return Ok(None);
                 }
-            };
-            if text.is_empty() {
-                continue;
-            }
-            out_lines.push(OcrLine {
-                text,
-                words: Vec::new(), // line-level recognition; word detail is open work
-                bbox: Some(BoundingBox {
-                    x: x0 as f32,
-                    y: y0 as f32,
-                    width: (x1 - x0) as f32,
-                    height: (y1 - y0) as f32,
-                }),
-                confidence,
-            });
-        }
+                Ok(Some(OcrLine {
+                    text,
+                    words: Vec::new(), // line-level recognition; word detail is open work
+                    bbox: Some(BoundingBox {
+                        x: x0 as f32,
+                        y: y0 as f32,
+                        width: (x1 - x0) as f32,
+                        height: (y1 - y0) as f32,
+                    }),
+                    confidence,
+                }))
+        };
+        let results: Vec<Option<OcrLine>> = if lines.len() >= 3 {
+            lines.par_iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
+        } else {
+            lines.iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
+        };
+        let out_lines: Vec<OcrLine> = results.into_iter().flatten().collect();
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.
