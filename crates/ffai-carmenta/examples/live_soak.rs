@@ -6,6 +6,12 @@ use ffai_core::engine::{OcrEngine, OcrOptions};
 
 fn main() {
     let mins: u64 = std::env::var("SOAK_MINS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+    if let Ok(replay) = std::env::var("SOAK_REPLAY") {
+        let v: Vec<f64> = replay.split(',').map(|x| x.parse().unwrap()).collect();
+        let manifest = ffai_bench::corpus::Manifest::load(std::path::Path::new("corpora/carmenta-screencast-v1.toml")).unwrap();
+        append_record(mins, v[0] as usize, v[1], v[2], v[2] <= v[1] * 1.10, &manifest);
+        return;
+    }
     let manifest = ffai_bench::corpus::Manifest::load(std::path::Path::new("corpora/carmenta-screencast-v1.toml")).unwrap();
     let mut clips: Vec<_> = manifest.clips.iter().collect();
     clips.sort_by(|a, b| a.id.cmp(&b.id));
@@ -31,5 +37,44 @@ fn main() {
     let mut last: Vec<u64> = samples.iter().filter(|(t, _)| *t > mins as f64 * 60.0 - window).map(|(_, b)| *b).collect();
     let (f, l) = (med(&mut first) as f64 / 1048576.0, med(&mut last) as f64 / 1048576.0);
     println!("SOAK {} min, {} frames: first-window median {f:.0} MiB, last-window median {l:.0} MiB, ratio {:.3}", mins, i, l / f);
-    println!("verdict: {}", if l <= f * 1.10 { "FLAT (PASS)" } else { "GROWING (FAIL)" });
+    let pass = l <= f * 1.10;
+    println!("verdict: {}", if pass { "FLAT (PASS)" } else { "GROWING (FAIL)" });
+    append_record(mins, i, f, l, pass, &manifest);
+}
+
+/// Ledger append. `SOAK_REPLAY="frames,first_mib,last_mib"` records an
+/// already-completed run's printed numbers without re-soaking — exists so a
+/// measurement whose process exited before this landed still gets its line;
+/// the values must be the printed ones, and the note says replay.
+fn append_record(mins: u64, frames: usize, first: f64, last: f64, pass: bool, manifest: &ffai_bench::corpus::Manifest) {
+    use ffai_bench::gate::{GateKind, GateOutcome, GateReport, GateResult};
+    let mut gates = GateReport::new();
+    gates.set(GateResult {
+        kind: GateKind::Footprint,
+        outcome: if pass { GateOutcome::Pass } else { GateOutcome::Fail },
+        metric: Some(last / first),
+        detail: format!("steady flat over {mins} min: first-window median {first:.0} MiB, last {last:.0} MiB (gate: ratio <= 1.10)"),
+    });
+    for kind in [GateKind::Correctness, GateKind::Quality, GateKind::Speed] {
+        gates.set(GateResult::skipped(kind, "soak measures footprint only; see the LIVE bench record"));
+    }
+    let (id, appended_at) = ffai_bench::ledger::BenchRecord::now_id("ocr");
+    let record = ffai_bench::ledger::BenchRecord {
+        schema: ffai_bench::ledger::LEDGER_SCHEMA,
+        id,
+        task: "ocr".into(),
+        corpus: manifest.name.clone(),
+        corpus_manifest_hash: manifest.manifest_hash(),
+        engine: None,
+        references: Vec::new(),
+        gates,
+        environment: ffai_bench::ledger::Environment::capture(),
+        notes: format!(
+            "M-C2 footprint soak: {mins} min, {frames} frames cycled through LiveSession (auto_roi on, FFAI_DET_SCALE=0.5); {}",
+            if std::env::var("SOAK_REPLAY").is_ok() { "REPLAY of completed run's printed values" } else { "live run" }
+        ),
+        appended_at,
+    };
+    ffai_bench::ledger::append(std::path::Path::new("bench/ledger.jsonl"), &record).expect("ledger");
+    println!("appended to bench/ledger.jsonl");
 }
