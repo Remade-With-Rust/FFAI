@@ -25,6 +25,7 @@ pub mod knobs;
 pub mod mel;
 pub mod model;
 pub mod profile;
+pub mod registry;
 pub mod speaker;
 pub mod text_decoder;
 pub mod tokenizer;

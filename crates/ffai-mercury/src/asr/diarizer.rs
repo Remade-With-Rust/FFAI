@@ -13,6 +13,7 @@ use ffai_core::types::TimedSegment;
 
 use super::diarize::{self, SpeakerTurn, HOP_SECS, WINDOW_SECS};
 use super::fbank::Fbank;
+use super::registry::SpeakerRegistry;
 use super::speaker::{Config, EcapaTdnn};
 
 /// Default manifest name.
@@ -66,14 +67,86 @@ impl Diarizer {
             return Vec::new();
         }
 
+        let (kept, embeddings) = self.embed_windows(samples, &windows);
+        if embeddings.is_empty() {
+            return Vec::new();
+        }
+
+        let labels = diarize::cluster(&embeddings, threshold, max_speakers);
+        diarize::turns_from_labels(&kept, &labels)
+    }
+
+    /// Diarize with identity that persists across calls.
+    ///
+    /// Same pipeline as [`Self::diarize`] up to clustering, then one extra
+    /// step: each in-chunk cluster is reduced to a centroid and matched
+    /// against `registry`, so a voice heard in an earlier call keeps its
+    /// label.
+    ///
+    /// **Clusters are matched, not individual windows.** A cluster centroid
+    /// averages every window that agreed with it, which is far better evidence
+    /// than one 1.5 s window — and the first window of a new voice is exactly
+    /// when the decision is least reliable and, in a registry, most permanent.
+    /// Matching per window would let a single marginal fragment enrol a
+    /// duplicate speaker or, worse, claim an existing one.
+    pub fn diarize_streaming(
+        &self,
+        samples: &[f32],
+        regions: &[TimedSegment<()>],
+        threshold: f32,
+        max_speakers: Option<usize>,
+        registry: &mut SpeakerRegistry,
+    ) -> Vec<SpeakerTurn> {
+        let windows = diarize::subsegment(regions, WINDOW_SECS, HOP_SECS);
+        if windows.is_empty() {
+            return Vec::new();
+        }
+        let (kept, embeddings) = self.embed_windows(samples, &windows);
+        if embeddings.is_empty() {
+            return Vec::new();
+        }
+
+        let local = diarize::cluster(&embeddings, threshold, max_speakers);
+        let n_local = local.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+
+        // Reduce each local cluster to its mean, then resolve that against
+        // the persistent identities.
+        let dim = embeddings[0].len();
+        let mut sums = vec![vec![0.0f32; dim]; n_local];
+        let mut counts = vec![0usize; n_local];
+        for (e, &c) in embeddings.iter().zip(local.iter()) {
+            for (acc, v) in sums[c].iter_mut().zip(e.iter()) {
+                *acc += v;
+            }
+            counts[c] += 1;
+        }
+
+        let global: Vec<usize> = (0..n_local)
+            .map(|c| {
+                let n = counts[c].max(1) as f32;
+                let centroid: Vec<f32> = sums[c].iter().map(|v| v / n).collect();
+                registry.assign(&centroid, counts[c] as f32)
+            })
+            .collect();
+
+        let labels: Vec<usize> = local.iter().map(|&c| global[c]).collect();
+        diarize::turns_from_labels(&kept, &labels)
+    }
+
+    /// Shared front half: window -> features -> embedding, dropping whatever
+    /// fails rather than substituting a zero vector.
+    fn embed_windows(
+        &self,
+        samples: &[f32],
+        windows: &[(f64, f64)],
+    ) -> (Vec<(f64, f64)>, Vec<Vec<f32>>) {
         let sr = self.sample_rate as f64;
-        let mut kept: Vec<(f64, f64)> = Vec::with_capacity(windows.len());
-        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(windows.len());
-        for (start, end) in windows {
+        let mut kept = Vec::with_capacity(windows.len());
+        let mut embeddings = Vec::with_capacity(windows.len());
+        for &(start, end) in windows {
             let a = ((start * sr) as usize).min(samples.len());
             let b = ((end * sr).ceil() as usize).clamp(a, samples.len());
-            let slice = &samples[a..b];
-            let (feats, frames) = self.fbank.compute(slice);
+            let (feats, frames) = self.fbank.compute(&samples[a..b]);
             if frames == 0 {
                 continue;
             }
@@ -85,11 +158,6 @@ impl Diarizer {
                 _ => continue,
             }
         }
-        if embeddings.is_empty() {
-            return Vec::new();
-        }
-
-        let labels = diarize::cluster(&embeddings, threshold, max_speakers);
-        diarize::turns_from_labels(&kept, &labels)
+        (kept, embeddings)
     }
 }

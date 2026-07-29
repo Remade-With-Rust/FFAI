@@ -82,6 +82,23 @@ pub struct AsrOptions {
     pub word_timestamps: bool,
     /// Speaker diarization (WhisperX-style).
     pub diarize: bool,
+    /// Keep speaker identities across calls, so a voice heard in one chunk
+    /// keeps its label in the next.
+    ///
+    /// Off by default, and the default is the batch behaviour every
+    /// diarization system has: labels are arbitrary names for clusters within
+    /// ONE call, and `SPEAKER_00` in two separate calls need not be the same
+    /// person. That is fine for a file and useless for a stream.
+    ///
+    /// With this set, the engine keeps a speaker registry between calls. Call
+    /// `WhisperCandle::reset_speakers()` when a new recording begins — a new
+    /// session is a new set of people, and carrying identities across is
+    /// worse than starting fresh.
+    ///
+    /// Matching is deliberately stricter than in-call clustering: a registry
+    /// merge is permanent, and two people who share a centroid stay merged for
+    /// the rest of the session.
+    pub persist_speakers: bool,
     /// Known speaker count, when the caller has one ("this is an interview,
     /// two people"). Overrides the clustering threshold.
     ///
@@ -138,6 +155,7 @@ impl Default for AsrOptions {
             language: None,
             word_timestamps: false,
             diarize: false,
+            persist_speakers: false,
             max_speakers: None,
             diarize_threshold: 0.80,
             translate: false,

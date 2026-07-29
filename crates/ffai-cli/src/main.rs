@@ -251,6 +251,9 @@ fn main() -> Result<()> {
                 language,
                 word_timestamps,
                 diarize,
+                // A one-shot CLI run has no next call to persist into; the
+                // registry is for embedders processing a stream.
+                persist_speakers: false,
                 max_speakers,
                 diarize_threshold,
                 translate: false,

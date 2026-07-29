@@ -18,6 +18,7 @@ use super::model::LoadedWhisper;
 use super::aligner::{Aligner, DEFAULT_MODEL as ALIGN_MODEL};
 use super::diarize;
 use super::diarizer::{Diarizer, DEFAULT_MODEL as DIARIZE_MODEL};
+use super::registry::SpeakerRegistry;
 use super::text_decoder::Precision;
 use super::vad;
 
@@ -39,6 +40,9 @@ pub struct WhisperCandle {
     /// the other, and lazy so the flag's promise holds: without `--diarize`
     /// the 83 MB speaker model is not fetched, not read, and not resident.
     diarizer: Mutex<Option<std::sync::Arc<Diarizer>>>,
+    /// Speaker identities carried between calls when `persist_speakers` is
+    /// set. Untouched otherwise, so the default path allocates nothing.
+    speakers: Mutex<Option<SpeakerRegistry>>,
     /// Loaded on first `--word-timestamps` call and never before.
     ///
     /// Separate from `state` so the ASR path cannot be blocked behind
@@ -92,6 +96,17 @@ impl WhisperCandle {
         Ok(guard.as_ref().expect("initialized above").clone())
     }
 
+    /// Forget every remembered speaker.
+    ///
+    /// Call this when a new recording starts. A registry that carries
+    /// identities from the last meeting into this one will match the wrong
+    /// people together, and unlike in-call clustering it never reconsiders.
+    pub fn reset_speakers(&self) {
+        if let Ok(mut guard) = self.speakers.lock() {
+            *guard = None;
+        }
+    }
+
     /// Default: `whisper-tiny-en` from the repo's `models/` directory — the
     /// M1 bring-up target, matching the M0 baseline configuration.
     pub fn new() -> Self {
@@ -110,6 +125,7 @@ impl WhisperCandle {
             state: Mutex::new(None),
             aligner: Mutex::new(None),
             diarizer: Mutex::new(None),
+            speakers: Mutex::new(None),
         }
     }
 }
@@ -307,12 +323,28 @@ impl AsrEngine for WhisperCandle {
         // transcript that already succeeded.
         let speakers = if opts.diarize {
             let diarizer = self.diarizer()?;
-            let turns = diarizer.diarize(
-                &mono.samples,
-                &regions,
-                opts.diarize_threshold,
-                opts.max_speakers,
-            );
+            let turns = if opts.persist_speakers {
+                let mut guard = self.speakers.lock().map_err(|_| {
+                    Error::Other("speaker registry lock poisoned by an earlier panic".into())
+                })?;
+                let registry = guard.get_or_insert_with(|| {
+                    SpeakerRegistry::new(opts.diarize_threshold, opts.max_speakers)
+                });
+                diarizer.diarize_streaming(
+                    &mono.samples,
+                    &regions,
+                    opts.diarize_threshold,
+                    opts.max_speakers,
+                    registry,
+                )
+            } else {
+                diarizer.diarize(
+                    &mono.samples,
+                    &regions,
+                    opts.diarize_threshold,
+                    opts.max_speakers,
+                )
+            };
             Some(diarize::labelled_turns(&turns))
         } else {
             None
