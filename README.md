@@ -33,7 +33,8 @@ tensor spine), `ffai-media` (ingest/egress, backed by
 `ffai-models` (weight manifests + cache), `ffai-bench` (the analyzer — see
 below), `ffai-cli` (the `ffai` binary), `ffai-demo` + `demo-ui` (a live
 side-by-side demo — speak into the mic and read Mercury and whisper.cpp
-transcribing the same audio in real time: `cargo run --release -p ffai-demo`).
+transcribing the same audio in real time, with Mercury's speaker labels
+holding steady across chunks: `cargo run --release -p ffai-demo`).
 
 ## The analyzer: `ffai bench`
 
@@ -184,6 +185,7 @@ single gated weight — as flags on the same engine rather than a fork.
 | *(default)* | speech segmentation before transcription | none — energy VAD | silence corpus **8/8 empty** |
 | `--word-timestamps` | per-word times by CTC forced alignment | wav2vec2-base-960h, Apache-2.0 | containment **100 %**, 1105 words |
 | `--diarize` | speaker turns (`SPEAKER_00`…) | ECAPA-TDNN, Apache-2.0 | **DER 4.21 %** |
+| `persist_speakers` | those labels survive the **next call** | — | streaming **DER 5.68 %** |
 
 Segmentation is **on by default for measured speed** — 2.2–4.2× on audio with
 trailing silence at a byte-identical transcript, and an empty result on
@@ -192,6 +194,19 @@ quality win: 38 improved / 38 worsened across 400 clips, a sign test of
 z = 0.00 ([why](docs/whys/vad-quality.md)). The other two stages are opt-in:
 they add models and change the output's shape, and nothing that has not
 earned a default gets one.
+
+**Streaming is a capability, not a mode.** Diarization labels are, by
+convention, arbitrary names for clusters *within one call* — `SPEAKER_00` in
+two separate calls need not be the same person. Fine for a file, useless for a
+live stream, where the same voice is renamed every chunk. Measured on
+conversations fed as 8 s chunks with DER scored over the whole concatenated
+timeline: **53.58 % without persistence, 5.68 % with it.** Registry matching is
+deliberately stricter than in-call clustering, because a registry merge is
+permanent — two people who share a centroid stay merged for the session.
+
+That gap existed because principle 5 says *streaming-first* while diarization
+only worked whole-file. WhisperX has the same gap; WhisperX does not claim
+streaming-first.
 
 **Licences shaped the design, not just the paperwork.** WhisperX's diarization
 depends on pyannote weights that are MIT-licensed *and gated* — permission
