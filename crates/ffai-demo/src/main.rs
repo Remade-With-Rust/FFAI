@@ -182,12 +182,23 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
     // ---- Mercury, in process ----
     let t0 = Instant::now();
     let (mercury_text, mercury_err) = match ffai_media::load_audio(tmp) {
-        // VAD comes on by default now, which is what this demo wanted anyway:
-        // a sliding window over a live microphone is mostly silence, and
-        // without segmentation every silent tick costs a full encoder pass to
-        // produce nothing. One captured session ran 7 chunks for 2 lines.
-        Ok(audio) => match guard.mercury.transcribe(&audio, &AsrOptions::default()) {
-            Ok(t) => (t.text().trim().to_string(), None),
+        // The full Mercury-X layer, live:
+        //
+        //   VAD          on by default — a sliding window over a microphone is
+        //                mostly silence, and without segmentation every silent
+        //                tick costs an encoder pass to produce nothing. One
+        //                captured session ran 7 chunks for 2 lines of text.
+        //   diarize      speaker turns per chunk.
+        //   persist      the label survives into the NEXT chunk. Without it
+        //                each call names its clusters afresh, so the same
+        //                person is SPEAKER_00 one tick and SPEAKER_01 the
+        //                next — measured at 53.58% DER against 5.68% with it.
+        //                That is why diarization was not in this demo before.
+        Ok(audio) => match guard.mercury.transcribe(
+            &audio,
+            &AsrOptions { diarize: true, persist_speakers: true, ..AsrOptions::default() },
+        ) {
+            Ok(t) => (label_speakers(&t), None),
             Err(e) => (String::new(), Some(e.to_string())),
         },
         Err(e) => (String::new(), Some(format!("decode failed: {e}"))),
@@ -255,6 +266,34 @@ fn run_whisper_cpp(bin: &Path, model: &Path, wav: &Path) -> (String, Option<Stri
         ),
         Err(e) => (String::new(), Some(format!("could not run whisper-cli: {e}"))),
     }
+}
+
+/// Prefix each line with whoever said it.
+///
+/// Speaker turns are a separate timeline from segments — one segment can span
+/// a speaker change and one turn can cover several segments — so this matches
+/// by the turn containing the segment's START rather than pretending the two
+/// align. Where a turn cannot be found the text is emitted unlabelled rather
+/// than guessed at.
+fn label_speakers(t: &ffai_core::types::Transcript) -> String {
+    let turns = match &t.speakers {
+        Some(s) if !s.is_empty() => s,
+        // Diarization off, or nothing found: unchanged behaviour.
+        _ => return t.text().trim().to_string(),
+    };
+    let mut out = Vec::new();
+    for seg in &t.segments {
+        let text = seg.value.trim();
+        if text.is_empty() {
+            continue;
+        }
+        match turns.iter().find(|w| seg.start >= w.start - 0.25 && seg.start < w.end + 0.25) {
+            Some(w) => out.push(format!("{}: {text}", w.value)),
+            None => out.push(text.to_string()),
+        }
+    }
+    out.join("
+")
 }
 
 fn json_error(msg: &str) -> String {
