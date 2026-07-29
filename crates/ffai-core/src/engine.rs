@@ -171,11 +171,29 @@ pub struct TtsOptions {
     pub voice: Option<String>,
     /// Playback-rate multiplier, 1.0 = normal.
     pub speed: f32,
+    /// Acoustic variation (VITS prior noise); `None` = the voice's own
+    /// default. 0.0 is fully deterministic audio.
+    pub noise_scale: Option<f32>,
+    /// Duration variation (stochastic duration predictor noise); `None` =
+    /// voice default, 0.0 = deterministic timing.
+    pub noise_w: Option<f32>,
+    /// Seed for all sampled noise. Mercury synthesis is byte-stable per
+    /// (input, options, seed) — a capability the references do not offer.
+    pub seed: u64,
+    /// Silence inserted between sentences of long-form input, in seconds.
+    pub sentence_silence_s: f32,
 }
 
 impl Default for TtsOptions {
     fn default() -> Self {
-        TtsOptions { voice: None, speed: 1.0 }
+        TtsOptions {
+            voice: None,
+            speed: 1.0,
+            noise_scale: None,
+            noise_w: None,
+            seed: 0,
+            sentence_silence_s: 0.2,
+        }
     }
 }
 
@@ -183,6 +201,12 @@ impl Default for TtsOptions {
 pub struct OcrOptions {
     /// Language hints (engine-specific tags); empty = engine default.
     pub languages: Vec<String>,
+    /// The image IS one text line: skip detection, recognize the whole
+    /// frame as a single line (tesseract's `--psm 7`). LIVE's dirty-band
+    /// path sets this when a band's known geometry is a single line —
+    /// detection becomes async maintenance, recognition the only
+    /// synchronous work.
+    pub single_line: bool,
 }
 
 #[derive(Debug, Clone, Default)]

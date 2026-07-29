@@ -359,7 +359,7 @@ fn main() -> Result<()> {
             println!("wrote {}", output.display());
         }
         Cmd::Ocr { input, engine, language, live, fps, change_fraction, sample_every, output, watch } => {
-            let opts = OcrOptions { languages: language };
+            let opts = OcrOptions { languages: language, ..Default::default() };
             let eng = reg.ocr(engine.as_deref())?;
             if live {
                 if fps <= 0.0 {

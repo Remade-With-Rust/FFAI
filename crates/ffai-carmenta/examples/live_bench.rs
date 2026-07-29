@@ -195,9 +195,18 @@ fn main() {
             detail,
         });
     };
-    set(GateKind::Correctness, churn == 0 && parity_break == 0, format!(
-        "churn {churn}/{unchanged_pairs} unchanged pairs; batch parity {parity_break}/{parity_checked} breaks"
-    ));
+    // Batch parity is a HARD gate in plain mode; with auto-ROI it is the
+    // plan's §4.1 explicit opt-in trade (banded output differs structurally
+    // while the CER gate proves text accuracy holds) — reported, not judged.
+    let auto_roi = std::env::var("FFAI_AUTO_ROI").is_ok();
+    set(
+        GateKind::Correctness,
+        churn == 0 && (auto_roi || parity_break == 0),
+        format!(
+            "churn {churn}/{unchanged_pairs} unchanged pairs; batch parity {parity_break}/{parity_checked} breaks{}",
+            if auto_roi { " (informational: auto-ROI's explicit trade, plan §4.1)" } else { "" }
+        ),
+    );
     set(GateKind::Quality, mean_cer <= 0.0174 + 0.0025, format!(
         "CER {:.2}% on change frames vs batch-mode frames corpus 1.74% (+0.25pp band)",
         mean_cer * 100.0

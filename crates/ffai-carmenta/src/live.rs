@@ -317,7 +317,14 @@ impl LiveSession {
                 .map(|&k| -> Result<_> {
                     let (y0, y1) = (self.bands[k].y0, self.bands[k].y1);
                     let sub = crop_rows(img, y0, y1);
-                    let band_out = engine.recognize(&sub, opts)?;
+                    // Known geometry: a band holding exactly one line skips
+                    // detection (the --psm-7 analog) — recognition is the
+                    // only synchronous work; sweeps keep geometry honest.
+                    let single =
+                        self.bands[k].cached.iter().map(|b| b.lines.len()).sum::<usize>() == 1;
+                    let band_opts =
+                        OcrOptions { single_line: single, ..opts.clone() };
+                    let band_out = engine.recognize(&sub, &band_opts)?;
                     let blocks = band_out
                         .blocks
                         .into_iter()

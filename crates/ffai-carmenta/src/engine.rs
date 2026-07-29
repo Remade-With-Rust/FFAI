@@ -137,10 +137,37 @@ impl OcrEngine for CraftCrnn {
         }
     }
 
-    fn recognize(&self, img: &ImageBuffer, _opts: &OcrOptions) -> Result<OcrOutput> {
+    fn recognize(&self, img: &ImageBuffer, opts: &OcrOptions) -> Result<OcrOutput> {
         let m = self.models()?;
 
         let (w, h) = (img.width as usize, img.height as usize);
+
+        // --psm-7 analog: the caller vouches the image is ONE text line
+        // (LIVE dirty bands with known single-line geometry). Detection is
+        // skipped entirely — the CRNN reads the whole frame as a line crop.
+        // Falls through to the full path for the word-level (parseq) stage,
+        // which needs the maps for word splitting.
+        if opts.single_line && self.rec == RecStage::Crnn {
+            let gray = crate::profile::timed(|p| &p.det_pre, || image::to_gray_f32(img))?;
+            let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
+            let crop = crate::profile::timed(|p| &p.rec_pre, || {
+                image::crnn_input(&gray, w, h, 0, 0, w, h, &m.device)
+            })?;
+            let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
+                .map_err(image::candle_err)?;
+            let (text, confidence) = crate::profile::timed(|p| &p.decode, || ctc_greedy(&logits))
+                .map_err(image::candle_err)?;
+            let mut lines = Vec::new();
+            if !text.is_empty() {
+                lines.push(OcrLine {
+                    text,
+                    words: Vec::new(),
+                    bbox: Some(BoundingBox { x: 0.0, y: 0.0, width: w as f32, height: h as f32 }),
+                    confidence,
+                });
+            }
+            return Ok(OcrOutput { blocks: vec![OcrBlock { lines, bbox: None }] });
+        }
 
         // ---- detect ----
         let (gray, input, scale) = crate::profile::timed(
