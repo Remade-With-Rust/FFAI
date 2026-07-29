@@ -52,7 +52,10 @@ fn main() {
 
     // ---- the live session ----
     let mut session =
-        LiveSession::new(&engine, OcrOptions::default(), LiveConfig::default());
+        LiveSession::new(&engine, OcrOptions::default(), LiveConfig {
+            auto_roi: std::env::var("FFAI_AUTO_ROI").is_ok(),
+            ..LiveConfig::default()
+        });
     let mut outputs: Vec<String> = Vec::with_capacity(paths.len());
     let mut line_bands: Vec<Vec<(f32, f32)>> = Vec::new(); // per frame: line y-bands
     let t0 = std::time::Instant::now();
@@ -162,7 +165,7 @@ fn main() {
     let (t50, t95) = (pct(&tess_times, 0.50) * 1000.0, pct(&tess_times, 0.95) * 1000.0);
     println!("LIVE bench — carmenta-screencast-v1 ({} frames @ {FPS} fps, wall {wall:.1}s)", paths.len());
     println!("  segments emitted:       {}", segments.len());
-    println!("  ocr calls / gated:      {} / {}", stats.ocr_calls, stats.gated);
+    println!("  ocr calls / gated / roi: {} / {} / {}", stats.ocr_calls, stats.gated, stats.roi_calls);
     println!("  engine p50/p95 per call {p50:.0} / {p95:.0} ms");
     println!("  tesseract p50/p95:      {t50:.0} / {t95:.0} ms (stateless, spawn tax included)");
     println!("  churn (engine):         {churn} of {unchanged_pairs} unchanged pairs");

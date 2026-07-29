@@ -44,11 +44,29 @@ pub struct LiveConfig {
     pub pixel_delta: f32,
     /// Process every Nth frame (1 = every frame).
     pub sample_every: usize,
+    /// Auto-ROI (mission plan §4.1): after calibration, run recognition on
+    /// the learned horizontal text bands instead of the full frame, with a
+    /// periodic full-frame sweep to catch new elements. Opt-in — landed
+    /// because the observe-only harvest measured 100% box coverage at 38.8%
+    /// of frame area on the screencast corpus (61% detection-pixel ceiling).
+    pub auto_roi: bool,
+    /// OCR calls spent calibrating (full-frame) before bands activate.
+    pub calib_calls: usize,
+    /// Every Nth OCR call runs full-frame anyway (new-element sweep, and the
+    /// band set is rebuilt from its result).
+    pub full_sweep_every: usize,
 }
 
 impl Default for LiveConfig {
     fn default() -> Self {
-        LiveConfig { change_fraction: 0.0005, pixel_delta: 8.0, sample_every: 1 }
+        LiveConfig {
+            change_fraction: 0.0005,
+            pixel_delta: 8.0,
+            sample_every: 1,
+            auto_roi: false,
+            calib_calls: 8,
+            full_sweep_every: 10,
+        }
     }
 }
 
@@ -62,6 +80,8 @@ pub struct LiveStats {
     pub gated: usize,
     /// Frames skipped by the sampler.
     pub sampled_out: usize,
+    /// OCR calls served by band (auto-ROI) recognition.
+    pub roi_calls: usize,
     /// Wall seconds of each full model call, for p50/p95.
     pub call_secs: Vec<f64>,
 }
@@ -87,7 +107,23 @@ pub struct LiveSession<'e> {
     /// Open span: (start time, text).
     open: Option<(f64, String)>,
     segments: Vec<TimedSegment<String>>,
+    /// Auto-ROI y-bands (top, bottom), rebuilt on every full-frame call.
+    bands: Vec<(usize, usize)>,
     pub stats: LiveStats,
+}
+
+/// Copy a horizontal band of rows out of a frame (any pixel format).
+fn crop_rows(img: &ImageBuffer, y0: usize, y1: usize) -> ImageBuffer {
+    let bpp = img.format.bytes_per_pixel();
+    let stride = img.width as usize * bpp;
+    let y1 = y1.min(img.height as usize);
+    let y0 = y0.min(y1);
+    ImageBuffer {
+        width: img.width,
+        height: (y1 - y0) as u32,
+        format: img.format,
+        data: img.data[y0 * stride..y1 * stride].to_vec(),
+    }
 }
 
 impl<'e> LiveSession<'e> {
@@ -101,6 +137,7 @@ impl<'e> LiveSession<'e> {
             prev_text: String::new(),
             open: None,
             segments: Vec::new(),
+            bands: Vec::new(),
             stats: LiveStats::default(),
         }
     }
@@ -131,8 +168,49 @@ impl<'e> LiveSession<'e> {
             return Ok(&self.prev_out);
         }
 
+        let use_bands = self.cfg.auto_roi
+            && !self.bands.is_empty()
+            && self.stats.ocr_calls >= self.cfg.calib_calls
+            && (self.stats.ocr_calls + 1) % self.cfg.full_sweep_every.max(1) != 0;
+
         let t0 = std::time::Instant::now();
-        let out = self.engine.recognize(img, &self.opts)?;
+        let out = if use_bands {
+            self.stats.roi_calls += 1;
+            let mut merged = OcrOutput::default();
+            for &(y0, y1) in &self.bands.clone() {
+                let sub = crop_rows(img, y0, y1);
+                let band_out = self.engine.recognize(&sub, &self.opts)?;
+                for block in band_out.blocks {
+                    let mut block = block;
+                    for line in &mut block.lines {
+                        if let Some(b) = &mut line.bbox {
+                            b.y += y0 as f32;
+                        }
+                    }
+                    merged.blocks.push(block);
+                }
+            }
+            merged
+        } else {
+            let full = self.engine.recognize(img, &self.opts)?;
+            // (Re)calibrate bands from every full-frame result: loose ±8 px
+            // unions of line y-bands, exactly the harvest's construction.
+            let mut bands: Vec<(usize, usize)> = Vec::new();
+            for l in full.lines() {
+                if let Some(b) = &l.bbox {
+                    let (y0, y1) = ((b.y - 8.0).max(0.0) as usize, (b.y + b.height + 8.0) as usize);
+                    if let Some(x) = bands.iter_mut().find(|x| y0 <= x.1 && y1 >= x.0) {
+                        x.0 = x.0.min(y0);
+                        x.1 = x.1.max(y1).min(img.height as usize);
+                    } else {
+                        bands.push((y0, y1.min(img.height as usize)));
+                    }
+                }
+            }
+            bands.sort_unstable();
+            self.bands = bands;
+            full
+        };
         self.stats.call_secs.push(t0.elapsed().as_secs_f64());
         self.stats.ocr_calls += 1;
 
