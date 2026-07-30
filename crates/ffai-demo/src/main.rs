@@ -184,8 +184,18 @@ fn handle(
             let json = read_image(&body, reader);
             respond(&mut stream, 200, "application/json", json.as_bytes())
         }
-        ("POST", "/transcribe") => {
-            let json = transcribe_both(&body, engines);
+        ("POST", p) if p.starts_with("/transcribe") => {
+            // `?diarize=0` turns the speaker layer off. It is a query rather
+            // than a body field because the body is raw WAV bytes.
+            //
+            // This exists because the two panes were not doing the same work
+            // and the UI invited the wrong conclusion: Mercury ran
+            // diarize+persist while whisper.cpp ran plain transcription, so
+            // a per-chunk average read "Mercury 2x slower" when the ASR-only
+            // paths are 107 ms against whisper.cpp's 274 ms. Measured, the
+            // speaker layer is +621 ms on a 3 s chunk — 6.8x the ASR path.
+            let diarize = !p.contains("diarize=0");
+            let json = transcribe_both(&body, engines, diarize);
             respond(&mut stream, 200, "application/json", json.as_bytes())
         }
         ("POST", "/synthesize") => {
@@ -201,7 +211,7 @@ fn handle(
 /// time. A failure in one is reported in its own pane rather than failing the
 /// request — the whole point is to see them side by side, including when one
 /// of them cannot answer.
-fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
+fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>, diarize: bool) -> String {
     if wav.len() < 44 {
         return json_error("posted body is not a WAV (too short)");
     }
@@ -256,9 +266,19 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
         //                person is SPEAKER_00 one tick and SPEAKER_01 the
         //                next — measured at 53.58% DER against 5.68% with it.
         //                That is why diarization was not in this demo before.
+        //
+        // `diarize` is a per-request toggle (`?diarize=0`) so the panes can
+        // be put on EQUAL work: whisper.cpp does not diarize at all, and
+        // with the speaker layer on, Mercury is running a whole second
+        // network (ECAPA-TDNN, ~4 forwards per 3 s chunk at 1.5 s windows /
+        // 0.75 s hop) that the other pane never runs.
         Ok(audio) => match guard.mercury.transcribe(
             &audio,
-            &AsrOptions { diarize: true, persist_speakers: true, ..AsrOptions::default() },
+            &AsrOptions {
+                diarize,
+                persist_speakers: diarize,
+                ..AsrOptions::default()
+            },
         ) {
             Ok(t) => (label_speakers(&t), None),
             Err(e) => (String::new(), Some(e.to_string())),
@@ -288,9 +308,13 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
         );
     }
 
+    // `diarize` rides back so the UI can label what was actually measured.
+    // A timing whose configuration is not on screen beside it is how the
+    // "2x slower" reading happened in the first place.
     serde_json::json!({
         "mercury": { "text": mercury_text, "ms": mercury_ms, "error": mercury_err },
         "whispercpp": { "text": cpp_text, "ms": cpp_ms, "error": cpp_err },
+        "diarize": diarize,
     })
     .to_string()
 }

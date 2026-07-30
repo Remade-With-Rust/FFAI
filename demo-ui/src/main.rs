@@ -135,7 +135,7 @@ const RECORDER_JS: &str = r####"
         const span = Math.floor(ctx.sampleRate * WINDOW);
         const tail = pcm.length > span ? pcm.subarray(pcm.length - span) : pcm;
         const wav = encodeWav(resample(tail, ctx.sampleRate, 16000), 16000);
-        const res = await fetch('/transcribe', { method: 'POST', body: wav });
+        const res = await fetch('/transcribe?diarize=__DIARIZE__', { method: 'POST', body: wav });
         const j = JSON.parse(await res.text());
         j.commit = commit;
         dioxus.send(JSON.stringify(j));
@@ -435,6 +435,11 @@ fn Listen() -> Element {
     let mut mercury = use_signal(Vec::<Line>::new);
     let mut cpp = use_signal(Vec::<Line>::new);
     let mut status = use_signal(|| "idle".to_string());
+    // Speaker labels ON by default — they are the capability worth showing.
+    // But whisper.cpp does not diarize at all, so with this on the two panes
+    // are timing different work, and the per-chunk numbers are NOT a
+    // like-for-like speed comparison. Turning it off is what makes them one.
+    let mut diarize = use_signal(|| true);
 
     let start = move |_| {
         if running() {
@@ -446,7 +451,10 @@ fn Listen() -> Element {
             // 1 s cadence, 10 s of context per pass. Nearly free: 1 s of audio
             // costs 213 ms and 10 s costs 311 ms, because the encoder pads to
             // 30 s either way.
-            let js = RECORDER_JS.replace("__TICK__", "1").replace("__WINDOW__", "10");
+            let js = RECORDER_JS
+                .replace("__TICK__", "1")
+                .replace("__WINDOW__", "10")
+                .replace("__DIARIZE__", if diarize() { "1" } else { "0" });
             let mut eval = document::eval(&js);
             // One message per transcribed chunk until the recorder reports
             // done. Each carries BOTH engines' answers for the same audio.
@@ -559,11 +567,40 @@ fn Listen() -> Element {
                     "■ Stop"
                 }
                 button { class: "btn ghost", onclick: clear, "Clear" }
+                // Locked while running: the recorder JS is templated with the
+                // flag at spawn time, so flipping it mid-session would change
+                // the label without changing what is measured — a control
+                // that lies is worse than no control.
+                button {
+                    class: if diarize() { "btn on" } else { "btn ghost" },
+                    disabled: running(),
+                    onclick: move |_| diarize.set(!diarize()),
+                    if diarize() { "Speakers: ON" } else { "Speakers: OFF" }
+                }
                 span { class: "status", "{status}" }
             }
+            p { class: if diarize() { "warn" } else { "sub" },
+                if diarize() {
+                    "Speakers ON: Mercury is additionally running ECAPA-TDNN speaker \
+                     embedding and cross-chunk identity matching — roughly four extra \
+                     network passes per chunk — which whisper.cpp does not do at all. \
+                     Measured at +621 ms on a 3 s chunk, 6.8× the ASR-only path. The two \
+                     panes are NOT doing equal work; turn this off to compare speed."
+                } else {
+                    "Speakers OFF: both panes now do the same job — transcribe this audio. \
+                     Mercury's ASR-only path measures 107 ms against whisper.cpp's 274 ms \
+                     on a 3 s chunk, and silence costs Mercury ~0 ms because VAD drops it \
+                     before the encoder, where whisper.cpp pays a full pass to print \
+                     [BLANK_AUDIO]."
+                }
+            }
             div { class: "panes",
-                Pane { title: "Mercury (pure Rust)", accent: "rust", lines: mercury() }
-                Pane { title: "whisper.cpp (C++/ggml)", accent: "cpp", lines: cpp() }
+                Pane {
+                    title: if diarize() { "Mercury (pure Rust) — ASR + speakers" } else { "Mercury (pure Rust) — ASR only" },
+                    accent: "rust",
+                    lines: mercury(),
+                }
+                Pane { title: "whisper.cpp (C++/ggml) — ASR only", accent: "cpp", lines: cpp() }
             }
         }
     }
