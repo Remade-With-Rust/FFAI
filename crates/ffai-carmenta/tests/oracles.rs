@@ -133,3 +133,29 @@ fn parseq_ids_match_pytorch_reference() {
     eprintln!("parseq oracle: {text:?} (conf {conf:?}) vs reference {expected_text:?}");
     assert_eq!(text, expected_text, "AR-greedy decode must match the reference");
 }
+
+#[test]
+fn parseq_refined_text_matches_pytorch_reference() {
+    let fixture = fixtures().join("parseq_refine_fixture.json");
+    let Some(weights) = model_file("parseq-tiny", "parseq-tiny.safetensors") else {
+        eprintln!("SKIP parseq refine oracle: weights not cached");
+        return;
+    };
+    if !fixture.exists() {
+        eprintln!("SKIP parseq refine oracle: fixture missing");
+        return;
+    }
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap()).unwrap();
+    let input: Vec<f32> = std::fs::read(fixtures().join(meta["input"].as_str().unwrap()))
+        .unwrap()
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let x = Tensor::from_vec(input, (1, 3, 32, 128), &Device::Cpu).unwrap();
+    let vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &Device::Cpu) }.unwrap();
+    let parseq = ffai_carmenta::parseq::Parseq::new(vb).unwrap();
+    let (text, _) = parseq.recognize(&x).unwrap();
+    assert_eq!(text, meta["text"].as_str().unwrap(), "refined decode must match reference");
+}

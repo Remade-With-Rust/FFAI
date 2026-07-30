@@ -276,6 +276,53 @@ impl Parseq {
             confs.push(p);
             tgt_ids.push(id);
         }
+        // ---- refinement pass (refine_iters = 1), strhub semantics ----
+        //
+        // The AR pass is fragile on out-of-distribution renderings (measured:
+        // first-letter doubling on crisp UI fonts, reproduced by the
+        // REFERENCE at refine_iters=0 on identical crops). Production PARSeq
+        // masks that slip class with one cloze re-prediction: every position
+        // is re-predicted seeing all content EXCEPT its own AR prediction
+        // (content index i+1 is the token emitted at step i — the mask
+        // blocks exactly j == i+1).
+        let l = tgt_ids.len(); // [BOS] + non-EOS tokens = strhub's tgt_in
+        if l > 1 {
+            let mut content_rows = Vec::with_capacity(l);
+            content_rows.push(self.text_embed.i(tgt_ids[0] as usize)?);
+            for (k, &id) in tgt_ids.iter().enumerate().skip(1) {
+                content_rows.push((self.text_embed.i(id as usize)? + self.pos_queries.i((0, k - 1))?)?);
+            }
+            let content = Tensor::stack(&content_rows, 0)?.unsqueeze(0)?;
+            let query = self.pos_queries.i((.., 0..l, ..))?.contiguous()?;
+            let cloze: Vec<f32> = (0..l)
+                .flat_map(|i| (0..l).map(move |j| if j == i + 1 { f32::NEG_INFINITY } else { 0.0 }))
+                .collect();
+            let cloze = Tensor::from_vec(cloze, (l, l), dev)?;
+            let t = self.layer.forward(&query, &content, &memory, &cloze)?;
+            let logits = self.dec_norm.forward(&t)?.apply(&self.head)?; // (1, l, 95)
+            let probs = softmax_last(&logits)?.squeeze(0)?.to_vec2::<f32>()?;
+            let mut refined = String::new();
+            let mut confs2 = Vec::new();
+            for row in &probs {
+                let (id, p) = row
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.total_cmp(b.1))
+                    .map(|(i, p)| (i as u32, *p))
+                    .unwrap_or((EOS_ID, 0.0));
+                if id == EOS_ID {
+                    break;
+                }
+                refined.push(charset[id as usize - 1]);
+                confs2.push(p);
+            }
+            if !refined.is_empty() {
+                let conf =
+                    Some(confs2.iter().sum::<f32>() / confs2.len() as f32);
+                return Ok((refined, conf));
+            }
+        }
+
         let conf = if confs.is_empty() {
             None
         } else {
