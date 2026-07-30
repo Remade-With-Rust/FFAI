@@ -29,6 +29,7 @@
 //! composed by [`engine`].
 
 pub mod boxes;
+pub mod content;
 pub mod craft;
 pub mod crnn;
 pub mod engine;
@@ -40,6 +41,20 @@ pub mod profile;
 use std::sync::Arc;
 
 use ffai_core::registry::EngineRegistry;
+
+/// Word-crop pads for the PARSeq path, `(x, y)` as fractions of line
+/// height. Defaults are the synthetic-render values; `FFAI_PARSEQ_PAD_X` /
+/// `FFAI_PARSEQ_PAD_Y` override for sweeps and for content-specific tuning.
+pub fn parseq_pads() -> (f32, f32) {
+    use std::sync::OnceLock;
+    static P: OnceLock<(f32, f32)> = OnceLock::new();
+    *P.get_or_init(|| {
+        let get = |k: &str, d: f32| {
+            std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+        };
+        (get("FFAI_PARSEQ_PAD_X", 0.10), get("FFAI_PARSEQ_PAD_Y", 0.12))
+    })
+}
 
 /// Install every Carmenta engine into a registry.
 pub fn register(reg: &mut EngineRegistry) {

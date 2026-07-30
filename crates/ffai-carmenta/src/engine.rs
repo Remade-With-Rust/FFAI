@@ -180,6 +180,7 @@ impl OcrEngine for CraftCrnn {
         }
 
         // ---- detect ----
+        let content_kind = crate::content::classify(img);
         let (gray, input, scale) = crate::profile::timed(
             |p| &p.det_pre,
             || -> Result<_> {
@@ -256,18 +257,29 @@ impl OcrEngine for CraftCrnn {
                         // boxes against 1027 ground-truth words on the CORD
                         // holdout — CRAFT's connected components ARE words.
                         // FFAI_PARSEQ_SPLIT=1 restores the old path for A/B.
-                        let word_ranges: Vec<(usize, usize)> = if std::env::var("FFAI_PARSEQ_SPLIT").is_ok() {
-                            let lb_map = boxes::line_bbox(line);
-                            let bh_img = (to_img(lb_map.y1) - to_img(lb_map.y0)).max(1.0);
-                            let ly0 = (to_img(lb_map.y0) - bh_img * 0.12).max(0.0) as usize;
-                            let ly1 = ((to_img(lb_map.y1) + bh_img * 0.12) as usize).min(h);
-                            let lx0 = (to_img(lb_map.x0) - bh_img * 0.5).max(0.0) as usize;
-                            let lx1 = ((to_img(lb_map.x1) + bh_img * 0.5) as usize).min(w);
-                            image::split_ink_words(&gray, w, ly0, ly1, lx0, lx1)
-                        } else {
-                            line.iter()
+                        // DISPATCH (mission plan §4). A measured, TWO-SIDED
+                        // sign-flip: the ink-gap splitter is 4.5x better on
+                        // rendered text (0.149 % vs 0.673 %) and 1.6x worse
+                        // on photographs (34.16 % vs 21.70 %). Clean rendered
+                        // gaps suit a projection; camera noise, tilt and
+                        // variable spacing suit CRAFT's learned affinity.
+                        // Neither wins everywhere, so the strategy is chosen
+                        // per image — see `content` for the signal and its
+                        // empty-band margin.
+                        let word_ranges: Vec<(usize, usize)> = match content_kind {
+                            crate::content::ContentKind::Rendered => {
+                                let lb_map = boxes::line_bbox(line);
+                                let bh = (to_img(lb_map.y1) - to_img(lb_map.y0)).max(1.0);
+                                let sy0 = (to_img(lb_map.y0) - bh * 0.12).max(0.0) as usize;
+                                let sy1 = ((to_img(lb_map.y1) + bh * 0.12) as usize).min(h);
+                                let sx0 = (to_img(lb_map.x0) - bh * 0.5).max(0.0) as usize;
+                                let sx1 = ((to_img(lb_map.x1) + bh * 0.5) as usize).min(w);
+                                image::split_ink_words(&gray, w, sy0, sy1, sx0, sx1)
+                            }
+                            crate::content::ContentKind::Photographic => line
+                                .iter()
                                 .map(|b| (to_img(b.x0).max(0.0) as usize, to_img(b.x1) as usize))
-                                .collect()
+                                .collect(),
                         };
                         let lb_map = boxes::line_bbox(line);
                         let bh_img = (to_img(lb_map.y1) - to_img(lb_map.y0)).max(1.0);

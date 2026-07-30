@@ -60,7 +60,15 @@ Measured on a pinned 180-frame screencast: **24 OCR calls for exactly 24 text ch
 
 ## Things measurement taught us, which you may want
 
-**Recognition lineages are content-dependent, with a sign flip.** The CRNN beats PARSeq on crisp UI text; PARSeq beats the CRNN 7× on photographs (and beats PaddleOCR's recognizer there too). Pick per content; averaging the two loses both wins.
+**Content decides the strategy, three times over.** Carmenta has measured three independent per-content sign-flips — the better choice on rendered text is the worse choice on photographs, every time:
+
+| Decision | Rendered/screen | Photographs |
+|---|---|---|
+| engine | `craft-crnn` — frames 1.602 % vs 5.339 % | `craft-parseq` — CORD 21.70 % vs 27.42 % |
+| word segmentation | ink-gap projection — 0.149 % vs 0.673 % | CRAFT boxes direct — 21.70 % vs 34.16 % |
+| recognition on identical crops | CRNN | PARSeq (1.5 %, beating PaddleOCR's 3.0 %) |
+
+Segmentation now dispatches automatically on a per-image signal — the fraction of exactly-equal adjacent pixels, which reads 0.88–0.99 on rendered/screen content and 0.10–0.51 on camera captures, a 0.37-wide empty band between the classes. Override with `FFAI_CONTENT=rendered|photo`. The engine choice stays yours, like a codec: `--engine craft-parseq` for photographs.
 
 **Detection input is scale-normalized adaptively** — small photos are magnified above CRAFT's measured ~8 px glyph floor, camera-resolution images are capped (`FFAI_DET_TARGET`, default 1536). This is a 2× detection-latency and multi-GB peak-memory difference on phone photos.
 

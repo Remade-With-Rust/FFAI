@@ -813,39 +813,80 @@ census predicted exactly this: 1230 CRAFT boxes against 1027 GT words means
 the components already ARE words, and re-deriving them by ink projection
 could only lose information.
 
-**CORRECTION, recorded rather than quietly fixed.** This section first
-claimed the direct feed "beats craft-crnn on BOTH corpora" — an overreach
-from a two-corpus sample. The frames corpus, measured next, refutes it:
+**CORRECTION TO THE CORRECTION (2026-07-30).** This section briefly claimed
+the render sign-flip "does not reproduce" and the splitter was deleted on
+that basis. **Both the claim and the deletion were wrong**, caused by a
+STALE BINARY (§8.12): `cargo build` had failed with "Access is denied" while
+a background run held `ffai.exe` open, and every measurement for the next
+hour ran an hour-old binary. Ground truth on a verified-fresh build:
 
-| Engine | render (print) | frames (HUD/screen) | CORD (photos) |
-|---|---:|---:|---:|
-| craft-crnn | 0.710 % | **1.602 %** | 27.42 % |
-| craft-parseq (direct) | 0.673 % | 5.339 % | **21.70 %** |
-| parseq + ink-split | **0.149 %** | — | 34.16 % |
+| corpus | ink-split | CRAFT direct |
+|---|---:|---:|
+| render (synthetic print) | **0.149 %** | 0.673 % |
+| CORD (real photographs) | 34.16 % | **21.70 %** |
 
-PARSeq is **3.3x WORSE than the CRNN on HUD/screen text**, and slower
-(2440 vs 2144 ms/frame). No engine wins everywhere, so `craft-crnn` KEEPS
-the default seat — it owns the LIVE content class outright — and
-`craft-parseq` is the documented choice for photographs. This is the third
-independent sign-flip in this component (rec lineage by content, splitter
-by content, and now engine by content); the toolkit answer is dispatch by
-content class, not a single winner.
+The flip is genuinely TWO-SIDED — 4.5x one way, 1.6x the other — so the
+dispatcher is earned, the splitter is restored, and the deletion is reverted.
 
-**And the sign flips per content, which is the finding to protect.** The
-ink-gap splitter is 4.5x BETTER than the direct feed on synthetic render
-(0.149 % vs 0.673 %) and 1.6x WORSE on photographs. Rendered text has
-clean, uniform inter-word gaps that a projection reads perfectly; camera
-photos have noise, tilt and variable spacing that break the projection while
-CRAFT's learned affinity handles them. Neither path dominates — averaging
-them would discard both wins. The direct feed ships as the default
-(it dominates the crnn baseline on both corpora, which the splitter does
-not) and `FFAI_PARSEQ_SPLIT=1` retains the alternative, measured and
-documented, as the dispatch candidate a content signal would select.
+A separate, REAL finding stands from the same period: PARSeq is 3.3x worse
+than the CRNN on HUD/screen text (frames 5.339 % vs 1.602 %) and slower, so
+`craft-crnn` KEEPS the default seat and `craft-parseq` is the documented
+photograph engine. No engine wins everywhere; the toolkit answer is content
+dispatch, not a ranking.
 
 Standing gap to paddle on real photos: **21.70 % vs 15.6 %**, down from
 27.4 %. The remaining deficit is recognition on our own crops, and the
 next lever is the crop GEOMETRY those boxes get padded with — the pads
 were tuned on synthetic render and have never been swept on photographs.
+
+### 8.11 Content dispatch — three sign-flips, one signal, and a pad sweep that found nothing
+
+**The crop pads were exonerated, not tuned.** They had never been swept on
+photographs, so they were the standing suspect. Nine configurations on
+CORD's TRAIN split (holdout untouched, so the 21.7 % claim stays clean):
+
+| pad_x \ pad_y | 0.04 | 0.12 | 0.28 |
+|---|---:|---:|---:|
+| 0.02 | 17.53 | 17.66 | 21.27 |
+| **0.10** | **17.15** | **17.15** *(shipping value)* | 17.47 |
+| 0.20 | 19.43 | 17.59 | 18.54 |
+
+The optimum is a TIE with the value already shipping, and both extremes
+degrade (too tight AND too loose cost 2–4 points), so the surface has a real
+interior optimum that we were already sitting on. The synthetic-tuned pads
+transfer to photographs unchanged. Recorded as a negative result; no change
+made. Pads are NOT a dispatch axis.
+
+**Dispatch, however, is now earned three times over.** Every strategy choice
+in this component has flipped sign by content:
+
+| Decision | Rendered/screen | Photographs |
+|---|---|---|
+| engine | `craft-crnn` — frames 1.60 % vs 5.34 % | `craft-parseq` — CORD 21.7 % vs 27.4 % |
+| word segmentation | ink-gap projection — 0.15 % vs 0.67 % | CRAFT boxes direct — 21.7 % vs 34.2 % |
+| recognition (identical crops) | CRNN | PARSeq 1.5 %, beating paddle's 3.0 % |
+
+**The signal ([`content.rs`]): adjacent-pixel exact-equality.** Measured
+across all four corpora:
+
+| corpus | flatness |
+|---|---|
+| render (synthetic print) | 0.881 – 0.943 |
+| frames (synthetic HUD) | 0.974 – 0.995 |
+| capture (GDI ClearType) | 0.974 |
+| CORD (real photographs) | 0.103 – 0.507 |
+
+A **0.37-wide EMPTY band** separates the classes, so the 0.70 threshold is
+not fitted — it is the middle of a gap. The mechanism is physical rather
+than statistical: shot noise perturbs every photosite independently, so a
+sensor essentially never emits large exactly-flat regions and a renderer
+emits little else. That is why this dispatch is expected to hold on content
+neither corpus contains.
+
+Word segmentation dispatches on it per image; `FFAI_CONTENT=rendered|photo`
+overrides. The ENGINE choice stays user-facing (`--engine craft-parseq`),
+matching the ffmpeg model this toolkit is built on: lineages are codecs you
+select, strategies within a lineage are the engine's business.
 
 ### 8.4 PARSeq-tiny port: oracle PASS; engine variant open with a localized defect
 
