@@ -33,7 +33,7 @@ pub mod vad;
 pub mod wav2vec2;
 pub mod vocab_int8;
 
-mod whisper_candle;
+pub mod whisper_candle;
 
 pub use whisper_candle::WhisperCandle;
 

@@ -27,8 +27,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use candle_nn::ops::softmax;
-use ffai_core::candle::{DType, Device, IndexOp, Tensor, D};
+use ffai_core::candle::{DType, Device, IndexOp, Tensor};
 use ffai_core::error::{Error, Result};
 
 use super::phoneme_ids::PhonemeIdMap;

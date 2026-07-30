@@ -94,11 +94,19 @@ This is a concrete mechanism for the long-form WER left unexplained in Phase E
 — which was refuted at z = 0.00 — this one names a specific missing input
 rather than a vague context effect.
 
-`examples/longform_why.rs` is written and unrun; it decomposes long-form WER
-per utterance, scoring the same audio alone versus in context, and separates
-"context confusion" from "window boundary" as causes. **Run that before
-building anything**, because it may show the effect is the corpus rather than
-the model.
+**RESOLVED 2026-07-29 — built, gated, and the gate said no** (full descent:
+[whys/adaptive-context.md](whys/adaptive-context.md)). `longform_why` ran
+first, as this note asked, and it was right to insist: the long-form penalty
+was NOT diffuse context confusion — it was two utterances swallowed whole
+(0.00 → 1.00 WER) behind stretched segment timestamps. Prefix conditioning
+was then built anyway (`FFAI_PREV_CONTEXT=on`, exact openai token budget,
+reset-on-high-temperature) and measured: in-context WER **13.16 % → 36.90 %**
+(31 worse / 4 better, z = +4.56) — on a corpus of concatenated UNRELATED
+utterances, conditioning on the previous book makes the model skip spliced
+content. It ships opt-in-off with that number attached. What actually fixed
+the long-form gap was hardening the coverage repair against lying spans:
+**long-form WER 10.55 % → 7.19 %**. Re-evaluate conditioning only on a
+coherent-long-form corpus.
 
 Also unbuilt: `initial_prompt`, the caller-supplied hint openai-whisper uses
 to bias vocabulary and style.

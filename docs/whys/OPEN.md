@@ -1,5 +1,16 @@
 # Open work — Mercury speed campaign
 
+> **SUPERSEDED 2026-07-29 — the speed gap is closed and inverted.** Adaptive
+> encoder context (docs/whys/adaptive-context.md) attacks what §1-§4 below
+> could not: the encoder was 1.13-1.15× behind because every window paid the
+> full 30 s of positions, and ~78 % of that was padding. Encoding a bucketed
+> context with escalation guards took the clean 30-clip side-by-side from
+> "1.15× behind on encode" to **Mercury faster on every stage** (encode
+> 2.0×, decode 1.1-1.2×, mel 1.4×, sample 1.7-2.0×; ~1.5-1.6× total).
+> §1-§4 stay below as the record of the kernel-level campaign; its two
+> remaining candidates (quantized KV that survives quality, candle-GEMM
+> internals) are still real but no longer gate anything.
+
 State at `cf821cc`. Gap to `whisper-cpp-tiny-greedy-t24`: **1.13–1.15×**
 (from 2.84× when this descent started). Quality **PASS** on both corpora.
 Speed gate **FAIL**. 62 tests, 0 failures.

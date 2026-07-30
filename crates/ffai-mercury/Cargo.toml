@@ -1,6 +1,6 @@
 [package]
 name = "ffai-mercury"
-description = "Mercury — FFai's voice component: ASR (Whisper/WhisperX-class) and TTS"
+description = "Mercury — FFai's voice component: pure-Rust ASR (Whisper/WhisperX-class) and TTS (VITS/piper-class, deterministic)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

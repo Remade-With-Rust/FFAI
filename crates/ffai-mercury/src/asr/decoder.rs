@@ -83,6 +83,26 @@ pub struct DecodeConfig {
     /// Retry when the transcript looks like a repetition loop (see
     /// [`repetition_ratio`]).
     pub repetition_threshold: f32,
+    /// Text tokens from the previous window(s), fed to the decoder as
+    /// `<|startofprev|>` context — openai-whisper's
+    /// `condition_on_previous_text`, which both references ship by default.
+    /// Empty = no conditioning. Capped to the last 223 tokens at prompt
+    /// build (half the decoder context minus the control token), matching
+    /// openai-whisper.
+    pub prev_text_tokens: Vec<u32>,
+    /// Suppress timestamp tokens beyond this many seconds. Set when the
+    /// encoder ran on a context shorter than the full 30 s window, so the
+    /// decoder cannot place a timestamp past the audio that was actually
+    /// encoded. `None` = the grammar's usual 30 s range.
+    pub max_timestamp_secs: Option<f64>,
+    /// Stop generating as soon as the running mean log-probability falls to
+    /// this value (checked from the 14th token). Only set on the
+    /// short-context rung, where a decode headed for rejection is pure
+    /// waste — without this, ~60 % of noisy windows paid a full doomed
+    /// decode before escalating, and the escalation tax ate the speed win.
+    /// Must sit BELOW [`Self::logprob_threshold`]: aborting can only route
+    /// the window to the full-context path it was already headed for.
+    pub early_abort_logprob: Option<f32>,
 }
 
 impl Default for DecodeConfig {
@@ -108,8 +128,37 @@ impl Default for DecodeConfig {
                 .and_then(|v| v.parse::<f32>().ok())
                 .filter(|t| (0.0..=1.0).contains(t)),
             repetition_threshold: 2.4,
+            prev_text_tokens: Vec::new(),
+            max_timestamp_secs: None,
+            early_abort_logprob: None,
         }
     }
+}
+
+/// Everything one window's decode produced, beyond the segments themselves.
+///
+/// `text_tokens` and `temperature` exist for the caller's previous-window
+/// conditioning: the next window's prompt wants this window's text, unless
+/// this window only passed at a high temperature — openai-whisper resets its
+/// context after any rung above 0.5, because conditioning on a sampled,
+/// barely-accepted transcript propagates its errors forward.
+pub struct WindowOutcome {
+    pub segments: Vec<TimedSegment<String>>,
+    /// The accepted rung's text tokens (timestamps and controls stripped).
+    pub text_tokens: Vec<u32>,
+    /// The temperature of the rung that produced the accepted result.
+    pub temperature: f32,
+}
+
+/// Which rungs of the fallback ladder a decode may use.
+#[derive(Clone, Copy, PartialEq)]
+enum Ladder {
+    /// The full temperature ladder; always produces a result.
+    Full,
+    /// The greedy rung only; `None` when its guards reject, so the caller
+    /// can escalate — used by the adaptive-context path, whose escalation
+    /// arm is the full 30 s context rather than a higher temperature.
+    GreedyOnly,
 }
 
 /// Decode one 30-second window that starts at `offset_secs` in the source.
@@ -122,7 +171,34 @@ pub fn decode_window(
     offset_secs: f64,
     cfg: &DecodeConfig,
     window_secs: f64,
-) -> Result<Vec<TimedSegment<String>>> {
+) -> Result<WindowOutcome> {
+    Ok(decode_window_inner(whisper, chunk, offset_secs, cfg, window_secs, Ladder::Full)?
+        .expect("Ladder::Full always yields a result"))
+}
+
+/// [`decode_window`], but greedy-rung-only: `None` means the confidence or
+/// repetition guard rejected it and the caller should re-decode at the full
+/// context. The audio handed in may be padded to less than 30 s **only**
+/// through this entry point — set [`DecodeConfig::max_timestamp_secs`] to the
+/// encoded extent so the timestamp grammar cannot point past the audio.
+pub fn decode_window_strict(
+    whisper: &mut LoadedWhisper,
+    chunk: &MelChunk,
+    offset_secs: f64,
+    cfg: &DecodeConfig,
+    window_secs: f64,
+) -> Result<Option<WindowOutcome>> {
+    decode_window_inner(whisper, chunk, offset_secs, cfg, window_secs, Ladder::GreedyOnly)
+}
+
+fn decode_window_inner(
+    whisper: &mut LoadedWhisper,
+    chunk: &MelChunk,
+    offset_secs: f64,
+    cfg: &DecodeConfig,
+    window_secs: f64,
+    ladder: Ladder,
+) -> Result<Option<WindowOutcome>> {
     let mel_tensor = whisper
         .mel_tensor(chunk)
         .map_err(|e| Error::Model(format!("building mel tensor: {e}")))?;
@@ -148,7 +224,11 @@ pub fn decode_window(
     let audio_features = audio_features
         .to_dtype(whisper.decoder_dtype)
         .map_err(tensor_err)?;
-    let tokens = decode_with_fallback(whisper, &audio_features, cfg)?;
+    let Some((tokens, temperature)) =
+        decode_with_fallback(whisper, &audio_features, cfg, ladder)?
+    else {
+        return Ok(None);
+    };
     // Set FFAI_DEBUG_TOKENS=1 to see the raw token stream — the first thing
     // worth looking at when a transcript is empty or garbled.
     if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() {
@@ -168,7 +248,10 @@ pub fn decode_window(
             .collect();
         eprintln!("[tokens n={}] {}", tokens.len(), rendered.join(" "));
     }
-    segments_from_tokens(whisper, &tokens, offset_secs, cfg, window_secs)
+    let text_tokens: Vec<u32> =
+        tokens.iter().copied().filter(|&t| t < whisper.tokenizer.eot).collect();
+    let segments = segments_from_tokens(whisper, &tokens, offset_secs, cfg, window_secs)?;
+    Ok(Some(WindowOutcome { segments, text_tokens, temperature }))
 }
 
 /// Whisper's temperature fallback: decode greedily, and if the result looks
@@ -187,9 +270,14 @@ fn decode_with_fallback(
     whisper: &mut LoadedWhisper,
     audio_features: &Tensor,
     cfg: &DecodeConfig,
-) -> Result<Vec<u32>> {
-    let ladder: &[f32] = if cfg.temperatures.is_empty() { &[0.0] } else { &cfg.temperatures };
-    let mut best: Option<(f32, Vec<u32>)> = None;
+    mode: Ladder,
+) -> Result<Option<(Vec<u32>, f32)>> {
+    let full: &[f32] = if cfg.temperatures.is_empty() { &[0.0] } else { &cfg.temperatures };
+    let ladder: &[f32] = match mode {
+        Ladder::Full => full,
+        Ladder::GreedyOnly => &full[..1],
+    };
+    let mut best: Option<(f32, Vec<u32>, f32)> = None;
 
     for &temperature in ladder {
         let (tokens, avg_logprob, no_speech_prob) =
@@ -222,7 +310,7 @@ fn decode_with_fallback(
         }
         if no_speech_prob > cfg.no_speech_threshold {
             NO_SPEECH_DROPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(Vec::new());
+            return Ok(Some((Vec::new(), temperature)));
         }
 
         let text = whisper.tokenizer.decode(&tokens).unwrap_or_default();
@@ -230,13 +318,23 @@ fn decode_with_fallback(
         let confident = avg_logprob > cfg.logprob_threshold;
 
         if confident && !looping {
-            return Ok(tokens);
+            return Ok(Some((tokens, temperature)));
         }
-        if best.as_ref().is_none_or(|(score, _)| avg_logprob > *score) {
-            best = Some((avg_logprob, tokens));
+        if best.as_ref().is_none_or(|(score, _, _)| avg_logprob > *score) {
+            best = Some((avg_logprob, tokens, temperature));
         }
     }
-    Ok(best.map(|(_, tokens)| tokens).unwrap_or_default())
+    match mode {
+        // No rung was acceptable: hand back the best-scoring one, so a hard
+        // segment still yields its most plausible transcription.
+        Ladder::Full => Ok(Some(
+            best.map(|(_, tokens, temperature)| (tokens, temperature))
+                .unwrap_or((Vec::new(), 1.0)),
+        )),
+        // The greedy rung failed its guards: the caller escalates (to the
+        // full context) instead of accepting a rejected transcript.
+        Ladder::GreedyOnly => Ok(None),
+    }
 }
 
 /// How many windows the no-speech gate has discarded in this process.
@@ -277,12 +375,26 @@ fn decode_once(
     let eot = whisper.tokenizer.eot;
     let no_speech_tok = whisper.tokenizer.no_speech as usize;
     let english_only = whisper.is_english_only();
-    let mut tokens = whisper.tokenizer.initial_tokens(
-        cfg.language,
-        cfg.translate,
-        cfg.timestamps,
-        english_only,
-    );
+    // Previous-window context: `<|startofprev|> <text…>` ahead of the usual
+    // prompt. The budget is exact, not openai's fixed 223: every Whisper
+    // decoder has 448 positions, and prompt + generation must fit them —
+    // `<|startofprev|>` + prev text + the SOT sequence + `max_tokens`
+    // generated. A cap of 223 overflowed position 448 on any window that
+    // generated to its 224-token limit, which is exactly the windows hard
+    // enough to be running with fallback context in the first place.
+    const N_TEXT_CTX: usize = 448;
+    let initial =
+        whisper.tokenizer.initial_tokens(cfg.language, cfg.translate, cfg.timestamps, english_only);
+    let mut tokens = Vec::new();
+    if !cfg.prev_text_tokens.is_empty() {
+        let budget = N_TEXT_CTX.saturating_sub(cfg.max_tokens + initial.len() + 1);
+        if budget > 0 {
+            tokens.push(whisper.tokenizer.prev);
+            let skip = cfg.prev_text_tokens.len().saturating_sub(budget);
+            tokens.extend_from_slice(&cfg.prev_text_tokens[skip..]);
+        }
+    }
+    tokens.extend(initial);
     let prompt_len = tokens.len();
 
     // The reference twin stays one env var away, so any suspected regression
@@ -425,6 +537,15 @@ fn decode_once(
         if next == eot {
             break;
         }
+        // Short-context rung only: a decode whose running mean is already
+        // clearly under the acceptance bar is headed for rejection — stop
+        // paying for it. 14 tokens before judging, so one bad opening word
+        // cannot trigger it.
+        if let Some(bar) = cfg.early_abort_logprob {
+            if generated >= 14 && logprob_sum / generated as f32 <= bar {
+                break;
+            }
+        }
     }
     p.count_tokens(tokens.len() - prompt_len);
     let avg = if generated > 0 { logprob_sum / generated as f32 } else { f32::NEG_INFINITY };
@@ -533,6 +654,17 @@ fn apply_logit_filters(
     // emitted end-of-text.
     if generated.is_empty() {
         let last_allowed = tk.timestamp_begin + MAX_INITIAL_TIMESTAMP_INDEX;
+        suppress_range(logits, (last_allowed + 1).min(vocab)..vocab);
+    }
+
+    // When the encoder ran on a shortened context, a timestamp past the
+    // encoded extent points at audio the model never saw. The 2026-07 prune
+    // of the variable-length window (mission plan §6.4) decoded without this
+    // mask; timestamps drifting past the real audio is one of the ways a
+    // truncated window destabilizes.
+    if let Some(max_secs) = cfg.max_timestamp_secs {
+        let last_allowed =
+            tk.timestamp_begin.saturating_add((max_secs / 0.02).floor().max(0.0) as u32);
         suppress_range(logits, (last_allowed + 1).min(vocab)..vocab);
     }
 

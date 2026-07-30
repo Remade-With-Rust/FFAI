@@ -4,26 +4,32 @@
 //! Mercury owns both directions of speech: **ASR** (speech → text) and
 //! **TTS** (text → speech).
 //!
-//! Engine lineup (Phase 0 = registered stubs, see ROADMAP.md for landing
-//! order):
+//! Engine lineup:
 //!
-//! | Engine | Task | Plan |
+//! | Engine | Task | Status |
 //! |---|---|---|
-//! | `whisper-candle` | asr | OpenAI Whisper on candle-transformers — the reference engine, first to go live |
-//! | `oxiwhisper` | asr | cool-japan's pure-Rust GGUF Whisper — quantized/CPU-lean alternative |
-//! | `any-tts` | tts | trait-based candle TTS (Kokoro, Qwen3-TTS, VibeVoice, …) |
-//! | `voirs` | tts | full G2P→acoustic→vocoder framework (VITS/FastSpeech2 + HiFi-GAN) |
+//! | `whisper-candle` | asr | **live** — OpenAI Whisper on candle: our own mel front-end, tokenizer grammar, decode loop, audio encoder, AVX2 kernels. Sizes and q8_0 variants are named configurations of the same engine |
+//! | `piper-candle` | tts | **live** — the full VITS stack on candle, running piper's own voice files; deterministic, oracle-exact against piper's runtime |
+//! | `oxiwhisper` | asr | stub — cool-japan's pure-Rust GGUF Whisper, on the watchlist |
+//! | `any-tts` | tts | stub — trait-based candle TTS (Kokoro, Qwen3-TTS, VibeVoice, …) |
+//! | `voirs` | tts | stub — alternative G2P→acoustic→vocoder lineage |
 //!
-//! The WhisperX layer (silero VAD, wav2vec2 forced alignment for word
-//! timestamps, diarization) is exposed through [`ffai_core::engine::AsrOptions`]
-//! — `word_timestamps` and `diarize` — and lands as Phase 1.5 on top of any
-//! ASR engine.
+//! The WhisperX layer (energy VAD, wav2vec2 forced alignment for word
+//! timestamps, ECAPA-TDNN diarization with cross-call speaker persistence) is
+//! exposed through [`ffai_core::engine::AsrOptions`] — `word_timestamps`,
+//! `diarize`, `persist_speakers` — as flags on any ASR engine, not a fork.
+//!
+//! TTS is decomposed the same way ([`tts`]): [`tts::phonemize`] is a
+//! clean-room pure-Rust G2P over CMUdict, so nothing GPL is linked (espeak-ng
+//! — the reason piper itself is GPL — serves only as an out-of-process test
+//! oracle). Synthesis knobs live on [`ffai_core::engine::TtsOptions`], and
+//! `seed` makes output byte-identical run over run.
 
 pub mod asr;
 pub mod tts;
 
 pub use asr::{OxiWhisper, WhisperCandle};
-pub use tts::{AnyTts, Voirs};
+pub use tts::{AnyTts, PiperCandle, Voirs};
 
 use std::sync::Arc;
 

@@ -765,6 +765,17 @@ impl Attention {
             })?;
             return super::profile::timed(&p.xa_out, || self.out.forward(&merged));
         }
+        // A multi-token prompt prefill (previous-window conditioning) has
+        // 1 < qlen < keys, a shape the fused kernel declines — and q
+        // deliberately stays f32 while the cache may be f16, so the fallback
+        // matmul would face mixed dtypes. Widen K/V for this one call: it
+        // runs once per window, and every per-token step after it still
+        // reads the f16 cache through the kernel.
+        let (k, v) = if q.dtype() != k.dtype() {
+            (k.to_dtype(q.dtype())?, v.to_dtype(q.dtype())?)
+        } else {
+            (k, v)
+        };
         let qk = super::profile::timed(&p.xa_qk, || q.matmul(&k))?;
         let w = super::profile::timed(&p.xa_softmax, || fast_softmax(&qk))?;
         let ctx = super::profile::timed(&p.xa_wv, || w.matmul(&v))?;

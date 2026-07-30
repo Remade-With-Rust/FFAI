@@ -274,6 +274,46 @@ pub fn timed<T>(stage: &Stage, f: impl FnOnce() -> T) -> T {
     out
 }
 
+/// Zero every bucket, so a harness can warm up (model load, precision
+/// calibration) outside the measured region and then start clean.
+pub fn reset() {
+    let p = profile();
+    let stages = [
+        &p.mel,
+        &p.encoder,
+        &p.decoder,
+        &p.sampling,
+        &p.dec_embed,
+        &p.dec_self_attn,
+        &p.dec_cross_attn,
+        &p.dec_mlp,
+        &p.dec_final,
+        &p.enc_conv,
+        &p.enc_attn,
+        &p.enc_mlp,
+        &p.xa_qproj,
+        &p.em_ln,
+        &p.em_fc1,
+        &p.em_gelu,
+        &p.em_fc2,
+        &p.ea_proj,
+        &p.ea_prep,
+        &p.ea_kernel,
+        &p.ea_merge,
+        &p.xa_prep,
+        &p.xa_qk,
+        &p.xa_softmax,
+        &p.xa_wv,
+        &p.xa_merge,
+        &p.xa_out,
+    ];
+    for s in stages {
+        s.nanos.store(0, Ordering::Relaxed);
+        s.calls.store(0, Ordering::Relaxed);
+    }
+    p.tokens.store(0, Ordering::Relaxed);
+}
+
 /// Marker so `AtomicBool` stays available if a per-run reset lands later.
 #[allow(dead_code)]
 type Unused = AtomicBool;

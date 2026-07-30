@@ -1,6 +1,6 @@
 # ffai-mercury
 
-**Speech recognition in pure Rust, with the full WhisperX layer** — voice activity detection, word-level timestamps, and speaker diarization. No Python, no C/C++ by default, no HuggingFace token, no gated weights.
+**Speech recognition and speech synthesis in pure Rust.** ASR with the full WhisperX layer — voice activity detection, word-level timestamps, speaker diarization — and TTS running piper's own voices on candle. No Python, no C/C++ by default, no HuggingFace token, no gated weights, and nothing GPL.
 
 Mercury is [FFai](https://github.com/Remade-With-Rust/FFAI)'s voice component. Standalone landing page: [Remade-With-Rust/mercury](https://github.com/Remade-With-Rust/mercury).
 
@@ -88,11 +88,60 @@ Measured on conversations fed as 8 s chunks, scoring DER over the whole concaten
 
 `Transcript` renders to plain text, SRT, WebVTT (with inline `<mm:ss.mmm>` word tags when word timestamps are on), and JSON carrying words and speaker turns.
 
+## Synthesize
+
+```rust
+use ffai_core::engine::{TtsEngine, TtsOptions};
+use ffai_mercury::tts::PiperCandle;
+
+let engine = PiperCandle::new();
+let audio  = engine.synthesize("The birch canoe slid on the smooth planks.",
+                               &TtsOptions::default())?;
+ffai_media::save_wav("out.wav".as_ref(), &audio)?;
+```
+
+`piper-candle` is the full VITS stack on candle — text encoder with relative-position attention, stochastic duration predictor with spline flows, residual coupling flow, HiFi-GAN — running the **same voice files** [piper](https://github.com/OHF-Voice/piper1-gpl) runs, converted locally from the voice's own `.onnx` (see `models/piper-vits-lessac-medium.toml`).
+
+| Option | Effect |
+|---|---|
+| `speed` | playback rate; 1.0 = the voice's own timing |
+| `noise_scale` / `noise_w` | acoustic and duration variation; `0.0` = fully deterministic audio |
+| `seed` | noise seed — same text + same seed = **byte-identical WAV** |
+| `sentence_silence_s` | gap between sentences of long-form input |
+
+Long-form input is segmented into sentences, synthesized per sentence, and joined — `ffai tts` on a paragraph just works.
+
+### The phonemizer is ours, and that is a licensing decision
+
+piper is GPL-3.0 because it embeds espeak-ng. Mercury's G2P is a clean-room pure-Rust implementation over CMUdict (BSD-2-Clause) that emits espeak-compatible IPA; espeak-ng participates **only as an out-of-process test oracle** over pinned corpora, and nothing GPL is linked, vendored, or shipped. The honest cost, stated rather than buried: **en-US only** for now, where piper covers 40+ languages.
+
+### What is measured
+
+- **Oracle-exact against piper's own runtime** at zero noise: text encoder to 4e-6, per-phoneme durations **integer-exact**, end-to-end waveform to 3e-5.
+- **The phonemizer passed its substitution gate** — our phonemes fed through piper's own runtime score round-trip WER inside the 5 % band of espeak's.
+- **Quality: parity.** Round-trip WER through a frozen whisper.cpp judge (never our own ASR — no self-grading): **5.91 %, byte-stable on every run**, against piper's own 4.8–6.5 % across runs. Piper samples noise in-graph and cannot repeat a number, so it is scored as the mean of independent draws with the range recorded. Parity through this instrument — not superiority; the instrument cannot support more.
+- **Determinism**: verified at both library and file-hash level. Piper structurally cannot offer it.
+- **Footprint and load ahead**: 172–208 MiB steady vs piper's 217–240; load 0.26–0.35 s vs ~1.8–2.6 s.
+- **Speed behind, closing, not claimable**: 3.2× → 19–20× realtime warm across five profiled campaigns; piper measures 25–32× here. Function-by-function against piper's runtime, Mercury's upsamplers and duration predictor are ~1.9× **faster** and the text encoder is at parity — the gap lives in two convolution kernels with measured targets. The speed gate reads FAIL on every fair ledger line.
+
 ## Status: `experimental`, honestly
 
-Measured against whisper.cpp on two hash-pinned 134-clip LibriSpeech holdouts, matched greedy decoding, CPU only, tiny.en: **6.79 % / 16.43 % WER** against their 7.58 % / 16.82 %, ahead on CER on both, at 1.01–1.09× throughput and lower memory. Every number traces to a line in [`bench/ledger.jsonl`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl).
+**ASR — all four gates PASS on both holdouts.** Measured against whisper.cpp
+on two hash-pinned 134-clip LibriSpeech holdouts, matched greedy decoding,
+CPU only, tiny.en: **7.27 % / 16.89 % WER** against their 7.58 % / 16.82 %,
+at **27.8× / 33.3× realtime** against their 25.9× / 19.6×, on 0.84–0.92× the
+steady memory. Speed had failed every previous ledger line; **adaptive
+encoder context** closed it — each window is encoded at a context sized to
+the audio present rather than always 30 s, with guards that escalate a
+suspect decode back to the full context. Function-by-function, Mercury is
+now ahead of whisper.cpp on **every** stage: encode ~2.0×, decode 1.1–1.2×,
+mel 1.4×, sampling 1.7–2.0×.
 
-Not yet `stable`: word-level timestamp error is gated at utterance granularity rather than milliseconds, and the diarization corpus has no speaker overlap — it gates regression, not readiness. TTS is a registered stub.
+**TTS** — three of four gates pass against piper1-gpl on a pinned 200-sentence corpus (correctness, quality, footprint); speed does not, and is reported as failing.
+
+Every number traces to a line in [`bench/ledger.jsonl`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl). Full campaign histories, every reverted experiment included: [ASR](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/finished/mercury-mission-plan.md) · [TTS](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/mercury-tts-mission.md).
+
+Not yet `stable`: ASR word-timestamp error is gated at utterance granularity rather than milliseconds and the diarization corpus has no speaker overlap — those gate regression, not readiness. TTS is en-US, single-voice, and behind on synthesis speed. `any-tts` and `voirs` remain registered stubs.
 
 ## License
 

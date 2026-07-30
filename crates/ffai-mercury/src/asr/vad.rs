@@ -113,6 +113,23 @@ fn percentile(sorted: &[f32], p: f64) -> f32 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
+/// Speech-to-floor energy contrast in dB: how far the loud frames (p90) sit
+/// above the noise floor (p10). Clean recordings show large contrast —
+/// speech against near-silence; noisy channels compress it, because the
+/// "silence" is noise. One pass over the samples, microseconds against the
+/// encoder pass it helps route, so the adaptive-context dispatcher can send
+/// low-contrast (noisy) windows straight to the full 30 s context without
+/// paying for a doomed short-context attempt first.
+pub fn energy_contrast_db(samples: &[f32]) -> f32 {
+    let energies = frame_energies(samples);
+    if energies.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = energies;
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    percentile(&sorted, 0.90) - percentile(&sorted, FLOOR_PERCENTILE)
+}
+
 /// Find speech regions in 16 kHz mono samples.
 ///
 /// Returns non-overlapping, ascending regions. An empty result means "no

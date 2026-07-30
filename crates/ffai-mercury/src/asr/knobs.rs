@@ -158,6 +158,12 @@ pub static GEMV_PAD_DISABLED: Flag = Flag::new("FFAI_GEMV_PAD", "off");
 /// be interleaved in one process.
 pub static ENC_KT_DISABLED: Flag = Flag::new("FFAI_ENC_KT", "off");
 
+// `FFAI_PREV_CONTEXT` and `FFAI_ADAPTIVE_CTX` are deliberately NOT here:
+// they are per-transcribe decisions read directly from the environment in
+// `whisper_candle::transcribe`, so `ab_clips` (which flips its B arm by
+// setting the variable between calls) sees the flip. A cached Flag would
+// hand that harness two identical arms.
+
 #[cfg(test)]
 mod tests {
     use super::*;
