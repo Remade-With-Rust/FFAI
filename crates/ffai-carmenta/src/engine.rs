@@ -184,7 +184,10 @@ impl OcrEngine for CraftCrnn {
             |p| &p.det_pre,
             || -> Result<_> {
                 let gray = image::to_gray_f32(img)?;
-                let (input, scale) = image::craft_input(&gray, w, h, &m.device)?;
+                // Detection sees COLOR (chroma contrast is real signal on
+                // photographs); recognition crops stay grayscale (both rec
+                // lineages take gray, and their gates were earned on it).
+                let (input, scale) = image::craft_input_color(img, &m.device)?;
                 Ok((gray, input, scale))
             },
         )?;

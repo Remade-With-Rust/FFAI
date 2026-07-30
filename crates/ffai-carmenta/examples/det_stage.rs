@@ -12,9 +12,9 @@ fn main() {
     for path in std::fs::read_to_string(&list).unwrap().lines().filter(|l| !l.trim().is_empty()) {
         let img = ffai_media::load_image(std::path::Path::new(path.trim())).unwrap();
         let (w, h) = (img.width as usize, img.height as usize);
-        let gray = ffai_carmenta::image::to_gray_f32(&img).unwrap();
+        let _ = (w, h);
         let t0 = std::time::Instant::now();
-        let (input, scale) = ffai_carmenta::image::craft_input(&gray, w, h, &dev).unwrap();
+        let (input, scale) = ffai_carmenta::image::craft_input_color(&img, &dev).unwrap();
         let maps = craft.forward(&input).unwrap();
         let (mh, mw, _) = maps.dims3().unwrap();
         let flat = maps.flatten_all().unwrap().to_vec1::<f32>().unwrap();

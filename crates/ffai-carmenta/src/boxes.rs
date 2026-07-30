@@ -21,13 +21,24 @@ pub struct DetBox {
 pub const TEXT_THRESHOLD: f32 = 0.7;
 pub const LINK_THRESHOLD: f32 = 0.4;
 pub const LOW_TEXT: f32 = 0.4;
+
+/// Env-sweepable overrides for the det-stage campaign (photo text peaks
+/// below the reference defaults; the sweep decides, per-corpus CER gates).
+pub fn text_threshold() -> f32 {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("FFAI_DET_TEXT_THR").ok().and_then(|v| v.parse().ok()).unwrap_or(TEXT_THRESHOLD))
+}
+pub fn low_text() -> f32 {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("FFAI_DET_LOW").ok().and_then(|v| v.parse().ok()).unwrap_or(LOW_TEXT))
+}
 /// Components smaller than this many map pixels are noise.
 const MIN_AREA: usize = 10;
 
 /// Extract word-level boxes from the two maps (row-major, `w` × `h`).
 pub fn extract_boxes(region: &[f32], affinity: &[f32], w: usize, h: usize) -> Vec<DetBox> {
     let mut mask: Vec<bool> =
-        (0..w * h).map(|i| region[i] >= LOW_TEXT || affinity[i] >= LINK_THRESHOLD).collect();
+        (0..w * h).map(|i| region[i] >= low_text() || affinity[i] >= LINK_THRESHOLD).collect();
     let mut boxes = Vec::new();
     let mut stack = Vec::new();
 
@@ -65,7 +76,7 @@ pub fn extract_boxes(region: &[f32], affinity: &[f32], w: usize, h: usize) -> Ve
                 stack.push(i + w);
             }
         }
-        if area >= MIN_AREA && peak >= TEXT_THRESHOLD {
+        if area >= MIN_AREA && peak >= text_threshold() {
             boxes.push(DetBox { x0, y0, x1, y1, score: peak });
         }
     }

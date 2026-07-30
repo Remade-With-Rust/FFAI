@@ -107,7 +107,7 @@ pub fn resize_bicubic(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -
 pub fn craft_input(gray: &[f32], w: usize, h: usize, device: &Device) -> Result<(Tensor, f32)> {
     const CANVAS: f32 = 2560.0;
     let long_side = w.max(h) as f32;
-    let scale = det_scale().min(CANVAS / long_side);
+    let scale = det_effective_scale(long_side).min(CANVAS / long_side);
 
     let (rw, rh) = (((w as f32 * scale) as usize).max(1), ((h as f32 * scale) as usize).max(1));
     let resized = resize_bilinear(gray, w, h, rw, rh);
@@ -177,6 +177,29 @@ fn det_scale() -> f32 {
     *SCALE.get_or_init(|| {
         std::env::var("FFAI_DET_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0)
     })
+}
+
+/// ADAPTIVE detection scale (the CORD spike fix): normalize the long side
+/// toward a target so small photos get magnified above CRAFT's measured
+/// ~8px glyph floor (7 of the 13 worst per-clip spikes were 576x864
+/// receipts with ~10px text) and camera-resolution monsters get capped
+/// (10.5s / 7.8GB class). `FFAI_DET_TARGET=0` disables (fixed-scale
+/// behaviour); FFAI_DET_SCALE still multiplies on top for sweeps.
+fn det_target() -> f32 {
+    use std::sync::OnceLock;
+    static T: OnceLock<f32> = OnceLock::new();
+    *T.get_or_init(|| {
+        std::env::var("FFAI_DET_TARGET").ok().and_then(|v| v.parse().ok()).unwrap_or(1536.0)
+    })
+}
+
+pub(crate) fn det_effective_scale(long_side: f32) -> f32 {
+    let base = det_scale();
+    let t = det_target();
+    if t <= 0.0 {
+        return base;
+    }
+    base * (t / long_side).clamp(0.375, 2.0)
 }
 
 /// Horizontal ink extent of a single-line strip: columns whose maximum
@@ -256,6 +279,44 @@ pub fn split_ink_words(
         words.push((x0 + st, x0 + ink.len() - gap.min(ink.len())));
     }
     words
+}
+
+/// CRAFT input from the FULL-COLOR frame. The gray path (above) replicates
+/// luma to three channels — correct for grayscale sources, but on real
+/// photographs it ERASES chroma contrast: red-on-white or stamped text can
+/// be near-isoluminant, its region scores collapse, and no threshold
+/// recovers it (measured: 63% coverage vs paddle on CORD, bit-identical
+/// across threshold sweeps — the threshold-insensitivity was the tell).
+/// Same scale/pad/normalize contract as `craft_input`.
+pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, f32)> {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let bpp = img.format.bytes_per_pixel();
+    if bpp == 1 {
+        let gray = to_gray_f32(img)?;
+        return craft_input(&gray, w, h, device);
+    }
+    const CANVAS: f32 = 2560.0;
+    let long_side = w.max(h) as f32;
+    let scale = det_effective_scale(long_side).min(CANVAS / long_side);
+    let (rw, rh) = (((w as f32 * scale) as usize).max(1), ((h as f32 * scale) as usize).max(1));
+    let (cw, ch) = (rw.div_ceil(32) * 32, rh.div_ceil(32) * 32);
+    const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+    const STD: [f32; 3] = [0.229, 0.224, 0.225];
+    let mut chw = vec![0f32; 3 * cw * ch];
+    for c in 0..3 {
+        let plane: Vec<f32> = (0..w * h).map(|i| img.data[i * bpp + c] as f32).collect();
+        let resized = resize_bilinear(&plane, w, h, rw, rh);
+        let (mean, std) = (MEAN[c], STD[c]);
+        let dst = &mut chw[c * cw * ch..(c + 1) * cw * ch];
+        dst.fill((0.0 - mean) / std);
+        for y in 0..rh {
+            for x in 0..rw {
+                dst[y * cw + x] = (resized[y * rw + x] / 255.0 - mean) / std;
+            }
+        }
+    }
+    let t = Tensor::from_vec(chw, (1, 3, ch, cw), device).map_err(candle_err)?;
+    Ok((t, scale))
 }
 
 pub fn candle_err(e: candle_core::Error) -> Error {
