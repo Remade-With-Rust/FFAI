@@ -1,5 +1,14 @@
 # WHYS — the side-by-side, the residual gap, and the padding lever
 
+> **Provenance note.** This campaign's code shipped in commit `103ec35`, whose
+> message reads "Mercury crate docs: TTS is live, not a stub" — a concurrent
+> session staged and committed everything in the tree while this work was
+> waiting to be committed under its own message. The commit was pushed before
+> that was noticed, so the message stands (pushed history is not rewritten
+> here) and **this file is the campaign's record**. Ledger lines:
+> `bench-asr-1785387940` (test-clean), `-1785388172` (test-other),
+> `-1785388224` (long-form).
+
 **Mission:** side-by-side Mercury vs whisper.cpp; localize where we are
 slower; find a lever that is faster AND higher quality.
 Method: `codec-six-whys-unknowns` + `codec-content-adaptive-dispatch`.
