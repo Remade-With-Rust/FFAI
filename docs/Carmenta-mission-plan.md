@@ -751,6 +751,51 @@ and precision is high but our box COUNT runs ~2× paddle's on the same image
 fragment reads. The next brick is line-assembly/merge policy — measured as
 token-count and insertion/deletion ratios against paddle, not by eye.
 
+### 8.9 Error composition — the over-segmentation hypothesis, refuted
+
+§8.8 closed by naming "insertion-dominated error from over-segmentation" as
+the next brick. Measured by Levenshtein BACKTRACE (word-level ins/del/sub
+against the same GT), it is wrong, and the reasoning behind it was wrong in
+three separate ways worth recording so they are not repeated:
+
+| | ins | del | sub | hits | ins % | sub % |
+|---|---:|---:|---:|---:|---:|---:|
+| ours (craft-crnn) | 123 | **103** | 374 | 550 | 20 % | **62 %** |
+| paddle | 46 | **103** | 192 | 732 | 13 % | 56 % |
+
+- **Substitutions dominate (62 %)**: we MISREAD text we detected and
+  cropped correctly. Insertions are a minor term.
+- **Word counts: ours 1.02x GT, paddle 0.94x.** We emit the right AMOUNT of
+  text — there is no junk bloat.
+- **Deletions are identical, 103 vs 103.** Both engines miss the same text
+  (CORD's blurred regions), which independently confirms §8.8's coverage
+  result and closes the recall question.
+- box-count ratio vs word-count ratio correlates **+0.17** — over-
+  segmentation does not predict output bloat; the splitter recovers.
+
+**Why the hypothesis was wrong.** (1) "bag > seq implies insertions" is
+BACKWARDS — substitutions that change a word's sort position inflate bag
+CER, while pure insertions cost the same either way. (2) The "2x box count"
+cited as evidence is the word-vs-line GRANULARITY artifact this same plan
+had already debunked in §8.8. (3) The "90 % of error is not recognition"
+framing compared PARSeq's stage quality (1.5 %) against craft-crnn's
+pipeline number (27.3 %) — two different engines.
+
+**Where the gap actually is.** Normalizing each pipeline against its OWN
+recognizer's true-crop score: ours degrades 10.9 -> 27.3 % (2.5x), paddle
+3.0 -> 15.6 % (5.2x). Our detection and cropping are proportionally BETTER
+than theirs; the whole pipeline gap (1.75x) is smaller than the raw
+recognizer gap (3.6x). **The CRNN is the deficit, not segmentation.**
+
+**Next brick, evidence-backed:** feed CRAFT's word boxes to PARSeq
+DIRECTLY. We already own a recognizer that beats paddle's (1.5 % vs 3.0 %
+on identical crops); it reads 33.4 % in-pipeline only because the ink-gap
+splitter re-derives word boxes badly on photographs — and the census says
+that re-derivation is unnecessary: **1230 CRAFT boxes against 1027 GT
+words**. Deleting the line-merge-then-resplit round trip is simpler than
+what exists AND the only route that passes paddle rather than approaching
+it.
+
 ### 8.4 PARSeq-tiny port: oracle PASS; engine variant open with a localized defect
 
 The port landed and is PROVEN at the stage level: ViT-tiny encoder +
