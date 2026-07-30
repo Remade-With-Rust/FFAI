@@ -275,17 +275,21 @@ and [docs/whys/](docs/whys/); every number traces to a line in
 encoder with relative-position attention, stochastic duration predictor
 with spline flows, residual coupling flow, HiFi-GAN) implemented on candle,
 running the SAME voice files [piper1-gpl](https://github.com/OHF-Voice/piper1-gpl)
-runs, converted locally from the voice's own `.onnx`. The phonemizer is a
-clean-room pure-Rust G2P built on CMUdict (BSD): espeak-ng — GPL, and the
-reason piper itself is GPL — participates only as an out-of-process test
-oracle, and nothing GPL ships. English (en-US) only for now; that is the
-honest cost of the license line, stated rather than buried.
+runs — fetched from the public, ungated `rhasspy/piper-voices` and read
+straight from ONNX by our own pure-Rust reader, with no conversion step, no
+Python, and no ONNX runtime. The phonemizer is a clean-room pure-Rust G2P
+built on CMUdict (BSD): espeak-ng — GPL, and the reason piper itself is GPL
+— participates only as an out-of-process test oracle, and nothing GPL ships.
+English (en-US) only for now; that is the honest cost of the license line,
+stated rather than buried.
 
 **Correctness is oracle-exact.** Against piper's own onnxruntime at zero
 noise, every stage matches: text encoder to 4e-6, per-phoneme durations
 integer-exact, end-to-end waveform to 3e-5. The pure-Rust phonemizer passed
 its substitution gate — our phonemes through piper's runtime score within
-the 5 % round-trip band of espeak's own.
+the 5 % round-trip band of espeak's own. And the ONNX reader that replaced
+the Python converter is byte-identical to it: 350 tensors, 15.65 M floats,
+132 convolution geometries and the audio itself, all exact.
 
 **Quality: parity, measured the hard way.** Round-trip WER through a frozen
 whisper.cpp judge (never our own ASR — no self-grading): **Mercury 5.91 %,
