@@ -15,7 +15,9 @@ ffai asr -i talk.wav -o talk.vtt --word-timestamps    # VTT with inline word tim
 ffai tts "Hello from FFai." -o hello.wav               # piper voices, pure Rust
 ffai tts -o out.wav --seed 42 "Same seed, same bytes."  # byte-stable synthesis
 ffai tts -o long.wav "Long form works. Sentences split; silence is a knob."
-ffai ocr -i receipt.png --engine easy-ocr
+ffai ocr -i page.png                                  # CRAFT + CRNN, pure Rust
+ffai ocr -i photo.png --engine craft-parseq           # word-level AR rec for photos
+ffai ocr --live --watch 5 -i captures/ -o screen.srt  # LIVE: point it at a screen
 ffai caption -i frame.png --prompt "what is happening here?"
 ffai engines        # list every engine + status, like `ffmpeg -codecs`
 ffai models         # list model manifests, licenses, cache status
@@ -26,7 +28,7 @@ ffai models         # list model manifests, licenses, cache status
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, ahead of whisper.cpp on WER+CER on both holdouts and on memory, 1.01–1.09× on speed. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, behind on synthesis speed ([Status](#status)) |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | Pending Build |
+| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, p95 230 ms/frame vs per-frame Tesseract's 377. Recognition beats PaddleOCR's own recognizer on identical real-photo crops (1.5 % vs 3.0 % CER); full-pipeline photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -284,8 +286,45 @@ reverted experiment included:
 [docs/mercury-tts-mission.md](docs/mercury-tts-mission.md); every number
 above traces to a line in [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
-OCR (Carmenta) and VLM (Argus) remain honest `stub`s — visible as such
-in `ffai engines`. See [ROADMAP.md](ROADMAP.md) for the build-out order.
+### Carmenta OCR: live, measured against PaddleOCR — the honest split
+
+Two engines run today, both the EasyOCR-lineage stack reimplemented on
+candle and oracle-matched against PyTorch (detection maps to <5e-3,
+recognition to the exact per-step argmax): `craft-crnn` (line-level CTC,
+the default) and `craft-parseq` (word-level AR with the refinement pass).
+
+**Where Carmenta wins, measured:**
+
+- **The recognition stage beats PaddleOCR's own mobile recognizer** on 400
+  identical real-photo word crops with quad-level ground truth: **1.5 % vs
+  3.0 % CER, 93 % vs 88 % exact-match, at 2.6× lower latency.**
+- **LIVE streaming** (a capability the incumbents don't have): change-gated
+  frame reading at steady **p95 230 ms vs 377 ms** for per-frame Tesseract,
+  **zero output churn** across 156 unchanged frames where stateless engines
+  churn 24 times, 24/24 text changes caught, memory flat over a 30-minute
+  soak (ratio 1.041).
+- Against the lineage it reimplements: **~5× better CER than the EasyOCR
+  pipeline on pages** (0.73 % vs 3.65 %) — line-level composition dodges its
+  word-segmentation errors.
+
+**Where PaddleOCR still wins, stated plainly:** the full pipeline on real
+photographs. On 45 photographed receipts (CORD-v2, CC-BY), PaddleOCR mobile
+scores **15.6 % CER to our 27.2 %** — despite our stronger recognition
+stage. Stage-level instrumentation localized the gap: tilt-sensitive line
+grouping between detection and recognition (deskew is the named fix), a
+share of ground-truth inflation from CORD's privacy-blurred regions that
+taxes every engine, and detection latency (5.6 s vs 2.9 s per receipt after
+adaptive scaling; was 10.5 s). Synthetic corpora tell the same story in
+miniature: Paddle 0.02 % vs our 0.31 % on clean pages. The refuted
+hypotheses (thresholds, color input) are recorded alongside the confirmed
+ones in the mission plan's campaign log.
+
+Full campaign history:
+[docs/Carmenta-mission-plan.md](docs/Carmenta-mission-plan.md) §8; every
+number traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
+
+VLM (Argus) remains an honest `stub` — visible as such in `ffai engines`.
+See [ROADMAP.md](ROADMAP.md) for the build-out order.
 
 ## Install
 
