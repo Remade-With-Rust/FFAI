@@ -61,6 +61,29 @@ impl PiperCandle {
     }
 }
 
+impl PiperCandle {
+    /// The phonemes this engine will feed the model for `text`, one entry per
+    /// sentence — the G2P's actual output.
+    ///
+    /// Exposed because it is the stage most worth inspecting: pronunciation
+    /// bugs are invisible in a waveform and obvious in IPA. It runs the SAME
+    /// chunker and phonemizer [`TtsEngine::synthesize`] does, so what a caller
+    /// displays is what the model was given, not a re-derivation that could
+    /// drift from it.
+    pub fn phonemes(&self, text: &str) -> Result<Vec<String>> {
+        let loaded = self.load()?;
+        super::chunk::sentences(text)
+            .iter()
+            .map(|s| loaded.phonemizer.phonemize(s))
+            .collect()
+    }
+
+    /// The voice's native sample rate, once loaded.
+    pub fn sample_rate(&self) -> Result<u32> {
+        Ok(self.load()?.vits.sample_rate)
+    }
+}
+
 impl Default for PiperCandle {
     fn default() -> Self {
         Self::new()

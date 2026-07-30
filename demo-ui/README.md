@@ -1,16 +1,22 @@
-# FFai side-by-side demo
+# FFai demo — Mercury, both directions
 
-Mercury and whisper.cpp transcribing the **same microphone audio**, next to
-each other, so you can read whether they agree.
+Two tabs:
+
+- **Listen** — Mercury and whisper.cpp transcribing the **same microphone
+  audio**, next to each other, so you can read whether they agree.
+- **Speak** — Mercury synthesizing whatever you type, with the phonemes, the
+  sentence split, and a determinism check on screen.
 
 ```sh
 # 1. build the UI (wasm)
 cd demo-ui && dx build --platform web --release && cd ..
 
-# 2. run the server (loads Mercury, finds whisper.cpp)
+# 2. run the server (loads Mercury ASR + the voice, finds whisper.cpp)
 cargo run --release -p ffai-demo
 
-# 3. open http://127.0.0.1:8787  → Start → talk → Stop
+# 3. open http://127.0.0.1:8787
+#    Listen → Start → talk → Stop
+#    Speak  → type → Speak
 ```
 
 ## How it fits together
@@ -45,11 +51,51 @@ runs best-of-N over a hash-pinned corpus:
 ffai bench asr --corpus corpora/librispeech-test-clean-v2.toml
 ```
 
-## What the demo is for
+## What the Listen tab is for
 
 Reading the **text**. Both run tiny.en at matched greedy settings, so where the
 two panes differ, that difference is the implementations — which is the only
 thing this demo is evidence of.
+
+## The Speak tab
+
+```
+browser  ──text + knobs as JSON──▶  POST /synthesize
+                                        │
+                    phonemize (our G2P) → sentence split → VITS on candle
+                                        │
+   WAV as a data URL, plus phonemes, timings, sha256  ◀── JSON response
+```
+
+Three things are on screen that a WER table cannot show:
+
+**The phonemes.** Pronunciation bugs are invisible in a waveform and obvious
+in IPA. What is displayed comes from `PiperCandle::phonemes`, which runs the
+same chunker and phonemizer `synthesize` does — so it is what the model
+received, not a re-derivation that could drift from it.
+
+**The sentence split.** Long-form text is synthesized per sentence and joined
+with a silence gap, so where the cuts land is a real decision, shown.
+
+**Determinism, checkable.** *Speak twice · prove determinism* synthesizes the
+same input twice and compares a SHA-256 of the **samples** (not the WAV — a
+header carries a length that would make two renderings match for a trivial
+reason). Identical hashes are the claim piper structurally cannot make: it
+samples noise inside its ONNX graph with no seed control, so it cannot
+reproduce its own output. Set `noise_scale` and `noise_w` to 0 for audio that
+is deterministic by construction rather than by seed.
+
+The ×realtime figure is **one warm call on a machine you are also using**. It
+collapses under load — measured 20× on an idle box and under 2× with the cores
+saturated — so read it as a liveness check. For the measured comparison:
+
+```sh
+ffai bench tts --corpus corpora/harvard-sentences-v1.toml
+```
+
+That gate currently reads **FAIL**: Mercury synthesizes at 19–20× realtime
+against piper's 25–32× on a quiet machine. The demo does not hide it and
+neither does the tab.
 
 ## Notes
 

@@ -25,8 +25,10 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use ffai_core::engine::{AsrEngine, AsrOptions};
+use ffai_core::engine::{AsrEngine, AsrOptions, TtsEngine, TtsOptions};
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::tts::PiperCandle;
+use serde_json::json;
 
 const ADDR: &str = "127.0.0.1:8787";
 /// Cap the posted body. A microphone chunk is a few hundred KB; anything
@@ -38,6 +40,17 @@ struct Engines {
     mercury: WhisperCandle,
     whisper_cli: Option<PathBuf>,
     model: PathBuf,
+}
+
+/// The TTS engine lives behind its OWN lock, not inside `Engines`.
+///
+/// Sharing one mutex would serialise synthesis behind transcription: the ASR
+/// demo holds its guard for the length of a whisper.cpp subprocess, so a
+/// `Synthesize` click during a live session would block on it for a second or
+/// more and look like the TTS engine was slow. Two locks, two independent
+/// paths, and the speak tab stays responsive while the listen tab runs.
+struct Speaker {
+    piper: PiperCandle,
 }
 
 fn main() {
@@ -59,6 +72,7 @@ fn main() {
         whisper_cli,
         model,
     }));
+    let speaker = Arc::new(Mutex::new(Speaker { piper: PiperCandle::new() }));
 
     // Warm Mercury before serving so the first click is not paying model load.
     // The same courtesy the bench harness extends to every implementation.
@@ -72,6 +86,19 @@ fn main() {
         let _ = g.mercury.transcribe(&silence, &AsrOptions::default());
     }
 
+    // Warm the voice too, for the same reason — and report the failure here
+    // rather than inside the first click, since an unconverted voice is a
+    // setup problem with a one-command fix.
+    eprintln!("loading the voice (piper-vits-lessac-medium) ...");
+    if let Ok(g) = speaker.lock() {
+        if let Err(e) = g.piper.synthesize("Warm up.", &TtsOptions::default()) {
+            eprintln!(
+                "note: TTS unavailable — {e}\n      The Speak tab will show this message; \
+                 the Listen tab is unaffected."
+            );
+        }
+    }
+
     let listener = match TcpListener::bind(ADDR) {
         Ok(l) => l,
         Err(e) => {
@@ -83,15 +110,20 @@ fn main() {
 
     for stream in listener.incoming().flatten() {
         let engines = engines.clone();
+        let speaker = speaker.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle(stream, &engines) {
+            if let Err(e) = handle(stream, &engines, &speaker) {
                 eprintln!("connection error: {e}");
             }
         });
     }
 }
 
-fn handle(mut stream: TcpStream, engines: &Arc<Mutex<Engines>>) -> std::io::Result<()> {
+fn handle(
+    mut stream: TcpStream,
+    engines: &Arc<Mutex<Engines>>,
+    speaker: &Arc<Mutex<Speaker>>,
+) -> std::io::Result<()> {
     // Read headers first: everything up to the blank line.
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
@@ -128,6 +160,10 @@ fn handle(mut stream: TcpStream, engines: &Arc<Mutex<Engines>>) -> std::io::Resu
     match (method.as_str(), path.as_str()) {
         ("POST", "/transcribe") => {
             let json = transcribe_both(&body, engines);
+            respond(&mut stream, 200, "application/json", json.as_bytes())
+        }
+        ("POST", "/synthesize") => {
+            let json = synthesize(&body, speaker);
             respond(&mut stream, 200, "application/json", json.as_bytes())
         }
         ("GET", p) => serve_static(&mut stream, p),
@@ -231,6 +267,149 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>) -> String {
         "whispercpp": { "text": cpp_text, "ms": cpp_ms, "error": cpp_err },
     })
     .to_string()
+}
+
+/// Synthesize posted text and report everything worth *seeing* about it.
+///
+/// The response carries four things a waveform alone cannot show:
+///
+/// - **the phonemes** our clean-room G2P produced, per sentence — pronunciation
+///   bugs are invisible in audio and obvious in IPA;
+/// - **the sentence split**, because long-form input is synthesized per
+///   sentence and joined, and where the cuts land is a real decision;
+/// - **synthesis time and ×realtime**, measured around the engine call only;
+/// - **a SHA-256 of the samples**, and on request a second synthesis of the
+///   same input so the two hashes can be compared in the UI. That is the
+///   determinism claim made checkable rather than asserted — piper samples
+///   noise inside its ONNX graph and cannot reproduce its own output.
+fn synthesize(body: &[u8], speaker: &Arc<Mutex<Speaker>>) -> String {
+    let req: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return json!({ "error": format!("bad request: {e}") }).to_string(),
+    };
+    let text = req.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+    if text.is_empty() {
+        return json!({ "error": "nothing to say — type some text" }).to_string();
+    }
+    // Cap the utterance: this is a demo on a shared socket, and synthesis time
+    // is linear in characters.
+    const MAX_CHARS: usize = 2000;
+    if text.chars().count() > MAX_CHARS {
+        return json!({ "error": format!("text longer than {MAX_CHARS} characters") }).to_string();
+    }
+
+    let f32_opt = |k: &str| req.get(k).and_then(|v| v.as_f64()).map(|v| v as f32);
+    let opts = TtsOptions {
+        voice: None,
+        speed: f32_opt("speed").unwrap_or(1.0).clamp(0.25, 4.0),
+        // `null` means "the voice's own default" all the way down to the
+        // engine, so the demo's knobs and the library's defaults cannot drift.
+        noise_scale: f32_opt("noise_scale").map(|v| v.clamp(0.0, 2.0)),
+        noise_w: f32_opt("noise_w").map(|v| v.clamp(0.0, 2.0)),
+        seed: req.get("seed").and_then(|v| v.as_u64()).unwrap_or(0),
+        sentence_silence_s: f32_opt("sentence_silence").unwrap_or(0.2).clamp(0.0, 2.0),
+    };
+    let verify = req.get("verify").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let guard = match speaker.lock() {
+        Ok(g) => g,
+        Err(_) => return json!({ "error": "voice lock poisoned" }).to_string(),
+    };
+
+    let phonemes = guard.piper.phonemes(&text).unwrap_or_default();
+
+    let t0 = Instant::now();
+    let audio = match guard.piper.synthesize(&text, &opts) {
+        Ok(a) => a,
+        Err(e) => return json!({ "error": e.to_string() }).to_string(),
+    };
+    let synth_ms = t0.elapsed().as_secs_f64() * 1e3;
+
+    // The determinism check runs the SAME call again and hashes both. Only on
+    // request: it doubles the work, and a demo should not spend that silently.
+    let repeat_hash = if verify {
+        guard.piper.synthesize(&text, &opts).ok().map(|a| sha256_hex(samples_bytes(&a.samples)))
+    } else {
+        None
+    };
+    drop(guard);
+
+    let hash = sha256_hex(samples_bytes(&audio.samples));
+    let audio_secs = audio.duration_secs();
+    let wav = wav_bytes(&audio);
+
+    json!({
+        "wav_base64": base64(&wav),
+        "sample_rate": audio.sample_rate,
+        "audio_secs": audio_secs,
+        "synth_ms": synth_ms,
+        "xrt": if synth_ms > 0.0 { audio_secs / (synth_ms / 1e3) } else { 0.0 },
+        "sentences": ffai_mercury::tts::chunk::sentences(&text),
+        "phonemes": phonemes,
+        "sha256": hash,
+        "sha256_repeat": repeat_hash,
+        "deterministic": repeat_hash.map(|r| r == hash),
+        "error": serde_json::Value::Null,
+    })
+    .to_string()
+}
+
+/// 16-bit PCM WAV, which is what every browser will play from a data URL.
+fn wav_bytes(audio: &ffai_core::types::AudioBuffer) -> Vec<u8> {
+    let n = audio.samples.len();
+    let rate = audio.sample_rate;
+    let mut out = Vec::with_capacity(44 + n * 2);
+    let data_len = (n * 2) as u32;
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes()); // byte rate
+    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for &s in &audio.samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// Hash the SAMPLES, not the WAV: the header carries a length that would make
+/// two identical renderings hash alike for a trivial reason. The samples are
+/// the engine's actual output, which is the thing being claimed stable.
+fn samples_bytes(samples: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(samples.len() * 4);
+    for s in samples {
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    bytes
+}
+
+fn sha256_hex(bytes: Vec<u8>) -> String {
+    // Reuse the hash the corpus manifests are pinned with, so "identical" here
+    // means the same thing it means in the ledger.
+    ffai_bench::corpus::file_sha256(&bytes)
+}
+
+/// Standard base64. Hand-rolled to keep the demo dependency-free — it is 20
+/// lines and the alternative is a crate in the tree for one data URL.
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 /// Matched settings to the benchmark harness: greedy (`-bs 1 -bo 1`), and

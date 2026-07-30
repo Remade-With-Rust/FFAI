@@ -2,7 +2,7 @@
 name = "demo-ui"
 
 [web.app]
-title = "FFai — Mercury vs whisper.cpp"
+title = "FFai — Mercury: pure-Rust speech recognition and text-to-speech"
 
 [web.watcher]
 reload_html = true

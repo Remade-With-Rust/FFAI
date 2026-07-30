@@ -171,8 +171,77 @@ const RECORDER_JS: &str = r####"
 
 const STOP_JS: &str = "window.__ffai = window.__ffai || {}; window.__ffai.stop = true;";
 
+/// POST the synthesis request and hand the JSON back. Playback is a data URL
+/// on an `<audio>` element (Rust owns that), so this only moves JSON.
+const SPEAK_JS: &str = r####"
+(async () => {
+  try {
+    const res = await fetch('/synthesize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: __PAYLOAD__,
+    });
+    dioxus.send(await res.text());
+  } catch (e) {
+    dioxus.send(JSON.stringify({ error: 'synthesize request failed: ' + e }));
+  }
+})();
+"####;
+
+/// One synthesis result, as the Speak tab renders it.
+#[derive(Clone, PartialEq, Default)]
+struct Spoken {
+    wav_base64: String,
+    sample_rate: u32,
+    audio_secs: f64,
+    synth_ms: f64,
+    xrt: f64,
+    sentences: Vec<String>,
+    phonemes: Vec<String>,
+    sha256: String,
+    /// `Some(true)` when a repeat synthesis produced identical samples.
+    deterministic: Option<bool>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Listen,
+    Speak,
+}
+
 #[component]
 fn App() -> Element {
+    let mut tab = use_signal(|| Tab::Listen);
+    rsx! {
+        style { {CSS} }
+        div { class: "wrap",
+            header {
+                h1 { "Mercury — pure-Rust speech, both directions" }
+                div { class: "tabs",
+                    button {
+                        class: if tab() == Tab::Listen { "tab on" } else { "tab" },
+                        onclick: move |_| tab.set(Tab::Listen),
+                        "Listen · ASR vs whisper.cpp"
+                    }
+                    button {
+                        class: if tab() == Tab::Speak { "tab on" } else { "tab" },
+                        onclick: move |_| tab.set(Tab::Speak),
+                        "Speak · TTS vs piper"
+                    }
+                }
+            }
+            // Both views stay MOUNTED, hidden by CSS rather than unmounted, so
+            // switching tabs mid-session does not tear down the recorder or
+            // discard a transcript.
+            div { class: if tab() == Tab::Listen { "view" } else { "view hidden" }, Listen {} }
+            div { class: if tab() == Tab::Speak { "view" } else { "view hidden" }, Speak {} }
+        }
+    }
+}
+
+#[component]
+fn Listen() -> Element {
     let mut running = use_signal(|| false);
     let mut mercury = use_signal(Vec::<Line>::new);
     let mut cpp = use_signal(Vec::<Line>::new);
@@ -266,10 +335,8 @@ fn App() -> Element {
     };
 
     rsx! {
-        style { {CSS} }
-        div { class: "wrap",
+        div {
             header {
-                h1 { "Mercury vs whisper.cpp" }
                 p { class: "sub",
                     "Both engines re-transcribe the same trailing 10 seconds of your \
                      microphone, once a second — same bytes, same greedy settings, same \
@@ -309,6 +376,244 @@ fn App() -> Element {
                 Pane { title: "Mercury (pure Rust)", accent: "rust", lines: mercury() }
                 Pane { title: "whisper.cpp (C++/ggml)", accent: "cpp", lines: cpp() }
             }
+        }
+    }
+}
+
+#[component]
+fn Speak() -> Element {
+    let mut text = use_signal(|| {
+        "The birch canoe slid on the smooth planks. Glue the sheet to the dark blue background."
+            .to_string()
+    });
+    let mut speed = use_signal(|| 1.0f64);
+    let mut noise_scale = use_signal(|| 0.667f64);
+    let mut noise_w = use_signal(|| 0.8f64);
+    let mut seed = use_signal(|| 42u64);
+    let mut busy = use_signal(|| false);
+    let mut result = use_signal(Spoken::default);
+
+    // Signals are `Copy`, so the closure shadows them with local mutable
+    // copies. That keeps `speak` itself `Fn`/`Copy` and therefore usable by
+    // BOTH buttons; a closure that mutated its captures directly would be
+    // `FnMut`, move into the first `onclick`, and refuse the second.
+    let speak = move |verify: bool| {
+        let (mut busy, mut result) = (busy, result);
+        if busy() {
+            return;
+        }
+        busy.set(true);
+        let payload = serde_json::json!({
+            "text": text(),
+            "speed": speed(),
+            "noise_scale": noise_scale(),
+            "noise_w": noise_w(),
+            "seed": seed(),
+            "verify": verify,
+        })
+        .to_string();
+        spawn(async move {
+            let js = SPEAK_JS.replace("__PAYLOAD__", &format!("{}", serde_json::json!(payload)));
+            let mut eval = document::eval(&js);
+            if let Ok(msg) = eval.recv::<String>().await {
+                match serde_json::from_str::<serde_json::Value>(&msg) {
+                    Ok(v) => {
+                        let strs = |k: &str| -> Vec<String> {
+                            v.get(k)
+                                .and_then(|a| a.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|s| s.as_str().map(str::to_string))
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        };
+                        result.set(Spoken {
+                            wav_base64: v
+                                .get("wav_base64")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            sample_rate: v
+                                .get("sample_rate")
+                                .and_then(|s| s.as_u64())
+                                .unwrap_or(0) as u32,
+                            audio_secs: v
+                                .get("audio_secs")
+                                .and_then(|s| s.as_f64())
+                                .unwrap_or(0.0),
+                            synth_ms: v.get("synth_ms").and_then(|s| s.as_f64()).unwrap_or(0.0),
+                            xrt: v.get("xrt").and_then(|s| s.as_f64()).unwrap_or(0.0),
+                            sentences: strs("sentences"),
+                            phonemes: strs("phonemes"),
+                            sha256: v
+                                .get("sha256")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            deterministic: v.get("deterministic").and_then(|d| d.as_bool()),
+                            error: v.get("error").and_then(|e| e.as_str()).map(str::to_string),
+                        });
+                    }
+                    Err(e) => {
+                        result.set(Spoken {
+                            error: Some(format!("bad response: {e}")),
+                            ..Spoken::default()
+                        });
+                    }
+                }
+            }
+            busy.set(false);
+        });
+    };
+
+    let r = result();
+    rsx! {
+        div {
+            header {
+                p { class: "sub",
+                    "Type anything and Mercury speaks it — the full VITS stack on candle, \
+                     running piper's own voice file (en_US-lessac-medium), phonemized by our \
+                     own clean-room G2P with no espeak-ng and nothing GPL linked in."
+                }
+                p { class: "warn",
+                    "The ×realtime figure is one warm call on a machine you are also using — \
+                     it collapses under load (measured: 20× idle, under 2× with the cores \
+                     saturated), so read it as a liveness check, not a benchmark. Mercury is \
+                     currently BEHIND piper on synthesis throughput (19–20× against its \
+                     25–32× on a quiet box) and that gate is reported as failing; use "
+                    code { "ffai bench tts" }
+                    " for the measured comparison. What this tab shows that a table cannot: \
+                     the phonemes, the sentence split, and byte-identical output under a seed."
+                }
+            }
+            div { class: "bar",
+                button {
+                    class: if busy() { "btn on" } else { "btn" },
+                    disabled: busy(),
+                    onclick: move |_| speak(false),
+                    "🔊 Speak"
+                }
+                button {
+                    class: "btn ghost",
+                    disabled: busy(),
+                    onclick: move |_| speak(true),
+                    "Speak twice · prove determinism"
+                }
+                span { class: "status", if busy() { "synthesizing…" } else { "" } }
+            }
+            textarea {
+                class: "say",
+                rows: 3,
+                value: "{text}",
+                oninput: move |e| text.set(e.value()),
+            }
+            div { class: "knobs",
+                Knob { label: "speed", value: speed(), min: 0.5, max: 2.0, step: 0.05,
+                       oninput: move |v| speed.set(v) }
+                Knob { label: "noise_scale", value: noise_scale(), min: 0.0, max: 1.5, step: 0.05,
+                       oninput: move |v| noise_scale.set(v) }
+                Knob { label: "noise_w", value: noise_w(), min: 0.0, max: 1.5, step: 0.05,
+                       oninput: move |v| noise_w.set(v) }
+                label { class: "knob",
+                    span { "seed" }
+                    input {
+                        r#type: "number",
+                        value: "{seed}",
+                        min: "0",
+                        oninput: move |e| { if let Ok(v) = e.value().parse::<u64>() { seed.set(v) } },
+                    }
+                }
+            }
+
+            if let Some(err) = &r.error {
+                div { class: "pane", div { class: "body", span { class: "err", "{err}" } } }
+            } else if !r.wav_base64.is_empty() {
+                div { class: "pane rust",
+                    h2 { "Audio" }
+                    div { class: "body",
+                        audio {
+                            controls: true,
+                            class: "player",
+                            src: "data:audio/wav;base64,{r.wav_base64}",
+                        }
+                        div { class: "stats",
+                            span { b { "{r.audio_secs:.2} s" } " audio" }
+                            span { b { "{r.synth_ms:.0} ms" } " synthesis" }
+                            span { b { "{r.xrt:.1}×" } " realtime" }
+                            span { b { "{r.sample_rate} Hz" } }
+                        }
+                        div { class: "hash",
+                            "sha256(samples) "
+                            code { "{r.sha256}" }
+                        }
+                        match r.deterministic {
+                            Some(true) => rsx! {
+                                div { class: "ok",
+                                    "✓ Synthesized twice with seed {seed} — the samples are \
+                                     byte-identical. piper samples its noise inside the ONNX \
+                                     graph and cannot reproduce its own output."
+                                }
+                            },
+                            Some(false) => rsx! {
+                                div { class: "err",
+                                    "✗ The two runs differed. That is a bug — same input and \
+                                     seed must give the same bytes."
+                                }
+                            },
+                            None => rsx! {},
+                        }
+                    }
+                }
+                div { class: "pane",
+                    h2 { "What the model was given" }
+                    div { class: "body",
+                        for (i, ipa) in r.phonemes.iter().enumerate() {
+                            div { class: "line",
+                                div { style: "flex:1",
+                                    div { class: "sent",
+                                        "{r.sentences.get(i).map(String::as_str).unwrap_or(\"\")}"
+                                    }
+                                    div { class: "ipa", "{ipa}" }
+                                }
+                            }
+                        }
+                        p { class: "note",
+                            "Each sentence is synthesized on its own and joined with a silence \
+                             gap — that is why the split is shown. The IPA is what our G2P \
+                             emitted and what the voice actually received; it is gated against \
+                             espeak-ng's output on a pinned corpus (83.6 % of holdout sentences \
+                             match character-for-character), and fed through piper's own runtime \
+                             it scores inside the 5 % round-trip band."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn Knob(
+    label: String,
+    value: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+    oninput: EventHandler<f64>,
+) -> Element {
+    rsx! {
+        label { class: "knob",
+            span { "{label}" }
+            input {
+                r#type: "range",
+                min: "{min}",
+                max: "{max}",
+                step: "{step}",
+                value: "{value}",
+                oninput: move |e| { if let Ok(v) = e.value().parse::<f64>() { oninput.call(v) } },
+            }
+            b { "{value:.2}" }
         }
     }
 }
@@ -380,4 +685,38 @@ h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.01em; }
 .txt.live { color:#8b949e; font-style:italic; }
 .ms { color:#6e7681; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .err { color:#f85149; font-size:13px; }
+
+/* ---- tabs ---- */
+.tabs { display:flex; gap:6px; margin:14px 0 18px; border-bottom:1px solid #30363d; }
+.tab { background:transparent; color:#8b949e; border:0; border-bottom:2px solid transparent;
+       padding:8px 14px; font-size:14px; cursor:pointer; }
+.tab:hover { color:#e6edf3; }
+.tab.on { color:#e6edf3; border-bottom-color:#f0883e; }
+.view.hidden { display:none; }
+
+/* ---- speak tab ---- */
+.say { width:100%; background:#0d1117; color:#e6edf3; border:1px solid #30363d;
+       border-radius:8px; padding:11px 13px; font:inherit; resize:vertical;
+       margin-bottom:14px; }
+.say:focus { outline:0; border-color:#1f6feb; }
+.knobs { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:18px; }
+.knob { display:flex; align-items:center; gap:8px; font-size:12px; color:#8b949e; }
+.knob span { min-width:74px; }
+.knob b { color:#e6edf3; font-variant-numeric:tabular-nums; min-width:34px; }
+.knob input[type=range] { width:110px; accent-color:#f0883e; }
+.knob input[type=number] { width:88px; background:#0d1117; color:#e6edf3;
+       border:1px solid #30363d; border-radius:6px; padding:4px 7px; font:inherit; }
+.pane + .pane { margin-top:14px; }
+.player { width:100%; margin-bottom:12px; }
+.stats { display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:#8b949e;
+         padding-bottom:10px; }
+.stats b { color:#e6edf3; font-variant-numeric:tabular-nums; }
+.hash { font-size:11px; color:#6e7681; word-break:break-all; padding-bottom:10px; }
+.hash code { color:#8b949e; }
+.ok { color:#3fb950; font-size:13px; background:#0f1c12; border:1px solid #1f4227;
+      border-radius:7px; padding:9px 11px; }
+.sent { color:#e6edf3; margin-bottom:3px; }
+.ipa { color:#f0883e; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+       font-size:13px; word-break:break-word; }
+.note { color:#8b949e; font-size:12px; margin:12px 0 0; max-width:72ch; }
 "#;

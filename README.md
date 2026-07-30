@@ -37,9 +37,11 @@ tensor spine), `ffai-media` (ingest/egress, backed by
 [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)),
 `ffai-models` (weight manifests + cache), `ffai-bench` (the analyzer — see
 below), `ffai-cli` (the `ffai` binary), `ffai-demo` + `demo-ui` (a live
-side-by-side demo — speak into the mic and read Mercury and whisper.cpp
-transcribing the same audio in real time, with Mercury's speaker labels
-holding steady across chunks: `cargo run --release -p ffai-demo`).
+two-tab demo: **Listen** puts Mercury and whisper.cpp on the same microphone
+in real time with speaker labels holding steady across chunks, and **Speak**
+synthesizes what you type while showing the phonemes our G2P produced, the
+sentence split, and a byte-identical-under-a-seed determinism check —
+`cargo run --release -p ffai-demo`).
 
 ## The analyzer: `ffai bench`
 
