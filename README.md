@@ -346,7 +346,9 @@ the default) and `craft-parseq` (word-level AR with the refinement pass).
 
 **Where PaddleOCR still wins, stated plainly:** the full pipeline on real
 photographs. On 45 photographed receipts (CORD-v2, CC-BY), PaddleOCR mobile
-scores **15.6 % CER to our 27.2 %** — despite our stronger recognition
+scores **15.6 % CER to our 21.7 %** (`--engine craft-parseq`; the default
+`craft-crnn` reads 27.4 % there but wins the screen/HUD class 3.3x, so the
+engine is a per-content choice, not a ranking) — despite our stronger recognition
 stage. Stage-level instrumentation localized the gap: tilt-sensitive line
 grouping between detection and recognition (deskew is the named fix), a
 share of ground-truth inflation from CORD's privacy-blurred regions that

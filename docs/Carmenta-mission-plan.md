@@ -808,11 +808,28 @@ hand PARSeq the boxes CRAFT already produced.
 | craft-crnn (standing default) | 27.42 % | 0.710 % |
 | paddleocr-mobile | 15.6 % | 0.019 % |
 
-**The direct feed cuts real-photo CER by 12.5 points (36 % relative)** and
-makes `craft-parseq` the first Carmenta configuration to beat `craft-crnn`
-on BOTH corpora. The census predicted exactly this: 1230 CRAFT boxes
-against 1027 GT words means the components already ARE words, and
-re-deriving them by ink projection could only lose information.
+**The direct feed cuts real-photo CER by 12.5 points (36 % relative).** The
+census predicted exactly this: 1230 CRAFT boxes against 1027 GT words means
+the components already ARE words, and re-deriving them by ink projection
+could only lose information.
+
+**CORRECTION, recorded rather than quietly fixed.** This section first
+claimed the direct feed "beats craft-crnn on BOTH corpora" — an overreach
+from a two-corpus sample. The frames corpus, measured next, refutes it:
+
+| Engine | render (print) | frames (HUD/screen) | CORD (photos) |
+|---|---:|---:|---:|
+| craft-crnn | 0.710 % | **1.602 %** | 27.42 % |
+| craft-parseq (direct) | 0.673 % | 5.339 % | **21.70 %** |
+| parseq + ink-split | **0.149 %** | — | 34.16 % |
+
+PARSeq is **3.3x WORSE than the CRNN on HUD/screen text**, and slower
+(2440 vs 2144 ms/frame). No engine wins everywhere, so `craft-crnn` KEEPS
+the default seat — it owns the LIVE content class outright — and
+`craft-parseq` is the documented choice for photographs. This is the third
+independent sign-flip in this component (rec lineage by content, splitter
+by content, and now engine by content); the toolkit answer is dispatch by
+content class, not a single winner.
 
 **And the sign flips per content, which is the finding to protect.** The
 ink-gap splitter is 4.5x BETTER than the direct feed on synthetic render
