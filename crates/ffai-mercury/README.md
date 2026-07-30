@@ -100,7 +100,7 @@ let audio  = engine.synthesize("The birch canoe slid on the smooth planks.",
 ffai_media::save_wav("out.wav".as_ref(), &audio)?;
 ```
 
-`piper-candle` is the full VITS stack on candle — text encoder with relative-position attention, stochastic duration predictor with spline flows, residual coupling flow, HiFi-GAN — running the **same voice files** [piper](https://github.com/OHF-Voice/piper1-gpl) runs, converted locally from the voice's own `.onnx` (see `models/piper-vits-lessac-medium.toml`).
+`piper-candle` is the full VITS stack on candle — text encoder with relative-position attention, stochastic duration predictor with spline flows, residual coupling flow, HiFi-GAN — running the **same voice files** [piper](https://github.com/OHF-Voice/piper1-gpl) runs. The `.onnx` and its config are fetched from the (public, ungated) `rhasspy/piper-voices` repo and read **directly by a pure-Rust ONNX reader**: no conversion step, no Python, no ONNX runtime. The first `synthesize` call fetches them; `ffai models --fetch piper-vits-lessac-medium` does it ahead of time.
 
 | Option | Effect |
 |---|---|
@@ -118,6 +118,7 @@ piper is GPL-3.0 because it embeds espeak-ng. Mercury's G2P is a clean-room pure
 ### What is measured
 
 - **Oracle-exact against piper's own runtime** at zero noise: text encoder to 4e-6, per-phoneme durations **integer-exact**, end-to-end waveform to 3e-5.
+- **The Rust ONNX reader is byte-identical to the Python converter it replaced** — 350 tensors, 15.65 M floats, 132 convolution geometries and the synthesized audio itself, all exact, at parity on load time (69 ms vs 71 ms). The Python script stays in the repo as the oracle that gate is measured against, not as a step anyone runs.
 - **The phonemizer passed its substitution gate** — our phonemes fed through piper's own runtime score round-trip WER inside the 5 % band of espeak's.
 - **Quality: parity.** Round-trip WER through a frozen whisper.cpp judge (never our own ASR — no self-grading): **5.91 %, byte-stable on every run**, against piper's own 4.8–6.5 % across runs. Piper samples noise in-graph and cannot repeat a number, so it is scored as the mean of independent draws with the range recorded. Parity through this instrument — not superiority; the instrument cannot support more.
 - **Determinism**: verified at both library and file-hash level. Piper structurally cannot offer it.

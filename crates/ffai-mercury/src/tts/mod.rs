@@ -16,6 +16,7 @@ pub mod chunk;
 pub mod decoder_kernels;
 pub mod lexicon;
 pub mod normalize;
+pub mod onnx;
 pub mod phoneme_ids;
 pub mod phonemize;
 pub mod piper_candle;

@@ -22,7 +22,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| dirs_cache().join("ffai"));
     let model_dir = cache.join("models").join("piper-vits-lessac-medium");
-    let vits = Vits::load(&model_dir)?;
+    // `FFAI_VOICE_SAFETENSORS=1` loads the Python converter's output instead.
+    // The default is the pure-Rust ONNX reader — the path a consumer takes —
+    // so the stage oracles gate what actually ships.
+    let onnx = std::path::PathBuf::from(".piper-voices/en_US-lessac-medium.onnx");
+    let vits = if std::env::var("FFAI_VOICE_SAFETENSORS").is_ok() || !onnx.exists() {
+        println!("loading via safetensors (converted)");
+        Vits::load(&model_dir)?
+    } else {
+        println!("loading via ONNX (pure Rust)");
+        Vits::load_onnx(&onnx, &onnx.with_extension("onnx.json"))?
+    };
     println!("voice loaded: {} Hz, defaults noise {:.3} / len {:.1} / w {:.1}",
         vits.sample_rate, vits.defaults.noise_scale, vits.defaults.length_scale, vits.defaults.noise_w);
 

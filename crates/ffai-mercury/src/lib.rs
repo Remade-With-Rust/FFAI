@@ -55,6 +55,21 @@ pub fn register(reg: &mut EngineRegistry) {
         "whisper-base-en",
         asr::text_decoder::Precision::Q8_0,
     )));
+    // The accuracy tiers. Registered late so the default stays tiny.en —
+    // the first registered engine is the default, and a 769M model is not a
+    // default anyone asked for. Above medium the family is multilingual-only,
+    // which needs language detection we do not have (docs/mercury-asr-todo.md
+    // §1), so medium.en is the largest size that is honestly usable today.
+    reg.register_asr(Arc::new(WhisperCandle::with_model(
+        "models",
+        "whisper-small-en",
+        asr::text_decoder::Precision::F32,
+    )));
+    reg.register_asr(Arc::new(WhisperCandle::with_model(
+        "models",
+        "whisper-medium-en",
+        asr::text_decoder::Precision::F32,
+    )));
     reg.register_asr(Arc::new(OxiWhisper));
     // piper-candle first: the first registered TTS engine is the default,
     // and it is the only live one (M-T2); the stubs stay visible after it.
@@ -73,8 +88,8 @@ mod tests {
         let mut reg = EngineRegistry::new();
         register(&mut reg);
         let infos = reg.list();
-        // tiny f32/q8_0, base f32/q8_0, oxiwhisper
-        assert_eq!(infos.iter().filter(|i| i.task == Task::Asr).count(), 5);
+        // tiny f32/q8_0, base f32/q8_0, small.en, medium.en, oxiwhisper
+        assert_eq!(infos.iter().filter(|i| i.task == Task::Asr).count(), 7);
         // piper-candle (live, default) + the any-tts/voirs stubs
         assert_eq!(infos.iter().filter(|i| i.task == Task::Tts).count(), 3);
         // default = first registered = the reference engine

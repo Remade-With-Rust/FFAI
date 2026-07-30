@@ -42,6 +42,11 @@ impl Phonemizer {
         Ok(Self::new(Lexicon::from_manifest_dir(dir)?))
     }
 
+    /// Build from an already-parsed `cmudict` manifest.
+    pub fn from_manifest(manifest: &ffai_models::ModelManifest) -> Result<Self> {
+        Ok(Self::new(Lexicon::from_manifest(manifest)?))
+    }
+
     pub fn new(lexicon: Lexicon) -> Self {
         Phonemizer { lexicon, function_words: function_words(), collocations: collocations() }
     }

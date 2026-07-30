@@ -67,6 +67,13 @@ impl Lexicon {
         let manifest = manifests.into_iter().find(|m| m.name == "cmudict").ok_or_else(|| {
             Error::Model(format!("no `cmudict` manifest in {} — see models/cmudict.toml", dir.display()))
         })?;
+        Self::from_manifest(&manifest)
+    }
+
+    /// Load from an already-parsed manifest — the path taken by
+    /// [`crate::tts::PiperCandle`], whose manifests are compiled in and so
+    /// need no directory at all.
+    pub fn from_manifest(manifest: &ffai_models::ModelManifest) -> Result<Self> {
         let resolved = manifest.fetch()?;
         Self::load(resolved.file("cmudict.dict")?)
     }

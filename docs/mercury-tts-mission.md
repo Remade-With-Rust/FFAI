@@ -909,6 +909,55 @@ evidence for the M-T4 interleaved-segments harness. The chain that ended a
 five-attack losing streak: instrument first, synthesize the partial
 truths, then read your own new code as adversarially as the reference's.
 
+### 6.15 The Python leaves the consumer's path — a pure-Rust ONNX reader
+
+M-T2 shipped with a hole that only showed up when the crate was examined as
+something a stranger installs: `cargo add ffai-mercury` + `PiperCandle` did
+not work outside this repo. Two causes, both fixed here.
+
+**1. The library read its manifests from the caller's working directory.**
+`Path::new("models")` is repo-wide (ASR and OCR do it too), so a published
+crate had nothing to read. The TTS manifests now live in the crate
+(`manifests/`) and are compiled in with `include_str!`; `with_manifest_dir`
+overrides them. Two copies exist on purpose — `models/*.toml` is what
+`ffai models` lists — and a test fails if they drift, verified by making
+them drift.
+
+**2. The voice needed a Python conversion step.** Now `tts::onnx` reads the
+`.onnx` piper ships, in Rust: a ~400-line protobuf decode of exactly four
+message types, enough to answer "what are the float initializers called" and
+"what geometry does each conv use". The three export quirks the Python
+converter had to learn are handled identically (embedding exported as `sid`,
+`exp(-logs)` constant-folded, weight-norm names recoverable only through the
+consuming node). The manifest now points at `rhasspy/piper-voices` — public,
+ungated — so `ffai models --fetch piper-vits-lessac-medium` is the whole
+setup.
+
+**The gate** (`examples/onnx_vs_safetensors.rs`): the Rust reader vs the
+Python converter, **350 tensors, 15 650 459 floats, 132 conv geometries and
+the synthesized audio — all byte-identical**. The Python script stays as the
+oracle, not as a step. Arm B inherits arm A's M-T2 acoustic oracle by
+equality, and the stage oracles now run through the ONNX path by default.
+
+**Validated for damage, because "identical weights" does not imply
+"identical cost":**
+
+| | safetensors (was) | ONNX (now) |
+|---|---:|---:|
+| round-trip WER | 5.91 % | **5.91 %** (identical) |
+| synthesis, interleaved best-of-5 | 99 ms | **98 ms** (1.01×) |
+| load, isolated | 71 ms | **69 ms** |
+| footprint gate | PASS 0.86× | **PASS 0.84×** |
+
+One real regression was caught and fixed *by* that check: the first version
+borrowed the graph and cloned each tensor, so the file bytes, the parsed
+initializers, the copies and the candle tensors were all live at once — ~4×
+the model in peak memory, which flipped the footprint gate to FAIL (260 MiB
+peak, 1.03×). `recover` now takes the graph by value and the file bytes are
+scoped so they drop before the tensors are built: peak 240, steady 201,
+gate PASS again. A first-run bench also read `LOAD_S 8.42` — that was the
+one-time 63 MB download, 0.69 s warm, still 4× faster than piper's 2.88 s.
+
 ## 7. Engineering discipline (inherited, non-negotiable)
 
 The finished plan's §7 applies verbatim — one brick per commit, profile

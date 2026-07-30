@@ -82,8 +82,53 @@ struct ConvGeom {
 }
 
 impl Vits {
+    /// Load a voice **straight from the files piper ships**: the `.onnx` and
+    /// its `.onnx.json`, with no conversion step, no Python, and no ONNX
+    /// runtime — [`super::onnx`] lifts the weights and the convolution
+    /// geometry out of the graph.
+    ///
+    /// This is the path a crates.io consumer takes: the manifest fetches both
+    /// files from `rhasspy/piper-voices` and this reads them. Byte-compared
+    /// against the Python converter's output by
+    /// `examples/onnx_vs_safetensors.rs`.
+    pub fn load_onnx(onnx: &Path, config_json: &Path) -> Result<Self> {
+        let device = Device::Cpu;
+        // Scoped so the 63 MB of file bytes are freed before the tensors are
+        // built — the peak, not the steady state, is what the footprint gate
+        // measures, and holding both doubles it for no reason.
+        let recovered = {
+            let bytes = std::fs::read(onnx)?;
+            super::onnx::recover(super::onnx::parse(&bytes)?)?
+        };
+
+        let mut w = HashMap::new();
+        for (name, init) in recovered.tensors {
+            let t = Tensor::from_vec(init.data, init.dims, &device).e()?;
+            w.insert(name, t);
+        }
+        let geom = recovered
+            .geometry
+            .into_iter()
+            .map(|(k, g)| {
+                (
+                    k,
+                    ConvGeom {
+                        transpose: g.transpose,
+                        stride: g.stride,
+                        pad: g.pad,
+                        dilation: g.dilation,
+                    },
+                )
+            })
+            .collect();
+        let config_text = std::fs::read_to_string(config_json)?;
+        Self::from_parts(w, geom, config_text, device)
+    }
+
     /// Load from a converted-voice directory: `vits.safetensors`,
     /// `vits-graph.json`, `voice-config.json` (see dump_piper_weights.py).
+    /// Kept as the in-repo path and as the oracle the ONNX loader is gated
+    /// against.
     pub fn load(dir: &Path) -> Result<Self> {
         let device = Device::Cpu;
         let w = ffai_core::candle::safetensors::load(dir.join("vits.safetensors"), &device)
@@ -116,6 +161,17 @@ impl Vits {
         }
 
         let config_text = std::fs::read_to_string(dir.join("voice-config.json"))?;
+        Self::from_parts(w, geom, config_text, device)
+    }
+
+    /// The shared tail of both loaders: everything downstream of "we have
+    /// named weights, geometry, and the voice config".
+    fn from_parts(
+        w: HashMap<String, Tensor>,
+        geom: HashMap<String, ConvGeom>,
+        config_text: String,
+        device: Device,
+    ) -> Result<Self> {
         let config: serde_json::Value = serde_json::from_str(&config_text)
             .map_err(|e| Error::Model(format!("voice-config.json: {e}")))?;
         let sample_rate = config
