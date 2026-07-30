@@ -14,6 +14,7 @@ publish = false
 ffai-core = { workspace = true }
 ffai-media = { workspace = true }
 ffai-mercury = { workspace = true }
+ffai-carmenta = { workspace = true }
 # For the corpus hash function, so "identical audio" in the Speak tab means
 # the same SHA-256 the corpus manifests and the ledger are pinned with.
 ffai-bench = { workspace = true }

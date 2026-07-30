@@ -25,7 +25,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use ffai_core::engine::{AsrEngine, AsrOptions, TtsEngine, TtsOptions};
+use ffai_carmenta::engine::CraftCrnn;
+use ffai_core::engine::{AsrEngine, AsrOptions, OcrEngine, OcrOptions, TtsEngine, TtsOptions};
 use ffai_mercury::asr::WhisperCandle;
 use ffai_mercury::tts::PiperCandle;
 use serde_json::json;
@@ -53,6 +54,19 @@ struct Speaker {
     piper: PiperCandle,
 }
 
+/// The OCR pair, behind its own lock for the same reason `Speaker` is: a
+/// read must not queue behind a live transcription.
+///
+/// BOTH engines are held because the Read tab's whole point is the measured
+/// content sign-flip — `craft-crnn` wins clean screen text (frames 1.602 %
+/// vs 5.034 % CER), `craft-parseq` wins photographs (CORD 21.70 % vs
+/// 27.42 %). Neither is "the OCR engine"; showing them side by side on the
+/// user's OWN image is the honest way to present that.
+struct Reader {
+    crnn: CraftCrnn,
+    parseq: CraftCrnn,
+}
+
 fn main() {
     let whisper_cli = [".whispercpp/whisper-cli.exe", ".whispercpp/whisper-cli"]
         .iter()
@@ -73,6 +87,12 @@ fn main() {
         model,
     }));
     let speaker = Arc::new(Mutex::new(Speaker { piper: PiperCandle::new() }));
+    // Both OCR lineages, constructed lazily — weights load on first read, so
+    // starting the demo does not pay for a tab nobody opens.
+    let reader = Arc::new(Mutex::new(Reader {
+        crnn: CraftCrnn::new(),
+        parseq: CraftCrnn::new_parseq(),
+    }));
 
     // Warm Mercury before serving so the first click is not paying model load.
     // The same courtesy the bench harness extends to every implementation.
@@ -111,8 +131,9 @@ fn main() {
     for stream in listener.incoming().flatten() {
         let engines = engines.clone();
         let speaker = speaker.clone();
+        let reader = reader.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle(stream, &engines, &speaker) {
+            if let Err(e) = handle(stream, &engines, &speaker, &reader) {
                 eprintln!("connection error: {e}");
             }
         });
@@ -123,6 +144,7 @@ fn handle(
     mut stream: TcpStream,
     engines: &Arc<Mutex<Engines>>,
     speaker: &Arc<Mutex<Speaker>>,
+    reader: &Arc<Mutex<Reader>>,
 ) -> std::io::Result<()> {
     // Read headers first: everything up to the blank line.
     let mut buf = Vec::new();
@@ -158,6 +180,10 @@ fn handle(
     }
 
     match (method.as_str(), path.as_str()) {
+        ("POST", "/read") => {
+            let json = read_image(&body, reader);
+            respond(&mut stream, 200, "application/json", json.as_bytes())
+        }
         ("POST", "/transcribe") => {
             let json = transcribe_both(&body, engines);
             respond(&mut stream, 200, "application/json", json.as_bytes())
@@ -473,6 +499,68 @@ fn label_speakers(t: &ffai_core::types::Transcript) -> String {
     }
     out.join("
 ")
+}
+
+/// Read one image with BOTH OCR lineages and report each one's text, wall
+/// time and line count, plus the content class the pipeline detected.
+///
+/// Same discipline as `transcribe_both`: identical bytes to both engines, a
+/// failure in one reported in its own pane rather than failing the request.
+/// The engines decode the PNG themselves from the same buffer, so neither
+/// gets a head start on image decoding.
+fn read_image(body: &[u8], reader: &Arc<Mutex<Reader>>) -> String {
+    const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if body.len() < 8 || body[..8] != PNG_MAGIC {
+        return json_error("posted body is not a PNG (the demo decodes PNG only until the rff image decoders land)");
+    }
+    // ffai-media reads from a path, so the bytes land in a temp file that is
+    // deleted on EVERY path below — the demo promises no storage.
+    let path = std::env::temp_dir().join(format!("ffai-demo-{}.png", std::process::id()));
+    if let Err(e) = std::fs::write(&path, body) {
+        return json_error(&format!("could not stage the image: {e}"));
+    }
+    let img = match ffai_media::load_image(&path) {
+        Ok(i) => i,
+        Err(e) => {
+            std::fs::remove_file(&path).ok();
+            return json_error(&format!("could not decode the image: {e}"));
+        }
+    };
+    std::fs::remove_file(&path).ok();
+
+    let kind = match ffai_carmenta::content::classify(&img) {
+        ffai_carmenta::content::ContentKind::Rendered => "rendered",
+        ffai_carmenta::content::ContentKind::Photographic => "photographic",
+    };
+    let flatness = ffai_carmenta::content::flatness(&img);
+
+    let guard = match reader.lock() {
+        Ok(g) => g,
+        Err(_) => return json_error("reader lock poisoned"),
+    };
+    let opts = OcrOptions::default();
+    let run = |engine: &CraftCrnn| {
+        let t0 = Instant::now();
+        match engine.recognize(&img, &opts) {
+            Ok(out) => {
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let lines: Vec<String> = out.lines().map(|l| l.text.clone()).collect();
+                json!({ "text": out.text(), "lines": lines.len(), "ms": ms })
+            }
+            Err(e) => json!({ "error": e.to_string() }),
+        }
+    };
+    let crnn = run(&guard.crnn);
+    let parseq = run(&guard.parseq);
+    json!({
+        "width": img.width,
+        "height": img.height,
+        "content": kind,
+        "flatness": flatness,
+        "crnn": crnn,
+        "parseq": parseq,
+    })
+    .to_string()
 }
 
 fn json_error(msg: &str) -> String {

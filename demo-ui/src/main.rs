@@ -169,6 +169,55 @@ const RECORDER_JS: &str = r####"
 })();
 "####;
 
+/// Take an image from a file picker, a drop, or the clipboard; POST the raw
+/// bytes to `/read`; hand back the server's JSON with a data-URL preview
+/// attached so Rust can render the image it actually sent.
+///
+/// PNG only: `ffai-media` decodes PNG until the rff image decoders land, so
+/// anything else is re-encoded to PNG through a canvas here rather than
+/// rejected — a user pasting a JPEG screenshot should not have to care.
+const READ_JS: &str = r####"
+(async () => {
+  const send = (o) => dioxus.send(JSON.stringify(o));
+  const toPng = (blob) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      c.toBlob((b) => b ? resolve(b) : reject('canvas encode failed'), 'image/png');
+    };
+    img.onerror = () => reject('not a decodable image');
+    img.src = URL.createObjectURL(blob);
+  });
+  const post = async (blob) => {
+    try {
+      const png = blob.type === 'image/png' ? blob : await toPng(blob);
+      const buf = await png.arrayBuffer();
+      const res = await fetch('/read', { method: 'POST', body: buf });
+      const out = JSON.parse(await res.text());
+      const fr = new FileReader();
+      fr.onload = () => { out.preview = fr.result; send(out); };
+      fr.readAsDataURL(png);
+    } catch (e) {
+      send({ error: 'read failed: ' + e });
+    }
+  };
+  // One-shot: whichever source fires first wins, then the listeners go away.
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/*';
+  input.onchange = () => { if (input.files[0]) post(input.files[0]); };
+  const onPaste = (e) => {
+    for (const it of (e.clipboardData || {}).items || []) {
+      if (it.type.startsWith('image/')) { post(it.getAsFile()); cleanup(); return; }
+    }
+  };
+  const cleanup = () => document.removeEventListener('paste', onPaste);
+  document.addEventListener('paste', onPaste);
+  input.click();
+})();
+"####;
+
 const STOP_JS: &str = "window.__ffai = window.__ffai || {}; window.__ffai.stop = true;";
 
 /// POST the synthesis request and hand the JSON back. Playback is a data URL
@@ -204,10 +253,34 @@ struct Spoken {
     error: Option<String>,
 }
 
+/// One OCR result pane.
+#[derive(Clone, PartialEq, Default)]
+struct Reading {
+    text: String,
+    lines: usize,
+    ms: f64,
+    error: Option<String>,
+}
+
+/// What the Read tab shows after one image.
+#[derive(Clone, PartialEq, Default)]
+struct ReadOut {
+    preview: String,
+    width: u64,
+    height: u64,
+    /// "rendered" or "photographic" — the dispatch signal's own verdict.
+    content: String,
+    flatness: f64,
+    crnn: Reading,
+    parseq: Reading,
+    error: Option<String>,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Listen,
     Speak,
+    Read,
 }
 
 #[component]
@@ -217,7 +290,7 @@ fn App() -> Element {
         style { {CSS} }
         div { class: "wrap",
             header {
-                h1 { "Mercury — pure-Rust speech, both directions" }
+                h1 { "FFai — pure-Rust speech and text, side by side" }
                 div { class: "tabs",
                     button {
                         class: if tab() == Tab::Listen { "tab on" } else { "tab" },
@@ -229,6 +302,11 @@ fn App() -> Element {
                         onclick: move |_| tab.set(Tab::Speak),
                         "Speak · TTS vs piper"
                     }
+                    button {
+                        class: if tab() == Tab::Read { "tab on" } else { "tab" },
+                        onclick: move |_| tab.set(Tab::Read),
+                        "Read · OCR, crnn vs parseq"
+                    }
                 }
             }
             // Both views stay MOUNTED, hidden by CSS rather than unmounted, so
@@ -236,6 +314,117 @@ fn App() -> Element {
             // discard a transcript.
             div { class: if tab() == Tab::Listen { "view" } else { "view hidden" }, Listen {} }
             div { class: if tab() == Tab::Speak { "view" } else { "view hidden" }, Speak {} }
+            div { class: if tab() == Tab::Read { "view" } else { "view hidden" }, Read {} }
+        }
+    }
+}
+
+/// Carmenta's tab: one image, BOTH OCR lineages, and the content class that
+/// decides which one the pipeline would pick.
+///
+/// The side-by-side is the point. Neither engine is "the" OCR engine — the
+/// measured sign-flip says `craft-crnn` wins clean screen text (frames
+/// 1.602 % vs 5.034 % CER) and `craft-parseq` wins photographs (CORD
+/// 21.70 % vs 27.42 %). A table asserts that; this lets you falsify it on
+/// your own image in one click.
+#[component]
+fn Read() -> Element {
+    let mut busy = use_signal(|| false);
+    let mut out = use_signal(ReadOut::default);
+
+    let pick = move |_| {
+        if busy() {
+            return;
+        }
+        busy.set(true);
+        spawn(async move {
+            let mut eval = document::eval(READ_JS);
+            if let Ok(msg) = eval.recv::<String>().await {
+                let v: serde_json::Value = serde_json::from_str(&msg).unwrap_or_default();
+                let pane = |k: &str| {
+                    let p = &v[k];
+                    Reading {
+                        text: p["text"].as_str().unwrap_or_default().to_string(),
+                        lines: p["lines"].as_u64().unwrap_or(0) as usize,
+                        ms: p["ms"].as_f64().unwrap_or(0.0),
+                        error: p["error"].as_str().map(str::to_string),
+                    }
+                };
+                out.set(ReadOut {
+                    preview: v["preview"].as_str().unwrap_or_default().to_string(),
+                    width: v["width"].as_u64().unwrap_or(0),
+                    height: v["height"].as_u64().unwrap_or(0),
+                    content: v["content"].as_str().unwrap_or_default().to_string(),
+                    flatness: v["flatness"].as_f64().unwrap_or(0.0),
+                    crnn: pane("crnn"),
+                    parseq: pane("parseq"),
+                    error: v["error"].as_str().map(str::to_string),
+                });
+            }
+            busy.set(false);
+        });
+    };
+
+    let r = out();
+    let photo = r.content == "photographic";
+    rsx! {
+        p { class: "lede",
+            "Choose an image — or paste one from the clipboard once the picker opens. "
+            "Both OCR lineages read the identical pixels; the winner depends on what "
+            "kind of image it is, which is why the pipeline dispatches instead of "
+            "picking a favourite."
+        }
+        div { class: "row",
+            button { class: "primary", disabled: busy(), onclick: pick,
+                if busy() { "Reading…" } else { "Choose or paste an image" }
+            }
+            if !r.content.is_empty() {
+                span { class: "badge",
+                    {format!("{} · {}×{} · flatness {:.2}", r.content, r.width, r.height, r.flatness)}
+                }
+            }
+        }
+        if let Some(e) = r.error.clone() {
+            div { class: "err", "{e}" }
+        }
+        if !r.preview.is_empty() {
+            div { class: "shot", img { src: "{r.preview}", alt: "the image being read" } }
+        }
+        if !r.content.is_empty() {
+            div { class: "panes",
+                ReadPane {
+                    name: "craft-crnn".to_string(),
+                    note: if photo { "line-level CTC — weaker on photographs".to_string() }
+                          else { "line-level CTC — the dispatch pick here".to_string() },
+                    favoured: !photo,
+                    pane: r.crnn.clone(),
+                }
+                ReadPane {
+                    name: "craft-parseq".to_string(),
+                    note: if photo { "word-level AR — the dispatch pick here".to_string() }
+                          else { "word-level AR — beats PaddleOCR's recognizer on photo crops".to_string() },
+                    favoured: photo,
+                    pane: r.parseq.clone(),
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ReadPane(name: String, note: String, favoured: bool, pane: Reading) -> Element {
+    rsx! {
+        div { class: if favoured { "pane won" } else { "pane" },
+            div { class: "pane-head",
+                strong { "{name}" }
+                span { class: "ms", {format!("{:.0} ms · {} lines", pane.ms, pane.lines)} }
+            }
+            div { class: "note", "{note}" }
+            if let Some(e) = pane.error.clone() {
+                div { class: "err", "{e}" }
+            } else {
+                pre { class: "ocr", "{pane.text}" }
+            }
         }
     }
 }
@@ -685,6 +874,19 @@ h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.01em; }
 .txt.live { color:#8b949e; font-style:italic; }
 .ms { color:#6e7681; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .err { color:#f85149; font-size:13px; }
+
+/* ---- read tab ---- */
+.shot { margin:14px 0; border:1px solid #30363d; border-radius:8px; overflow:hidden; background:#0d1117; }
+.shot img { display:block; max-width:100%; max-height:340px; margin:0 auto; }
+.panes { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.pane { border:1px solid #30363d; border-radius:8px; padding:12px; background:#0d1117; }
+.pane.won { border-color:#f0883e; }
+.pane-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.note { color:#8b949e; font-size:12px; margin:4px 0 8px; }
+.ocr { white-space:pre-wrap; word-break:break-word; font-size:13px; line-height:1.5;
+       margin:0; max-height:320px; overflow:auto; color:#e6edf3; }
+.badge { color:#8b949e; font-size:12px; font-variant-numeric:tabular-nums; }
+@media (max-width:820px) { .panes { grid-template-columns:1fr; } }
 
 /* ---- tabs ---- */
 .tabs { display:flex; gap:6px; margin:14px 0 18px; border-bottom:1px solid #30363d; }
