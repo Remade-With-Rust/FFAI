@@ -19,6 +19,7 @@ tokenizers = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
+png = { workspace = true }
 
 [dev-dependencies]
 ffai-media = { workspace = true }

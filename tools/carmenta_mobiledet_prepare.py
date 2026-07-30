@@ -15,7 +15,12 @@ def main():
     assert root, "PP-OCRv5_mobile_det not in paddlex cache; run the paddleocr adapter once"
     prog = root / "inference.json"
     params = root / "inference.pdiparams"
-    state = paddle.load(str(params), return_numpy=True)
+    import numpy as np
+    paddle.enable_static()
+    exe = paddle.static.Executor(paddle.CPUPlace())
+    prog, _, _ = paddle.static.load_inference_model(str(root / "inference"), exe)
+    scope = paddle.static.global_scope()
+    state = {p.name: np.array(scope.find_var(p.name).get_tensor()) for p in prog.global_block().all_parameters()}
     CACHE.mkdir(parents=True, exist_ok=True)
     shapes = {k: list(v.shape) for k, v in state.items()}
     Path("corpora/refs/fixtures/ppocrv5_mobile_det_shapes.json").write_text(

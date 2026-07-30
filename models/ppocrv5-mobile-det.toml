@@ -1,0 +1,13 @@
+# PP-OCRv5 mobile text detector (DBNet / PP-LCNetV3, Apache-2.0, plan §7.1
+# audit) — the speed-margin lineage for LIVE. Converted from the paddlex
+# cache by tools/carmenta_mobiledet_prepare.py (234 tensors, shape map in
+# corpora/refs/fixtures/ppocrv5_mobile_det_shapes.json). Candle port = the
+# open campaign brick.
+name = "ppocrv5-mobile-det"
+task = "ocr"
+description = "PP-OCRv5 mobile det (DBNet/PP-LCNetV3) — staged detector lineage"
+license = "Apache-2.0"
+
+[[files]]
+name = "det.safetensors"
+sha256 = "abe92a954293370d2dc078bceae0c316f6c3bd02542c84ff8be166e7b797c97d"

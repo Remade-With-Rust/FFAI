@@ -261,6 +261,9 @@ impl OcrEngine for CraftCrnn {
                                 crop[y * cw..(y + 1) * cw]
                                     .copy_from_slice(&gray[(by0 + y) * w + bx0..(by0 + y) * w + bx1]);
                             }
+                            if let Ok(dir) = std::env::var("FFAI_DUMP_CROPS") {
+                                dump_crop(&crop, cw, ch, &dir);
+                            }
                             let x = crate::profile::timed(|p| &p.rec_pre, || {
                                 crate::parseq::parseq_input(&crop, cw, ch, &m.device)
                             })
@@ -308,5 +311,27 @@ impl OcrEngine for CraftCrnn {
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.
         Ok(OcrOutput { blocks: vec![OcrBlock { lines: out_lines, bbox: None }] })
+    }
+}
+
+/// Six-whys instrument for the parseq word-crop defect: write the exact
+/// crops the recognizer receives so the failure can be SEEN, not guessed.
+fn dump_crop(gray: &[f32], w: usize, h: usize, dir: &str) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    if n >= 40 {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dir);
+    let path = std::path::Path::new(dir).join(format!("crop-{n:02}.png"));
+    if let Ok(f) = std::fs::File::create(&path) {
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w as u32, h as u32);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        if let Ok(mut wr) = enc.write_header() {
+            let buf: Vec<u8> = gray.iter().map(|&v| v.clamp(0.0, 255.0) as u8).collect();
+            let _ = wr.write_image_data(&buf);
+        }
     }
 }

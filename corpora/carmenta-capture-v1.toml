@@ -1,0 +1,975 @@
+name = "carmenta-capture"
+version = 1
+task = "ocr"
+
+[[clips]]
+id = "cap-000"
+path = "clips/carmenta-capture/cap-000.png"
+ground_truth = "clips/carmenta-capture/cap-000.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-001"
+path = "clips/carmenta-capture/cap-001.png"
+ground_truth = "clips/carmenta-capture/cap-001.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-002"
+path = "clips/carmenta-capture/cap-002.png"
+ground_truth = "clips/carmenta-capture/cap-002.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-003"
+path = "clips/carmenta-capture/cap-003.png"
+ground_truth = "clips/carmenta-capture/cap-003.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-004"
+path = "clips/carmenta-capture/cap-004.png"
+ground_truth = "clips/carmenta-capture/cap-004.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-005"
+path = "clips/carmenta-capture/cap-005.png"
+ground_truth = "clips/carmenta-capture/cap-005.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-006"
+path = "clips/carmenta-capture/cap-006.png"
+ground_truth = "clips/carmenta-capture/cap-006.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-007"
+path = "clips/carmenta-capture/cap-007.png"
+ground_truth = "clips/carmenta-capture/cap-007.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-008"
+path = "clips/carmenta-capture/cap-008.png"
+ground_truth = "clips/carmenta-capture/cap-008.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-009"
+path = "clips/carmenta-capture/cap-009.png"
+ground_truth = "clips/carmenta-capture/cap-009.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-010"
+path = "clips/carmenta-capture/cap-010.png"
+ground_truth = "clips/carmenta-capture/cap-010.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-011"
+path = "clips/carmenta-capture/cap-011.png"
+ground_truth = "clips/carmenta-capture/cap-011.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "be73ab6683e16d8c37678026656b730be7b9be9ecc0b7d399ade1b716092d7b4"
+
+[[clips]]
+id = "cap-012"
+path = "clips/carmenta-capture/cap-012.png"
+ground_truth = "clips/carmenta-capture/cap-012.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-013"
+path = "clips/carmenta-capture/cap-013.png"
+ground_truth = "clips/carmenta-capture/cap-013.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-014"
+path = "clips/carmenta-capture/cap-014.png"
+ground_truth = "clips/carmenta-capture/cap-014.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-015"
+path = "clips/carmenta-capture/cap-015.png"
+ground_truth = "clips/carmenta-capture/cap-015.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-016"
+path = "clips/carmenta-capture/cap-016.png"
+ground_truth = "clips/carmenta-capture/cap-016.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-017"
+path = "clips/carmenta-capture/cap-017.png"
+ground_truth = "clips/carmenta-capture/cap-017.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-018"
+path = "clips/carmenta-capture/cap-018.png"
+ground_truth = "clips/carmenta-capture/cap-018.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-019"
+path = "clips/carmenta-capture/cap-019.png"
+ground_truth = "clips/carmenta-capture/cap-019.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-020"
+path = "clips/carmenta-capture/cap-020.png"
+ground_truth = "clips/carmenta-capture/cap-020.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-021"
+path = "clips/carmenta-capture/cap-021.png"
+ground_truth = "clips/carmenta-capture/cap-021.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-022"
+path = "clips/carmenta-capture/cap-022.png"
+ground_truth = "clips/carmenta-capture/cap-022.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-023"
+path = "clips/carmenta-capture/cap-023.png"
+ground_truth = "clips/carmenta-capture/cap-023.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "c977ec12b6a79230eca06ab72d4005dbdbd99407028143ee88ccc0235a988884"
+
+[[clips]]
+id = "cap-024"
+path = "clips/carmenta-capture/cap-024.png"
+ground_truth = "clips/carmenta-capture/cap-024.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-025"
+path = "clips/carmenta-capture/cap-025.png"
+ground_truth = "clips/carmenta-capture/cap-025.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-026"
+path = "clips/carmenta-capture/cap-026.png"
+ground_truth = "clips/carmenta-capture/cap-026.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-027"
+path = "clips/carmenta-capture/cap-027.png"
+ground_truth = "clips/carmenta-capture/cap-027.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-028"
+path = "clips/carmenta-capture/cap-028.png"
+ground_truth = "clips/carmenta-capture/cap-028.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-029"
+path = "clips/carmenta-capture/cap-029.png"
+ground_truth = "clips/carmenta-capture/cap-029.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-030"
+path = "clips/carmenta-capture/cap-030.png"
+ground_truth = "clips/carmenta-capture/cap-030.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-031"
+path = "clips/carmenta-capture/cap-031.png"
+ground_truth = "clips/carmenta-capture/cap-031.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-032"
+path = "clips/carmenta-capture/cap-032.png"
+ground_truth = "clips/carmenta-capture/cap-032.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-033"
+path = "clips/carmenta-capture/cap-033.png"
+ground_truth = "clips/carmenta-capture/cap-033.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-034"
+path = "clips/carmenta-capture/cap-034.png"
+ground_truth = "clips/carmenta-capture/cap-034.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-035"
+path = "clips/carmenta-capture/cap-035.png"
+ground_truth = "clips/carmenta-capture/cap-035.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2c40f5ed422ca7ebfaa971416096aa224a7b6916df42a2fd068ed66b18015030"
+
+[[clips]]
+id = "cap-036"
+path = "clips/carmenta-capture/cap-036.png"
+ground_truth = "clips/carmenta-capture/cap-036.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-037"
+path = "clips/carmenta-capture/cap-037.png"
+ground_truth = "clips/carmenta-capture/cap-037.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-038"
+path = "clips/carmenta-capture/cap-038.png"
+ground_truth = "clips/carmenta-capture/cap-038.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-039"
+path = "clips/carmenta-capture/cap-039.png"
+ground_truth = "clips/carmenta-capture/cap-039.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-040"
+path = "clips/carmenta-capture/cap-040.png"
+ground_truth = "clips/carmenta-capture/cap-040.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-041"
+path = "clips/carmenta-capture/cap-041.png"
+ground_truth = "clips/carmenta-capture/cap-041.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-042"
+path = "clips/carmenta-capture/cap-042.png"
+ground_truth = "clips/carmenta-capture/cap-042.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-043"
+path = "clips/carmenta-capture/cap-043.png"
+ground_truth = "clips/carmenta-capture/cap-043.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-044"
+path = "clips/carmenta-capture/cap-044.png"
+ground_truth = "clips/carmenta-capture/cap-044.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-045"
+path = "clips/carmenta-capture/cap-045.png"
+ground_truth = "clips/carmenta-capture/cap-045.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-046"
+path = "clips/carmenta-capture/cap-046.png"
+ground_truth = "clips/carmenta-capture/cap-046.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-047"
+path = "clips/carmenta-capture/cap-047.png"
+ground_truth = "clips/carmenta-capture/cap-047.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "62c09cbab4e5b9bd7b1ed3d1784c4a31487530bdf8a8912bdd50a17ce514a610"
+
+[[clips]]
+id = "cap-048"
+path = "clips/carmenta-capture/cap-048.png"
+ground_truth = "clips/carmenta-capture/cap-048.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-049"
+path = "clips/carmenta-capture/cap-049.png"
+ground_truth = "clips/carmenta-capture/cap-049.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-050"
+path = "clips/carmenta-capture/cap-050.png"
+ground_truth = "clips/carmenta-capture/cap-050.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-051"
+path = "clips/carmenta-capture/cap-051.png"
+ground_truth = "clips/carmenta-capture/cap-051.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-052"
+path = "clips/carmenta-capture/cap-052.png"
+ground_truth = "clips/carmenta-capture/cap-052.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-053"
+path = "clips/carmenta-capture/cap-053.png"
+ground_truth = "clips/carmenta-capture/cap-053.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-054"
+path = "clips/carmenta-capture/cap-054.png"
+ground_truth = "clips/carmenta-capture/cap-054.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-055"
+path = "clips/carmenta-capture/cap-055.png"
+ground_truth = "clips/carmenta-capture/cap-055.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-056"
+path = "clips/carmenta-capture/cap-056.png"
+ground_truth = "clips/carmenta-capture/cap-056.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-057"
+path = "clips/carmenta-capture/cap-057.png"
+ground_truth = "clips/carmenta-capture/cap-057.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-058"
+path = "clips/carmenta-capture/cap-058.png"
+ground_truth = "clips/carmenta-capture/cap-058.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-059"
+path = "clips/carmenta-capture/cap-059.png"
+ground_truth = "clips/carmenta-capture/cap-059.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "b64a6787514bf85927395b98caf032b04b9c8edf3cb50bc68f7c6a18bec25661"
+
+[[clips]]
+id = "cap-060"
+path = "clips/carmenta-capture/cap-060.png"
+ground_truth = "clips/carmenta-capture/cap-060.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-061"
+path = "clips/carmenta-capture/cap-061.png"
+ground_truth = "clips/carmenta-capture/cap-061.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-062"
+path = "clips/carmenta-capture/cap-062.png"
+ground_truth = "clips/carmenta-capture/cap-062.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-063"
+path = "clips/carmenta-capture/cap-063.png"
+ground_truth = "clips/carmenta-capture/cap-063.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-064"
+path = "clips/carmenta-capture/cap-064.png"
+ground_truth = "clips/carmenta-capture/cap-064.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-065"
+path = "clips/carmenta-capture/cap-065.png"
+ground_truth = "clips/carmenta-capture/cap-065.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-066"
+path = "clips/carmenta-capture/cap-066.png"
+ground_truth = "clips/carmenta-capture/cap-066.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-067"
+path = "clips/carmenta-capture/cap-067.png"
+ground_truth = "clips/carmenta-capture/cap-067.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-068"
+path = "clips/carmenta-capture/cap-068.png"
+ground_truth = "clips/carmenta-capture/cap-068.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-069"
+path = "clips/carmenta-capture/cap-069.png"
+ground_truth = "clips/carmenta-capture/cap-069.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-070"
+path = "clips/carmenta-capture/cap-070.png"
+ground_truth = "clips/carmenta-capture/cap-070.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-071"
+path = "clips/carmenta-capture/cap-071.png"
+ground_truth = "clips/carmenta-capture/cap-071.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "9b9fbc58a3885a484c287156ab3713999c896b0da29caba9fc9c204ffb620cfb"
+
+[[clips]]
+id = "cap-072"
+path = "clips/carmenta-capture/cap-072.png"
+ground_truth = "clips/carmenta-capture/cap-072.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-073"
+path = "clips/carmenta-capture/cap-073.png"
+ground_truth = "clips/carmenta-capture/cap-073.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-074"
+path = "clips/carmenta-capture/cap-074.png"
+ground_truth = "clips/carmenta-capture/cap-074.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-075"
+path = "clips/carmenta-capture/cap-075.png"
+ground_truth = "clips/carmenta-capture/cap-075.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-076"
+path = "clips/carmenta-capture/cap-076.png"
+ground_truth = "clips/carmenta-capture/cap-076.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-077"
+path = "clips/carmenta-capture/cap-077.png"
+ground_truth = "clips/carmenta-capture/cap-077.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-078"
+path = "clips/carmenta-capture/cap-078.png"
+ground_truth = "clips/carmenta-capture/cap-078.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-079"
+path = "clips/carmenta-capture/cap-079.png"
+ground_truth = "clips/carmenta-capture/cap-079.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-080"
+path = "clips/carmenta-capture/cap-080.png"
+ground_truth = "clips/carmenta-capture/cap-080.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-081"
+path = "clips/carmenta-capture/cap-081.png"
+ground_truth = "clips/carmenta-capture/cap-081.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-082"
+path = "clips/carmenta-capture/cap-082.png"
+ground_truth = "clips/carmenta-capture/cap-082.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-083"
+path = "clips/carmenta-capture/cap-083.png"
+ground_truth = "clips/carmenta-capture/cap-083.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "5b97fbdb1779aed4d771d27d5563d212ee4369a76778f2bdee0f6812e1a1a389"
+
+[[clips]]
+id = "cap-084"
+path = "clips/carmenta-capture/cap-084.png"
+ground_truth = "clips/carmenta-capture/cap-084.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-085"
+path = "clips/carmenta-capture/cap-085.png"
+ground_truth = "clips/carmenta-capture/cap-085.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-086"
+path = "clips/carmenta-capture/cap-086.png"
+ground_truth = "clips/carmenta-capture/cap-086.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-087"
+path = "clips/carmenta-capture/cap-087.png"
+ground_truth = "clips/carmenta-capture/cap-087.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-088"
+path = "clips/carmenta-capture/cap-088.png"
+ground_truth = "clips/carmenta-capture/cap-088.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-089"
+path = "clips/carmenta-capture/cap-089.png"
+ground_truth = "clips/carmenta-capture/cap-089.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-090"
+path = "clips/carmenta-capture/cap-090.png"
+ground_truth = "clips/carmenta-capture/cap-090.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-091"
+path = "clips/carmenta-capture/cap-091.png"
+ground_truth = "clips/carmenta-capture/cap-091.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-092"
+path = "clips/carmenta-capture/cap-092.png"
+ground_truth = "clips/carmenta-capture/cap-092.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-093"
+path = "clips/carmenta-capture/cap-093.png"
+ground_truth = "clips/carmenta-capture/cap-093.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-094"
+path = "clips/carmenta-capture/cap-094.png"
+ground_truth = "clips/carmenta-capture/cap-094.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-095"
+path = "clips/carmenta-capture/cap-095.png"
+ground_truth = "clips/carmenta-capture/cap-095.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "2363f6f6e8a0c1cab776319185ff04d128ff286d7e687905f7eae153c425a9bd"
+
+[[clips]]
+id = "cap-096"
+path = "clips/carmenta-capture/cap-096.png"
+ground_truth = "clips/carmenta-capture/cap-096.txt"
+class = "video"
+split = "train"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-097"
+path = "clips/carmenta-capture/cap-097.png"
+ground_truth = "clips/carmenta-capture/cap-097.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-098"
+path = "clips/carmenta-capture/cap-098.png"
+ground_truth = "clips/carmenta-capture/cap-098.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-099"
+path = "clips/carmenta-capture/cap-099.png"
+ground_truth = "clips/carmenta-capture/cap-099.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-100"
+path = "clips/carmenta-capture/cap-100.png"
+ground_truth = "clips/carmenta-capture/cap-100.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-101"
+path = "clips/carmenta-capture/cap-101.png"
+ground_truth = "clips/carmenta-capture/cap-101.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-102"
+path = "clips/carmenta-capture/cap-102.png"
+ground_truth = "clips/carmenta-capture/cap-102.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-103"
+path = "clips/carmenta-capture/cap-103.png"
+ground_truth = "clips/carmenta-capture/cap-103.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-104"
+path = "clips/carmenta-capture/cap-104.png"
+ground_truth = "clips/carmenta-capture/cap-104.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-105"
+path = "clips/carmenta-capture/cap-105.png"
+ground_truth = "clips/carmenta-capture/cap-105.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-106"
+path = "clips/carmenta-capture/cap-106.png"
+ground_truth = "clips/carmenta-capture/cap-106.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"
+
+[[clips]]
+id = "cap-107"
+path = "clips/carmenta-capture/cap-107.png"
+ground_truth = "clips/carmenta-capture/cap-107.txt"
+class = "video"
+split = "holdout"
+license = "CC0-1.0 (GDI ClearType render of a scripted schedule)"
+sha256 = "96a0991a1813c950d876080c28e16a0c8950b2108ea397fb0cf622ce109f3a0e"

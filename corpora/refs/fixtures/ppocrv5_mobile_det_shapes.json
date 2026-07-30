@@ -1,0 +1,896 @@
+{
+"conv2d_transpose_1.b_0": [
+1
+],
+"conv2d_transpose_1.w_0": [
+24,
+1,
+2,
+2
+],
+"batch_norm_1.w_2": [
+24
+],
+"batch_norm_1.w_1": [
+24
+],
+"batch_norm_1.b_0": [
+24
+],
+"batch_norm_1.w_0": [
+24
+],
+"conv2d_transpose_0.b_0": [
+24
+],
+"conv2d_transpose_0.w_0": [
+24,
+24,
+2,
+2
+],
+"batch_norm_0.w_2": [
+24
+],
+"batch_norm_0.w_1": [
+24
+],
+"batch_norm_0.b_0": [
+24
+],
+"batch_norm_0.w_0": [
+24
+],
+"conv2d_159.w_0": [
+24,
+96,
+3,
+3
+],
+"conv2d_158.b_0": [
+24
+],
+"conv2d_158.w_0": [
+24,
+6,
+1,
+1
+],
+"conv2d_157.b_0": [
+6
+],
+"conv2d_157.w_0": [
+6,
+24,
+1,
+1
+],
+"conv2d_156.w_0": [
+24,
+96,
+3,
+3
+],
+"conv2d_152.b_0": [
+24
+],
+"conv2d_152.w_0": [
+24,
+6,
+1,
+1
+],
+"conv2d_151.b_0": [
+6
+],
+"conv2d_151.w_0": [
+6,
+24,
+1,
+1
+],
+"conv2d_150.w_0": [
+24,
+96,
+3,
+3
+],
+"conv2d_146.b_0": [
+24
+],
+"conv2d_146.w_0": [
+24,
+6,
+1,
+1
+],
+"conv2d_145.b_0": [
+6
+],
+"conv2d_145.w_0": [
+6,
+24,
+1,
+1
+],
+"conv2d_144.w_0": [
+24,
+96,
+3,
+3
+],
+"conv2d_140.b_0": [
+24
+],
+"conv2d_140.w_0": [
+24,
+6,
+1,
+1
+],
+"conv2d_139.b_0": [
+6
+],
+"conv2d_139.w_0": [
+6,
+24,
+1,
+1
+],
+"conv2d_138.w_0": [
+24,
+96,
+3,
+3
+],
+"conv2d_155.b_0": [
+96
+],
+"conv2d_155.w_0": [
+96,
+24,
+1,
+1
+],
+"conv2d_154.b_0": [
+24
+],
+"conv2d_154.w_0": [
+24,
+96,
+1,
+1
+],
+"conv2d_153.w_0": [
+96,
+360,
+1,
+1
+],
+"conv2d_149.b_0": [
+96
+],
+"conv2d_149.w_0": [
+96,
+24,
+1,
+1
+],
+"conv2d_148.b_0": [
+24
+],
+"conv2d_148.w_0": [
+24,
+96,
+1,
+1
+],
+"conv2d_147.w_0": [
+96,
+42,
+1,
+1
+],
+"conv2d_143.b_0": [
+96
+],
+"conv2d_143.w_0": [
+96,
+24,
+1,
+1
+],
+"conv2d_142.b_0": [
+24
+],
+"conv2d_142.w_0": [
+24,
+96,
+1,
+1
+],
+"conv2d_141.w_0": [
+96,
+18,
+1,
+1
+],
+"conv2d_137.b_0": [
+96
+],
+"conv2d_137.w_0": [
+96,
+24,
+1,
+1
+],
+"conv2d_136.b_0": [
+24
+],
+"conv2d_136.w_0": [
+24,
+96,
+1,
+1
+],
+"conv2d_135.w_0": [
+96,
+12,
+1,
+1
+],
+"conv2d_134.b_0": [
+360
+],
+"conv2d_134.w_0": [
+360,
+384,
+1,
+1
+],
+"conv2d_133.b_0": [
+42
+],
+"conv2d_133.w_0": [
+42,
+192,
+1,
+1
+],
+"conv2d_132.b_0": [
+18
+],
+"conv2d_132.w_0": [
+18,
+96,
+1,
+1
+],
+"conv2d_131.b_0": [
+12
+],
+"conv2d_131.w_0": [
+12,
+48,
+1,
+1
+],
+"conv2d_188.b_0": [
+384
+],
+"conv2d_188.w_0": [
+384,
+384,
+1,
+1
+],
+"learnable_affine_block_55.w_1": [
+1
+],
+"learnable_affine_block_55.w_0": [
+1
+],
+"learnable_affine_block_54.w_1": [
+1
+],
+"learnable_affine_block_54.w_0": [
+1
+],
+"conv2d_187.b_0": [
+384
+],
+"conv2d_187.w_0": [
+384,
+1,
+5,
+5
+],
+"learnable_affine_block_53.w_1": [
+1
+],
+"learnable_affine_block_53.w_0": [
+1
+],
+"learnable_affine_block_52.w_1": [
+1
+],
+"learnable_affine_block_52.w_0": [
+1
+],
+"conv2d_186.b_0": [
+384
+],
+"conv2d_186.w_0": [
+384,
+384,
+1,
+1
+],
+"learnable_affine_block_51.w_1": [
+1
+],
+"learnable_affine_block_51.w_0": [
+1
+],
+"learnable_affine_block_50.w_1": [
+1
+],
+"learnable_affine_block_50.w_0": [
+1
+],
+"conv2d_185.b_0": [
+384
+],
+"conv2d_185.w_0": [
+384,
+1,
+5,
+5
+],
+"learnable_affine_block_49.w_1": [
+1
+],
+"learnable_affine_block_49.w_0": [
+1
+],
+"learnable_affine_block_48.w_1": [
+1
+],
+"learnable_affine_block_48.w_0": [
+1
+],
+"conv2d_184.b_0": [
+384
+],
+"conv2d_184.w_0": [
+384,
+384,
+1,
+1
+],
+"learnable_affine_block_47.w_1": [
+1
+],
+"learnable_affine_block_47.w_0": [
+1
+],
+"learnable_affine_block_46.w_1": [
+1
+],
+"learnable_affine_block_46.w_0": [
+1
+],
+"conv2d_108.b_0": [
+384
+],
+"conv2d_108.w_0": [
+384,
+96,
+1,
+1
+],
+"conv2d_107.b_0": [
+96
+],
+"conv2d_107.w_0": [
+96,
+384,
+1,
+1
+],
+"conv2d_183.b_0": [
+384
+],
+"conv2d_183.w_0": [
+384,
+1,
+5,
+5
+],
+"learnable_affine_block_45.w_1": [
+1
+],
+"learnable_affine_block_45.w_0": [
+1
+],
+"learnable_affine_block_44.w_1": [
+1
+],
+"learnable_affine_block_44.w_0": [
+1
+],
+"conv2d_182.b_0": [
+384
+],
+"conv2d_182.w_0": [
+384,
+192,
+1,
+1
+],
+"learnable_affine_block_43.w_1": [
+1
+],
+"learnable_affine_block_43.w_0": [
+1
+],
+"learnable_affine_block_42.w_1": [
+1
+],
+"learnable_affine_block_42.w_0": [
+1
+],
+"conv2d_97.b_0": [
+192
+],
+"conv2d_97.w_0": [
+192,
+48,
+1,
+1
+],
+"conv2d_96.b_0": [
+48
+],
+"conv2d_96.w_0": [
+48,
+192,
+1,
+1
+],
+"conv2d_181.b_0": [
+192
+],
+"conv2d_181.w_0": [
+192,
+1,
+5,
+5
+],
+"learnable_affine_block_40.w_1": [
+1
+],
+"learnable_affine_block_40.w_0": [
+1
+],
+"conv2d_180.b_0": [
+192
+],
+"conv2d_180.w_0": [
+192,
+192,
+1,
+1
+],
+"learnable_affine_block_39.w_1": [
+1
+],
+"learnable_affine_block_39.w_0": [
+1
+],
+"learnable_affine_block_38.w_1": [
+1
+],
+"learnable_affine_block_38.w_0": [
+1
+],
+"conv2d_179.b_0": [
+192
+],
+"conv2d_179.w_0": [
+192,
+1,
+5,
+5
+],
+"learnable_affine_block_37.w_1": [
+1
+],
+"learnable_affine_block_37.w_0": [
+1
+],
+"learnable_affine_block_36.w_1": [
+1
+],
+"learnable_affine_block_36.w_0": [
+1
+],
+"conv2d_178.b_0": [
+192
+],
+"conv2d_178.w_0": [
+192,
+192,
+1,
+1
+],
+"learnable_affine_block_35.w_1": [
+1
+],
+"learnable_affine_block_35.w_0": [
+1
+],
+"learnable_affine_block_34.w_1": [
+1
+],
+"learnable_affine_block_34.w_0": [
+1
+],
+"conv2d_177.b_0": [
+192
+],
+"conv2d_177.w_0": [
+192,
+1,
+5,
+5
+],
+"learnable_affine_block_33.w_1": [
+1
+],
+"learnable_affine_block_33.w_0": [
+1
+],
+"learnable_affine_block_32.w_1": [
+1
+],
+"learnable_affine_block_32.w_0": [
+1
+],
+"conv2d_176.b_0": [
+192
+],
+"conv2d_176.w_0": [
+192,
+192,
+1,
+1
+],
+"learnable_affine_block_31.w_1": [
+1
+],
+"learnable_affine_block_31.w_0": [
+1
+],
+"learnable_affine_block_30.w_1": [
+1
+],
+"learnable_affine_block_30.w_0": [
+1
+],
+"conv2d_175.b_0": [
+192
+],
+"conv2d_175.w_0": [
+192,
+1,
+5,
+5
+],
+"learnable_affine_block_29.w_1": [
+1
+],
+"learnable_affine_block_29.w_0": [
+1
+],
+"learnable_affine_block_28.w_1": [
+1
+],
+"learnable_affine_block_28.w_0": [
+1
+],
+"conv2d_174.b_0": [
+192
+],
+"conv2d_174.w_0": [
+192,
+192,
+1,
+1
+],
+"learnable_affine_block_27.w_1": [
+1
+],
+"learnable_affine_block_27.w_0": [
+1
+],
+"learnable_affine_block_26.w_1": [
+1
+],
+"learnable_affine_block_26.w_0": [
+1
+],
+"conv2d_173.b_0": [
+192
+],
+"conv2d_173.w_0": [
+192,
+1,
+5,
+5
+],
+"learnable_affine_block_25.w_1": [
+1
+],
+"learnable_affine_block_25.w_0": [
+1
+],
+"learnable_affine_block_24.w_1": [
+1
+],
+"learnable_affine_block_24.w_0": [
+1
+],
+"conv2d_172.b_0": [
+192
+],
+"conv2d_172.w_0": [
+192,
+96,
+1,
+1
+],
+"learnable_affine_block_23.w_1": [
+1
+],
+"learnable_affine_block_23.w_0": [
+1
+],
+"learnable_affine_block_22.w_1": [
+1
+],
+"learnable_affine_block_22.w_0": [
+1
+],
+"conv2d_171.b_0": [
+96
+],
+"conv2d_171.w_0": [
+96,
+1,
+3,
+3
+],
+"learnable_affine_block_20.w_1": [
+1
+],
+"learnable_affine_block_20.w_0": [
+1
+],
+"conv2d_170.b_0": [
+96
+],
+"conv2d_170.w_0": [
+96,
+96,
+1,
+1
+],
+"learnable_affine_block_19.w_1": [
+1
+],
+"learnable_affine_block_19.w_0": [
+1
+],
+"learnable_affine_block_18.w_1": [
+1
+],
+"learnable_affine_block_18.w_0": [
+1
+],
+"conv2d_169.b_0": [
+96
+],
+"conv2d_169.w_0": [
+96,
+1,
+3,
+3
+],
+"learnable_affine_block_17.w_1": [
+1
+],
+"learnable_affine_block_17.w_0": [
+1
+],
+"learnable_affine_block_16.w_1": [
+1
+],
+"learnable_affine_block_16.w_0": [
+1
+],
+"conv2d_168.b_0": [
+96
+],
+"conv2d_168.w_0": [
+96,
+48,
+1,
+1
+],
+"learnable_affine_block_15.w_1": [
+1
+],
+"learnable_affine_block_15.w_0": [
+1
+],
+"learnable_affine_block_14.w_1": [
+1
+],
+"learnable_affine_block_14.w_0": [
+1
+],
+"conv2d_167.b_0": [
+48
+],
+"conv2d_167.w_0": [
+48,
+1,
+3,
+3
+],
+"learnable_affine_block_12.w_1": [
+1
+],
+"learnable_affine_block_12.w_0": [
+1
+],
+"conv2d_166.b_0": [
+48
+],
+"conv2d_166.w_0": [
+48,
+48,
+1,
+1
+],
+"learnable_affine_block_11.w_1": [
+1
+],
+"learnable_affine_block_11.w_0": [
+1
+],
+"learnable_affine_block_10.w_1": [
+1
+],
+"learnable_affine_block_10.w_0": [
+1
+],
+"conv2d_165.b_0": [
+48
+],
+"conv2d_165.w_0": [
+48,
+1,
+3,
+3
+],
+"learnable_affine_block_9.w_1": [
+1
+],
+"learnable_affine_block_9.w_0": [
+1
+],
+"learnable_affine_block_8.w_1": [
+1
+],
+"learnable_affine_block_8.w_0": [
+1
+],
+"conv2d_164.b_0": [
+48
+],
+"conv2d_164.w_0": [
+48,
+32,
+1,
+1
+],
+"learnable_affine_block_7.w_1": [
+1
+],
+"learnable_affine_block_7.w_0": [
+1
+],
+"learnable_affine_block_6.w_1": [
+1
+],
+"learnable_affine_block_6.w_0": [
+1
+],
+"conv2d_163.b_0": [
+32
+],
+"conv2d_163.w_0": [
+32,
+1,
+3,
+3
+],
+"learnable_affine_block_4.w_1": [
+1
+],
+"learnable_affine_block_4.w_0": [
+1
+],
+"conv2d_162.b_0": [
+32
+],
+"conv2d_162.w_0": [
+32,
+16,
+1,
+1
+],
+"learnable_affine_block_3.w_1": [
+1
+],
+"learnable_affine_block_3.w_0": [
+1
+],
+"learnable_affine_block_2.w_1": [
+1
+],
+"learnable_affine_block_2.w_0": [
+1
+],
+"conv2d_161.b_0": [
+16
+],
+"conv2d_161.w_0": [
+16,
+1,
+3,
+3
+],
+"learnable_affine_block_1.w_1": [
+1
+],
+"learnable_affine_block_1.w_0": [
+1
+],
+"learnable_affine_block_0.w_1": [
+1
+],
+"learnable_affine_block_0.w_0": [
+1
+],
+"batch_norm2d_0.w_2": [
+16
+],
+"batch_norm2d_0.w_1": [
+16
+],
+"batch_norm2d_0.b_0": [
+16
+],
+"batch_norm2d_0.w_0": [
+16
+],
+"conv2d_0.w_0": [
+16,
+3,
+3,
+3
+]
+}
