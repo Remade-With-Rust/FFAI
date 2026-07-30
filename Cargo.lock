@@ -1124,6 +1124,7 @@ dependencies = [
  "ffai-core",
  "ffai-media",
  "ffai-models",
+ "png",
  "rayon",
  "serde",
  "serde_json",

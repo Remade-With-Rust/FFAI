@@ -20,7 +20,7 @@
 //! ASR engine.
 
 pub mod asr;
-mod tts;
+pub mod tts;
 
 pub use asr::{OxiWhisper, WhisperCandle};
 pub use tts::{AnyTts, Voirs};
@@ -50,6 +50,9 @@ pub fn register(reg: &mut EngineRegistry) {
         asr::text_decoder::Precision::Q8_0,
     )));
     reg.register_asr(Arc::new(OxiWhisper));
+    // piper-candle first: the first registered TTS engine is the default,
+    // and it is the only live one (M-T2); the stubs stay visible after it.
+    reg.register_tts(Arc::new(tts::PiperCandle::new()));
     reg.register_tts(Arc::new(AnyTts));
     reg.register_tts(Arc::new(Voirs));
 }
@@ -66,9 +69,11 @@ mod tests {
         let infos = reg.list();
         // tiny f32/q8_0, base f32/q8_0, oxiwhisper
         assert_eq!(infos.iter().filter(|i| i.task == Task::Asr).count(), 5);
-        assert_eq!(infos.iter().filter(|i| i.task == Task::Tts).count(), 2);
+        // piper-candle (live, default) + the any-tts/voirs stubs
+        assert_eq!(infos.iter().filter(|i| i.task == Task::Tts).count(), 3);
         // default = first registered = the reference engine
         assert_eq!(reg.asr(None).unwrap().info().name, "whisper-candle");
+        assert_eq!(reg.tts(None).unwrap().info().name, "piper-candle");
         assert!(reg.asr(Some("whisper-candle")).is_ok());
         assert!(reg.asr(Some("nonexistent")).is_err());
     }

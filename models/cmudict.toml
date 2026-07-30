@@ -1,0 +1,23 @@
+# CMU Pronouncing Dictionary — the permissively-licensed lexicon backbone of
+# Mercury's pure-Rust G2P (docs/mercury-tts-mission.md, M-T1).
+#
+# WHY THIS AND NOT ESPEAK'S DICTIONARY: piper phonemizes with espeak-ng,
+# whose dictionary data is GPL-3.0 and cannot be shipped or extracted by an
+# MIT/Apache project. CMUdict is BSD-2-Clause; Mercury maps its ARPABET to
+# espeak's IPA conventions in code (crates/ffai-mercury/src/tts/phonemize.rs)
+# and espeak-ng participates only as an out-of-process TEST ORACLE.
+#
+# Not on the Hugging Face hub, so no hf_repo: fetch it manually into the
+# cache (the manifest's sha256 pins it either way):
+#   curl -sL -o "<cache>/models/cmudict/cmudict.dict" \
+#     https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
+# where <cache> is $FFAI_CACHE or the OS cache dir + /ffai
+# (Windows: %LOCALAPPDATA%\ffai).
+name = "cmudict"
+task = "tts"
+description = "CMU Pronouncing Dictionary (cmusphinx, ~134k words, ARPABET) — G2P lexicon"
+license = "BSD-2-Clause (CMU)"
+
+[[files]]
+name = "cmudict.dict"
+sha256 = "81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22"

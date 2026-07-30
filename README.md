@@ -12,7 +12,9 @@ ffai asr -i talk.wav -o talk.srt --engine whisper-candle
 ffai asr -i talk.wav -o talk.json --word-timestamps   # per-word times (CTC alignment)
 ffai asr -i meeting.wav --diarize --max-speakers 3    # who spoke when
 ffai asr -i talk.wav -o talk.vtt --word-timestamps    # VTT with inline word timing
-ffai tts "hello world" -o hello.wav --voice kokoro
+ffai tts "Hello from FFai." -o hello.wav               # piper voices, pure Rust
+ffai tts -o out.wav --seed 42 "Same seed, same bytes."  # byte-stable synthesis
+ffai tts -o long.wav "Long form works. Sentences split; silence is a knob."
 ffai ocr -i receipt.png --engine easy-ocr
 ffai caption -i frame.png --prompt "what is happening here?"
 ffai engines        # list every engine + status, like `ffmpeg -codecs`
@@ -23,7 +25,7 @@ ffai models         # list model manifests, licenses, cache status
 
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | ASR live, with the full WhisperX layer (VAD · word timestamps · diarization) in pure Rust: ahead of whisper.cpp on WER+CER on both holdouts and on memory, 1.01–1.09× on speed ([Status](#status)) |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, ahead of whisper.cpp on WER+CER on both holdouts and on memory, 1.01–1.09× on speed. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, behind on synthesis speed ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | Pending Build |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -228,7 +230,61 @@ the [Mercury-X plan](docs/finished/mercury-X-mission.md)
 and [docs/whys/](docs/whys/); every number traces to a line in
 [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
-TTS, OCR (Carmenta), and VLM (Argus) remain honest `stub`s — visible as such
+### Mercury TTS: piper's voices, pure Rust, deterministic
+
+**`piper-candle` synthesizes speech today** — the full VITS stack (text
+encoder with relative-position attention, stochastic duration predictor
+with spline flows, residual coupling flow, HiFi-GAN) implemented on candle,
+running the SAME voice files [piper1-gpl](https://github.com/OHF-Voice/piper1-gpl)
+runs, converted locally from the voice's own `.onnx`. The phonemizer is a
+clean-room pure-Rust G2P built on CMUdict (BSD): espeak-ng — GPL, and the
+reason piper itself is GPL — participates only as an out-of-process test
+oracle, and nothing GPL ships. English (en-US) only for now; that is the
+honest cost of the license line, stated rather than buried.
+
+**Correctness is oracle-exact.** Against piper's own onnxruntime at zero
+noise, every stage matches: text encoder to 4e-6, per-phoneme durations
+integer-exact, end-to-end waveform to 3e-5. The pure-Rust phonemizer passed
+its substitution gate — our phonemes through piper's runtime score within
+the 5 % round-trip band of espeak's own.
+
+**Quality: parity, measured the hard way.** Round-trip WER through a frozen
+whisper.cpp judge (never our own ASR — no self-grading): **Mercury 5.91 %,
+byte-stable on every run**. Piper's own audio scores 4.8–6.5 % across
+ledger runs — it samples noise in-graph and cannot repeat a number, so the
+harness scores it as the mean of independent draws with the range recorded.
+Read that as parity through this instrument, not superiority; the
+instrument cannot support more, and we say so.
+
+**Deterministic by default** — same text, same seed, byte-identical WAV,
+verified at both the library and the file-hash level. Piper structurally
+cannot offer this. Long-form chunking, speed/noise/seed knobs, and
+sentence-silence control ship on `ffai tts`.
+
+**Footprint and load: ahead.** 172–208 MiB steady against piper's 217–240
+(0.71–0.87×, gate PASS), model load 0.26–0.35 s against ~1.8–2.6 s.
+
+**Speed: behind, closing, and not claimable — stated plainly.** Synthesis
+went from 3.2× realtime at bring-up to **19–20× warm** on a quiet machine
+across five profiled campaigns (cache-blocked AVX2 conv kernels,
+phase-decomposed upsamplers, a flat decoder, GEMM-shaped flow with
+vectorized gates — with nine pruned attempts recorded alongside the wins).
+Piper measures 25–32× warm here. Function-by-function against piper's own
+runtime, Mercury's upsamplers and duration predictor are ~1.9× FASTER and
+the text encoder is at parity; the remaining gap lives in two convolution
+kernels with measured targets. The speed gate reads FAIL on every fair
+ledger line, and three unfair lines (one flattering us, two flattering
+piper) are explicitly disowned in the mission plan with reading
+instructions.
+
+Voice weights are converted, never vendored, and the voice's own license is
+surfaced per manifest (`models/piper-vits-lessac-medium.toml` — see its
+MODEL_CARD note before commercial use). Full campaign history, every
+reverted experiment included:
+[docs/mercury-tts-mission.md](docs/mercury-tts-mission.md); every number
+above traces to a line in [`bench/ledger.jsonl`](bench/ledger.jsonl).
+
+OCR (Carmenta) and VLM (Argus) remain honest `stub`s — visible as such
 in `ffai engines`. See [ROADMAP.md](ROADMAP.md) for the build-out order.
 
 ## Install

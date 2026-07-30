@@ -1,4 +1,27 @@
-//! Mercury TTS engines (text → speech).
+//! Mercury TTS: text → speech.
+//!
+//! Decomposed into independently testable stages (mission plan §2), the same
+//! law the ASR side follows. Live today:
+//!
+//! | Stage | Contract |
+//! |---|---|
+//! | [`normalize`] | raw text → speakable words (numbers, case) |
+//! | [`lexicon`] | CMUdict: word → ARPABET pronunciations |
+//! | [`phonemize`] | sentence → espeak-compatible IPA phoneme string |
+//!
+//! The synthesis stages (`vits`, `voice`, the `piper-candle` engine) land in
+//! M-T2; the engines below are honest stubs until then.
+
+pub mod chunk;
+pub mod decoder_kernels;
+pub mod lexicon;
+pub mod normalize;
+pub mod phoneme_ids;
+pub mod phonemize;
+pub mod piper_candle;
+pub mod vits;
+
+pub use piper_candle::PiperCandle;
 
 use ffai_core::engine::{EngineInfo, EngineStatus, Task, TtsEngine, TtsOptions};
 use ffai_core::error::{Error, Result};

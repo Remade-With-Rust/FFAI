@@ -171,20 +171,25 @@ fn run_tts_reference(
     }
     let outdir = PathBuf::from(OUT_ROOT).join(&spec.name);
 
-    // One invocation over the whole corpus, repeated; keep the FASTEST run's
-    // wall clock together with THAT RUN'S batch — timings only compose when
-    // they come from the same execution, and with in-graph noise the AUDIO
-    // differs per run too, so scoring must use the kept run's WAVs.
-    let mut best: Option<(f64, TtsBatchResult)> = None;
-    for _ in 0..runs.max(1) {
+    // One invocation over the whole corpus, repeated. The FASTEST run's wall
+    // clock and adapter timings stay together (timings only compose from one
+    // execution) — but QUALITY is scored on EVERY run's audio and averaged:
+    // a reference that samples noise in-graph produces a different WER draw
+    // per run (observed spread 5.41–6.45 % across seven draws), and gating
+    // on one draw is gating on luck. The per-run draws land in the notes.
+    let mut best: Option<(f64, usize)> = None;
+    let mut batches = Vec::new();
+    for run in 0..runs.max(1) {
+        let run_dir = outdir.join(format!("run{run}"));
         let started = std::time::Instant::now();
-        let batch = spec.run_batch_tts(paths, &outdir)?;
+        let batch = spec.run_batch_tts(paths, &run_dir)?;
         let wall = started.elapsed().as_secs_f64();
         if best.as_ref().is_none_or(|(prev, _)| wall < *prev) {
-            best = Some((wall, batch));
+            best = Some((wall, run));
         }
+        batches.push((run_dir, batch));
     }
-    let (wall_secs, batch) = best.expect("at least one run");
+    let (wall_secs, best_run) = best.expect("at least one run");
 
     let mut summary = empty_summary(
         spec.name.clone(),
@@ -194,12 +199,35 @@ fn run_tts_reference(
         holdout.len(),
         Vec::new(),
     );
-    summary.notes.extend(batch.meta.iter().cloned());
+    summary.notes.extend(batches[best_run].1.meta.iter().cloned());
 
-    // Measure generated audio OURSELVES from the kept run's WAVs (never
-    // trusted from the adapter) and write the judge's 16 kHz mono copies.
-    let judged = prepare_judge_wavs(&batch, holdout, paths, &outdir, &mut summary)?;
-    score_with_judge(judge, &judged, manifest, Mode::English, &mut summary)?;
+    // Judge every run's audio; the kept run also fills clips_ok/media_secs.
+    let mut draws: Vec<(f64, f64)> = Vec::new();
+    for (run, (run_dir, batch)) in batches.iter().enumerate() {
+        let mut scratch = empty_summary(String::new(), None, None, Default::default(), 0, vec![]);
+        let target = if run == best_run { &mut summary } else { &mut scratch };
+        let judged = prepare_judge_wavs(batch, holdout, paths, run_dir, target)?;
+        score_with_judge(judge, &judged, manifest, Mode::English, target)?;
+        if let (Some(w), Some(c)) = (target.wer, target.cer) {
+            draws.push((w, c));
+        }
+    }
+    if !draws.is_empty() {
+        summary.wer = Some(draws.iter().map(|(w, _)| w).sum::<f64>() / draws.len() as f64);
+        summary.cer = Some(draws.iter().map(|(_, c)| c).sum::<f64>() / draws.len() as f64);
+        if draws.len() > 1 {
+            let lo = draws.iter().map(|(w, _)| *w).fold(f64::MAX, f64::min);
+            let hi = draws.iter().map(|(w, _)| *w).fold(f64::MIN, f64::max);
+            summary.notes.push(format!(
+                "quality is the MEAN of {} independent draws (WER range {:.2}–{:.2} %); \
+                 the reference samples noise in-graph, so one draw is one sample",
+                draws.len(),
+                lo * 100.0,
+                hi * 100.0
+            ));
+        }
+    }
+    let batch = &batches[best_run].1;
 
     // Speed: warm = adapter-reported synthesis seconds; e2e = our wall clock
     // (one load + synthesis + WAV writing) — both against the audio actually

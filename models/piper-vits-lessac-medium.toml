@@ -1,0 +1,32 @@
+# The M-T2 voice for `piper-candle`: en_US-lessac-medium's VITS weights,
+# converted from the voice's own .onnx into named safetensors + geometry JSON
+# (docs/mercury-tts-mission.md §6.3).
+#
+# Not fetched from a hub — CONVERTED locally from the same files piper uses:
+#   .venv-bench/Scripts/python -m piper.download_voices en_US-lessac-medium --data-dir .piper-voices
+#   .venv-bench/Scripts/python corpora/refs/dump_piper_weights.py \
+#       --model .piper-voices/en_US-lessac-medium.onnx \
+#       --out "<cache>/models/piper-vits-lessac-medium"
+#   copy .piper-voices/en_US-lessac-medium.onnx.json \
+#       "<cache>/models/piper-vits-lessac-medium/voice-config.json"
+# where <cache> is $FFAI_CACHE or the OS cache dir + /ffai.
+#
+# The conversion is deterministic (same .onnx -> same safetensors bytes);
+# source voice sha256 5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f.
+# VOICE LICENSE: see the voice's MODEL_CARD in rhasspy/piper-voices — the
+# piper-voices repo states voices are intended for personal use and TTS
+# research; check before commercial redistribution. Surfaced here per
+# principle 4: the license field below is the VOICE's, not FFai's.
+name = "piper-vits-lessac-medium"
+task = "tts"
+description = "piper en_US-lessac-medium (VITS, 15.7M params, 22.05 kHz) converted for candle"
+license = "See MODEL_CARD (rhasspy/piper-voices; blizzard_lessac dataset)"
+
+[[files]]
+name = "vits.safetensors"
+
+[[files]]
+name = "vits-graph.json"
+
+[[files]]
+name = "voice-config.json"
