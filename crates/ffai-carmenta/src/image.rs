@@ -105,9 +105,24 @@ pub fn resize_bicubic(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -
 /// Returns the (1,3,H,W) tensor and the scale that maps ORIGINAL image
 /// coordinates to tensor coordinates (boxes divide by it on the way back).
 pub fn craft_input(gray: &[f32], w: usize, h: usize, device: &Device) -> Result<(Tensor, f32)> {
+    let long_side = w.max(h) as f32;
+    craft_input_scaled(gray, w, h, det_effective_scale(long_side), device)
+}
+
+/// `craft_input` with the scale supplied explicitly. Oracles use this: a
+/// stage oracle must test the NET against its pinned fixture, never the
+/// scaling POLICY — adaptive scaling silently re-scaled the 640x640 fixture
+/// to 2x and the oracle caught it, which is the whole point of having one.
+pub fn craft_input_scaled(
+    gray: &[f32],
+    w: usize,
+    h: usize,
+    requested: f32,
+    device: &Device,
+) -> Result<(Tensor, f32)> {
     const CANVAS: f32 = 2560.0;
     let long_side = w.max(h) as f32;
-    let scale = det_effective_scale(long_side).min(CANVAS / long_side);
+    let scale = requested.min(CANVAS / long_side);
 
     let (rw, rh) = (((w as f32 * scale) as usize).max(1), ((h as f32 * scale) as usize).max(1));
     let resized = resize_bilinear(gray, w, h, rw, rh);
@@ -154,6 +169,11 @@ pub fn crnn_input(
     for y in 0..ch {
         crop[y * cw..(y + 1) * cw].copy_from_slice(&gray[(y0 + y) * img_w + x0..(y0 + y) * img_w + x1]);
     }
+    crnn_input_patch(&crop, cw, ch, device)
+}
+
+/// The CRNN tensor for an already-extracted patch (straight or straightened).
+pub fn crnn_input_patch(crop: &[f32], cw: usize, ch: usize, device: &Device) -> Result<Tensor> {
     let out_w = ((cw as f32 * 64.0 / ch as f32).round() as usize).max(8);
     // Bicubic, not bilinear: recognition crops UPSCALE (~25 px lines to
     // h=64), and bilinear smears single-dot glyphs — measured as a

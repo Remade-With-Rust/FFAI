@@ -37,8 +37,10 @@ fn craft_maps_match_pytorch_reference() {
     let img = ffai_media::load_image(&crop_png).expect("fixture crop loads");
     assert_eq!((img.width, img.height), (640, 640));
     let gray = ffai_carmenta::image::to_gray_f32(&img).unwrap();
+    // Scale pinned at 1.0 EXPLICITLY: this oracle tests the network against
+    // its fixture, and must not move when the detection scaling policy does.
     let (input, scale) =
-        ffai_carmenta::image::craft_input(&gray, 640, 640, &Device::Cpu).unwrap();
+        ffai_carmenta::image::craft_input_scaled(&gray, 640, 640, 1.0, &Device::Cpu).unwrap();
     assert_eq!(scale, 1.0, "640x640 must not be rescaled");
 
     let vb =

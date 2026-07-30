@@ -685,6 +685,72 @@ honesty first) -> bidirectional coverage metric -> deskew/slope-tolerant
 grouping gated per-clip -> parseq-for-photos dispatch -> pipeline re-bench
 vs paddle.
 
+### 8.8 The three diagnostics — two indictments overturned, one fix pruned
+
+Run before buying any expensive fix, exactly as the campaign rule requires.
+Every headline below replaced a belief this plan previously held.
+
+**1. Detection recall was never the problem.** The "63 % coverage" that
+drove three sessions was a METRIC ARTIFACT: centre-in-rect scoring punished
+our word-level boxes against paddle's line-level polys. Scored
+bidirectionally with any-overlap (granularity-fair):
+
+| | |
+|---|---:|
+| paddle regions found by ours (recall) | **93.3 %** (4/45 clips < 80 %) |
+| our regions found by paddle (precision) | **97.0 %** (1/45 clips < 80 %) |
+
+Consequence: the mobile-det port is a SPEED/margin play, not a recall fix.
+
+**2. Reading order is not the loss either.** Sequential vs bag-of-words CER
+(sort the tokens on both sides — if order were scrambled, bag collapses):
+
+| | seq CER | bag CER | order tax |
+|---|---:|---:|---:|
+| ours (craft-crnn) | 27.3 % | 33.9 % | **−6.7 pp** |
+| paddle | 15.6 % | 14.8 % | +0.8 pp |
+
+Our order tax is NEGATIVE — sorting makes us worse. The text comes out in
+sequence; something else is wrong with it.
+
+**3. The blur-filtered-GT test was invalid by construction** and is recorded
+as such rather than as a finding: removing GT words while the engine still
+emits them converts each one into an insertion, so both sides "worsened"
+(ours 27.4 → 48.5 %, paddle 15.4 → 38.3 %). A valid version needs spatial
+alignment of hypothesis text to GT regions.
+
+**PRUNED: slope-tolerant grouping + rotated-rectangle crops.** Built,
+oracle-clean, unit-tested — and null. The mechanism is genuinely present
+(measured on the box field: **26/45 clips ≥ 1° skew, up to 4°**, estimator
+fires on 33/45), the correction applies, and CORD CER moved **27.4 → 27.3 %**.
+Tilt exists, gets corrected, and is not the loss. The §8.7 visual diagnosis
+was wrong; reverted rather than kept as dead weight.
+
+**Two instrument defects caught, both of which would have produced false
+claims:**
+
+- the CORD holdout is files `cord-015…059`; mapping it to `cord-000…044`
+  scored every receipt against a DIFFERENT receipt's GT and produced 104 %
+  and 1263 % CER. Cross-validating a new scorer against the known ledger
+  number (27.15 %) is what caught it — do that first, always.
+- a "+0.53 pp frames regression" was a BASELINE CONFIG MISMATCH: the
+  1.602 % baseline is measured at `FFAI_DET_SCALE=0.5` (what LIVE uses),
+  the gate ran at the adaptive default. At matched settings the build
+  reproduces 1.602 % exactly. A gate must pin the same knobs its baseline
+  was measured with.
+- and the CRAFT oracle failed correctly: adaptive scaling had silently
+  rescaled its 640×640 fixture to 2×, so the oracle had stopped testing the
+  network. It now pins its scale explicitly (`craft_input_scaled`) — a stage
+  oracle tests the NET, never the surrounding policy.
+
+**The surviving hypothesis, with evidence.** Our error is
+INSERTION-DOMINATED: sorting scatters junk tokens among correct ones (hence
+bag > seq for us and the reverse for paddle), while detection recall is high
+and precision is high but our box COUNT runs ~2× paddle's on the same image
+(23 rects vs 11 polys on cord-055). That is over-segmentation producing
+fragment reads. The next brick is line-assembly/merge policy — measured as
+token-count and insertion/deletion ratios against paddle, not by eye.
+
 ### 8.4 PARSeq-tiny port: oracle PASS; engine variant open with a localized defect
 
 The port landed and is PROVEN at the stage level: ViT-tiny encoder +
