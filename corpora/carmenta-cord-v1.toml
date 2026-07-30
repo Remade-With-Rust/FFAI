@@ -1,0 +1,543 @@
+name = "carmenta-cord"
+version = 1
+task = "ocr"
+
+[[clips]]
+id = "cord-000"
+path = "clips/carmenta-cord/cord-000.png"
+ground_truth = "clips/carmenta-cord/cord-000.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "2423ea6be07e0d8a8c0d041c70f6880e68b424f5efb02b0568a517074af04db7"
+
+[[clips]]
+id = "cord-001"
+path = "clips/carmenta-cord/cord-001.png"
+ground_truth = "clips/carmenta-cord/cord-001.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "945e505a3416b7578abeed11ad6a112b6600b24816dfb75bddbc369000b1eef9"
+
+[[clips]]
+id = "cord-002"
+path = "clips/carmenta-cord/cord-002.png"
+ground_truth = "clips/carmenta-cord/cord-002.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "3d9bdf850a9b04fc1faf023667225c28af4c75d62511c6c410ee34ad801dfd95"
+
+[[clips]]
+id = "cord-003"
+path = "clips/carmenta-cord/cord-003.png"
+ground_truth = "clips/carmenta-cord/cord-003.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "e2dfa54e0af1fe1234e98d45026c7b7f82db7bb0299196b8f4fe4b29ee8b218b"
+
+[[clips]]
+id = "cord-004"
+path = "clips/carmenta-cord/cord-004.png"
+ground_truth = "clips/carmenta-cord/cord-004.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "395a4aada020d241e38ab175c6b2c230897d0197b3e78a14a6de763ad192ea2a"
+
+[[clips]]
+id = "cord-005"
+path = "clips/carmenta-cord/cord-005.png"
+ground_truth = "clips/carmenta-cord/cord-005.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "f2f39d5f12253390f4c8264a8fa96e9bfdde78009e57068cb05ca5ad3c5b7d02"
+
+[[clips]]
+id = "cord-006"
+path = "clips/carmenta-cord/cord-006.png"
+ground_truth = "clips/carmenta-cord/cord-006.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "76a8ab6bc5d3baa31643474a851277fccacb13dd9a4915c5c0e82be4b63fecf6"
+
+[[clips]]
+id = "cord-007"
+path = "clips/carmenta-cord/cord-007.png"
+ground_truth = "clips/carmenta-cord/cord-007.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "52adf3336878fbd558951660d6ce52268dd3e636563ca1d7d7e004ccab96bff7"
+
+[[clips]]
+id = "cord-008"
+path = "clips/carmenta-cord/cord-008.png"
+ground_truth = "clips/carmenta-cord/cord-008.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "0176f6485570f8389cf78ee11f5da32bdd9bb5ebb638490b04ec495bec7562eb"
+
+[[clips]]
+id = "cord-009"
+path = "clips/carmenta-cord/cord-009.png"
+ground_truth = "clips/carmenta-cord/cord-009.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "cb5e23ac462d4706be5c2ead6f0a362b284671181dd801883e62b78bad6b3f62"
+
+[[clips]]
+id = "cord-010"
+path = "clips/carmenta-cord/cord-010.png"
+ground_truth = "clips/carmenta-cord/cord-010.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "15c42233c76b935d24145b1f75625692f6b58d855ba85657076701c78c404826"
+
+[[clips]]
+id = "cord-011"
+path = "clips/carmenta-cord/cord-011.png"
+ground_truth = "clips/carmenta-cord/cord-011.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "b6ed97de45b7f317bdc9fa6ff739d281cf4095761b145e07450bc06d627d59e2"
+
+[[clips]]
+id = "cord-012"
+path = "clips/carmenta-cord/cord-012.png"
+ground_truth = "clips/carmenta-cord/cord-012.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "df3c8fda9a86120a9f897ae278b4c214d1ec45e64f33cd539b808d4c7802d6ab"
+
+[[clips]]
+id = "cord-013"
+path = "clips/carmenta-cord/cord-013.png"
+ground_truth = "clips/carmenta-cord/cord-013.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "ea239a07e2d5e7afe77c15d7854ce32e340be3c50561ec0d4c4bb504a99a965e"
+
+[[clips]]
+id = "cord-014"
+path = "clips/carmenta-cord/cord-014.png"
+ground_truth = "clips/carmenta-cord/cord-014.txt"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "2811d54a6abdb3559fadb49e83b4da9790a9a9986bdd321c794e2f3f4e513dd8"
+
+[[clips]]
+id = "cord-015"
+path = "clips/carmenta-cord/cord-015.png"
+ground_truth = "clips/carmenta-cord/cord-015.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "20a241dd04301f4284696c507bc706df6fe4d2800750799d05076cfe0e162d8f"
+
+[[clips]]
+id = "cord-016"
+path = "clips/carmenta-cord/cord-016.png"
+ground_truth = "clips/carmenta-cord/cord-016.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "090f7d598707ac5ec3d687511113fec45e560a7f018aa725f04d99a2c3133baa"
+
+[[clips]]
+id = "cord-017"
+path = "clips/carmenta-cord/cord-017.png"
+ground_truth = "clips/carmenta-cord/cord-017.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "0b69682e64074165576cb79236a64b5602ad75b94c39db611ed69a2f363c9c08"
+
+[[clips]]
+id = "cord-018"
+path = "clips/carmenta-cord/cord-018.png"
+ground_truth = "clips/carmenta-cord/cord-018.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "10639cb8a73f71b011825f2f556b70d850735aeb05e39fd0c5e047a225c90be7"
+
+[[clips]]
+id = "cord-019"
+path = "clips/carmenta-cord/cord-019.png"
+ground_truth = "clips/carmenta-cord/cord-019.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "885c954fff1d2b298ada955f5c48cb0b5bac0a9ab31e23825f3719c4c8ca340d"
+
+[[clips]]
+id = "cord-020"
+path = "clips/carmenta-cord/cord-020.png"
+ground_truth = "clips/carmenta-cord/cord-020.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "e83ff52e4945fb7204f6d99be70f952a0bcd2684d4afc5eef6806c53ca6bbad2"
+
+[[clips]]
+id = "cord-021"
+path = "clips/carmenta-cord/cord-021.png"
+ground_truth = "clips/carmenta-cord/cord-021.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "07310d0365e5b86c720d2b2a37ea9ff1868366ca33ab7eb31bc54fe1a58ed09c"
+
+[[clips]]
+id = "cord-022"
+path = "clips/carmenta-cord/cord-022.png"
+ground_truth = "clips/carmenta-cord/cord-022.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "d27f10eeadc2f3a4f1b7e277f07fd2a2c4c06ed24378b5ec949786ec39949c7b"
+
+[[clips]]
+id = "cord-023"
+path = "clips/carmenta-cord/cord-023.png"
+ground_truth = "clips/carmenta-cord/cord-023.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "e36fc1ae44633f01ddaa6632074333c8dfeb2e1463ceebd91c0ecb9ee7247385"
+
+[[clips]]
+id = "cord-024"
+path = "clips/carmenta-cord/cord-024.png"
+ground_truth = "clips/carmenta-cord/cord-024.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "9556c172f4be7b787c51fad33740dea7034714455034567f4a33ea53bea05e99"
+
+[[clips]]
+id = "cord-025"
+path = "clips/carmenta-cord/cord-025.png"
+ground_truth = "clips/carmenta-cord/cord-025.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "cca757878442a78294b4e30187e4ffc99abbb7f1cdde408f28d12fc44d872567"
+
+[[clips]]
+id = "cord-026"
+path = "clips/carmenta-cord/cord-026.png"
+ground_truth = "clips/carmenta-cord/cord-026.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "a03502f2366af2a6ec2800c6fd762a92866481de9e126139a47a92ec2017d748"
+
+[[clips]]
+id = "cord-027"
+path = "clips/carmenta-cord/cord-027.png"
+ground_truth = "clips/carmenta-cord/cord-027.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "e6180b66bc2d1c6d4ce56503d875076f8d454055f3c08f3edd572b4e5375b179"
+
+[[clips]]
+id = "cord-028"
+path = "clips/carmenta-cord/cord-028.png"
+ground_truth = "clips/carmenta-cord/cord-028.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "b610a4b0960606d01509fbfd7b7761d8ca3cfb4fd8f7d3f26e083d3c40dc6fe1"
+
+[[clips]]
+id = "cord-029"
+path = "clips/carmenta-cord/cord-029.png"
+ground_truth = "clips/carmenta-cord/cord-029.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "63f142c28bc3d87a0a2c26f574ebda11224049477a36c9d7d9de5aa5904eccee"
+
+[[clips]]
+id = "cord-030"
+path = "clips/carmenta-cord/cord-030.png"
+ground_truth = "clips/carmenta-cord/cord-030.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "18079de945731e7aa56626a7b1e229655ff532af0f58bcce9016d45563870984"
+
+[[clips]]
+id = "cord-031"
+path = "clips/carmenta-cord/cord-031.png"
+ground_truth = "clips/carmenta-cord/cord-031.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "efa973336c3ab756ba6a9d53865146198f764c2e5734e4e89b999c22ceae65e9"
+
+[[clips]]
+id = "cord-032"
+path = "clips/carmenta-cord/cord-032.png"
+ground_truth = "clips/carmenta-cord/cord-032.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "80a46f02dd5374b13781b25c2eca7ff3e58c1ba432633ac8c7a7773505d31ee1"
+
+[[clips]]
+id = "cord-033"
+path = "clips/carmenta-cord/cord-033.png"
+ground_truth = "clips/carmenta-cord/cord-033.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "15623e7437984be95a5b98da30238a38aade3810fff32832a69fd3a1bdd2d5ab"
+
+[[clips]]
+id = "cord-034"
+path = "clips/carmenta-cord/cord-034.png"
+ground_truth = "clips/carmenta-cord/cord-034.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "a9d15ca2d822247be438055910a20df491b99fe6d5337442e1d3186416eab15f"
+
+[[clips]]
+id = "cord-035"
+path = "clips/carmenta-cord/cord-035.png"
+ground_truth = "clips/carmenta-cord/cord-035.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "bc81cfc99b061ba24ac97d5a411d118baaa2aa84b071f18354bfa8d2a4a631d0"
+
+[[clips]]
+id = "cord-036"
+path = "clips/carmenta-cord/cord-036.png"
+ground_truth = "clips/carmenta-cord/cord-036.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "7b87965c8f981e2822e31515a786dd9742d99aede6366630135542addf22e7d7"
+
+[[clips]]
+id = "cord-037"
+path = "clips/carmenta-cord/cord-037.png"
+ground_truth = "clips/carmenta-cord/cord-037.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "aa8483fa6093e197414d29896c1f683e34f642cd5b5ce1db9891043032deb1cf"
+
+[[clips]]
+id = "cord-038"
+path = "clips/carmenta-cord/cord-038.png"
+ground_truth = "clips/carmenta-cord/cord-038.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "bd1325e1856bc3f9cffb0a2f69412194e17dc98ac4f2bff30eb1768f08a1c2e9"
+
+[[clips]]
+id = "cord-039"
+path = "clips/carmenta-cord/cord-039.png"
+ground_truth = "clips/carmenta-cord/cord-039.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "af47c003b84ca25dba4d5344ca56bd4bbdef8de3767ad0e14a0d0c221f97917e"
+
+[[clips]]
+id = "cord-040"
+path = "clips/carmenta-cord/cord-040.png"
+ground_truth = "clips/carmenta-cord/cord-040.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "59ba670f57a7341c0ac6ce89f2dcbeaec51332f7b5d5a259d63bf2029ec466e8"
+
+[[clips]]
+id = "cord-041"
+path = "clips/carmenta-cord/cord-041.png"
+ground_truth = "clips/carmenta-cord/cord-041.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "7ad869f7787a35fff1d4c94e3fcfd045caaef6e2c3974aa3e7b30b4170930a2a"
+
+[[clips]]
+id = "cord-042"
+path = "clips/carmenta-cord/cord-042.png"
+ground_truth = "clips/carmenta-cord/cord-042.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "2e1ac01fd896e662eaa7cf672b6335d20ab182877395793fcdb1e8378b44fbec"
+
+[[clips]]
+id = "cord-043"
+path = "clips/carmenta-cord/cord-043.png"
+ground_truth = "clips/carmenta-cord/cord-043.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "dec4bd8c98933a8851afa823b46facc2776bff95e9ffd1cc0a370b555680d386"
+
+[[clips]]
+id = "cord-044"
+path = "clips/carmenta-cord/cord-044.png"
+ground_truth = "clips/carmenta-cord/cord-044.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "d38a1512b73c6da8ff078ff3471f449b6e75d342a63552c77f4dfba2cdcaac5f"
+
+[[clips]]
+id = "cord-045"
+path = "clips/carmenta-cord/cord-045.png"
+ground_truth = "clips/carmenta-cord/cord-045.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "942f2120d29a1a274fdbfa94b4b0f31461bb9e5604ea4ad92ea976439dec6a3d"
+
+[[clips]]
+id = "cord-046"
+path = "clips/carmenta-cord/cord-046.png"
+ground_truth = "clips/carmenta-cord/cord-046.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "e1f2edb4fb4bb59d720203a286dce1c24c5513db29fc2978819f41e35bdd147b"
+
+[[clips]]
+id = "cord-047"
+path = "clips/carmenta-cord/cord-047.png"
+ground_truth = "clips/carmenta-cord/cord-047.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "cc3323238d18761c562098499b36de588e1f45e4cad073b4f519251ddf949d85"
+
+[[clips]]
+id = "cord-048"
+path = "clips/carmenta-cord/cord-048.png"
+ground_truth = "clips/carmenta-cord/cord-048.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "2fc4bd8b25710009ae14f35dc0f708933027c8e2caf9b07ccc4ab1cdef6dfb90"
+
+[[clips]]
+id = "cord-049"
+path = "clips/carmenta-cord/cord-049.png"
+ground_truth = "clips/carmenta-cord/cord-049.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "b18465531f0a7b530d9caa66c9d4346ce28f0a7164d6ba0cdaaad4836822cba5"
+
+[[clips]]
+id = "cord-050"
+path = "clips/carmenta-cord/cord-050.png"
+ground_truth = "clips/carmenta-cord/cord-050.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "8759d588dc2fd384e5e69ce2b4ac5c85cc0936b9622a932b0105231832058018"
+
+[[clips]]
+id = "cord-051"
+path = "clips/carmenta-cord/cord-051.png"
+ground_truth = "clips/carmenta-cord/cord-051.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "b15d79923e4d6bd8ba130f0d285b58073d86e1db0bacd183f6c88b88c7cea3c6"
+
+[[clips]]
+id = "cord-052"
+path = "clips/carmenta-cord/cord-052.png"
+ground_truth = "clips/carmenta-cord/cord-052.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "1b467bd5670e3f6d4892bc0d73c68cf431b4885d7c0e989899a1edc26328a323"
+
+[[clips]]
+id = "cord-053"
+path = "clips/carmenta-cord/cord-053.png"
+ground_truth = "clips/carmenta-cord/cord-053.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "a4979a4d3f8befa00b6626c4652ac60d1f77e4f1c378965931cf89c8c54aef94"
+
+[[clips]]
+id = "cord-054"
+path = "clips/carmenta-cord/cord-054.png"
+ground_truth = "clips/carmenta-cord/cord-054.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "20691a67d8ffa3576cc503956ca49fab5897537a30875bea1f25bb9470c0de34"
+
+[[clips]]
+id = "cord-055"
+path = "clips/carmenta-cord/cord-055.png"
+ground_truth = "clips/carmenta-cord/cord-055.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "cdcd2861035c337652892c852b6f2ab934d44216199bda6e2b9df0f7caaa906e"
+
+[[clips]]
+id = "cord-056"
+path = "clips/carmenta-cord/cord-056.png"
+ground_truth = "clips/carmenta-cord/cord-056.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "abec81ec532eeb4a41f677ade7ed3768060e825e497db45a414c79745ec5202f"
+
+[[clips]]
+id = "cord-057"
+path = "clips/carmenta-cord/cord-057.png"
+ground_truth = "clips/carmenta-cord/cord-057.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "53e412bb80ef1fe814d13c0140243a9395557fed3eb68ece9b383c1e7e0c2ad9"
+
+[[clips]]
+id = "cord-058"
+path = "clips/carmenta-cord/cord-058.png"
+ground_truth = "clips/carmenta-cord/cord-058.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "a288fbae889cb3459ca5c10a9e1cb1a97b5344e89d896c8328f886c57386c1db"
+
+[[clips]]
+id = "cord-059"
+path = "clips/carmenta-cord/cord-059.png"
+ground_truth = "clips/carmenta-cord/cord-059.txt"
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0 (CORD-v2, naver-clova-ix)"
+sha256 = "0f93c704921ff2a75af171fa9bf4005968d87d2c48d827e0c1d4152e0c5fea3b"
