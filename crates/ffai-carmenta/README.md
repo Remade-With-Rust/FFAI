@@ -64,7 +64,7 @@ Measured on a pinned 180-frame screencast: **24 OCR calls for exactly 24 text ch
 
 | Decision | Rendered/screen | Photographs |
 |---|---|---|
-| engine | `craft-crnn` — frames 1.602 % vs 5.339 % | `craft-parseq` — CORD 21.70 % vs 27.42 % |
+| engine | `craft-crnn` — frames 1.602 % vs 5.034 % | `craft-parseq` — CORD 21.70 % vs 27.42 % |
 | word segmentation | ink-gap projection — 0.149 % vs 0.673 % | CRAFT boxes direct — 21.70 % vs 34.16 % |
 | recognition on identical crops | CRNN | PARSeq (1.5 %, beating PaddleOCR's 3.0 %) |
 

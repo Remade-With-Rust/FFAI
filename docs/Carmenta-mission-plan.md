@@ -888,6 +888,63 @@ overrides. The ENGINE choice stays user-facing (`--engine craft-parseq`),
 matching the ffmpeg model this toolkit is built on: lineages are codecs you
 select, strategies within a lineage are the engine's business.
 
+### 8.12 The stale-binary hour — an instrument failure and the guard that ends it
+
+**What happened.** `cargo build` failed with `Access is denied` because a
+background measurement still held `ffai.exe` open. The failure scrolled past a
+`grep -E "^error"` filter, and for roughly an hour EVERY measurement ran a
+binary built at 09:29 while the source said otherwise. It produced four
+mutually contradictory numbers, one wrong refutation, and one deletion of a
+working feature.
+
+**The tell, and why I missed it.** CER is DETERMINISTIC — same binary, same
+input, same number. When 0.149 % became 0.673 % on unchanged code, that was
+proof the binary differed, not evidence the earlier number was an artifact.
+I reasoned about the code for three exchanges before testing the instrument.
+The six-whys rule exists for exactly this: *if a number contradicts one you
+just took, suspect the artifact before the code* — and *run depth 6 first*.
+
+**What it cost, and what recovered it.** I declared my own committed
+measurement an artifact and deleted the ink-gap splitter. Ground truth on a
+verified-fresh build:
+
+| corpus | ink-split | CRAFT direct |
+|---|---:|---:|
+| render | **0.149 %** | 0.673 % |
+| CORD | 34.16 % | **21.70 %** |
+
+A genuine two-sided flip. The splitter is restored and the dispatcher earned.
+Recovery came only from re-running a refutation — the skill's asymmetry rule
+made concrete: a wrong KEEP faces the next gate, a wrong REFUTE is permanent.
+
+**A second defect the same recovery surfaced:** `parseq_pads()` survived in
+`lib.rs` but lost its call site in `engine.rs` during the stash/checkout
+dance — a dead public function, and silently dead sweep knobs. Re-wired; the
+pad sweep then reproduced its original numbers exactly (17.66 / 17.15 /
+17.59), confirming both the knob and the earlier conclusion that the
+synthetic-tuned pads are already optimal on photographs.
+
+**The guard ([`tools/rebuild.sh`]).** Kills stale processes, deletes the
+binary, builds, and FAILS if any `.rs` is newer than the artifact. No
+measurement without a proven-fresh binary. It is tracked in-repo — it first
+lived in a gitignored directory, which would have let the same failure recur
+on a fresh clone.
+
+**Full re-verification after the guard**, every contaminated number re-run:
+
+| measurement | verified | prior |
+|---|---:|---:|
+| render, crnn | 0.710 % | 0.710 % |
+| render, parseq (auto-dispatch) | 0.149 % | 0.149 % |
+| frames, crnn | 1.602 % | 1.602 % |
+| frames, parseq (auto-dispatch) | **5.034 %** | 5.339 % (pre-dispatch) |
+| CORD holdout, crnn | 27.42 % | 27.42 % |
+| CORD holdout, parseq (auto) | 21.70 % | 21.70 % |
+
+Dispatch is confirmed on BOTH sides — rendered content routes to the
+splitter, photographs to the direct feed — and the frames improvement is the
+dispatcher working, not a discrepancy.
+
 ### 8.4 PARSeq-tiny port: oracle PASS; engine variant open with a localized defect
 
 The port landed and is PROVEN at the stage level: ViT-tiny encoder +

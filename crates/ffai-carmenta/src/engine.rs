@@ -283,11 +283,16 @@ impl OcrEngine for CraftCrnn {
                         };
                         let lb_map = boxes::line_bbox(line);
                         let bh_img = (to_img(lb_map.y1) - to_img(lb_map.y0)).max(1.0);
-                        let ly0 = (to_img(lb_map.y0) - bh_img * 0.12).max(0.0) as usize;
-                        let ly1 = ((to_img(lb_map.y1) + bh_img * 0.12) as usize).min(h);
+                        // Word-crop pads, fractions of line height. Swept on
+                        // CORD's TRAIN split and left at their synthetic-render
+                        // values, which measured optimal on photographs too;
+                        // FFAI_PARSEQ_PAD_X/_Y keep the sweep repeatable.
+                        let (pad_x, pad_y) = crate::parseq_pads();
+                        let ly0 = (to_img(lb_map.y0) - bh_img * pad_y).max(0.0) as usize;
+                        let ly1 = ((to_img(lb_map.y1) + bh_img * pad_y) as usize).min(h);
                         let _ = (&region, &affinity, mw);
                         for &(wx0, wx1) in word_ranges.iter() {
-                            let pad = (bh_img * 0.10) as usize;
+                            let pad = (bh_img * pad_x) as usize;
                             let bx0 = wx0.saturating_sub(pad);
                             let by0 = ly0;
                             let bx1 = (wx1 + pad).min(w);
