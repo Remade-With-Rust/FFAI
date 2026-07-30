@@ -796,6 +796,40 @@ words**. Deleting the line-merge-then-resplit round trip is simpler than
 what exists AND the only route that passes paddle rather than approaching
 it.
 
+### 8.10 The direct CRAFT-box feed — 12.5 points, and a content sign-flip
+
+§8.9's prediction, tested: stop re-deriving word boundaries from pixels and
+hand PARSeq the boxes CRAFT already produced.
+
+| Config | CORD (real photos) | render (synthetic) |
+|---|---:|---:|
+| **parseq + CRAFT boxes DIRECT** | **21.70 %** | 0.673 % |
+| parseq + ink-gap split (old) | 34.16 % | **0.149 %** |
+| craft-crnn (standing default) | 27.42 % | 0.710 % |
+| paddleocr-mobile | 15.6 % | 0.019 % |
+
+**The direct feed cuts real-photo CER by 12.5 points (36 % relative)** and
+makes `craft-parseq` the first Carmenta configuration to beat `craft-crnn`
+on BOTH corpora. The census predicted exactly this: 1230 CRAFT boxes
+against 1027 GT words means the components already ARE words, and
+re-deriving them by ink projection could only lose information.
+
+**And the sign flips per content, which is the finding to protect.** The
+ink-gap splitter is 4.5x BETTER than the direct feed on synthetic render
+(0.149 % vs 0.673 %) and 1.6x WORSE on photographs. Rendered text has
+clean, uniform inter-word gaps that a projection reads perfectly; camera
+photos have noise, tilt and variable spacing that break the projection while
+CRAFT's learned affinity handles them. Neither path dominates — averaging
+them would discard both wins. The direct feed ships as the default
+(it dominates the crnn baseline on both corpora, which the splitter does
+not) and `FFAI_PARSEQ_SPLIT=1` retains the alternative, measured and
+documented, as the dispatch candidate a content signal would select.
+
+Standing gap to paddle on real photos: **21.70 % vs 15.6 %**, down from
+27.4 %. The remaining deficit is recognition on our own crops, and the
+next lever is the crop GEOMETRY those boxes get padded with — the pads
+were tuned on synthetic render and have never been swept on photographs.
+
 ### 8.4 PARSeq-tiny port: oracle PASS; engine variant open with a localized defect
 
 The port landed and is PROVEN at the stage level: ViT-tiny encoder +
