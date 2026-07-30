@@ -208,6 +208,56 @@ pub fn ink_extent(gray: &[f32], w: usize, h: usize) -> (usize, usize) {
     }
 }
 
+/// Word x-ranges within a single-line band of the ORIGINAL image, by ink
+/// column projection: a run of ink-free columns wider than 30% of the band
+/// height is a word gap. Replaces map-space splitting for word-level
+/// recognizers — CRAFT's region/affinity maps are per-character gaussians
+/// whose dips cut words mid-glyph (measured: "October" -> "Oo"+"ccober" on
+/// region-only, truncations like "Exa[ctly]" on region|affinity), while
+/// image-space gaps at this rendering are unambiguous.
+pub fn split_ink_words(
+    gray: &[f32],
+    img_w: usize,
+    y0: usize,
+    y1: usize,
+    x0: usize,
+    x1: usize,
+) -> Vec<(usize, usize)> {
+    let h = y1.saturating_sub(y0).max(1);
+    let min_gap = ((h as f32) * 0.30).max(2.0) as usize;
+    let mut sample: Vec<f32> = (y0..y1)
+        .flat_map(|y| gray[y * img_w + x0..y * img_w + x1].iter().copied())
+        .step_by(53)
+        .collect();
+    sample.sort_by(|a, b| a.total_cmp(b));
+    let median = sample.get(sample.len() / 2).copied().unwrap_or(128.0);
+    const DEV: f32 = 25.0;
+    let ink: Vec<bool> = (x0..x1)
+        .map(|x| (y0..y1).any(|y| (gray[y * img_w + x] - median).abs() > DEV))
+        .collect();
+    let mut words = Vec::new();
+    let (mut start, mut gap) = (None::<usize>, 0usize);
+    for (i, &on) in ink.iter().enumerate() {
+        if on {
+            if start.is_none() {
+                start = Some(i);
+            }
+            gap = 0;
+        } else if let Some(st) = start {
+            gap += 1;
+            if gap >= min_gap {
+                words.push((x0 + st, x0 + i + 1 - gap));
+                start = None;
+                gap = 0;
+            }
+        }
+    }
+    if let Some(st) = start {
+        words.push((x0 + st, x0 + ink.len() - gap.min(ink.len())));
+    }
+    words
+}
+
 pub fn candle_err(e: candle_core::Error) -> Error {
     Error::Other(format!("candle: {e}"))
 }

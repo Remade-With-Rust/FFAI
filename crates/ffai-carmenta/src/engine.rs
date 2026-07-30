@@ -244,14 +244,24 @@ impl OcrEngine for CraftCrnn {
                         let mut words = Vec::new();
                         let mut confs = Vec::new();
                         let lb_map = boxes::line_bbox(line);
-                        let word_boxes = boxes::split_words(&region, &affinity, mw, &lb_map);
-                        for b in word_boxes.iter() {
-                            let bh = to_img(b.y1) - to_img(b.y0);
-                            let (wpx, wpy) = (bh * 0.08, bh * 0.12);
-                            let bx0 = (to_img(b.x0) - wpx).max(0.0) as usize;
-                            let by0 = (to_img(b.y0) - wpy).max(0.0) as usize;
-                            let bx1 = ((to_img(b.x1) + wpx) as usize).min(w);
-                            let by1 = ((to_img(b.y1) + wpy) as usize).min(h);
+                        // Word boundaries from IMAGE-SPACE ink gaps (see
+                        // image::split_ink_words) — map-space dips cut
+                        // words mid-glyph; ink gaps at this rendering are
+                        // unambiguous. y-band from the line box, x-extent
+                        // padded before splitting.
+                        let bh_img = (to_img(lb_map.y1) - to_img(lb_map.y0)).max(1.0);
+                        let ly0 = (to_img(lb_map.y0) - bh_img * 0.12).max(0.0) as usize;
+                        let ly1 = ((to_img(lb_map.y1) + bh_img * 0.12) as usize).min(h);
+                        let lx0 = (to_img(lb_map.x0) - bh_img * 0.5).max(0.0) as usize;
+                        let lx1 = ((to_img(lb_map.x1) + bh_img * 0.5) as usize).min(w);
+                        let word_ranges = image::split_ink_words(&gray, w, ly0, ly1, lx0, lx1);
+                        let _ = (&region, &affinity, mw); // maps unused on this path now
+                        for &(wx0, wx1) in word_ranges.iter() {
+                            let pad = (bh_img * 0.10) as usize;
+                            let bx0 = wx0.saturating_sub(pad);
+                            let by0 = ly0;
+                            let bx1 = (wx1 + pad).min(w);
+                            let by1 = ly1;
                             if bx1 <= bx0 + 1 || by1 <= by0 + 1 {
                                 continue;
                             }

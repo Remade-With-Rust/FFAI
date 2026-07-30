@@ -200,7 +200,13 @@ impl Parseq {
             layer: DecoderLayer::new(&vb.pp("decoder.layers.0"))?,
             dec_norm: layer_norm(DIM, 1e-5, vb.pp("decoder.norm"))?,
             pos_queries: vb.get((1, MAX_STEPS, DIM), "pos_queries")?,
-            text_embed: vb.get((97, DIM), "text_embed.embedding.weight")?,
+            // strhub TokenEmbedding scales lookups by sqrt(embed_dim). Missing
+            // this was INVISIBLE at step 0 (content = BOS only: LayerNorm
+            // cancels a pure per-row scale) and degraded every later step
+            // (token+positional MIX shifts toward the positional term) —
+            // measured as confidence decay 0.9996->0.90 by step 2 and early
+            // EOS on long words ('warehouse' -> 'war'). Scale at load.
+            text_embed: (vb.get((97, DIM), "text_embed.embedding.weight")? * (DIM as f64).sqrt())?,
             head: linear(DIM, 95, vb.pp("head"))?,
         })
     }
@@ -269,6 +275,11 @@ impl Parseq {
                 .max_by(|a, b| a.1.total_cmp(b.1))
                 .map(|(i, p)| (i as u32, *p))
                 .unwrap_or((EOS_ID, 0.0));
+            if std::env::var("FFAI_PARSEQ_DEBUG").is_ok() {
+                let mut top: Vec<(usize, f32)> = probs.iter().copied().enumerate().collect();
+                top.sort_by(|a, b| b.1.total_cmp(&a.1));
+                eprintln!("step {i}: top3 {:?}", &top[..3]);
+            }
             if id == EOS_ID {
                 break;
             }
@@ -285,8 +296,11 @@ impl Parseq {
         // is re-predicted seeing all content EXCEPT its own AR prediction
         // (content index i+1 is the token emitted at step i — the mask
         // blocks exactly j == i+1).
+        if std::env::var("FFAI_PARSEQ_DEBUG").is_ok() {
+            eprintln!("AR ids: {tgt_ids:?} -> {out:?}");
+        }
         let l = tgt_ids.len(); // [BOS] + non-EOS tokens = strhub's tgt_in
-        if l > 1 {
+        if l > 1 && std::env::var("FFAI_NO_REFINE").is_err() {
             let mut content_rows = Vec::with_capacity(l);
             content_rows.push(self.text_embed.i(tgt_ids[0] as usize)?);
             for (k, &id) in tgt_ids.iter().enumerate().skip(1) {
