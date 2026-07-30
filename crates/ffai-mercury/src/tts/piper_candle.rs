@@ -30,19 +30,6 @@ use super::vits::{SynthesisOptions, Vits};
 /// The default (and currently only) converted voice.
 pub const DEFAULT_VOICE: &str = "piper-vits-lessac-medium";
 
-/// The manifests this engine needs, COMPILED IN.
-///
-/// They live in the crate (`manifests/`) rather than being read from a
-/// `models/` directory beside the caller, because a library must not depend
-/// on its consumer's working directory. `ffai-mercury` on crates.io has no
-/// repo checkout to read, and the same `Path::new("models")` assumption is
-/// why a plain `cargo add` + `PiperCandle::new()` failed outside this tree.
-///
-/// The repo's `models/*.toml` remain the copies `ffai models` lists; the test
-/// at the bottom of this file fails if the two drift apart.
-const CMUDICT_MANIFEST: &str = include_str!("../../manifests/cmudict.toml");
-const VOICE_MANIFEST: &str = include_str!("../../manifests/piper-vits-lessac-medium.toml");
-
 pub struct PiperCandle {
     /// `None` = use the compiled-in manifests. `Some(dir)` = read them from
     /// there instead, for a caller who wants to point at their own.
@@ -73,18 +60,15 @@ impl PiperCandle {
     }
 
     /// A manifest by name: from `manifest_dir` when one was given, otherwise
-    /// the compiled-in copy.
-    fn manifest(&self, name: &str, embedded: &str) -> Result<ModelManifest> {
-        match &self.manifest_dir {
-            Some(dir) => ModelManifest::load(&dir.join(format!("{name}.toml"))),
-            None => ModelManifest::from_toml(embedded),
-        }
+    /// the copy compiled into [`crate::manifests`].
+    fn manifest(&self, name: &str) -> Result<ModelManifest> {
+        crate::manifests::resolve(self.manifest_dir.as_deref(), name)
     }
 
     fn load(&self) -> Result<&Loaded> {
         self.loaded
             .get_or_init(|| {
-                let voice = self.manifest(DEFAULT_VOICE, VOICE_MANIFEST)?;
+                let voice = self.manifest(DEFAULT_VOICE)?;
                 // Fetch the files piper itself ships and read the ONNX
                 // directly — no conversion step, no Python, no ONNX runtime.
                 let resolved = voice.fetch().map_err(|e| {
@@ -106,8 +90,7 @@ impl PiperCandle {
                     .map(|(_, p)| p.clone())
                     .ok_or_else(|| Error::Model("voice manifest lists no .onnx.json".into()))?;
                 let vits = Vits::load_onnx(&onnx, &config)?;
-                let phonemizer =
-                    Phonemizer::from_manifest(&self.manifest("cmudict", CMUDICT_MANIFEST)?)?;
+                let phonemizer = Phonemizer::from_manifest(&self.manifest("cmudict")?)?;
                 Ok(Loaded { vits, phonemizer })
             })
             .as_ref()
@@ -212,38 +195,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_manifests_parse_and_name_what_they_claim() {
-        let voice = ModelManifest::from_toml(VOICE_MANIFEST).expect("voice manifest parses");
+    fn the_voice_and_lexicon_resolve_without_a_working_directory() {
+        // Parsing and drift are covered once for all ten manifests in
+        // `crate::manifests`; what matters here is that THIS engine's two
+        // names resolve with no directory at all.
+        let voice = PiperCandle::new().manifest(DEFAULT_VOICE).expect("voice");
         assert_eq!(voice.name, DEFAULT_VOICE);
         assert_eq!(voice.task, "tts");
-        // The licence field is the whole point of a manifest (principle 4);
-        // an empty one would ship a voice with no licence surfaced.
-        assert!(!voice.license.is_empty());
+        // Fetched from the voice repo piper itself publishes, as an ONNX we
+        // read directly — if this stops being true the setup story changes.
+        assert_eq!(voice.hf_repo.as_deref(), Some("rhasspy/piper-voices"));
+        assert!(voice.files.iter().any(|f| f.name.ends_with(".onnx")));
 
-        let dict = ModelManifest::from_toml(CMUDICT_MANIFEST).expect("cmudict manifest parses");
-        assert_eq!(dict.name, "cmudict");
+        let dict = PiperCandle::new().manifest("cmudict").expect("cmudict");
         assert!(dict.files.iter().any(|f| f.name == "cmudict.dict"));
-    }
-
-    #[test]
-    fn embedded_manifests_match_the_repo_copies() {
-        // Two copies exist on purpose: the crate needs its own (a published
-        // crate has no repo checkout to read), and `models/` is what
-        // `ffai models` lists. This test is the guard against them drifting.
-        //
-        // Skipped when the repo files are absent — that is the packaged-crate
-        // case, where there is nothing to drift from.
-        for (embedded, name) in
-            [(CMUDICT_MANIFEST, "cmudict.toml"), (VOICE_MANIFEST, "piper-vits-lessac-medium.toml")]
-        {
-            let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models").join(name);
-            let Ok(text) = std::fs::read_to_string(&repo) else { continue };
-            assert_eq!(
-                text.replace("\r\n", "\n"),
-                embedded.replace("\r\n", "\n"),
-                "crates/ffai-mercury/manifests/{name} has drifted from models/{name} — \
-                 copy the repo version over the crate's"
-            );
-        }
     }
 }

@@ -26,6 +26,7 @@
 //! `seed` makes output byte-identical run over run.
 
 pub mod asr;
+pub mod manifests;
 pub mod tts;
 
 pub use asr::{OxiWhisper, WhisperCandle};
@@ -40,18 +41,15 @@ pub fn register(reg: &mut EngineRegistry) {
     // Named engines are named *configurations*, the way ffmpeg exposes codec
     // presets: same implementation, different model size.
     reg.register_asr(Arc::new(WhisperCandle::new()));
-    reg.register_asr(Arc::new(WhisperCandle::with_model(
-        "models",
+    reg.register_asr(Arc::new(WhisperCandle::model(
         "whisper-tiny-en",
         asr::text_decoder::Precision::Q8_0,
     )));
-    reg.register_asr(Arc::new(WhisperCandle::with_model(
-        "models",
+    reg.register_asr(Arc::new(WhisperCandle::model(
         "whisper-base-en",
         asr::text_decoder::Precision::F32,
     )));
-    reg.register_asr(Arc::new(WhisperCandle::with_model(
-        "models",
+    reg.register_asr(Arc::new(WhisperCandle::model(
         "whisper-base-en",
         asr::text_decoder::Precision::Q8_0,
     )));
@@ -60,13 +58,11 @@ pub fn register(reg: &mut EngineRegistry) {
     // default anyone asked for. Above medium the family is multilingual-only,
     // which needs language detection we do not have (docs/mercury-asr-todo.md
     // §1), so medium.en is the largest size that is honestly usable today.
-    reg.register_asr(Arc::new(WhisperCandle::with_model(
-        "models",
+    reg.register_asr(Arc::new(WhisperCandle::model(
         "whisper-small-en",
         asr::text_decoder::Precision::F32,
     )));
-    reg.register_asr(Arc::new(WhisperCandle::with_model(
-        "models",
+    reg.register_asr(Arc::new(WhisperCandle::model(
         "whisper-medium-en",
         asr::text_decoder::Precision::F32,
     )));
@@ -138,16 +134,30 @@ mod tests {
             channels: 1,
         };
         let opts = ffai_core::engine::AsrOptions { diarize: true, ..Default::default() };
-        let err = reg
-            .asr(Some("whisper-candle"))
-            .unwrap()
-            .transcribe(&audio, &opts)
-            .unwrap_err();
         // 160 samples of silence: too short for the speaker model to embed,
-        // so this exercises the wiring rather than the network. Whatever it
-        // reports, it must not be the old "not built yet" refusal.
-        let msg = err.to_string();
-        assert!(!msg.contains("not built yet"), "stale refusal still present: {msg}");
-        assert!(!msg.contains("phase D"), "stale refusal still present: {msg}");
+        // so this exercises the wiring rather than the network.
+        //
+        // BOTH outcomes are accepted on purpose. This used to assert an
+        // error, which passed for the wrong reason: the engine resolved its
+        // manifests from a relative `models/` path that does not exist in the
+        // test's working directory, so it failed before reaching diarization
+        // at all. With the manifests compiled in it gets further, and whether
+        // it then returns empty output or an error depends on whether the
+        // 83 MB speaker model happens to be in the cache — which a unit test
+        // must not require, and must not download to satisfy.
+        //
+        // What is actually invariant: the flag is HONOURED rather than
+        // silently ignored, and the old refusal is gone.
+        match reg.asr(Some("whisper-candle")).unwrap().transcribe(&audio, &opts) {
+            Ok(t) => assert!(
+                t.speakers.is_some(),
+                "diarize was requested and the transcript carries no speaker track"
+            ),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(!msg.contains("not built yet"), "stale refusal still present: {msg}");
+                assert!(!msg.contains("phase D"), "stale refusal still present: {msg}");
+            }
+        }
     }
 }

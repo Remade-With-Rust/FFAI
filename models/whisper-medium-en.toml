@@ -1,0 +1,20 @@
+# English-only Whisper medium — the top English tier.
+#
+# 769M params. Above this the family goes multilingual-only (large-v*), which
+# needs language detection Mercury does not yet have — see
+# docs/mercury-asr-todo.md §1. So this is the largest size that is honestly
+# usable today.
+name = "whisper-medium-en"
+task = "asr"
+description = "OpenAI Whisper medium.en (769M params) — English-only, top accuracy tier"
+license = "Apache-2.0"
+hf_repo = "openai/whisper-medium.en"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

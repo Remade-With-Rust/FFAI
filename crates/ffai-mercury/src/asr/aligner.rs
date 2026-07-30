@@ -28,12 +28,16 @@ pub struct Aligner {
 impl Aligner {
     /// Load from a manifest directory, the same way the ASR model is loaded.
     pub fn from_manifest_dir(dir: &Path, name: &str, device: Device) -> Result<Self> {
-        let manifests = ffai_models::load_dir(dir)?;
-        let manifest = manifests.into_iter().find(|m| m.name == name).ok_or_else(|| {
+        Self::from_manifest_source(Some(dir), name, device)
+    }
+
+    /// Load by name, from `dir` when given and from the manifests compiled
+    /// into the crate otherwise — so word timestamps work without a `models/`
+    /// directory beside the caller.
+    pub fn from_manifest_source(dir: Option<&Path>, name: &str, device: Device) -> Result<Self> {
+        let manifest = crate::manifests::resolve(dir, name).map_err(|e| {
             Error::Model(format!(
-                "no model manifest named `{name}` in {} — word timestamps need a CTC \
-                 alignment model (see models/{DEFAULT_MODEL}.toml)",
-                dir.display()
+                "{e} — word timestamps need a CTC alignment model (default: {DEFAULT_MODEL})"
             ))
         })?;
         let resolved = manifest.fetch()?;

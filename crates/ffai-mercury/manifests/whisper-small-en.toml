@@ -1,0 +1,18 @@
+# English-only Whisper small — the accuracy tier above base.
+#
+# 244M params against base.en's 74M. The engine is parameterised by manifest,
+# so this is a configuration rather than code: `--engine whisper-candle-small`.
+name = "whisper-small-en"
+task = "asr"
+description = "OpenAI Whisper small.en (244M params) — English-only, accuracy tier"
+license = "Apache-2.0"
+hf_repo = "openai/whisper-small.en"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

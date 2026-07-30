@@ -27,14 +27,26 @@ pub struct Diarizer {
 
 impl Diarizer {
     pub fn from_manifest_dir(dir: &Path, name: &str, device: Device) -> Result<Self> {
-        let manifests = ffai_models::load_dir(dir)?;
-        let manifest = manifests.into_iter().find(|m| m.name == name).ok_or_else(|| {
+        Self::from_manifest_source(Some(dir), name, device)
+    }
+
+    /// Load by name, from `dir` when given and from the manifests compiled
+    /// into the crate otherwise — so diarization works without a `models/`
+    /// directory beside the caller.
+    pub fn from_manifest_source(dir: Option<&Path>, name: &str, device: Device) -> Result<Self> {
+        let manifest = crate::manifests::resolve(dir, name).map_err(|e| {
             Error::Model(format!(
-                "no model manifest named `{name}` in {} — diarization needs a speaker \
-                 embedding model (see models/{DEFAULT_MODEL}.toml)",
-                dir.display()
+                "{e} — diarization needs a speaker embedding model (default: {DEFAULT_MODEL})"
             ))
         })?;
+        Self::from_manifest(&manifest, device)
+    }
+
+    /// Load from an already-parsed manifest.
+    pub fn from_manifest(
+        manifest: &ffai_models::ModelManifest,
+        device: Device,
+    ) -> Result<Self> {
         let resolved = manifest.fetch()?;
         let weights = resolved.file("embedding_model.ckpt")?.to_path_buf();
 

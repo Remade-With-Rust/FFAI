@@ -1,0 +1,16 @@
+# English-only Whisper base — the second M1 size, matching the M0 baseline
+# (openai-whisper base.en: 1.72% WER, 6.5x realtime).
+name = "whisper-base-en"
+task = "asr"
+description = "OpenAI Whisper base.en (74M params) — English-only"
+license = "Apache-2.0"
+hf_repo = "openai/whisper-base.en"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

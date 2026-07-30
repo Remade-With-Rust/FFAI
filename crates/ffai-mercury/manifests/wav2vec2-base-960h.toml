@@ -1,0 +1,30 @@
+# The forced-alignment acoustic model behind `--word-timestamps`.
+#
+# This is NOT a transcriber. Its CTC head is only ever read as per-frame
+# character probabilities, which `asr::align` aligns an already-known Whisper
+# transcript against. Nothing it recognises reaches the output.
+#
+# Footprint warning, on the record: 95M parameters is **larger than
+# whisper-tiny.en's 39M**. Footprint is the one bench gate Mercury currently
+# wins (0.86-0.94x vs whisper.cpp), and loading this alongside Whisper can
+# invert that. It is why `--word-timestamps` is opt-in and why quantization is
+# tracked as open work rather than assumed (mercury-X-mission.md §C3).
+#
+# Licence is Apache-2.0 and the weights are ungated — no token, no browser
+# terms acceptance — which is what lets them live in a manifest at all. The
+# same is not true of pyannote's diarization weights, and that difference
+# shapes Phase D.
+name = "wav2vec2-base-960h"
+task = "asr"
+description = "facebook/wav2vec2-base-960h (95M params) — CTC acoustic model for forced alignment, English"
+license = "Apache-2.0"
+hf_repo = "facebook/wav2vec2-base-960h"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "vocab.json"

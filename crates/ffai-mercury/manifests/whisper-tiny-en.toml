@@ -1,0 +1,17 @@
+# English-only Whisper tiny — the Mercury M1 bring-up target, and the exact
+# model the M0 baselines were measured with (see docs/mercury-mission-plan.md
+# section 6.1: 2.99% WER, 22.1x realtime for faster-whisper).
+name = "whisper-tiny-en"
+task = "asr"
+description = "OpenAI Whisper tiny.en (39M params) — English-only, the M1 target"
+license = "Apache-2.0"
+hf_repo = "openai/whisper-tiny.en"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

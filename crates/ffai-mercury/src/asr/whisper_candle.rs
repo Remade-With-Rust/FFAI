@@ -28,7 +28,9 @@ use super::vad;
 /// per-clip timing measures inference rather than weight loading (see
 /// docs/benchmarking.md on warm vs end-to-end throughput).
 pub struct WhisperCandle {
-    manifest_dir: PathBuf,
+    /// `None` = the manifests compiled into the crate; `Some(dir)` = read
+    /// them from there instead.
+    manifest_dir: Option<PathBuf>,
     model_name: String,
     precision: Precision,
     // Mutex because decoding mutates the KV cache; the engine trait is
@@ -70,8 +72,8 @@ impl WhisperCandle {
             .lock()
             .map_err(|_| Error::Other("aligner lock poisoned by an earlier panic".into()))?;
         if guard.is_none() {
-            *guard = Some(std::sync::Arc::new(Aligner::from_manifest_dir(
-                &self.manifest_dir,
+            *guard = Some(std::sync::Arc::new(Aligner::from_manifest_source(
+                self.manifest_dir.as_deref(),
                 ALIGN_MODEL,
                 ffai_core::best_device(),
             )?));
@@ -87,8 +89,8 @@ impl WhisperCandle {
             .lock()
             .map_err(|_| Error::Other("diarizer lock poisoned by an earlier panic".into()))?;
         if guard.is_none() {
-            *guard = Some(std::sync::Arc::new(Diarizer::from_manifest_dir(
-                &self.manifest_dir,
+            *guard = Some(std::sync::Arc::new(Diarizer::from_manifest_source(
+                self.manifest_dir.as_deref(),
                 DIARIZE_MODEL,
                 ffai_core::best_device(),
             )?));
@@ -107,19 +109,40 @@ impl WhisperCandle {
         }
     }
 
-    /// Default: `whisper-tiny-en` from the repo's `models/` directory — the
-    /// M1 bring-up target, matching the M0 baseline configuration.
+    /// Default: `whisper-tiny-en` — the M1 bring-up target, matching the M0
+    /// baseline configuration.
+    ///
+    /// Manifests come from the copies compiled into the crate
+    /// ([`crate::manifests`]), so this works from any working directory; a
+    /// library that resolved them from a relative `models/` path would work
+    /// only inside this repo.
     pub fn new() -> Self {
-        Self::with_model("models", "whisper-tiny-en", Precision::F32)
+        Self::model("whisper-tiny-en", Precision::F32)
     }
 
+    /// A named size/precision, using the compiled-in manifests.
+    pub fn model(model_name: impl Into<String>, precision: Precision) -> Self {
+        WhisperCandle {
+            manifest_dir: None,
+            model_name: model_name.into(),
+            precision,
+            state: Mutex::new(None),
+            aligner: Mutex::new(None),
+            diarizer: Mutex::new(None),
+            speakers: Mutex::new(None),
+        }
+    }
+
+    /// A named size/precision whose manifests are read from `manifest_dir`
+    /// instead — for a caller shipping their own (a different checkpoint, a
+    /// pinned checksum, a relocated cache).
     pub fn with_model(
         manifest_dir: impl Into<PathBuf>,
         model_name: impl Into<String>,
         precision: Precision,
     ) -> Self {
         WhisperCandle {
-            manifest_dir: manifest_dir.into(),
+            manifest_dir: Some(manifest_dir.into()),
             model_name: model_name.into(),
             precision,
             state: Mutex::new(None),
@@ -168,8 +191,8 @@ impl AsrEngine for WhisperCandle {
             Error::Other("whisper-candle state lock poisoned by an earlier panic".into())
         })?;
         if guard.is_none() {
-            let whisper = LoadedWhisper::from_manifest_dir(
-                &self.manifest_dir,
+            let whisper = LoadedWhisper::from_manifest_source(
+                self.manifest_dir.as_deref(),
                 &self.model_name,
                 ffai_core::best_device(),
                 self.precision,

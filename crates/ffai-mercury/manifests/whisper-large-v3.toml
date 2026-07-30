@@ -1,0 +1,15 @@
+# The quality ASR tier.
+name = "whisper-large-v3"
+task = "asr"
+description = "OpenAI Whisper large-v3 (1.5B params) — quality transcription tier"
+license = "Apache-2.0"
+hf_repo = "openai/whisper-large-v3"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

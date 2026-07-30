@@ -51,11 +51,19 @@ impl LoadedWhisper {
         device: Device,
         precision: Precision,
     ) -> Result<Self> {
-        let manifests = ffai_models::load_dir(dir)?;
-        let manifest = manifests
-            .into_iter()
-            .find(|m| m.name == name)
-            .ok_or_else(|| Error::Model(format!("no model manifest named `{name}` in {}", dir.display())))?;
+        Self::from_manifest_source(Some(dir), name, device, precision)
+    }
+
+    /// Load by name, from `dir` when given and from the manifests compiled
+    /// into the crate otherwise — the path that lets `WhisperCandle::new()`
+    /// work from any working directory.
+    pub fn from_manifest_source(
+        dir: Option<&Path>,
+        name: &str,
+        device: Device,
+        precision: Precision,
+    ) -> Result<Self> {
+        let manifest = crate::manifests::resolve(dir, name)?;
         Self::from_manifest(&manifest, device, precision)
     }
 
