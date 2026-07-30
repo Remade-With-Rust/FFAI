@@ -142,6 +142,28 @@ config = "tiny.en/greedy"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-tiny.en.bin", "--threads", "24", "--beam-size", "1"]
 version_command = [".whispercpp/whisper-cli.exe", "--version"]
 
+# The SIZE-MATCHED bar. Mercury registers small.en, and comparing our small
+# against their tiny would be the mismatched-reference error this file exists
+# to prevent — it would price the model, not the implementation. Greedy, so
+# the decoding strategy stays matched too; the beam-5 rows below are for the
+# separate question of what each implementation's own DEFAULTS achieve.
+[[reference]]
+name = "whisper-cpp-small-greedy-t24"
+task = "asr"
+config = "small.en/greedy"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-small.en.bin", "--threads", "24", "--beam-size", "1"]
+version_command = [".whispercpp/whisper-cli.exe", "--version"]
+
+# whisper.cpp at ITS OWN default decoding strategy (beam 5), tiny.en. Pairs
+# with Mercury's beam-5 rows: the "how good is each tool out of the box"
+# question, as distinct from the matched-strategy comparison above.
+[[reference]]
+name = "whisper-cpp-tiny-beam5-t24"
+task = "asr"
+config = "tiny.en/beam5"
+batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-tiny.en.bin", "--threads", "24", "--beam-size", "5"]
+version_command = [".whispercpp/whisper-cli.exe", "--version"]
+
 # ---- TTS (Mercury M-T0+): piper1-gpl, the fast-local-TTS world standard ----
 # Batch contract: {filelist} of text paths in, WAVs written to {outdir},
 # JSONL timings out — see corpora/refs/piper_ref.py and

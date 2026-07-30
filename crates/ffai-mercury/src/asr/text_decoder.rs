@@ -1178,6 +1178,26 @@ impl Block {
     }
 }
 
+/// A saved decoder cache, for restoring one beam's history.
+///
+/// Opaque by design: the shape of the caches is the decoder's business, and
+/// beam search only needs to save one and put it back.
+#[derive(Clone)]
+pub struct DecoderState {
+    blocks: Vec<(Option<(Tensor, Tensor)>, Option<(Tensor, Tensor)>)>,
+    offset: usize,
+}
+
+impl DecoderState {
+    /// A state holding no cached history — equivalent to a freshly
+    /// [`TextDecoder::reset`] decoder. Restoring it into a decoder with more
+    /// blocks than this holds leaves the extra blocks untouched, so it is
+    /// only meaningful as a placeholder (tests, an unused beam slot).
+    pub fn empty() -> Self {
+        DecoderState { blocks: Vec::new(), offset: 0 }
+    }
+}
+
 /// Whisper's text decoder, decoding one token per step.
 pub struct TextDecoder {
     token_embedding: Embedding,
@@ -1273,6 +1293,34 @@ impl TextDecoder {
             block.reset();
         }
         self.offset = 0;
+    }
+
+    /// Snapshot every cache plus the position counter.
+    ///
+    /// This is what makes beam search affordable. Each hypothesis needs its
+    /// own self-attention K/V history, and the naive alternative — reset and
+    /// re-feed each beam's whole prefix every step — is O(steps²·beams),
+    /// roughly a hundredfold more decoder work at beam 5.
+    ///
+    /// The clone is SHALLOW: a candle `Tensor` is a handle onto refcounted
+    /// storage, and the caches are only ever *replaced* (by `Tensor::cat`),
+    /// never written in place, so snapshots share storage with the live
+    /// cache and stay valid after it advances. The cross-attention cache is
+    /// identical across beams — same audio — so sharing it costs nothing.
+    pub fn save(&self) -> DecoderState {
+        DecoderState {
+            blocks: self.blocks.iter().map(|b| (b.attn.cache.clone(), b.cross_attn.cache.clone())).collect(),
+            offset: self.offset,
+        }
+    }
+
+    /// Restore a snapshot taken by [`Self::save`].
+    pub fn restore(&mut self, state: &DecoderState) {
+        for (block, (attn, cross)) in self.blocks.iter_mut().zip(state.blocks.iter()) {
+            block.attn.cache = attn.clone();
+            block.cross_attn.cache = cross.clone();
+        }
+        self.offset = state.offset;
     }
 
     /// Feed `tokens` (the whole prompt on the first call, one token after) and

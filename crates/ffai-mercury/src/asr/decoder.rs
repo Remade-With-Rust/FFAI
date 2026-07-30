@@ -103,6 +103,17 @@ pub struct DecodeConfig {
     /// Must sit BELOW [`Self::logprob_threshold`]: aborting can only route
     /// the window to the full-context path it was already headed for.
     pub early_abort_logprob: Option<f32>,
+    /// Hypotheses to carry in the search. `1` is greedy decoding — the path
+    /// every measurement in this repo has used, and the one the references
+    /// are pinned to for a like-for-like comparison. `5` is what all three
+    /// references run by DEFAULT, so it is the setting to use when the
+    /// question is "how good can Mercury be" rather than "is our
+    /// implementation equivalent".
+    pub beam_size: usize,
+    /// Exponent for beam-search length normalization (`logprob / len^alpha`),
+    /// applied when picking the winner, never while expanding. `0.0` scores
+    /// on raw cumulative log-probability.
+    pub length_penalty: f32,
 }
 
 impl Default for DecodeConfig {
@@ -131,6 +142,20 @@ impl Default for DecodeConfig {
             prev_text_tokens: Vec::new(),
             max_timestamp_secs: None,
             early_abort_logprob: None,
+            // Greedy by default: it is what every ledger line to date was
+            // measured with, and flipping the default would silently
+            // invalidate the comparison the whole bench rests on. Beam search
+            // is opt-in until its own corpus gate says otherwise.
+            beam_size: std::env::var("FFAI_BEAM_SIZE")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|n| (1..=16).contains(n))
+                .unwrap_or(1),
+            length_penalty: std::env::var("FFAI_LENGTH_PENALTY")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .filter(|v| (0.0..=2.0).contains(v))
+                .unwrap_or(1.0),
         }
     }
 }
@@ -280,8 +305,16 @@ fn decode_with_fallback(
     let mut best: Option<(f32, Vec<u32>, f32)> = None;
 
     for &temperature in ladder {
-        let (tokens, avg_logprob, no_speech_prob) =
-            decode_once(whisper, audio_features, cfg, temperature)?;
+        // Beam search only at temperature 0. Above it the ladder is
+        // deliberately sampling to escape a degenerate greedy result, and a
+        // beam search over a sampled distribution is neither one strategy nor
+        // the other — openai-whisper switches to plain sampling at t > 0 for
+        // the same reason.
+        let (tokens, avg_logprob, no_speech_prob) = if cfg.beam_size > 1 && temperature == 0.0 {
+            decode_beam(whisper, audio_features, cfg, cfg.beam_size)?
+        } else {
+            decode_once(whisper, audio_features, cfg, temperature)?
+        };
 
         // The no-speech gate, and a *deliberate divergence* from the
         // reference. openai-whisper requires BOTH a high `<|nospeech|>`
@@ -363,6 +396,200 @@ pub fn repetition_ratio(text: &str) -> f32 {
     }
     let distinct: std::collections::HashSet<&str> = words.iter().copied().collect();
     words.len() as f32 / distinct.len().max(1) as f32
+}
+
+/// One hypothesis under beam search.
+struct Beam {
+    /// The full token sequence, prompt included (so `forward` can be fed the
+    /// prompt once and one token per step thereafter).
+    tokens: Vec<u32>,
+    /// Sum of per-token log-probabilities — the quantity beams are ranked on
+    /// before any length normalization.
+    logprob: f32,
+    /// This beam's decoder cache, so it can be resumed without re-feeding.
+    state: super::text_decoder::DecoderState,
+    /// Set once the beam has emitted end-of-text; finished beams stop
+    /// expanding but still compete for the final answer.
+    done: bool,
+}
+
+/// Beam search over the same grammar greedy decoding uses.
+///
+/// Whisper's references (openai-whisper, faster-whisper, whisper.cpp) all
+/// default to `beam_size=5`; Mercury has been greedy since M1, and every
+/// benchmark in this repo pins the references to greedy so the comparison
+/// measures implementations rather than decoding strategies. That is the
+/// honest comparison and it also caps what we can claim about accuracy —
+/// closing that is what this function is for.
+///
+/// The search is the textbook one, with the two details that matter:
+///
+/// - **Per-beam decoder state.** Each hypothesis owns a cache snapshot
+///   ([`super::text_decoder::DecoderState`]), so expanding a beam costs one
+///   token's forward pass rather than a re-feed of its whole prefix.
+/// - **Length normalization at selection time only.** Beams are *expanded* on
+///   raw cumulative log-probability, but the winner is chosen on
+///   `logprob / len^alpha`. Ranking mid-search on the normalized score
+///   biases toward whichever beam happens to be shortest at that step.
+///
+/// Returns the same triple as [`decode_once`] so the fallback ladder and the
+/// no-speech gate are untouched.
+fn decode_beam(
+    whisper: &mut LoadedWhisper,
+    audio_features: &Tensor,
+    cfg: &DecodeConfig,
+    beam_size: usize,
+) -> Result<(Vec<u32>, f32, f32)> {
+    let eot = whisper.tokenizer.eot;
+    let no_speech_tok = whisper.tokenizer.no_speech as usize;
+    let english_only = whisper.is_english_only();
+
+    const N_TEXT_CTX: usize = 448;
+    let initial =
+        whisper.tokenizer.initial_tokens(cfg.language, cfg.translate, cfg.timestamps, english_only);
+    let mut prompt = Vec::new();
+    if !cfg.prev_text_tokens.is_empty() {
+        let budget = N_TEXT_CTX.saturating_sub(cfg.max_tokens + initial.len() + 1);
+        if budget > 0 {
+            prompt.push(whisper.tokenizer.prev);
+            let skip = cfg.prev_text_tokens.len().saturating_sub(budget);
+            prompt.extend_from_slice(&cfg.prev_text_tokens[skip..]);
+        }
+    }
+    prompt.extend(initial);
+    let prompt_len = prompt.len();
+
+    let non_speech = if cfg.suppress_non_speech {
+        whisper.tokenizer.non_speech_tokens()
+    } else {
+        Vec::new()
+    };
+
+    let p = super::profile::profile();
+    whisper.decoder.reset();
+
+    // Step 0 is shared: one forward over the prompt seeds every beam, so the
+    // prompt is encoded once no matter how wide the search is.
+    let logits = super::profile::timed(&p.decoder, || {
+        whisper.decoder.forward(&prompt, audio_features)
+    })
+    .map_err(|e| Error::Model(format!("decoder forward: {e}")))?;
+    let mut values: Vec<f32> = logits
+        .to_dtype(ffai_core::candle::DType::F32)
+        .and_then(|t| t.to_vec1())
+        .map_err(tensor_err)?;
+    let no_speech_prob = {
+        let denom = logsumexp(&values);
+        values.get(no_speech_tok).map_or(0.0, |&v| (v - denom).exp())
+    };
+    apply_logit_filters(&mut values, &[], &whisper.tokenizer, cfg, &non_speech);
+    let seed_state = whisper.decoder.save();
+
+    let mut beams: Vec<Beam> = top_k(&values, beam_size)
+        .into_iter()
+        .map(|(token, lp)| {
+            let mut tokens = prompt.clone();
+            tokens.push(token);
+            Beam { tokens, logprob: lp, state: seed_state.clone(), done: token == eot }
+        })
+        .collect();
+
+    for _ in 1..cfg.max_tokens {
+        if beams.iter().all(|b| b.done) {
+            break;
+        }
+        let mut candidates: Vec<Beam> = Vec::new();
+        for beam in &beams {
+            if beam.done {
+                // A finished beam is carried forward unchanged; it still
+                // competes on score but consumes no more compute.
+                candidates.push(Beam {
+                    tokens: beam.tokens.clone(),
+                    logprob: beam.logprob,
+                    state: beam.state.clone(),
+                    done: true,
+                });
+                continue;
+            }
+            whisper.decoder.restore(&beam.state);
+            let last = [*beam.tokens.last().expect("seeded with one token")];
+            let logits = super::profile::timed(&p.decoder, || {
+                whisper.decoder.forward(&last, audio_features)
+            })
+            .map_err(|e| Error::Model(format!("decoder forward: {e}")))?;
+            let state = whisper.decoder.save();
+            let mut values: Vec<f32> = super::profile::timed(&p.sampling, || {
+                logits.to_dtype(ffai_core::candle::DType::F32).and_then(|t| t.to_vec1())
+            })
+            .map_err(tensor_err)?;
+            super::profile::timed(&p.sampling, || {
+                apply_logit_filters(
+                    &mut values,
+                    &beam.tokens[prompt_len..],
+                    &whisper.tokenizer,
+                    cfg,
+                    &non_speech,
+                );
+            });
+            for (token, lp) in top_k(&values, beam_size) {
+                let mut tokens = beam.tokens.clone();
+                tokens.push(token);
+                candidates.push(Beam {
+                    tokens,
+                    logprob: beam.logprob + lp,
+                    state: state.clone(),
+                    done: token == eot,
+                });
+            }
+        }
+        // Expand on RAW cumulative logprob (see the doc comment).
+        candidates.sort_by(|a, b| b.logprob.total_cmp(&a.logprob));
+        candidates.truncate(beam_size);
+        beams = candidates;
+    }
+
+    // Select on the LENGTH-NORMALIZED score.
+    let best = beams
+        .iter()
+        .max_by(|a, b| beam_score(a, prompt_len, cfg).total_cmp(&beam_score(b, prompt_len, cfg)))
+        .ok_or_else(|| Error::Model("beam search produced no hypotheses".into()))?;
+
+    let generated = best.tokens.len().saturating_sub(prompt_len);
+    let avg_logprob =
+        if generated > 0 { best.logprob / generated as f32 } else { f32::NEG_INFINITY };
+    p.count_tokens(generated);
+    Ok((best.tokens[prompt_len..].to_vec(), avg_logprob, no_speech_prob))
+}
+
+/// `logprob / len^alpha` — Google NMT-style length normalization.
+///
+/// Without it, cumulative log-probability is monotonically decreasing in
+/// length, so the search systematically prefers to stop early. `alpha = 0`
+/// reproduces raw cumulative scoring.
+fn beam_score(beam: &Beam, prompt_len: usize, cfg: &DecodeConfig) -> f32 {
+    let len = beam.tokens.len().saturating_sub(prompt_len).max(1) as f32;
+    if cfg.length_penalty == 0.0 {
+        beam.logprob
+    } else {
+        beam.logprob / len.powf(cfg.length_penalty)
+    }
+}
+
+/// The `k` highest-scoring tokens with their LOG-probabilities.
+///
+/// Normalizes over the filtered distribution, so a beam's cumulative score is
+/// comparable with any other beam's: `apply_logit_filters` sets rejected
+/// tokens to `-inf`, and those drop out of the `logsumexp` rather than
+/// silently stealing mass.
+fn top_k(values: &[f32], k: usize) -> Vec<(u32, f32)> {
+    let denom = logsumexp(values);
+    let mut idx: Vec<u32> = (0..values.len() as u32).collect();
+    idx.sort_unstable_by(|&a, &b| values[b as usize].total_cmp(&values[a as usize]));
+    idx.into_iter()
+        .take(k)
+        .filter(|&i| values[i as usize].is_finite())
+        .map(|i| (i, values[i as usize] - denom))
+        .collect()
 }
 
 /// Token generation at a given temperature. The KV cache is reset per window.
@@ -796,3 +1023,72 @@ pub fn windows(samples: &[f32]) -> impl Iterator<Item = (usize, &[f32])> {
 /// Type marker so `m` stays referenced even when the model module changes.
 #[allow(dead_code)]
 type WhisperModel = m::model::Whisper;
+
+#[cfg(test)]
+mod beam_tests {
+    use super::*;
+
+    fn cfg_with(beam: usize, penalty: f32) -> DecodeConfig {
+        DecodeConfig { beam_size: beam, length_penalty: penalty, ..DecodeConfig::default() }
+    }
+
+    /// `top_k` must return LOG-probabilities normalized over the FILTERED
+    /// distribution. If it returned raw logits, beams of different lengths
+    /// would accumulate scores on different scales and the comparison
+    /// between them would be meaningless — a bug that still produces
+    /// plausible transcripts, which is why it is pinned here.
+    #[test]
+    fn top_k_returns_normalized_logprobs_in_rank_order() {
+        // Two live tokens and one suppressed: exp(1)+exp(2) is the whole
+        // mass, so the top token's logprob is 2 - logsumexp([1,2]).
+        let values = vec![1.0f32, 2.0, f32::NEG_INFINITY];
+        let got = top_k(&values, 3);
+        assert_eq!(got.len(), 2, "-inf tokens must not be selectable");
+        assert_eq!(got[0].0, 1, "highest logit first");
+        let denom = (1.0f32.exp() + 2.0f32.exp()).ln();
+        assert!((got[0].1 - (2.0 - denom)).abs() < 1e-5, "got {}", got[0].1);
+        // A normalized distribution's probabilities sum to 1.
+        let mass: f32 = got.iter().map(|(_, lp)| lp.exp()).sum();
+        assert!((mass - 1.0).abs() < 1e-5, "probabilities must sum to 1, got {mass}");
+    }
+
+    /// Length normalization must not change the ranking of equal-length
+    /// beams, and must favour the longer of two beams with equal cumulative
+    /// logprob — that is the whole point of dividing by `len^alpha`.
+    #[test]
+    fn length_penalty_favours_longer_at_equal_cumulative_score() {
+        let state = super::super::text_decoder::DecoderState::empty();
+        let mk = |n: usize, lp: f32| Beam {
+            tokens: vec![0u32; 3 + n], // 3-token prompt
+            logprob: lp,
+            state: state.clone(),
+            done: false,
+        };
+        let short = mk(2, -4.0);
+        let long = mk(8, -4.0);
+
+        // alpha = 0 -> raw cumulative: a tie.
+        let c0 = cfg_with(5, 0.0);
+        assert_eq!(beam_score(&short, 3, &c0), beam_score(&long, 3, &c0));
+
+        // alpha = 1 -> divided by length: the longer beam wins, because the
+        // same total surprise spread over more tokens is a better sequence.
+        let c1 = cfg_with(5, 1.0);
+        assert!(
+            beam_score(&long, 3, &c1) > beam_score(&short, 3, &c1),
+            "length penalty must reward the longer hypothesis at equal cumulative score"
+        );
+    }
+
+    /// The default must stay greedy. Every ledger line in this repo was
+    /// measured with greedy decoding and the references are pinned to it;
+    /// flipping this default would silently invalidate that comparison.
+    #[test]
+    fn default_is_greedy() {
+        // Guard against a stray environment leaking into the assertion.
+        if std::env::var_os("FFAI_BEAM_SIZE").is_some() {
+            return;
+        }
+        assert_eq!(DecodeConfig::default().beam_size, 1);
+    }
+}
