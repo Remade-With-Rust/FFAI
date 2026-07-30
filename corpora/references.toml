@@ -84,10 +84,18 @@ version_command = [".venv-bench/Scripts/python.exe", "-c", "import faster_whispe
 # see docs/benchmarking.md), eng.traineddata from tessdata_fast. Its adapter
 # spawns one process per image — the spawn tax is inside its per-page times,
 # stated in corpora/refs/tesseract_ref.py rather than discovered later.
+# DECISION (2026-07-30, user directive): tesseract is dropped from the
+# MATCHED quality comparison — its 0.00% on synthetic clean print is real
+# (five independent runs; the render corpus's recorded ceiling effect) but
+# it makes the parity band degenerate, and Paddle is the accuracy bar that
+# matters for a neural stack. The config key below no longer matches the
+# engine's, so tesseract scores as open-field context only. It remains in
+# LIVE benches as the per-frame C++ latency line (paddle-mobile's mkldnn
+# handicap makes it a weak latency bar).
 [[reference]]
 name = "tesseract"
 task = "ocr"
-config = "en/printed"
+config = "en/legacy-cpp"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/tesseract_ref.py", "--batch", "{filelist}", "--bin", ".tools-bench/tesseract/tesseract.exe", "--tessdata", ".tools-bench/tesseract/tessdata", "--lang", "eng", "--psm", "3", "--oem", "1"]
 version_command = [".tools-bench/tesseract/tesseract.exe", "--version"]
 
