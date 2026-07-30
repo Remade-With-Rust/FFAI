@@ -6,9 +6,9 @@ Carmenta is [FFai](https://github.com/Remade-With-Rust/FFAI)'s OCR component, na
 
 ```toml
 [dependencies]
-ffai-carmenta = "0.4"
-ffai-core = "0.4"
-ffai-media = "0.4"
+ffai-carmenta = "0.5"
+ffai-core = "0.5"
+ffai-media = "0.5"
 ```
 
 ## Recognize

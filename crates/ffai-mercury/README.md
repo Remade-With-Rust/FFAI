@@ -6,9 +6,9 @@ Mercury is [FFai](https://github.com/Remade-With-Rust/FFAI)'s voice component. S
 
 ```toml
 [dependencies]
-ffai-mercury = "0.4"
-ffai-core = "0.4"
-ffai-media = "0.4"
+ffai-mercury = "0.5"
+ffai-core = "0.5"
+ffai-media = "0.5"
 ```
 
 ## Transcribe
