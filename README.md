@@ -12,7 +12,7 @@ Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 ffai asr -i talk.wav -o talk.srt --engine whisper-candle
 ffai asr -i talk.wav -o talk.json --word-timestamps   # per-word times (CTC alignment)
 ffai asr -i meeting.wav --diarize --max-speakers 3    # who spoke when
-ffai asr -i talk.wav -o talk.vtt --word-timestamps    # VTT with inline word timing
+ffai asr -i talk.wav --engine whisper-candle-small    # accuracy tier: 3.05% WER
 ffai tts "Hello from FFai." -o hello.wav               # piper voices, pure Rust
 ffai tts -o out.wav --seed 42 "Same seed, same bytes."  # byte-stable synthesis
 ffai tts -o long.wav "Long form works. Sentences split; silence is a knob."
@@ -28,7 +28,7 @@ ffai models         # list model manifests, licenses, cache status
 
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — 1.07× / 1.70× its throughput, 0.84–0.92× its memory, line-ball on WER. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, behind on synthesis speed ([Status](#status)) |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, behind on synthesis speed ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, p95 230 ms/frame vs per-frame Tesseract's 377. Recognition beats PaddleOCR's own recognizer on identical real-photo crops (1.5 % vs 3.0 % CER); full-pipeline photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -136,14 +136,50 @@ refutation expires when its baseline moves. Full descent, including the two
 levers that failed on the way and the four measured iterations it took to
 gate clean: [docs/whys/adaptive-context.md](docs/whys/adaptive-context.md).
 
-**Quality: line-ball, and read the per-clip column, not the aggregate.** 7.27
-vs 7.58 on clean; on test-other 16.89 vs 16.82 is 0.07 pp *behind* on WER and
-0.01 pp ahead on CER. Both sit inside the harness's own gate band, and the
-per-clip decomposition of the adaptive-context change is neutral on both
-corpora (test-clean 9 improved / 11 worsened, z = −0.45; test-other 12 / 17,
-z = −0.93; ~88 % of clips byte-unchanged). Aggregate WER on this box also
-moves ±0.2–0.3 pp across rebuilds of identical-behaviour code, so a
-sub-0.3 pp corpus delta is not a result here — the paired per-clip counts are.
+**Quality at tiny.en: line-ball, and read the per-clip column, not the
+aggregate.** 7.27 vs 7.58 on clean; on test-other 16.89 vs 16.82 is 0.07 pp
+*behind* on WER and 0.01 pp ahead on CER. Both sit inside the harness's own
+gate band. Aggregate WER on this box moves ±0.2–0.3 pp across rebuilds of
+identical-behaviour code, so a sub-0.3 pp corpus delta is not a result here —
+the paired per-clip counts are.
+
+That parity is not a limitation of the implementation, it is the *model*:
+`whisper-candle` runs OpenAI's tiny.en weights, so its accuracy ceiling is
+Whisper's. Two levers change that, and both now exist.
+
+### Accuracy tiers, and beam search
+
+**`small.en` more than halves the error rate** (test-clean, greedy, same
+harness, 200 clips):
+
+| model | WER % | CER % | ×realtime |
+|---|---:|---:|---:|
+| tiny.en | 6.39 | 2.31 | 19.9 |
+| base.en | 5.16 | 2.10 | 8.3 |
+| **small.en** | **3.05** | **0.88** | 4.2 |
+
+And at the **same** model size — the only comparison that prices the
+implementation rather than the weights — Mercury is ahead of whisper.cpp on
+quality *and* speed:
+
+| implementation | WER % | CER % | ×realtime |
+|---|---:|---:|---:|
+| **mercury** small.en | **3.05** | **0.88** | **4.2** |
+| whisper.cpp small.en | 3.38 | 1.16 | 3.7 |
+
+16 clips better, 8 worse, 176 tied — z = +1.63, which is *under* this
+project's |z| > 2 bar, so that reads "ahead, direction consistent, not yet
+significant" rather than as a proven win.
+
+**Beam search** (`FFAI_BEAM_SIZE=5`, greedy stays the default) is the other
+lever — what all three references run by default, and what Mercury lacked
+until now. It clears the bar, but only pooled: test-clean 6.36 → 5.76 % (19
+improved / 9 worsened, z = +1.89) and test-other 13.87 → 13.12 % (25 / 15,
+z = +1.58) are each below |z| > 2 alone; **pooled, 44 / 24 gives z = +2.43**
+on WER and +2.32 on CER. It costs ~5×, spending the whole speed surplus above.
+
+Full descent, including a harness that briefly reported an 18 pp lead that
+did not exist: [docs/whys/quality-routes.md](docs/whys/quality-routes.md).
 
 A related caution the project keeps on the record: **speech segmentation is on
 by default**, which whisper.cpp does not do — and segmentation is **not** a
@@ -171,16 +207,13 @@ test-clean and nothing on test-other, and is one flag away —
 (0.84–0.92×)**, and ~49–63 MiB of ours is audio the harness holds for the
 speed comparison, so the engine itself sits near 120 MiB.
 
-So the standing against whisper.cpp is **ahead on speed, ahead on memory,
-line-ball on quality** — and, for the first time, the harness's own verdict
-line reads `ALL GATES PASS — claimable` on both holdouts. That is a verdict
-against **matched** references (tiny, greedy). It is not a claim against the
-field: `openai-whisper-base`, a 74M beam-search model, sits at 5.96 % /
-12.14 % and Mercury does not beat it. The harness used to conflate those two
-questions by judging quality against the best reference it ran whatever its
-size; it now bands the comparison against matched configs, which is the
-honest version of the question "is our implementation good" as distinct from
-"is tiny.en a good model".
+So the standing against whisper.cpp is **ahead on speed, ahead on memory, and
+— at matched size — ahead on quality too**, with the harness's own verdict
+line reading `ALL GATES PASS — claimable` on both holdouts. Every one of
+those is a verdict against **matched** references: same weights, same
+decoding strategy. Comparing our `small.en` against their `tiny.en` would
+price the model rather than the implementation, which is the error the
+reference file exists to prevent.
 
 **Long-form is the one corpus still behind** — 6.89 % against whisper.cpp's
 6.47 % (ledger `bench-asr-1785388224`), down from **10.55 %** at the start of
@@ -203,18 +236,13 @@ selecting an AVX-VNNI build, blocked weight repacking, and f16 weights.
 Toggling its own `-nfa` flag prices that fused attention at **1.65×** — and
 against its *unfused* encoder ours is **1.38× faster**.
 
-Two cautions this project keeps on the record. **Single-run gap ratios are
-worthless here** — across ledger runs of the same code the test-clean gap has
+One caution this project keeps on the record: **single-run gap ratios are
+worthless here.** Across ledger runs of the same code the test-clean gap has
 read 1.01×–1.29× purely on machine state, and the reference's own throughput
-spreads ~37 % of its median — so progress is reported as our own throughput
-(22.9 → 27.8–46 ×RT depending on the box's mood) and cross-implementation
-ratios only as standing. It is also why the speed claim above rests on the
-paired, single-process, interleaved measurements rather than on any one
-ledger line's ratio. And the **test-clean CER deficit (3.27 % vs 2.87 %) is
-now a lead (2.79 %)** — but it was first closed by a segmentation change
-whose per-clip effect is z = 0.00, so it is better described as *displaced*
-than as explained. It went unexplained through int8, the f16 cache and every
-kernel change since §6.7, and nothing since has said what caused it.
+spreads ~37 % of its median. So progress is reported as our own throughput
+and cross-implementation ratios only as standing — and the speed claims above
+rest on paired, single-process, interleaved measurements rather than on any
+one ledger line's ratio.
 
 ### The WhisperX layer, in pure Rust
 

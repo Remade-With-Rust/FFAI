@@ -28,6 +28,32 @@ for seg in &transcript.segments {
 
 Weights download once, into a local cache, from hash-verified manifests.
 
+### Trading speed for accuracy
+
+`WhisperCandle::new()` is `tiny.en` — the fast default. Accuracy is a dial:
+
+```rust
+use ffai_mercury::asr::text_decoder::Precision;
+
+// tiny 6.39 % WER @ 19.9x · base 5.16 @ 8.3 · small 3.05 @ 4.2 (test-clean)
+let engine = WhisperCandle::model("whisper-small-en", Precision::F32);
+```
+
+Sizes run `whisper-{tiny,base,small,medium}-en`; `Precision::Q8_0` halves the
+decoder's memory on tiny and base. Above `medium.en` Whisper is multilingual
+only, which needs language detection Mercury does not yet have — so that is
+where the ladder honestly stops.
+
+Beam search is the other dial, and it is what the reference implementations
+run by default. Greedy is Mercury's default because every benchmark in this
+repo pins the references to greedy so the comparison measures implementations
+rather than decoding strategies:
+
+```rust
+// pooled across both holdouts: z = +2.43 on WER, ~5x the cost
+let cfg = DecodeConfig { beam_size: 5, ..Default::default() };
+```
+
 ## The WhisperX layer
 
 | Option | What it adds | Model fetched |
@@ -137,6 +163,20 @@ the audio present rather than always 30 s, with guards that escalate a
 suspect decode back to the full context. Function-by-function, Mercury is
 now ahead of whisper.cpp on **every** stage: encode ~2.0×, decode 1.1–1.2×,
 mel 1.4×, sampling 1.7–2.0×.
+
+**Accuracy is a dial, not a fixed point.** tiny.en's WER is Whisper's, not
+ours — so the lever is the model size, and `small.en` more than halves it:
+6.39 % → 5.16 % → **3.05 %** for tiny → base → small on test-clean, at
+19.9 → 8.3 → 4.2 ×realtime. At **matched size**, the comparison that prices
+the implementation rather than the weights, Mercury leads on both axes:
+**3.05 % WER / 0.88 % CER at 4.2 ×RT** against whisper.cpp small.en's
+3.38 % / 1.16 % at 3.7 ×RT (16 clips better, 8 worse, 176 tied — z = +1.63,
+under our |z| > 2 bar, so "ahead, not yet significant").
+
+**Beam search** landed too — `beam_size: 5`, what every reference runs by
+default. Pooled across both holdouts it is a significant improvement over
+greedy (WER 44 improved / 24 worsened, **z = +2.43**; CER z = +2.32), worth
+0.6–0.75 pp, at roughly 5× the cost. Greedy remains the default.
 
 **TTS** — three of four gates pass against piper1-gpl on a pinned 200-sentence corpus (correctness, quality, footprint); speed does not, and is reported as failing.
 
