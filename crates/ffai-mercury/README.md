@@ -1,6 +1,6 @@
 # ffai-mercury
 
-**Speech recognition and speech synthesis in pure Rust.** ASR with the full WhisperX layer — voice activity detection, word-level timestamps, speaker diarization — and TTS running piper's own voices on candle. No Python, no C/C++ by default, no HuggingFace token, no gated weights, and nothing GPL.
+**Speech recognition (ASR) and text-to-speech (TTS) in pure Rust.** Whisper/WhisperX-class recognition — voice activity detection, word-level timestamps, speaker diarization — and VITS/Piper-class synthesis running piper's own voices on candle. No Python runtime, no C/C++ by default, no HuggingFace token, no gated weights, and nothing GPL.
 
 Mercury is [FFai](https://github.com/Remade-With-Rust/FFAI)'s voice component. Standalone landing page: [Remade-With-Rust/mercury](https://github.com/Remade-With-Rust/mercury).
 

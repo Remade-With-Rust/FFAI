@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["cli", "speech-to-text", "tts", "ocr", "ai"]
+categories = ["command-line-utilities", "multimedia", "science"]
 
 [[bin]]
 name = "ffai"

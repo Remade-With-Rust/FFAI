@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["speech-recognition", "text-to-speech", "whisper", "tts", "asr"]
+categories = ["multimedia::audio", "science", "accessibility"]
 
 [dependencies]
 ffai-core = { workspace = true }

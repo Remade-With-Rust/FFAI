@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["vlm", "image-captioning", "computer-vision", "multimodal", "captioning"]
+categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }

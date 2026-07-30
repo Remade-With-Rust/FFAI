@@ -1,9 +1,10 @@
 # FFAI
 
-**The AI media toolkit, remade with rust.** OCR, speech recognition, speech
-synthesis, and vision-language understanding in one pure-Rust toolkit — built
-the way ffmpeg was built: libraries first, one binary on top, everything
-swappable by name.
+**The AI media toolkit, remade with rust.** OCR, speech recognition (ASR),
+text-to-speech (TTS), and vision-language understanding in one pure-Rust
+toolkit — built the way ffmpeg was built: libraries first, one binary on top,
+everything swappable by name. No Python runtime, no C/C++ by default, no
+gated weights.
 
 Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 

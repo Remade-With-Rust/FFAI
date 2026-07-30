@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["ai", "inference", "candle", "machine-learning", "toolkit"]
+categories = ["multimedia", "science", "api-bindings"]
 
 [dependencies]
 candle-core = { workspace = true }

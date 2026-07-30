@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["audio", "wav", "resample", "decoding", "media"]
+categories = ["multimedia::audio", "multimedia::encoding"]
 
 [dependencies]
 ffai-core = { workspace = true }

@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["benchmark", "wer", "profiling", "evaluation", "ai"]
+categories = ["development-tools", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }

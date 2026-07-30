@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["ocr", "text-recognition", "computer-vision", "document-ai", "craft"]
+categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }

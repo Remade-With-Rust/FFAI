@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+keywords = ["model-weights", "huggingface", "safetensors", "cache", "manifest"]
+categories = ["caching", "filesystem"]
 
 [dependencies]
 ffai-core = { workspace = true }
