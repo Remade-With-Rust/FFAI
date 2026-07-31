@@ -1626,6 +1626,40 @@ next probe is not another threshold: it is a direct comparison of the two
 detectors' box SETS on a blurred region, which is a different question from the
 box GEOMETRY §8.13 measured.
 
+### 8.24 Quad crops — ceiling measured at 1.26 pp, then pruned on structure
+
+We compute DBNet's rotated quad and discard it for its axis-aligned bounds, and
+the ground-truth quads that read at 1.30 % in §8.13 *are* quads. §8.8 pruned a
+deskew fix, but that was line GROUPING; this is crop SHAPE — a different lever
+wearing a similar name, which is how levers get wrongly refuted. So: ceiling
+first, cost second, exactly as the campaign rule says.
+
+Same 300 CORD ground-truth words, cut two ways, read by the same recogniser:
+
+| crop | CER |
+|---|---:|
+| axis-aligned bounds | 14.91 % |
+| **perspective warp of the quad** | **13.65 %** |
+
+**1.26 pp, and it is real.** It is also concentrated: CORD's words are
+essentially upright — tilt median **0.00 deg**, p90 4.21, max 8.69 — so a
+warp and an AABB are the same rectangle for the typical word, and the whole
+gain comes from a ~10 % tilted tail.
+
+**Pruned anyway, on structure rather than on size.** The engine that would use
+it is the wrong one. Our best CORD engine is craft-parseq at 20.93 %, and CRAFT
+emits axis-aligned character components — **there is no quad to warp**. The
+detector that does emit quads is mobile-det, which sits 13 points behind on
+this corpus, so the 1.26 pp would be spent making the loser slightly less far
+behind. Building it now buys nothing on the number the gate reads.
+
+Where it *should* return is skewed DOCUMENT scans, where a line detector is the
+right tool and page skew is real rather than a 10 % tail. The corpus that could
+fail it does not exist yet: `carmenta-doclaynet-v1` is rendered from PDFs at
+zero skew (§8.17). So this is recorded as a measured, quantified lever waiting
+on M-C3's corpus, which is this plan's own rule — nothing lands without a
+corpus that can fail it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

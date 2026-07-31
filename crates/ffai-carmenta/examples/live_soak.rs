@@ -17,7 +17,16 @@ fn main() {
     clips.sort_by(|a, b| a.id.cmp(&b.id));
     let frames: Vec<_> = clips.iter().map(|c| ffai_media::load_image(&manifest.clip_path(c)).unwrap()).collect();
 
-    let engine = std::sync::Arc::new(ffai_carmenta::engine::CraftCrnn::new());
+    // FFAI_LIVE_DET=mobiledet soaks the other detector. It holds 123 MiB steady
+    // against CRAFT's 1500 in batch (§8.21), and the footprint gate is the one
+    // M-C2 has never actually run — a SKIP is not a pass.
+    let engine = std::sync::Arc::new(
+        if std::env::var("FFAI_LIVE_DET").as_deref() == Ok("mobiledet") {
+            ffai_carmenta::engine::CraftCrnn::new_mobiledet(ffai_carmenta::engine::RecStage::Crnn)
+        } else {
+            ffai_carmenta::engine::CraftCrnn::new()
+        },
+    );
     engine.recognize(&frames[0], &OcrOptions::default()).unwrap();
     let mut session = LiveSession::new(engine, OcrOptions::default(), LiveConfig { auto_roi: true, ..Default::default() });
 
