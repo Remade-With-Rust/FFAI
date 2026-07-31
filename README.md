@@ -19,6 +19,8 @@ ffai tts -o long.wav "Long form works. Sentences split; silence is a knob."
 ffai ocr -i page.png                                  # CRAFT + CRNN, pure Rust
 ffai ocr -i photo.png --engine craft-parseq           # word-level AR rec for photos
 ffai ocr --live --watch 5 -i captures/ -o screen.srt  # LIVE: point it at a screen
+ffai detect -i street.png --engine yolo26n                # YOLO26, pure Rust
+ffai detect -i street.png -o boxes.jsonl --conf 0.4       # structured out
 ffai caption -i frame.png --prompt "what is happening here?"
 ffai engines        # list every engine + status, like `ffmpeg -codecs`
 ffai models         # list model manifests, licenses, cache status
@@ -29,7 +31,8 @@ ffai models         # list model manifests, licenses, cache status
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, behind on synthesis speed ([Status](#status)) |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, p95 230 ms/frame vs per-frame Tesseract's 377. Recognition beats PaddleOCR's own recognizer on identical real-photo crops (1.5 % vs 3.0 % CER); full-pipeline photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
+| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion — **mAP identical to PyTorch and ONNX Runtime on the same weights** (68.65 mAP50, three implementations within 5.6e-05), at 0.70× ORT's memory. Speed is 4.7× behind ORT after the first five kernels of the M-D2 campaign ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -410,7 +413,7 @@ corpus class, not by leaderboard.
   identical real-photo word crops with quad-level ground truth: **1.5 % vs
   3.0 % CER, 93 % vs 88 % exact-match, at 2.6× lower latency.**
 - **LIVE streaming** (a capability the incumbents don't have): change-gated
-  frame reading at steady **p95 230 ms vs 377 ms** for per-frame Tesseract,
+  frame reading at steady **p95 257 ms vs 343 ms** for per-frame Tesseract,
   **zero output churn** across 156 unchanged frames where stateless engines
   churn 24 times, 24/24 text changes caught, memory flat over a 30-minute
   soak (ratio 1.041).
@@ -420,8 +423,8 @@ corpus class, not by leaderboard.
 
 **Where PaddleOCR still wins, stated plainly:** the full pipeline on real
 photographs. On 45 photographed receipts (CORD-v2, CC-BY), PaddleOCR mobile
-scores **15.6 % CER to our 21.7 %** (`--engine craft-parseq`; the default
-`craft-crnn` reads 27.4 % there but wins the screen/HUD class 3.3x, so the
+scores **15.6 % CER to our 20.9 %** (`--engine craft-parseq`; the default
+`craft-crnn` reads 27.3 % there but wins the screen/HUD class, so the
 engine is a per-content choice, not a ranking) — despite our stronger recognition
 stage. Stage-level instrumentation localized the gap: tilt-sensitive line
 grouping between detection and recognition (deskew is the named fix), a

@@ -1436,10 +1436,22 @@ Made proportional to the band's own height and swept (CER on change frames):
 | CRAFT | 1.74 | 1.74 | 1.77 | 1.74 | **1.43** | 1.47 | 1.54 | 2.47 | 3.42 |
 | mobile-det | 1.83 | 1.83 | 1.83 | — | **1.80** | — | 2.21 | — | — |
 
-**LIVE's quality gate goes 1.74 % -> 1.43 %**, an 18 % relative improvement on
-the default engine, with churn still 0/156 and all four gates PASS. A basin
-rather than a spike — three values inside, monotone rise on both sides — and
-confirmed on the second detector rather than assumed to generalise.
+A basin rather than a spike — three values inside, monotone rise on both sides
+— and confirmed on the second detector rather than assumed to generalise.
+
+**Correction (§8.21): the row above was measured under `FFAI_DET_SCALE=0.5`,
+which is not the shipped default.** Re-run at the adaptive default the pad
+still wins and the basin sits in the same place, but the margin is smaller:
+
+| frac (adaptive default) | 0.0 | 0.25 | **0.33** |
+|---|---:|---:|---:|
+| CRAFT | 1.81 | 1.82 | **1.67** |
+
+So the honest figure for LIVE's quality gate is **1.81 % -> 1.67 %**, a 7.7 %
+relative improvement, not the 18 % the pinned-scale pair implied. The direction,
+the basin's location and the cliff all reproduce; only the size shrinks. Filed
+as a correction rather than an edit because quoting a gate number from a
+non-default configuration is the same error class as §8.15's reference flag.
 
 The cliff past ~0.45 is mechanical: bands are clamped to the midpoint of the
 gap to their neighbour, so a large fraction eventually grows a crop halfway
@@ -1468,6 +1480,55 @@ shape probe rules out the strips. The remaining difference is what the boxes
 are USED for — final crops in batch, band GEOMETRY in LIVE's calibration — but
 that is a hypothesis, not a measurement, and it is recorded as one. Plumbing a
 per-call floor needs an `OcrOptions` field, which is a shared-crate change.
+
+### 8.21 The ledger sweep — every engine, every corpus, one configuration
+
+The campaign had drifted ahead of its own evidence: §8.19 and §8.20 were argued
+from `.tools-bench/score_corpus.py`, a scorer explicitly labelled "A/B only,
+never quoted as a claim", while the ledger held **zero** lines for
+`mobiledet-parseq` and one stale line for `mobiledet-crnn`. Twelve runs later
+it does not. One configuration throughout — adaptive detection default,
+best-of-1, PaddleOCR-mobile as the single reference — because a per-engine env
+makes the arms incomparable, which is exactly how the earlier suite ended up
+with craft-crnn at 1.76 % and this one at 1.72 %.
+
+| CER % (pages/s, steady MiB) | frames | render | CORD |
+|---|---|---|---|
+| craft-crnn | 1.72 (0.11, 1500) | 0.67 (0.10, 1957) | 27.27 (0.05, 2055) |
+| craft-parseq | 2.87 (0.13, 1497) | **0.49** (0.08, 1897) | **20.93** (0.09, 1782) |
+| **mobiledet-crnn** | **1.70** (**0.64**, **123**) | 0.54 (**0.59**, 210) | 34.08 (0.36, 646) |
+| mobiledet-parseq | 2.48 (0.57, **102**) | 0.68 (0.47, **100**) | 35.17 (0.36, 631) |
+| paddleocr-mobile | 1.31 (0.26, 739) | 0.02 (0.14, 736) | 15.62 (0.16, 810) |
+
+**Mobile-det passes the speed AND footprint gates on all three corpora against
+PaddleOCR** — the first Carmenta configuration to do so anywhere, and it does
+it everywhere. On frames it runs **5.8x faster than CRAFT at 1/12th its steady
+memory** (123 MiB against 1500), and it is faster and leaner than the reference
+itself. Quality is the only gate still open, and only on photographs.
+
+Three things the sweep settled that the ad-hoc scorer could not:
+
+1. **The unclip fix is real and banked.** mobiledet-parseq reads 2.48 % on
+   frames where the reference's 1.5 would have put it near 10.9 %.
+2. **The pad fix is real but smaller than reported** — see the correction in
+   §8.20. Measured at the default rather than at a pinned scale.
+3. **The dispatch rule I proposed does not survive.** §8.17 read "Rendered ->
+   mobile-det", resting on the frames corpus alone. Render is also Rendered,
+   and there craft-parseq wins (0.49 vs mobiledet-crnn's 0.54). No single
+   engine takes both Rendered corpora, and the two winners are *opposite*
+   pairings. So content class is NOT a sufficient dispatch key.
+
+   What survives is weaker and more useful: mobiledet-crnn is first on frames
+   and a 0.05 pp second on render, at ~6x the speed and a fifth of the memory.
+   It is never far from best on rendered content and never close on
+   photographs. A dispatch built on that is defensible; one built on "Rendered
+   -> mobile-det wins" is not, and I had the second one written down.
+
+**Scorer calibration, now that both exist.** The ad-hoc scorer ran high by
+0.08–1.03 pp (frames craft-crnn 1.80 vs 1.72; CORD craft-parseq 21.96 vs 20.93;
+frames mobiledet-parseq 2.29 vs 2.48 — that one ran LOW). Every A/B conclusion
+drawn from it survives the ledger, but no absolute number from it should be
+quoted, which is what it was labelled for.
 
 ## 9. Pure-Rust boundary and watchlist
 
