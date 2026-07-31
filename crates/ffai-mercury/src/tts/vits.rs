@@ -377,8 +377,15 @@ impl Vits {
                 }
             }
         };
-        // Below this the rayon grid costs more than the rows do, matching the
-        // size-adaptive guard the decoder kernels already use.
+        // Guard MEASURED, not reasoned (`examples/len_sweep.rs`, paired ABBA
+        // win-rate at each length). Parallel wins at EVERY length tested and
+        // the margin grows without bound, because attention is O(T^2) and only
+        // the parallel arm spreads that:
+        //   T=16 1.30x z+2.32 | 64 1.68x z+3.87 | 256 4.26x z+3.87 | 1024 9.63x
+        // So this floor is a safety net for degenerate inputs, not a crossover
+        // -- there isn't one in the range that occurs. It also means the 1.04x
+        // this change bought on ~88-phoneme sentences UNDERSTATES it badly for
+        // long-form text: the same code is worth ~9.6x at T=1024.
         let parallel = HEADS * t_len >= 32 && std::env::var("FFAI_SERIAL_ATTN").is_err();
         if parallel {
             use rayon::prelude::*;
@@ -456,11 +463,6 @@ impl Vits {
 
     // ---------------------------------------------------------------- stage 2
 
-    /// Stochastic duration predictor, reverse mode → frames per phoneme.
-    ///
-    /// Two graph-confirmed quirks: `dp.flows.1` never runs (the VITS
-    /// reversal drops it), and durations are NOT clamped — only the total
-    /// length is, downstream.
     /// The duration predictor's conditioning half (pre -> DDSConv -> proj),
     /// exposed so `dp_anatomy` can separate it from the flow half. Nearly all
     /// of this stage's multiply-accumulate lives here: 192 channels against the
@@ -471,13 +473,19 @@ impl Vits {
         self.conv("dp.proj", &g)
     }
 
-    pub fn durations(
+    /// Stochastic duration predictor, reverse mode → raw (pre-`ceil`) frames
+    /// per phoneme.
+    ///
+    /// Two graph-confirmed quirks: `dp.flows.1` never runs (the VITS
+    /// reversal drops it), and durations are NOT clamped — only the total
+    /// length is, downstream.
+    fn durations_raw(
         &self,
         hidden: &Tensor,
         noise_w: f64,
         length_scale: f64,
         rng: &mut GaussRng,
-    ) -> Result<Vec<u32>> {
+    ) -> Result<Vec<f64>> {
         let t_len = hidden.dim(2).e()?;
         // Conditioning: pre -> DDSConv -> proj.
         let g = self.conv("dp.pre", hidden)?;
@@ -504,10 +512,37 @@ impl Vits {
         z = z.broadcast_sub(&m).e()?.broadcast_mul(&exp_neg_logs).e()?;
 
         let logw: Vec<f32> = z.i((0, 0)).e()?.to_vec1().e()?;
-        Ok(logw
-            .iter()
-            .map(|lw| ((lw.exp() as f64) * length_scale).ceil().max(0.0) as u32)
+        Ok(logw.iter().map(|lw| (lw.exp() as f64) * length_scale).collect())
+    }
+
+    /// Frames per phoneme — the integer contract the graph's `w_ceil` pins.
+    pub fn durations(
+        &self,
+        hidden: &Tensor,
+        noise_w: f64,
+        length_scale: f64,
+        rng: &mut GaussRng,
+    ) -> Result<Vec<u32>> {
+        Ok(self
+            .durations_raw(hidden, noise_w, length_scale, rng)?
+            .into_iter()
+            .map(|d| d.ceil().max(0.0) as u32)
             .collect())
+    }
+
+    /// The same durations BEFORE `.ceil()`. Exposed so `corpus_stability` can
+    /// report how close the nearest phoneme sits to an integer boundary: a
+    /// routing change that reorders float accumulation is only safe by the
+    /// margin between the raw duration and the boundary it would round across,
+    /// and "it passed" means little without that margin.
+    pub fn durations_raw_probe(
+        &self,
+        hidden: &Tensor,
+        noise_w: f64,
+        length_scale: f64,
+        rng: &mut GaussRng,
+    ) -> Result<Vec<f64>> {
+        self.durations_raw(hidden, noise_w, length_scale, rng)
     }
 
     /// DDSConv: depthwise-separable dilated conv stack with channel
@@ -571,14 +606,24 @@ impl Vits {
             }
             rq_spline_inverse(z1v[t] as f64, &widths, &heights, &derivs) as f32
         };
-        // Parallelising this loop was MEASURED AND REJECTED: at the pipeline it
-        // read 0.996x, 8/21 rounds, z = -1.09 (inside noise), and at the stage
-        // it was frankly worse — dp 211 -> 250 ms wall for 516 -> 1125 ms CPU.
-        // A column is one ~10-bin spline solve; rayon's fork/join costs more
-        // than the work it hands out. The de-plumbing above (three heap Vecs
-        // per column -> stack arrays) is kept on its own merits: byte-identical
-        // and strictly less work. `FFAI_PAR_SPLINE=1` re-enables the parallel
-        // arm for anyone re-testing on a machine with cheaper threads.
+        // Parallelising this loop was rejected at T~88, then RE-TESTED across a
+        // length sweep, because a mixed win/lose outcome is an unfinished
+        // dispatch rather than a verdict (codec-content-adaptive-dispatch). Its
+        // two siblings on the same work-per-task axis — dp's dense convs and
+        // the attention row grid — both WON, so the spline deserved the same
+        // question asked properly: is there a length where it crosses over?
+        //
+        // There is not, anywhere in range (`examples/len_sweep.rs`, paired):
+        //   T=32 0.877x z-2.84 | 64 0.939x z-2.32 | 128 0.994x z-0.26
+        //   T=256 1.043x z+1.81 | 512 z+0.26 | 1024 1.038x z+1.81
+        // Serial genuinely wins at 32-64; parallel only ever LEANS at >=256 and
+        // never reaches z=+2. A column is one ~10-bin spline solve, so rayon's
+        // fork/join outweighs the work at every size that occurs. This is the
+        // "no cheap signal separates them -> gate it off" endpoint, recorded
+        // with what was measured. `FFAI_PAR_SPLINE=1` re-enables it.
+        //
+        // The de-plumbing above (three heap Vecs per column -> stack arrays) is
+        // kept separately, on byte-identity and strictly-less-work.
         let out: Vec<f32> = if t_len >= 32 && std::env::var("FFAI_PAR_SPLINE").is_ok() {
             use rayon::prelude::*;
             (0..t_len).into_par_iter().map(column).collect()

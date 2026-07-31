@@ -565,15 +565,40 @@ impl FlatDecoder {
         let mut t_up = 0f64;
         let mut t_conv = 0f64;
         let mut t_glue = 0f64;
+        // Per-upsampling-stage buckets. The decoder upsamples 256x overall, so
+        // the three stages operate on wildly different tensor sizes and a
+        // single lumped total cannot say which one owns the cost.
+        let mut stage_ms = [0f64; 3];
+        let mut stage_len = [0usize; 3];
+        // Glue is ~22% of the decoder and is three different things wearing one
+        // name: a per-resblock buffer clone (alloc + copy of a multi-MB
+        // tensor), the activation passes, and the accumulate. They have
+        // different fixes, so they need different buckets.
+        let mut t_clone = 0f64;
+        let mut t_act = 0f64;
+        let mut t_add = 0f64;
         let clock = std::time::Instant::now;
 
         let t0 = clock();
         let (mut x, mut len) = self.conv_pre.conv(z, len);
         t_conv += t0.elapsed().as_secs_f64();
+
+        // MEASURED AND REVERTED: hoisting these scratch buffers out of the
+        // stage/resblock loops (to kill the 15 multi-MB allocations per call --
+        // 9 `x.clone()` residuals + 3 `lx` + 3 `scratch`) did NOT pay. The
+        // whole-pipeline paired A/B read 11/21, z = +0.22, and the per-op
+        // buckets explained why: `clone` fell 159 -> ~100 ms but `act` ROSE
+        // 211 -> ~250 ms, because the cost moved into the `resize` first-touch
+        // rather than disappearing. Reverted as unproven, not as impossible --
+        // an arena that persists ACROSS decode() calls (rather than within one)
+        // would not pay the first-touch cost and is still worth trying.
         for (up_i, up) in self.ups.iter().enumerate() {
+            let stage_t0 = clock();
             let t0 = clock();
             leaky_inplace(&mut x, 0.1);
-            t_glue += t0.elapsed().as_secs_f64();
+            let d = t0.elapsed().as_secs_f64();
+            t_glue += d;
+            t_act += d;
             let t0 = clock();
             let (xu, lu) = up.transpose(&x, len);
             t_up += t0.elapsed().as_secs_f64();
@@ -588,18 +613,24 @@ impl FlatDecoder {
             let mut lx = vec![0f32; x.len()];
             leaky_into(&x, &mut lx, 0.1);
             let mut scratch = vec![0f32; x.len()];
-            t_glue += t0.elapsed().as_secs_f64();
+            let d = t0.elapsed().as_secs_f64();
+            t_glue += d;
+            t_act += d;
             for rb in &self.resblocks[up_i * 3..up_i * 3 + 3] {
                 let t0 = clock();
                 let mut y = x.clone();
-                t_glue += t0.elapsed().as_secs_f64();
+                let d = t0.elapsed().as_secs_f64();
+                t_glue += d;
+                t_clone += d;
                 let t0 = clock();
                 // Fused: y += conv0(leaky(x)) in the conv's write pass.
                 rb[0].conv_into(&lx, len, &mut y);
                 t_conv += t0.elapsed().as_secs_f64();
                 let t0 = clock();
                 leaky_into(&y, &mut scratch, 0.1);
-                t_glue += t0.elapsed().as_secs_f64();
+                let d = t0.elapsed().as_secs_f64();
+                t_glue += d;
+                t_act += d;
                 let t0 = clock();
                 rb[1].conv_into(&scratch, len, &mut y);
                 t_conv += t0.elapsed().as_secs_f64();
@@ -608,11 +639,15 @@ impl FlatDecoder {
                     Some(a) => add_inplace(a, &y),
                     None => acc = Some(y),
                 }
-                t_glue += t0.elapsed().as_secs_f64();
+                let d = t0.elapsed().as_secs_f64();
+                t_glue += d;
+                t_add += d;
             }
             // No /3 here: the resblock average is folded into the next
             // conv's weights (see from_weights).
             x = acc.expect("3 resblocks");
+            stage_ms[up_i] = stage_t0.elapsed().as_secs_f64();
+            stage_len[up_i] = len;
         }
         let t0 = clock();
         leaky_inplace(&mut x, 0.01);
@@ -623,10 +658,20 @@ impl FlatDecoder {
         t_conv += t0.elapsed().as_secs_f64();
         if profile {
             eprintln!(
-                "[dec] conv {:.1} ms  ups {:.1} ms  glue(clone/act/add) {:.1} ms",
+                "[dec] conv {:.1} ms  ups {:.1} ms  glue(clone/act/add) {:.1} ms  \
+                 | clone {:.1} act {:.1} add {:.1}                  | stage0 {:.1} ms (L={})  stage1 {:.1} ms (L={})  stage2 {:.1} ms (L={})",
                 t_conv * 1000.0,
                 t_up * 1000.0,
-                t_glue * 1000.0
+                t_glue * 1000.0,
+                t_clone * 1000.0,
+                t_act * 1000.0,
+                t_add * 1000.0,
+                stage_ms[0] * 1000.0,
+                stage_len[0],
+                stage_ms[1] * 1000.0,
+                stage_len[1],
+                stage_ms[2] * 1000.0,
+                stage_len[2],
             );
         }
         audio

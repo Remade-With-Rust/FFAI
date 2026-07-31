@@ -292,6 +292,145 @@ where the remaining machine is.
 
 ---
 
+# Round 2 — paying the debts
+
+Five items were owed after round 1. All five were investigated; two produced
+shipped knowledge, two produced measured rejections, and one is **still open and
+is now known to be less certain than it looked**.
+
+## #1 — the corpus gate I argued past (CLOSED, clean)
+
+- ASKED: the dp routing change reorders float accumulation and `durations()`
+  ends in `.ceil()`, so a phoneme near an integer boundary can flip a frame.
+  Three oracle fixtures do not prove 200 sentences.
+- MEASURED (`examples/corpus_stability.rs`), all 200 corpus sentences, both
+  arms of all three changes:
+  - dp routing: `w_ceil` **IDENTICAL**, audio **BIT-IDENTICAL**
+  - attention kernel: `m_p` **BIT-IDENTICAL**
+  - decoder buffers: audio **BIT-IDENTICAL**
+  - **closest `ceil()` boundary anywhere in the corpus: 1.032e-4** (hvd-01-04)
+- ANSWER: output-neutral, so WER cannot have moved. And the margin makes it a
+  ROBUST pass rather than a lucky one: the routing perturbs floats at ~5e-6
+  (the oracle's `m_p max|Δ|`) against a 1.03e-4 boundary distance — about 100x
+  headroom. "It passed" without that margin would have meant much less.
+- STATUS: closed.
+
+## #3 — a trustworthy per-stage reference split (CLOSED, and it inverts the map again)
+
+- ASKED: ORT's profiler was discarded as unusable, leaving no valid per-stage
+  comparison. Replace it by CUTTING the graph instead of instrumenting it.
+- BUILT (`corpora/refs/profile_piper_submodels.py`): `onnx.utils.extract_model`
+  produces cumulative PREFIXES (enc_p -> +dp -> +flow -> +dec), each a valid
+  standalone model driven by real inputs, timed unprofiled; stages come out by
+  differencing. No intermediate tensor is ever synthesized.
+- THE INSTRUMENT NEEDED THREE FIXES, each caught by its own falsifier:
+  1. **Cross-session control.** The first falsifier compared the full prefix to
+     a stored 1811.1 ms and read VOID at 1.141x. The control has to be measured
+     in the SAME PROCESS — this box drifts ~10-60% between sessions, the same
+     size as the effect. In-process it read 0.976x, OK.
+  2. **Falsifier position.** Measuring the control LAST let it absorb all drift
+     accumulated over the sweep, firing VOID again at 1.104x. Fixed by riding
+     the unmodified model along IN EVERY REP and taking the ratio per rep.
+  3. **Differencing amplifies noise.** `flow = (+flow) - (+dp)` compounds two
+     large prefixes' errors; ORT's flow swung **74%** between runs while its
+     text encoder held to 2%. Fixed by differencing WITHIN each rep and
+     reporting the spread, so an unresolved stage says so.
+- ANSWER: absolute ms are not portable across sessions, but **stage SHARES are**
+  — across three runs whose absolute totals swung 66%, the reference's shares
+  held to about a point. Comparing shares:
+
+  | stage | piper share | our share | implied |
+  |---|---|---|---|
+  | text_encoder | ~8.5% | 19.8% | **~2.9x SLOWER** |
+  | duration_pred | ~4.8% | 10.8% | **~2.9x SLOWER** |
+  | flow | ~15% | 15.9% | ~1.3x slower |
+  | decoder | ~65% | 52.1% | **~PARITY** |
+
+- **This inverts the campaign's picture a second time.** The original map said
+  we lose 2.5x on flow and 2.2x on the decoder and are fine on the text encoder.
+  The truth is the reverse: the decoder — 52% of our pipeline — is at parity,
+  flow is close, and the entire deficit lives in the two stages nobody
+  suspected. Round 1's iterations 1 and 2 happened to hit those two stages for
+  unrelated reasons (occupancy anomalies); this explains why they were the ones
+  that paid.
+- STATUS: closed. Report SHARES unless both engines were measured in one window.
+
+## #2 — the decoder descent (CLOSED: it is near done, now measured)
+
+- MEASURED (`examples/dec_anatomy.rs` + per-stage/per-glue buckets added to
+  `FlatDecoder::run`): 20 sentences, ~737 GFLOP/s, 8.2-9.9 cores.
+  - conv (resblocks + pre/post) ~52%, ups (transposed) ~22%, glue ~26%
+  - glue splits: **clone 197 / act 179 / add 71 ms**
+  - per upsampling stage, the tensor grows 8x/8x/4x (L=1224 -> 9792 -> 39168)
+    and stage2 is ~45% of stage time
+- BRICK TRIED AND REVERTED: hoisting the 15 multi-MB allocations per call
+  (9 `x.clone()` + 3 `lx` + 3 `scratch`) into reused scratch buffers.
+  - bit-identical across all 200 corpus sentences
+  - whole-pipeline paired A/B: **11/21, z = +0.22 — inside noise**
+  - per-op buckets said why: `clone` fell 159 -> ~100 ms but `act` ROSE
+    211 -> ~250 ms. The allocation cost MOVED into the `resize` first touch
+    rather than disappearing.
+  - reverted as unproven, not impossible: an arena persisting ACROSS `decode()`
+    calls would not pay the first-touch cost and is still worth trying.
+- ANSWER: "it may well be near done" is now a measurement — parity with ORT on
+  share, ~737 GFLOP/s, and the one glue lever tested did not pay.
+- STATUS: closed.
+
+## #4 — the unmeasured thresholds (CLOSED, and it reopened #3 of round 1)
+
+Per `codec-content-adaptive-dispatch`: **a mixed win/lose outcome is an
+unfinished dispatch, not a verdict.** Three parallel decisions this campaign sit
+on ONE axis — work per task, driven by sequence length — and one of them lost.
+That loss localizes where the premise breaks; it does not close the question. So
+the guards were swept rather than asserted (`examples/len_sweep.rs`, paired ABBA
+win-rate per length):
+
+| T | 16 | 32 | 64 | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|---|---|---|
+| attention | 1.30x z+2.32 | 1.40x z+3.36 | 1.68x z+3.87 | 2.50x z+3.87 | 4.26x z+3.87 | 6.32x z+3.36 | **9.63x z+3.87** |
+| spline | 0.96x z-0.77 | 0.88x z**-2.84** | 0.94x z**-2.32** | 0.99x z-0.26 | 1.04x z+1.81 | 0.79x z+0.26 | 1.04x z+1.81 |
+
+- **Attention: no crossover exists in range** — parallel wins at every length
+  and the margin GROWS, because attention is O(T^2) and only the parallel arm
+  spreads that cost. The `>= 32` guard I reasoned to happens to sit at the
+  measured floor; it is a safety net, not a threshold. Consequence worth
+  stating: **the 1.04x this change bought on ~88-phoneme sentences badly
+  understates it — the same code is worth ~9.6x at T=1024**, so long-form or
+  unchunked text benefits far more than the corpus number suggests.
+- **Spline: no crossover exists either, in the other direction** — serial
+  genuinely wins at T=32-64 and parallel never reaches z=+2 at ANY length. This
+  is the dispatch skill's endpoint (b): no cheap signal separates them, so gate
+  it off and record what was measured. The original rejection was right, but it
+  rested on one length; it now rests on seven.
+- STATUS: closed. Guards documented with the data that justifies them.
+
+## #5 — the E-core refutation debt (STILL OPEN — and the harness is the reason)
+
+- ASKED: round 1 killed the E-core straggler hypothesis on three SEQUENTIAL
+  runs, the design later proven unreliable. Re-probe it paired.
+- BUILT (`examples/ecore_ab.rs`): `SetProcessAffinityMask` can be called
+  repeatedly, so both affinity arms alternate inside one process, ABBA-ordered,
+  at three granularities chosen because straggling should scale with how SHORT
+  the parallel regions are.
+- **THE NULL ARM FAILED.** With both arms on the IDENTICAL mask it reported
+  `whole pipeline ... ratio 0.875x, 2/11, z = -2.11 -> E-cores HURT`. That
+  verdict is impossible by construction, so this harness can manufacture a 2σ
+  result at 11 rounds.
+- The real arm, at 21 rounds, shows only leanings — decoder-only (long regions)
+  P+E wins 15/21 z=+1.96; attention-only (short regions) P+E 9/21 z=-0.65;
+  whole pipeline 8/21 z=-1.09 — i.e. nothing clears |z|>2, and the direction of
+  the lean does split by granularity exactly as the straggler mechanism
+  predicts.
+- ANSWER: **the debt is NOT paid.** Round 1's refutation is withdrawn as
+  under-evidenced, and this round's probe cannot replace it because its null arm
+  is dirty. What round 1 recorded as "medium-high confidence, refuted" should
+  read "unresolved". The by-granularity lean is a live hypothesis worth a
+  cleaner harness (more rounds, and the whole-pipeline workload not measured
+  first while the process is still warming).
+- STATUS: **open.** Recorded honestly rather than closed on a bad instrument.
+
+---
+
 ## Standing corrections to the ledger
 
 1. The headline gap is **1.19x at matched thread occupancy** (1.28x at each
@@ -301,6 +440,15 @@ where the remaining machine is.
 3. All per-stage "ours vs ORT" ms comparisons recorded before this descent are
    **withdrawn**: they compared different sentences, at different thread counts,
    with the reference's profiler inflating its side 1.75-1.93x.
-4. Pinning to P-cores is NOT a speed lever (refuted); it is an instrument
-   control. Benchmarks should keep reporting cpu/wall so occupancy regressions
-   are visible.
+4. ~~Pinning to P-cores is NOT a speed lever (refuted)~~ — **WITHDRAWN in round
+   2.** That refutation rested on sequential runs, and the paired re-probe built
+   to replace it has a dirty null arm. The question is UNRESOLVED. Benchmarks
+   should still report cpu/wall so occupancy regressions stay visible.
+5. **The per-stage deficit is the opposite of what the campaign believed.**
+   Measured by load-invariant share against a profiler-free graph cut: the
+   decoder (52% of our pipeline) is at PARITY with ORT and flow is close, while
+   text_encoder and duration_pred are each ~2.9x slower. Every prior effort went
+   into flow and the decoder.
+6. **Compare SHARES, not raw ms**, unless both engines were measured in the same
+   window. Across three reference runs the absolute totals swung 66% while the
+   shares held to about a point.
