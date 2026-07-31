@@ -12,6 +12,14 @@
 *.gguf
 *.onnx
 *.bin
+# ...but the ORACLE FIXTURES are code's evidence, not weights. `*.bin` above
+# exists to keep 77-488 MB checkpoints out; it also silently caught these,
+# so three Carmenta oracle tests could only pass on a machine that happened
+# to have them and failed on every fresh clone and in CI. For a project that
+# gates everything on oracles, an oracle that cannot run is worse than one
+# that fails. 1.2 MB total, and the exception is scoped to this one directory
+# so a stray checkpoint still cannot ride in.
+!/corpora/refs/fixtures/*.bin
 /.whispercpp/
 /.tools-bench/
 /corpora/fonts/
