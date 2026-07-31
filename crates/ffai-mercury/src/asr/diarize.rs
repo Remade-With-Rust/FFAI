@@ -130,13 +130,32 @@ pub fn subsegment_at(
         // non-sliding caller this is the previous behaviour for any region
         // already on the grid, and shifts the chain by under one hop
         // otherwise.
-        let abs = offset + region.start;
-        let snapped = (abs / hop).ceil() * hop;
-        let mut start = region.start + (snapped - abs);
-        // Snapping forward must not skip past the region: fall back to the
-        // region's own start rather than emit nothing for it.
-        if start >= region.end {
-            start = region.start;
+        // ALWAYS cover the region's own start, THEN follow the absolute grid.
+        //
+        // The first version snapped the whole chain forward to the grid, which
+        // skipped up to one hop of each region's leading audio — and a hop is
+        // 0.75 s of speech at the moment a speaker begins, which is exactly
+        // the evidence a cluster needs. Measured: blind DER 4.21 % -> 9.60 %,
+        // oracle 5.00 % -> 8.11 %. It shipped in 0.6.0 described as "DER
+        // unchanged" because the gate was re-run against a STALE example
+        // binary (the library was rebuilt, the example was not).
+        //
+        // Emitting the region-start window first costs one extra forward per
+        // region and restores that coverage; every window after it sits on the
+        // absolute grid, which is what lets a sliding buffer's repeated audio
+        // hit the embedding cache. Coverage and alignment, rather than a
+        // trade between them.
+        let snap = std::env::var("FFAI_DIARIZE_ABSGRID").as_deref() != Ok("off");
+        out.push((region.start, (region.start + window).min(region.end)));
+        let mut start = if snap {
+            let abs = offset + region.start;
+            region.start + (((abs / hop).ceil() * hop) - abs)
+        } else {
+            region.start
+        };
+        // Never re-emit the window just pushed.
+        if start <= region.start {
+            start = region.start + hop;
         }
         while start < region.end {
             let end = (start + window).min(region.end);
@@ -510,4 +529,26 @@ mod absolute_grid_tests {
         assert!(!w.is_empty(), "snapping must not erase a region");
         assert!(w[0].0 >= 0.10 && w[0].0 < 2.00, "first window must start inside the region");
     }
+}
+
+/// The window geometry actually used, after any runtime override.
+///
+/// `FFAI_DIARIZE_HOP` / `FFAI_DIARIZE_WINDOW` exist so the geometry can be
+/// SWEPT against DER rather than argued about. Embedding is ~100 % of
+/// diarization's cost and the forward count is `span / hop`, so the hop is
+/// the one knob that trades quality for compute linearly — and 0.75 s was
+/// inherited convention, never measured on this corpus.
+///
+/// Read per call rather than cached: a sweep changes it between runs in one
+/// process, and the cost of two env reads against a ~172 ms forward is
+/// nothing.
+pub fn geometry() -> (f64, f64) {
+    let read = |name: &str, default: f64| -> f64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| *v > 0.0 && *v <= 30.0)
+            .unwrap_or(default)
+    };
+    (read("FFAI_DIARIZE_WINDOW", WINDOW_SECS), read("FFAI_DIARIZE_HOP", HOP_SECS))
 }

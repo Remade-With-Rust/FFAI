@@ -111,7 +111,9 @@ let opts = AsrOptions {
 };
 ```
 
-Speaker embedding is ~100 % of diarization's cost (~172 ms per 1.5 s window). A sliding window re-sends mostly the same audio each tick, and without the offset the window grid is anchored to the *buffer* — so identical audio gets re-cut at new offsets and every embedding is recomputed. With it, windows land on an absolute grid and a content-keyed cache actually hits: median 2024 → 641 ms across paired ticks, 10/10, **DER unchanged**. Leave it at `0.0` for whole-file use and nothing changes.
+Speaker embedding is ~100 % of diarization's cost (~172 ms per 1.5 s window). A sliding window re-sends mostly the same audio each tick, and without the offset the window grid is anchored to the *buffer* — so identical audio gets re-cut at new offsets and every embedding is recomputed. With it, windows land on an absolute grid and a content-keyed cache actually hits: median 1258 → 720 ms across paired ticks, 10/10, at **4.20 % DER against 4.21 %** region-anchored. Leave it at `0.0` for whole-file use and nothing changes.
+
+*Correction:* 0.6.0 described this as DER-neutral on a stale measurement. Its first version snapped window chains forward and skipped 0.75 s of each region's leading audio, costing 4.21 % → 9.60 % DER; 0.6.1 emits the region-start window before following the grid, restoring coverage at a smaller — and real — 1.75× speedup.
 
 ## Things measurement taught us, which you may want
 

@@ -289,8 +289,16 @@ re-embedding almost the same audio every tick. Two changes fixed that: a
 cache keyed on each window's **samples** rather than its timestamps, and an
 **absolute window grid** (`AsrOptions::stream_offset_secs`) so the same audio
 lands on the same window bounds no matter where the buffer starts. Paired
-against the same ticks: median 2024 → 641 ms, **10/10 paired wins**, and DER
-unchanged at 4.21 % / 5.00 %.
+against the same ticks: median 1258 → 720 ms, **10/10 paired wins**, at
+**4.20 % DER against 4.21 %** region-anchored.
+
+That accuracy line is a correction. The grid shipped in 0.6.0 described as
+DER-neutral and it was not — the first version snapped each window chain
+forward, skipping up to 0.75 s of every region's leading audio, and cost
+**4.21 % → 9.60 %**. It read as neutral because the gate was re-run against a
+stale example binary. The fix emits the region-start window before following
+the grid, which restores coverage; the honest speedup is 1.75×, not the 3.16×
+first reported, because part of that was accuracy nobody had priced.
 
 The diagnosis is worth more than the number, and it was not what reading the
 code suggested — the leading speech region is *clipped by the buffer's edge*,

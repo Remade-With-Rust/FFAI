@@ -146,11 +146,43 @@ behaviour for any region already on the grid.
 The 39 % is understated — the counters include the no-cache arm's forced
 misses, so the cache arm's own rate is considerably higher.
 
-**Gate.** Unlike the cache, this *moves* window placement, so it is not
-neutral by construction and the batch path is affected too. DER measured
-**4.21 % blind / 5.00 % oracle — identical**. Two new unit tests pin the
-invariant it rests on: the same audio must yield the same absolute bounds as
-the buffer slides, and snapping must never drop a region.
+### RETRACTED: "DER unchanged" was measured on a stale binary
+
+**The first version of this grid more than doubled DER, and shipped in 0.6.0
+described as neutral.**
+
+| | blind DER | oracle DER |
+|---|---:|---:|
+| region-anchored (before) | 4.21 % | 5.00 % |
+| absolute grid, v1 | **9.60 %** | **8.11 %** |
+| absolute grid, fixed | **4.20 %** | 5.00 % |
+
+The mechanism: v1 snapped the whole window chain *forward* to the grid, which
+skipped up to one hop — 0.75 s — of every region's leading audio. That is
+precisely the moment a speaker starts talking, and the evidence a cluster most
+needs.
+
+**How it got through.** I re-ran `diarize_gate` after the change and read
+4.21 %, so I wrote "DER unchanged" into the commit, this document, both
+READMEs, and a published crate. The gate binary was **stale**: I had rebuilt
+the library (`cargo build -p ffai-mercury`) and not the example, so the
+measurement came from code that predated the change. This is the *third*
+stale-artifact incident in this campaign — after the beam-search A/B and the
+demo's wasm bundle — and the first one where the bad number reached users.
+
+*The rule was already written and I did not follow it: `cargo build -p <lib>`
+does not rebuild the examples that measure it. Build the artifact that
+produces the number, and check its mtime before believing it.*
+
+**The fix.** Emit the region-start window first, then follow the absolute grid
+for everything after it. Coverage and alignment instead of a trade between
+them; it costs one extra forward per region. DER returns to 4.20 %, and the
+live speedup is 1.75× with 10/10 paired wins (down from the 3.16× that was
+partly paid for in accuracy nobody had priced).
+
+Two unit tests pin the invariant: the same audio yields the same absolute
+bounds as the buffer slides, and snapping never drops a region.
+`FFAI_DIARIZE_ABSGRID=off` restores region-anchored placement.
 
 ## What is left
 

@@ -14,7 +14,7 @@ use ffai_core::candle::{DType, Device};
 use ffai_core::error::{Error, Result};
 use ffai_core::types::TimedSegment;
 
-use super::diarize::{self, SpeakerTurn, HOP_SECS, WINDOW_SECS};
+use super::diarize::{self, SpeakerTurn};
 use super::fbank::Fbank;
 use super::registry::SpeakerRegistry;
 use super::speaker::{Config, EcapaTdnn};
@@ -104,7 +104,8 @@ impl Diarizer {
         threshold: f32,
         max_speakers: Option<usize>,
     ) -> Vec<SpeakerTurn> {
-        let windows = diarize::subsegment(regions, WINDOW_SECS, HOP_SECS);
+        let (win, hop) = diarize::geometry();
+        let windows = diarize::subsegment(regions, win, hop);
         if windows.is_empty() {
             return Vec::new();
         }
@@ -141,7 +142,10 @@ impl Diarizer {
         stream_offset_secs: f64,
     ) -> Vec<SpeakerTurn> {
         let windows =
-            diarize::subsegment_at(regions, WINDOW_SECS, HOP_SECS, stream_offset_secs);
+            {
+                let (win, hop) = diarize::geometry();
+                diarize::subsegment_at(regions, win, hop, stream_offset_secs)
+            };
         if windows.is_empty() {
             return Vec::new();
         }
