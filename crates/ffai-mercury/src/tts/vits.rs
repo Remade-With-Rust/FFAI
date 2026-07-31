@@ -553,17 +553,38 @@ impl Vits {
         let filt_scale = 1.0 / (HIDDEN as f64).sqrt();
         let params: Vec<Vec<f32>> = h.i(0).e()?.to_vec2().e()?; // [29][T]
         let z1v: Vec<f32> = z1.i((0, 0)).e()?.to_vec1().e()?;
-        let mut out = Vec::with_capacity(t_len);
-        for t in 0..t_len {
-            let widths: Vec<f64> =
-                (0..SPLINE_BINS).map(|b| params[b][t] as f64 * filt_scale).collect();
-            let heights: Vec<f64> = (SPLINE_BINS..2 * SPLINE_BINS)
-                .map(|b| params[b][t] as f64 * filt_scale)
-                .collect();
-            let derivs: Vec<f64> =
-                (2 * SPLINE_BINS..3 * SPLINE_BINS - 1).map(|b| params[b][t] as f64).collect();
-            out.push(rq_spline_inverse(z1v[t] as f64, &widths, &heights, &derivs) as f32);
-        }
+        // Each column's spline is independent, and its parameter vectors are
+        // 10/10/9 f64 — small enough to live on the stack. The original
+        // collected three heap Vecs PER COLUMN and walked the columns serially,
+        // which is most of why the duration predictor's flow half (65% of the
+        // stage) stayed at ~1 core.
+        let column = |t: usize| -> f32 {
+            let mut widths = [0f64; SPLINE_BINS];
+            let mut heights = [0f64; SPLINE_BINS];
+            let mut derivs = [0f64; SPLINE_BINS - 1];
+            for b in 0..SPLINE_BINS {
+                widths[b] = params[b][t] as f64 * filt_scale;
+                heights[b] = params[SPLINE_BINS + b][t] as f64 * filt_scale;
+            }
+            for (b, d) in derivs.iter_mut().enumerate() {
+                *d = params[2 * SPLINE_BINS + b][t] as f64;
+            }
+            rq_spline_inverse(z1v[t] as f64, &widths, &heights, &derivs) as f32
+        };
+        // Parallelising this loop was MEASURED AND REJECTED: at the pipeline it
+        // read 0.996x, 8/21 rounds, z = -1.09 (inside noise), and at the stage
+        // it was frankly worse — dp 211 -> 250 ms wall for 516 -> 1125 ms CPU.
+        // A column is one ~10-bin spline solve; rayon's fork/join costs more
+        // than the work it hands out. The de-plumbing above (three heap Vecs
+        // per column -> stack arrays) is kept on its own merits: byte-identical
+        // and strictly less work. `FFAI_PAR_SPLINE=1` re-enables the parallel
+        // arm for anyone re-testing on a machine with cheaper threads.
+        let out: Vec<f32> = if t_len >= 32 && std::env::var("FFAI_PAR_SPLINE").is_ok() {
+            use rayon::prelude::*;
+            (0..t_len).into_par_iter().map(column).collect()
+        } else {
+            (0..t_len).map(column).collect()
+        };
         let z1_new = Tensor::from_vec(out, (1, 1, t_len), &self.device).e()?;
         Tensor::cat(&[&z0, &z1_new], 1).e()
     }

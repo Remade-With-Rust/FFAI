@@ -199,6 +199,99 @@ Gate at every level climbed, per the skill.
 
 ---
 
+## D3b — iteration 2: why is the text encoder at 4.27 cores?
+
+- ASKED: after the dp fix, text_encoder was the lowest-occupancy stage left
+  (483 ms, 4.27 cores, 24% of pipeline). Attention, feed-forward, or norms?
+- MEASURED (`examples/enc_anatomy.rs`):
+
+  | part | wall ms | cores | GFLOP/s |
+  |---|---|---|---|
+  | attention x6 | 190.4 | **3.94** | **16.4** |
+  | ffn x6 | 259.6 | 9.21 | 72.1 |
+  | layernorm x6 | 14.4 | 1.08 | — |
+  | residue | 30.2 (6%) | | |
+
+- ANSWER: the feed-forward is **healthy** — 72 GFLOP/s at 9.21 cores — and must
+  be left alone. Attention is the anomaly at 4.4x lower throughput inside the
+  same stage. Cause: the flat rel-attention kernel is a fully serial
+  `for h { for i { ... } }` while the QKV and output convs around it are
+  candle-threaded; 3.94 is the average of the two.
+- FIX: each output row `(h, i)` writes only its own `hd` values, so the grid is
+  embarrassingly parallel. Accumulate in `[h][i][d]` (one contiguous chunk per
+  task), transpose once into the `[C][T]` the output conv wants. No row's
+  summation order changes, so this is **bit-identical** — asserted on f32 bit
+  patterns over 20 sentences, not a tolerance.
+- GATES: stage-level 1.345x (25/31, z = +3.41); **whole-pipeline 1.040x (19/21,
+  z = +3.71)**, null arm 1.029x (5/15, z = -1.29). Kept, reported at 1.04x.
+- STATUS: closed, landed (7b17bcb).
+
+### Lesson — a stage harness that loops one stage is cache-warm
+
+The stage A/B overstated the win **8x** (1.345x vs 1.040x). Running one stage
+back-to-back keeps its weights hot in a way the real pipeline never does. This
+is the skill's "microbench measures a cache-warm state the real code never
+sees", and it is why `examples/pipe_ab.rs` now exists: **every routing knob
+from here on is gated at the whole pipeline, paired, with a null arm.** The
+paired win rate is the statistic that survives; the median ratio sat barely
+above its own ~3% floor.
+
+## D3c — iteration 3: the duration predictor's remaining 65%
+
+- ASKED: dp was still the worst-occupancy stage (2.44 cores). Its flow half is
+  65% of it and contains a serial `for t in 0..t_len` spline loop that also
+  collects **three heap Vecs per column** (widths/heights/derivs, 10/10/9 f64).
+  Two candidate levers: de-plumb the allocations, and parallelise the columns.
+- MEASURED: the two were separated deliberately.
+  - **De-plumbing (heap Vecs -> stack arrays): KEPT.** Byte-identical and
+    strictly less work — three allocations per column removed. No speed number
+    is claimed for it alone; the harness cannot resolve one, and inventing one
+    would be dishonest.
+  - **Parallelising the columns: REJECTED.** Pipeline 0.996x, 8/21 rounds,
+    z = -1.09 (inside noise) — and the stage evidence is worse than inside
+    noise: dp went **211 -> 250 ms wall while CPU went 516 -> 1125 ms**. A
+    column is one ~10-bin spline solve; rayon's fork/join costs more than the
+    work it hands out. Reverted to opt-in (`FFAI_PAR_SPLINE=1`).
+- ANSWER: not every serial loop is an occupancy bug. The attention grid
+  (iteration 2) has ~17k MACs per row and paid; the spline loop has a few
+  hundred flops per column and does not. **The distinguishing quantity is work
+  per task, not core count** — so "dp is at 2.44 cores" was a symptom, not a
+  prescription.
+- CONFIDENCE: high on the rejection — two probes agreeing (pipeline paired A/B
+  inside noise, stage measurably worse) plus a mechanism that predicts it.
+  Recorded as "measured worse at the stage, inside noise at the pipeline", and
+  kept behind a knob rather than deleted, so it is re-testable on a machine
+  with cheaper threads.
+- STATUS: closed. One lever kept, one rejected, both recorded.
+
+---
+
+## Where this leaves the numbers
+
+Same probe, same 20 holdout sentences, same 45.0s of audio:
+
+| | before descent | after |
+|---|---|---|
+| pipeline wall | 2181.9 ms | **1958.0 ms** |
+| realtime factor | 20.61x | **22.97x** |
+| core occupancy (cpu/wall) | 7.70 | **9.68** |
+| vs ORT @ 8 threads (1811 ms) | 1.19x | **1.08x** |
+| vs ORT @ default (1682 ms) | 1.28x | **1.16x** |
+
+Per-stage, before -> after: text_encoder 498.1 -> 393.9 (3.71 -> 7.06 cores),
+duration_pred 296.0 -> 213.5 (0.90 -> 3.37 cores), flow 301.0 -> 311.2,
+decoder 1085.8 -> 1024.3.
+
+Correctness unchanged throughout: `w_ceil` integer-EXACT vs ORT on every
+fixture, all stages within tolerance, byte-stability holds.
+
+**The gap that remains is a threading gap, not a kernel gap.** We reach 9.68
+effective cores against ORT's 15.62 while spending less CPU in total. The next
+lever is occupancy, and the decoder — 52% of the pipeline at 9.90 cores — is
+where the remaining machine is.
+
+---
+
 ## Standing corrections to the ledger
 
 1. The headline gap is **1.19x at matched thread occupancy** (1.28x at each
