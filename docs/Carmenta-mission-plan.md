@@ -1660,6 +1660,29 @@ zero skew (§8.17). So this is recorded as a measured, quantified lever waiting
 on M-C3's corpus, which is this plan's own rule — nothing lands without a
 corpus that can fail it.
 
+### 8.25 The footprint soak — M-C2's last gate, and it was never a pass before
+
+M-C2 has been reported as green with `footprint SKIP` since it closed. A
+skipped gate is never a pass — this plan says so in its own §8 preamble — so
+the milestone was never actually complete. Two 30-minute soaks, cycling the
+screencast corpus through a `LiveSession` and sampling resident memory:
+
+| detector | frames | first-window | last-window | ratio | gate (<= 1.10) |
+|---|---:|---:|---:|---:|---|
+| mobile-det | 70 716 | 285 MiB | 309 MiB | 1.085 | **PASS** |
+| CRAFT | 57 483 | 1602 MiB | 1646 MiB | 1.027 | **PASS** |
+
+**All four M-C2 gates are now green for both detectors, on evidence rather than
+on an exemption.** Mobile-det also pushed 23 % more frames through the same
+wall clock at a fifth of the memory.
+
+One honest caveat rather than a clean win: **mobile-det passes at 1.085 against
+a 1.10 bar** — 24 MiB of growth across 70k frames, and only 1.5 % of margin.
+CRAFT's 1.027 is comfortable; mobile-det's is not. Thirty minutes cannot
+distinguish a plateau from a slow leak, and the gate's shape means a longer run
+is the only thing that can. Recorded as a pass with a thin margin, which is
+what it is, and a longer soak is named work rather than an assumed formality.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
