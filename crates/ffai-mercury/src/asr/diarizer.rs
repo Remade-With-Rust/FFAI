@@ -5,7 +5,10 @@
 //! each stays independently testable — the clustering has 15 tests and needs
 //! no weights, which is only possible because none of it lives here.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::Mutex;
 
 use ffai_core::candle::{DType, Device};
 use ffai_core::error::{Error, Result};
@@ -23,7 +26,29 @@ pub struct Diarizer {
     model: EcapaTdnn,
     fbank: Fbank,
     sample_rate: usize,
+    /// Embeddings keyed by the CONTENT of the window that produced them.
+    ///
+    /// Streaming re-embeds the whole buffer every call: the live path hands
+    /// over the trailing 10 s once a second, and at 1.5 s windows on a 0.75 s
+    /// hop that is ~13 windows of which ~12 are byte-identical to last
+    /// tick's. Each one cost a full ECAPA forward — measured at 172 ms, and
+    /// the embedding stage is ~100 % of diarization (`examples/
+    /// diarize_anatomy.rs`; fbank is 1.1 %, clustering ~0).
+    ///
+    /// Keyed on the SAMPLES, not on the window's time bounds, because the
+    /// buffer slides: `(0.0, 1.5)` names different audio on consecutive
+    /// ticks, so a time key would return a confidently wrong embedding.
+    /// Content keying makes a hit numerically identical to a recompute, so
+    /// this cannot move DER — it is the same vector, not an approximation.
+    cache: Mutex<HashMap<u64, Vec<f32>>>,
 }
+
+/// Entries to retain. Each is 192 f32 plus a key — under 1 KB — so this is
+/// ~0.4 MB at the cap, against the ~13 windows a live tick actually needs.
+/// Cleared wholesale rather than evicted one at a time: the access pattern
+/// is a sliding window, so the old entries are genuinely dead, and an LRU's
+/// bookkeeping would cost more than the misses it saves.
+const EMBED_CACHE_CAP: usize = 512;
 
 impl Diarizer {
     pub fn from_manifest_dir(dir: &Path, name: &str, device: Device) -> Result<Self> {
@@ -58,7 +83,12 @@ impl Diarizer {
         let cfg = Config::default();
         let fbank = Fbank::new(cfg.n_mels);
         let model = EcapaTdnn::load(cfg, vb, device)?;
-        Ok(Diarizer { model, fbank, sample_rate: super::fbank::SAMPLE_RATE })
+        Ok(Diarizer {
+            model,
+            fbank,
+            sample_rate: super::fbank::SAMPLE_RATE,
+            cache: Mutex::new(HashMap::new()),
+        })
     }
 
     /// Speech regions in, speaker turns out.
@@ -147,6 +177,23 @@ impl Diarizer {
 
     /// Shared front half: window -> features -> embedding, dropping whatever
     /// fails rather than substituting a zero vector.
+    /// The sample rate the speaker front end expects.
+    pub fn sample_rate(&self) -> usize {
+        self.sample_rate
+    }
+
+    /// Filterbank features for one window — exposed so a profile can price
+    /// the DSP separately from the network without reimplementing either
+    /// (a probe that reimplements the path measures the probe).
+    pub fn fbank_for(&self, samples: &[f32]) -> (Vec<f32>, usize) {
+        self.fbank.compute(samples)
+    }
+
+    /// One embedding forward. Profiling seam; see [`Self::fbank_for`].
+    pub fn embed_for(&self, feats: &[f32], frames: usize) -> Result<Vec<f32>> {
+        self.model.embed(feats, frames)
+    }
+
     fn embed_windows(
         &self,
         samples: &[f32],
@@ -158,12 +205,38 @@ impl Diarizer {
         for &(start, end) in windows {
             let a = ((start * sr) as usize).min(samples.len());
             let b = ((end * sr).ceil() as usize).clamp(a, samples.len());
-            let (feats, frames) = self.fbank.compute(&samples[a..b]);
+            let window = &samples[a..b];
+
+            // Hash the audio, not the timestamps — see `cache`. ~96 KB per
+            // window against a ~172 ms forward, so the hash is ~0.06 % of
+            // what a hit saves; it does not need to be a fast hash to pay.
+            let key = content_key(window);
+            let caching = cache_enabled();
+            if caching {
+                if let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+                    CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    kept.push((start, end));
+                    embeddings.push(hit);
+                    continue;
+                }
+            }
+            CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            let (feats, frames) = self.fbank.compute(window);
             if frames == 0 {
                 continue;
             }
             match self.model.embed(&feats, frames) {
                 Ok(e) if e.iter().all(|v| v.is_finite()) => {
+                    if let Some(mut c) = caching.then(|| self.cache.lock().ok()).flatten() {
+                        // Only failures are excluded from the cache: a
+                        // dropped window must stay droppable, or a transient
+                        // failure would be memoized into a permanent one.
+                        if c.len() >= EMBED_CACHE_CAP {
+                            c.clear();
+                        }
+                        c.insert(key, e.clone());
+                    }
                     kept.push((start, end));
                     embeddings.push(e);
                 }
@@ -172,4 +245,52 @@ impl Diarizer {
         }
         (kept, embeddings)
     }
+}
+
+/// A key for a window's audio content.
+///
+/// Hashes the sample BITS rather than the floats, because `f32` is not
+/// `Hash` — and bitwise equality is exactly the property wanted here: two
+/// windows collide only if they are the same audio, in which case the model
+/// would return the same embedding anyway.
+fn content_key(samples: &[f32]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    samples.len().hash(&mut h);
+    // SAFETY-free reinterpretation: `to_bits` is a pure integer view of the
+    // float, so this hashes the exact bytes without an unsafe cast.
+    for s in samples {
+        s.to_bits().hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Embedding-cache hit/miss counters.
+///
+/// A speedup without a hit rate is a number you cannot attribute — and this
+/// campaign has twice mistaken a stale binary for "the change does nothing".
+/// These make the mechanism visible instead of inferred.
+pub static CACHE_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CACHE_MISSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// `(hits, misses)` since process start.
+pub fn cache_stats() -> (usize, usize) {
+    (
+        CACHE_HITS.load(std::sync::atomic::Ordering::Relaxed),
+        CACHE_MISSES.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Runtime switch, read per window rather than cached in a `OnceLock`, so a
+/// harness can interleave both arms in ONE process. The live cost varies with
+/// how much speech VAD finds per tick, so arm-by-arm across two processes
+/// compares different work — the mistake that produced the "2x slower"
+/// reading this whole thread started from.
+fn cache_enabled() -> bool {
+    std::env::var("FFAI_DIARIZE_CACHE").as_deref() != Ok("off")
+}
+
+/// Drop every cached embedding. For a harness measuring a cold arm.
+pub fn clear_embed_cache_counters() {
+    CACHE_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
+    CACHE_MISSES.store(0, std::sync::atomic::Ordering::Relaxed);
 }
