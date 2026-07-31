@@ -258,7 +258,7 @@ single gated weight — as flags on the same engine rather than a fork.
 | *(default)* | speech segmentation before transcription | none — energy VAD | silence corpus **8/8 empty** |
 | `--word-timestamps` | per-word times by CTC forced alignment | wav2vec2-base-960h, Apache-2.0 | containment **100 %**, 1105 words |
 | `--diarize` | speaker turns (`SPEAKER_00`…) | ECAPA-TDNN, Apache-2.0 | **DER 4.21 %** |
-| `persist_speakers` | those labels survive the **next call** | — | streaming **DER 5.68 %** |
+| `persist_speakers` | those labels survive the **next call** | — | streaming **DER 5.68 %**, 3.16× faster live |
 
 Segmentation is **on by default for measured speed** — 2.2–4.2× on audio with
 trailing silence at a byte-identical transcript, and an empty result on
@@ -280,6 +280,23 @@ permanent — two people who share a centroid stay merged for the session.
 That gap existed because principle 5 says *streaming-first* while diarization
 only worked whole-file. WhisperX has the same gap; WhisperX does not claim
 streaming-first.
+
+**Streaming diarization is also 3.16× cheaper than it was**, which is what
+makes it usable live rather than merely correct. Speaker embedding is ~100 %
+of diarization's cost (~172 ms per 1.5 s window; the filterbank is 1.1 % and
+clustering ~0), and a live caller re-sending a sliding window was
+re-embedding almost the same audio every tick. Two changes fixed that: a
+cache keyed on each window's **samples** rather than its timestamps, and an
+**absolute window grid** (`AsrOptions::stream_offset_secs`) so the same audio
+lands on the same window bounds no matter where the buffer starts. Paired
+against the same ticks: median 2024 → 641 ms, **10/10 paired wins**, and DER
+unchanged at 4.21 % / 5.00 %.
+
+The diagnosis is worth more than the number, and it was not what reading the
+code suggested — the leading speech region is *clipped by the buffer's edge*,
+so its windows anchor to the buffer and slide with it while the audio beneath
+moves. Full descent, including a hypothesis stated, withdrawn, and then
+restored by the trace: [docs/whys/diarization-cost.md](docs/whys/diarization-cost.md).
 
 **Licences shaped the design, not just the paperwork.** WhisperX's diarization
 depends on pyannote weights that are MIT-licensed *and gated* — permission

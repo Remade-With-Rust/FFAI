@@ -6,9 +6,9 @@ Mercury is [FFai](https://github.com/Remade-With-Rust/FFAI)'s voice component. S
 
 ```toml
 [dependencies]
-ffai-mercury = "0.5"
-ffai-core = "0.5"
-ffai-media = "0.5"
+ffai-mercury = "0.6"
+ffai-core = "0.6"
+ffai-media = "0.6"
 ```
 
 ## Transcribe
@@ -99,6 +99,19 @@ engine.reset_speakers();                          // a new recording is new peop
 ```
 
 Measured on conversations fed as 8 s chunks, scoring DER over the whole concatenated timeline: **53.58 % without it, 5.68 % with it.** Matching is deliberately stricter than in-call clustering, because a registry merge is permanent — two people who share a centroid stay merged for the session.
+
+Tell the engine where each buffer sits in the stream and streaming diarization gets **3.16× cheaper**:
+
+```rust
+let opts = AsrOptions {
+    diarize: true,
+    persist_speakers: true,
+    stream_offset_secs: elapsed,   // where THIS buffer starts in the session
+    ..Default::default()
+};
+```
+
+Speaker embedding is ~100 % of diarization's cost (~172 ms per 1.5 s window). A sliding window re-sends mostly the same audio each tick, and without the offset the window grid is anchored to the *buffer* — so identical audio gets re-cut at new offsets and every embedding is recomputed. With it, windows land on an absolute grid and a content-keyed cache actually hits: median 2024 → 641 ms across paired ticks, 10/10, **DER unchanged**. Leave it at `0.0` for whole-file use and nothing changes.
 
 ## Things measurement taught us, which you may want
 
