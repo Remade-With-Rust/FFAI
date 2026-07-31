@@ -1159,6 +1159,7 @@ name = "ffai-demo"
 version = "0.5.1"
 dependencies = [
  "ffai-bench",
+ "ffai-carmenta",
  "ffai-core",
  "ffai-media",
  "ffai-mercury",
