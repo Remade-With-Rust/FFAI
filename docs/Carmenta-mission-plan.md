@@ -302,6 +302,38 @@ fetchable-without-an-account (several ICDAR sets sit behind registration —
 the pyannote lesson applies to corpora too). Chosen sets get hash-pinned
 manifests with holdout/train splits; claims are measured on holdout only.
 
+#### The DOCUMENT holdout, pinned (2026-07-30)
+
+`carmenta-doclaynet-v1` — 60 pages from **DocLayNet-v1.1**, hash-pinned,
+stratified 10 per document category across all six (financial reports,
+government tenders, laws and regulations, manuals, patents, scientific
+articles), split 12 train / 48 holdout *within* each category. Per page:
+the image, plain text from `pdf_cells` for the CER gate, and a JSON of
+layout regions with their classes for the reading-order gate. M-C3 had no
+corpus that could fail it before this; now it does.
+
+Licence **CDLA-Permissive-1.0**, stated on the dataset card. Clips are not
+committed — `/corpora/clips/` is ignored and the manifest's hashes are what
+travel, so a fresh checkout regenerates the corpus and verifies it byte for
+byte.
+
+Two candidates were rejected on audit, and the reasons are worth keeping:
+
+| corpus | verdict |
+|---|---|
+| **OmniDocBench** | Purpose-built for document parsing and the better fit on paper — reading order, formulas, tables. **Rejected: no licence stated** in either the HF card data or the README. Same rule that disqualified CRAFT's click-gated weights in §7.1 — an unstated licence is not a permissive one, and a corpus whose terms we cannot name cannot back a public claim. |
+| **PubLayNet** | Layout only, no text ground truth, and the HF mirrors return 401. |
+
+A first attempt at this pinned 39 pages covering four of six categories, with
+every financial report in train and every government tender in holdout —
+DocLayNet is stored grouped by category, so a prefix of one shard is not a
+sample of the dataset. Stratifying *within* category fixed it. Recorded
+because an unrepresentative holdout fails silently: it produces a number.
+
+DocLayNet also seeds M-C4 (LONG) at no extra cost — `original_filename` and
+`num_pages` group pages back into documents, which is exactly what the
+multi-page holdout needs.
+
 ### 6.3 Harness work items
 
 - image/frame corpus support in `ffai-bench` (manifests currently assume
@@ -1028,6 +1060,87 @@ for craft-parseq; craft-crnn stays the default engine until the variant
 beats it on the corpus.
 
 ---
+
+### 8.14 The mobile-det port — exact to paddle, and two instrument failures on the way
+
+The named fix for §8.13's residual: DBNet emits text regions directly, so
+nothing has to reassemble character components into boxes. `mobiledet.rs`
+now loads PP-OCRv5 mobile-det (4.7 MB against CRAFT's VGG16) and reproduces
+paddle's own exported program:
+
+| check | result |
+|---|---|
+| probability map vs paddle, pinned 256x256 page crop | max abs 8.3e-05 |
+| binarised agreement at threshold 0.3 | **0 / 65 536 pixels disagree** |
+| DB postprocess boxes vs paddle's `DBPostProcess` | 4 / 4, IoU > 0.99 |
+| box scores, axis-aligned quads | exact, identical pixel counts |
+
+Two things nearly shipped wrong, and neither was a coding error.
+
+**The fusion's self-check could not fail.** `carmenta_mobiledet_fuse.py`
+verified its branch sum against its fused conv and reported 4.88e-04 — while
+silently dropping all **19 identity BatchNorm branches**, because a check
+assembled from the parts it collected cannot detect a part it never
+collected. The number looked like evidence and was a tautology. Verification
+now runs the whole fused model against paddle's exported program and refuses
+to write on disagreement. Restated for the log: *a self-consistency check is
+not evidence.*
+
+**Two undocumented constants, resolved by search rather than by reading.**
+The det variant of PP-LCNetV3 is not vendored on this box, and the two
+sources that describe its parts disagree. So the numpy reference searched the
+space against the oracle:
+
+| choice | measured | the plausible reading | cost of the wrong one |
+|---|---|---|---|
+| backbone SE hardsigmoid slope | **1/6** | 0.2 | 0.55 logit |
+| neck SE hardsigmoid slope | **0.2** | 0.2 | 0.52 logit |
+| RSELayer residual shortcut | **on** | — | 13.3 logit |
+
+They genuinely differ between backbone and neck. "0.2 everywhere" — the
+reading the PaddleOCR source supports — would have produced a detector that
+loads, runs, and degrades every box.
+
+A third trap is now unrepresentable rather than commented: `LearnableRepLayer`
+builds its post-activation unconditionally but applies it only when
+stride != 2, so the checkpoint carries parameters for stride-2 layers that
+must never be used. The fused file omits them. (The same asymmetry is the
+stride oracle: an identity branch exists iff `in == out && stride == 1`, and a
+depthwise conv always has `in == out`, so the 19 identity branches pin every
+depthwise stride exactly. Nothing about the architecture was guessed.)
+
+### 8.15 The 17x input — a depth-6 finding that inverted the first result
+
+First end-to-end run of `mobiledet-crnn` on a CORD receipt returned the
+labels and **not one number**. The boxes explained it: one 1903x1781 blob
+swallowing the whole receipt.
+
+The instinct was to suspect the port. The measurement said otherwise —
+paddle's OWN probability map at that input size contains the same merged
+component, and paddle's own `DBPostProcess` returns the same giant box. The
+detector was never wrong. **The input was 17x too small.**
+
+`inference.yml` says `resize_long: 960`, which reads as "scale the long side
+to 960". It is not what the reference does. The effective policy is a
+**minimum** short side with a 4000-px cap: images larger than the floor pass
+through untouched. A 2376x4224 receipt reaches the reference detector at
+**2240x4000**, not 544x960. The proof is in the reference's own log —
+`Resized image size (2376x4224) exceeds max_side_limit of 4000` — which can
+only print if the ratio was still 1.0 when the cap applied.
+
+With the policy corrected, the same receipt yields 11 boxes and every number
+appears. Two consequences worth carrying forward:
+
+- **The speed comparison was never like-for-like.** PaddleOCR reads a page in
+  ~12 s partly because it runs detection at 4000 px. Any future speed claim
+  has to state the detector input size on both sides, exactly as the `-nt`
+  finding forced token counts into the Mercury comparison.
+- Detector input resolution is now the dominant quality/speed knob
+  (`FFAI_DET_MIN_SIDE`, `FFAI_DET_MAX_SIDE`), and it is a sweep, not a
+  constant.
+
+This is the fourth consecutive campaign descent to terminate at depth 6 on a
+configuration difference rather than a defect.
 
 ## 9. Pure-Rust boundary and watchlist
 

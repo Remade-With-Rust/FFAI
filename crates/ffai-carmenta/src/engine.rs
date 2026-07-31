@@ -33,8 +33,31 @@ pub enum RecStage {
     Parseq,
 }
 
+/// Which detector feeds the recognition stage.
+#[derive(Clone, Copy, PartialEq)]
+pub enum DetStage {
+    /// CRAFT: character heatmaps, reassembled into words by the component walk.
+    Craft,
+    /// PP-OCRv5 mobile-det (DBNet/PP-LCNetV3): emits text-LINE regions
+    /// directly, from 4.7 MB against CRAFT's VGG16.
+    MobileDet,
+}
+
+/// Minimum short side the mobile-det input is scaled UP to; larger images pass
+/// through untouched (capped at `FFAI_DET_MAX_SIDE`). See
+/// `image::mobiledet_input` for why this is a floor and not a ceiling — the
+/// reading that made it a ceiling cost a factor of 17 in detector input.
+/// Swept per corpus because detection dominates frame time.
+fn mobiledet_min_side() -> usize {
+    static V: OnceLock<usize> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("FFAI_DET_MIN_SIDE").ok().and_then(|v| v.parse().ok()).unwrap_or(736)
+    })
+}
+
 struct Models {
-    craft: Craft,
+    craft: Option<Craft>,
+    mobiledet: Option<crate::mobiledet::MobileDet>,
     crnn: Option<Crnn>,
     parseq: Option<crate::parseq::Parseq>,
     device: Device,
@@ -46,6 +69,7 @@ pub struct CraftCrnn {
     models: OnceLock<std::result::Result<Models, String>>,
     manifest_dir: std::path::PathBuf,
     rec: RecStage,
+    det: DetStage,
 }
 
 impl CraftCrnn {
@@ -55,22 +79,38 @@ impl CraftCrnn {
 
     /// The `craft-parseq` variant: same detection, PARSeq-tiny recognition.
     pub fn new_parseq() -> Self {
+        Self::variant(RecStage::Parseq, DetStage::Craft)
+    }
+
+    /// The mobile-det variants: DBNet line regions instead of CRAFT's
+    /// reassembled character components.
+    pub fn new_mobiledet(rec: RecStage) -> Self {
+        Self::variant(rec, DetStage::MobileDet)
+    }
+
+    fn variant(rec: RecStage, det: DetStage) -> Self {
         CraftCrnn {
             models: OnceLock::new(),
             manifest_dir: Path::new("models").to_path_buf(),
-            rec: RecStage::Parseq,
+            rec,
+            det,
         }
     }
 
     pub fn with_manifest_dir(dir: &Path) -> Self {
-        CraftCrnn { models: OnceLock::new(), manifest_dir: dir.to_path_buf(), rec: RecStage::Crnn }
+        CraftCrnn {
+            models: OnceLock::new(),
+            manifest_dir: dir.to_path_buf(),
+            rec: RecStage::Crnn,
+            det: DetStage::Craft,
+        }
     }
 
     fn models(&self) -> Result<&Models> {
-        let rec = self.rec;
+        let (rec, det) = (self.rec, self.det);
         let loaded = self
             .models
-            .get_or_init(|| load_models(&self.manifest_dir, rec).map_err(|e| e.to_string()));
+            .get_or_init(|| load_models(&self.manifest_dir, rec, det).map_err(|e| e.to_string()));
         match loaded {
             Ok(m) => Ok(m),
             Err(e) => Err(Error::Model(e.clone())),
@@ -84,7 +124,7 @@ impl Default for CraftCrnn {
     }
 }
 
-fn load_models(dir: &Path, rec: RecStage) -> Result<Models> {
+fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
     let device = Device::Cpu;
     let manifests = ffai_models::load_dir(dir)?;
     let find = |name: &str| {
@@ -97,9 +137,22 @@ fn load_models(dir: &Path, rec: RecStage) -> Result<Models> {
         unsafe { VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device) }
             .map_err(image::candle_err)
     };
-    let craft_file = find("craft-mlt")?.fetch()?;
-    let craft = Craft::new(load_vb(craft_file.file("craft.safetensors")?.to_path_buf())?)
-        .map_err(image::candle_err)?;
+    let (craft, mobiledet) = match det {
+        DetStage::Craft => {
+            let f = find("craft-mlt")?.fetch()?;
+            let m = Craft::new(load_vb(f.file("craft.safetensors")?.to_path_buf())?)
+                .map_err(image::candle_err)?;
+            (Some(m), None)
+        }
+        DetStage::MobileDet => {
+            let f = find("ppocrv5-mobile-det")?.fetch()?;
+            let m = crate::mobiledet::MobileDet::new(load_vb(
+                f.file("det-fused.safetensors")?.to_path_buf(),
+            )?)
+            .map_err(image::candle_err)?;
+            (None, Some(m))
+        }
+    };
     let (crnn, parseq) = match rec {
         RecStage::Crnn => {
             let f = find("crnn-english-g2")?.fetch()?;
@@ -114,19 +167,27 @@ fn load_models(dir: &Path, rec: RecStage) -> Result<Models> {
             (None, Some(m))
         }
     };
-    Ok(Models { craft, crnn, parseq, device })
+    Ok(Models { craft, mobiledet, crnn, parseq, device })
 }
 
 impl OcrEngine for CraftCrnn {
     fn info(&self) -> EngineInfo {
-        let (name, description) = match self.rec {
-            RecStage::Crnn => (
+        let (name, description) = match (self.det, self.rec) {
+            (DetStage::Craft, RecStage::Crnn) => (
                 "craft-crnn",
                 "CRAFT detection + english_g2 CRNN recognition (EasyOCR lineage), pure Rust on candle",
             ),
-            RecStage::Parseq => (
+            (DetStage::Craft, RecStage::Parseq) => (
                 "craft-parseq",
                 "CRAFT detection + PARSeq-tiny recognition (word-level AR decoder), pure Rust on candle",
+            ),
+            (DetStage::MobileDet, RecStage::Crnn) => (
+                "mobiledet-crnn",
+                "PP-OCRv5 mobile-det (DBNet/PP-LCNetV3) + english_g2 CRNN, pure Rust on candle",
+            ),
+            (DetStage::MobileDet, RecStage::Parseq) => (
+                "mobiledet-parseq",
+                "PP-OCRv5 mobile-det (DBNet/PP-LCNetV3) + PARSeq-tiny, pure Rust on candle",
             ),
         };
         EngineInfo {
@@ -181,31 +242,70 @@ impl OcrEngine for CraftCrnn {
 
         // ---- detect ----
         let content_kind = crate::content::classify(img);
-        let (gray, input, scale) = crate::profile::timed(
-            |p| &p.det_pre,
-            || -> Result<_> {
-                let gray = image::to_gray_f32(img)?;
+        let gray = crate::profile::timed(|p| &p.det_pre, || image::to_gray_f32(img))?;
+        // `scale` is carried so the crop stage can map detector coordinates
+        // back to image pixels via `to_img` below; mobile-det already emits
+        // image coordinates, which is why its scale is the identity 2.0.
+        let (lines, region, affinity, mw, scale) = match self.det {
+            DetStage::Craft => {
                 // Detection sees COLOR (chroma contrast is real signal on
                 // photographs); recognition crops stay grayscale (both rec
                 // lineages take gray, and their gates were earned on it).
-                let (input, scale) = image::craft_input_color(img, &m.device)?;
-                Ok((gray, input, scale))
-            },
-        )?;
-        let maps = crate::profile::timed(|p| &p.det_fwd, || m.craft.forward(&input))
-            .map_err(image::candle_err)?;
-        let (lines, region, affinity, mw) = crate::profile::timed(
-            |p| &p.boxes,
-            || -> Result<_> {
-                let (mh, mw, _) = image::ok(maps.dims3())?;
-                let flat = image::ok(maps.flatten_all()?.to_vec1::<f32>())?;
-                // maps are (h, w, 2) interleaved: region even, affinity odd.
-                let region: Vec<f32> = flat.iter().step_by(2).copied().collect();
-                let affinity: Vec<f32> = flat.iter().skip(1).step_by(2).copied().collect();
-                let word_boxes = boxes::extract_boxes(&region, &affinity, mw, mh);
-                Ok((boxes::group_lines(word_boxes), region, affinity, mw))
-            },
-        )?;
+                let (input, scale) = crate::profile::timed(|p| &p.det_pre, || {
+                    image::craft_input_color(img, &m.device)
+                })?;
+                let craft = m.craft.as_ref().expect("craft loaded for DetStage::Craft");
+                let maps = crate::profile::timed(|p| &p.det_fwd, || craft.forward(&input))
+                    .map_err(image::candle_err)?;
+                crate::profile::timed(
+                    |p| &p.boxes,
+                    || -> Result<_> {
+                        let (mh, mw, _) = image::ok(maps.dims3())?;
+                        let flat = image::ok(maps.flatten_all()?.to_vec1::<f32>())?;
+                        // maps are (h, w, 2) interleaved: region even, affinity odd.
+                        let region: Vec<f32> = flat.iter().step_by(2).copied().collect();
+                        let affinity: Vec<f32> = flat.iter().skip(1).step_by(2).copied().collect();
+                        let word_boxes = boxes::extract_boxes(&region, &affinity, mw, mh);
+                        Ok((boxes::group_lines(word_boxes), region, affinity, mw, scale))
+                    },
+                )?
+            }
+            DetStage::MobileDet => {
+                let (input, sx, sy) = crate::profile::timed(|p| &p.det_pre, || {
+                    image::mobiledet_input(img, mobiledet_min_side(), &m.device)
+                })?;
+                let det = m.mobiledet.as_ref().expect("mobiledet loaded for DetStage::MobileDet");
+                let prob = crate::profile::timed(|p| &p.det_fwd, || det.forward(&input))
+                    .map_err(image::candle_err)?;
+                crate::profile::timed(
+                    |p| &p.boxes,
+                    || -> Result<_> {
+                        let (_, _, ph, pw) = image::ok(prob.dims4())?;
+                        let flat = image::ok(prob.flatten_all()?.to_vec1::<f32>())?;
+                        let mut b =
+                            crate::mobiledet::boxes_from_probability(&flat, pw, ph, sx, sy);
+                        // DBNet emits text LINES, so there is nothing to group
+                        // — each region IS a line. Sorting is still needed:
+                        // the component walk returns raster order, and reading
+                        // order is what the output contract promises.
+                        b.sort_by_key(|r| (r.y0, r.x0));
+                        if std::env::var("FFAI_DET_DEBUG").is_ok() {
+                            eprintln!(
+                                "mobiledet: {} boxes; image {w}x{h} -> map {pw}x{ph} (sx {sx:.3} sy {sy:.3})",
+                                b.len()
+                            );
+                            for r in &b {
+                                eprintln!(
+                                    "   [{},{},{},{}] {}x{} score {:.3}",
+                                    r.x0, r.y0, r.x1, r.y1, r.x1 - r.x0, r.y1 - r.y0, r.score
+                                );
+                            }
+                        }
+                        Ok((b.into_iter().map(|r| vec![r]).collect(), Vec::new(), Vec::new(), 0, 2.0))
+                    },
+                )?
+            }
+        };
 
         // ---- recognize, line by line, ACROSS CORES ----
         // Lines are independent; recognition was the serial half of the
@@ -215,6 +315,10 @@ impl OcrEngine for CraftCrnn {
         // Map coords are at (input/2); input coords are original * scale.
         use rayon::prelude::*;
         let to_img = |v: usize| (v as f32 * 2.0 / scale).round();
+        // Mobile-det gives one line box per region rather than per-word
+        // components, so the photographic per-word path has nothing to iterate;
+        // the ink-gap splitter supplies word boundaries inside each line.
+        let det_is_line_level = self.det == DetStage::MobileDet;
         // Parallel across lines ONLY when there are enough to amortize the
         // pool contention with candle's internal rayon: measured, a 1-line
         // band strip pays 177 ms/line under par_iter vs 82 ms serial, while
@@ -266,8 +370,13 @@ impl OcrEngine for CraftCrnn {
                         // Neither wins everywhere, so the strategy is chosen
                         // per image — see `content` for the signal and its
                         // empty-band margin.
-                        let word_ranges: Vec<(usize, usize, usize, usize)> = match content_kind {
-                            crate::content::ContentKind::Rendered => {
+                        let word_ranges: Vec<(usize, usize, usize, usize)> = match (det_is_line_level, content_kind) {
+                            // Rendered text takes the ink-gap projection, and
+                            // so does ANY line-level detector: DBNet hands us
+                            // one box per line, so there are no per-word
+                            // components to iterate and the gaps are all we
+                            // have to go on.
+                            (_, crate::content::ContentKind::Rendered) | (true, _) => {
                                 let lb_map = boxes::line_bbox(line);
                                 let bh = (to_img(lb_map.y1) - to_img(lb_map.y0)).max(1.0);
                                 let sy0 = (to_img(lb_map.y0) - bh * 0.12).max(0.0) as usize;
@@ -292,7 +401,7 @@ impl OcrEngine for CraftCrnn {
                             // measured far worse than the crop win (CORD
                             // 21.70 -> 32.5 %). Tight boxes for structure,
                             // expanded boxes for reading.
-                            crate::content::ContentKind::Photographic => line
+                            (false, crate::content::ContentKind::Photographic) => line
                                 .iter()
                                 .map(|b| {
                                     let (bx0, by0) = (to_img(b.x0), to_img(b.y0));

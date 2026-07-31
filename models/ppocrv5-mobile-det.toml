@@ -14,9 +14,17 @@ sha256 = "abe92a954293370d2dc078bceae0c316f6c3bd02542c84ff8be166e7b797c97d"
 
 # Training checkpoint (STRUCTURAL names: backbone.blocksN / neck / head —
 # the export-fused inference program has only op-indexed names, which
-# blocks a direct port). The candle port loads THESE 905 tensors and folds
-# the rep-conv branches at load; oracle = mobiledet_fixture.json (polys +
-# texts from the mkldnn-off reference on a pinned frame).
+# blocks a direct port). Source for the fusion below; not loaded at runtime.
 [[files]]
 name = "det-train.safetensors"
 sha256 = "d7188218e5666327c0006ed149a2305da6cedae15132a19c0e657c45fb9df052"
+
+# What the candle port actually loads. `tools/carmenta_mobiledet_fuse.py`
+# collapses every LearnableRepLayer branch and every BatchNorm into plain
+# convolutions offline — 905 tensors down to 168 — so `mobiledet.rs` sees
+# nothing but convs. The fusion is not self-checked: it is rejected unless it
+# reproduces paddle's own exported program (currently 7.3e-04 max logit
+# error, 100% binarised agreement at the 0.3 threshold).
+[[files]]
+name = "det-fused.safetensors"
+sha256 = "7aa0fe33ac821b4df1c26c216a715a8e82f0cbf8df42321a959a25fb944a8d6d"

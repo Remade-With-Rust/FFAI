@@ -339,6 +339,74 @@ pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, 
     Ok((t, scale))
 }
 
+/// Input for PP-OCRv5 mobile-det, reproducing `DetResizeForTest`'s policy.
+///
+/// Returns the tensor and the per-axis scale from source to network pixels,
+/// which the postprocess needs to map boxes back. The axes scale
+/// independently — paddle resizes straight to the /32-rounded size rather than
+/// resizing proportionally and padding, so `sx != sy` in general.
+///
+/// ## The policy is a MINIMUM side, not a maximum, and that is the whole ball game
+///
+/// The obvious reading of `inference.yml` — "resize_long: 960", so scale the
+/// long side to 960 — is wrong, and wrong by a factor of 17 in pixel count.
+/// The reference resizes only to bring the SHORT side UP to `min_side`, leaves
+/// larger images alone, and then caps the long side at `max_side`. A 2376x4224
+/// receipt therefore reaches the detector at 2240x4000, not 544x960.
+///
+/// Measured, not inferred: the reference logs
+/// `Resized image size (2376x4224) exceeds max_side_limit of 4000`, which can
+/// only happen if the ratio was still 1.0 when the cap was applied. Running our
+/// port at 544x960 merged an entire receipt into one 1903x1781 blob — and so
+/// did paddle's own postprocess on paddle's own probability map at that size.
+/// The detector was never the problem; the input was.
+///
+/// One faithful oddity, deliberate: channels are **BGR**. PaddleOCR decodes BGR
+/// and then normalizes with ImageNet's *RGB* statistics, so mean 0.485 lands on
+/// the blue channel. It looks like a bug and is not one — it is what these
+/// weights were trained against.
+pub fn mobiledet_input(
+    img: &ImageBuffer,
+    min_side: usize,
+    device: &Device,
+) -> Result<(Tensor, f32, f32)> {
+    const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+    const STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+    let (w, h) = (img.width as usize, img.height as usize);
+    let max_side: usize = std::env::var("FFAI_DET_MAX_SIDE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4000);
+
+    let short = w.min(h) as f32;
+    let ratio = if (short as usize) < min_side { min_side as f32 / short } else { 1.0 };
+    let (mut rw, mut rh) = ((w as f32 * ratio).trunc(), (h as f32 * ratio).trunc());
+    if rw.max(rh) > max_side as f32 {
+        let cap = max_side as f32 / rw.max(rh);
+        rw = (rw * cap).trunc();
+        rh = (rh * cap).trunc();
+    }
+    let round32 = |v: f32| (((v / 32.0).round() as usize) * 32).max(32);
+    let (cw, ch) = (round32(rw), round32(rh));
+
+    let bpp = img.format.bytes_per_pixel();
+    let mut chw = vec![0f32; 3 * cw * ch];
+    for c in 0..3 {
+        // Tensor channel 0 is blue; a grey source replicates its single plane.
+        let src_c = if bpp == 1 { 0 } else { 2 - c };
+        let plane: Vec<f32> = (0..w * h).map(|i| img.data[i * bpp + src_c] as f32).collect();
+        let resized = resize_bilinear(&plane, w, h, cw, ch);
+        let (mean, std) = (MEAN[c], STD[c]);
+        let dst = &mut chw[c * cw * ch..(c + 1) * cw * ch];
+        for (d, &s) in dst.iter_mut().zip(&resized) {
+            *d = (s / 255.0 - mean) / std;
+        }
+    }
+    let t = Tensor::from_vec(chw, (1, 3, ch, cw), device).map_err(candle_err)?;
+    Ok((t, cw as f32 / w as f32, ch as f32 / h as f32))
+}
+
 pub fn candle_err(e: candle_core::Error) -> Error {
     Error::Other(format!("candle: {e}"))
 }

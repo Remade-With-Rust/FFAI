@@ -1,0 +1,543 @@
+name = "carmenta-doclaynet"
+version = 1
+task = "ocr"
+
+[[clips]]
+id = "doclaynet-000"
+path = "clips/carmenta-doclaynet/doclaynet-000.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-000.txt"
+class = "financial_reports"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "d7f9abce97a63dbcf244e1c098279011d18f3515f238d14cf01bd48fc6f6354a"
+
+[[clips]]
+id = "doclaynet-001"
+path = "clips/carmenta-doclaynet/doclaynet-001.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-001.txt"
+class = "financial_reports"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "deb8b59767813e0b94092467038e1972b482160fdcf7a9d2b68063da2f84eda4"
+
+[[clips]]
+id = "doclaynet-002"
+path = "clips/carmenta-doclaynet/doclaynet-002.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-002.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "09970ccaf2ae035f8c0fc36a7ef731bc6faa1102c1d8b3cd1a678b1e00370297"
+
+[[clips]]
+id = "doclaynet-003"
+path = "clips/carmenta-doclaynet/doclaynet-003.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-003.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "31689268f4bc7abb74c50a0fead0eb610dfe51755cf225561a32ff10de0c1f2b"
+
+[[clips]]
+id = "doclaynet-004"
+path = "clips/carmenta-doclaynet/doclaynet-004.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-004.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "390bb510a83e8482710cd1c68c2db723bf4714793b795fe10652261d16f1cb88"
+
+[[clips]]
+id = "doclaynet-005"
+path = "clips/carmenta-doclaynet/doclaynet-005.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-005.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "510fdd563afeb2ba45859943fc8816e8b86fe8826d9b6876240576f01c43769f"
+
+[[clips]]
+id = "doclaynet-006"
+path = "clips/carmenta-doclaynet/doclaynet-006.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-006.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "ff1c85396398dd18edab7f60af6928bd7e64e5f405e520bef46969c78e93dd9d"
+
+[[clips]]
+id = "doclaynet-007"
+path = "clips/carmenta-doclaynet/doclaynet-007.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-007.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "a5aad3827a83ed63e9c0020e8113d14f026d43a9c9876304031e977f3cbad1cb"
+
+[[clips]]
+id = "doclaynet-008"
+path = "clips/carmenta-doclaynet/doclaynet-008.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-008.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "d894fb80ff23e2adec72b29b3e2e2449c27bf05bc13abcd42132754bc3ac12b8"
+
+[[clips]]
+id = "doclaynet-009"
+path = "clips/carmenta-doclaynet/doclaynet-009.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-009.txt"
+class = "financial_reports"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "fe9a077d76db9e8c481f84c0b44c270ff7e2f107e7735e1b0926a5075028023d"
+
+[[clips]]
+id = "doclaynet-010"
+path = "clips/carmenta-doclaynet/doclaynet-010.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-010.txt"
+class = "government_tenders"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "ca11900b6fc969433e94c16f86da83597256c52f82744c24f7eee0dc1179bfc7"
+
+[[clips]]
+id = "doclaynet-011"
+path = "clips/carmenta-doclaynet/doclaynet-011.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-011.txt"
+class = "government_tenders"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "add0937f4ffd9fa227513fd07e86bac9828223095ae2ded0c5d86319992b79e3"
+
+[[clips]]
+id = "doclaynet-012"
+path = "clips/carmenta-doclaynet/doclaynet-012.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-012.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "52927d8990748c50b65eb61418efe077ac6319b99ab73f27c611aed59a8247ad"
+
+[[clips]]
+id = "doclaynet-013"
+path = "clips/carmenta-doclaynet/doclaynet-013.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-013.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "5a0976fd259a895a7da6535afdbc3f8dbfceef21ddfce09a30ad3da238ab8d94"
+
+[[clips]]
+id = "doclaynet-014"
+path = "clips/carmenta-doclaynet/doclaynet-014.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-014.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "368d8ce1abf351ba19a1d899ad788147737d1e66e17967b43d27db65f0bd3263"
+
+[[clips]]
+id = "doclaynet-015"
+path = "clips/carmenta-doclaynet/doclaynet-015.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-015.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "30c32952bf8215dd497c49b269e32b85c13ebcc3ee918fa94f6b557eafa0c529"
+
+[[clips]]
+id = "doclaynet-016"
+path = "clips/carmenta-doclaynet/doclaynet-016.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-016.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "2c72631cac512818853021c73bddfee44c94cb93293703708ca07bef206fcfec"
+
+[[clips]]
+id = "doclaynet-017"
+path = "clips/carmenta-doclaynet/doclaynet-017.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-017.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "408e45a5694ba905037f2fab144e959e6ba82f467021046483478c3327979b9e"
+
+[[clips]]
+id = "doclaynet-018"
+path = "clips/carmenta-doclaynet/doclaynet-018.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-018.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "f942d2e2df2129db654e08f4fd5948dd2626355b29ca7bd3a330b16fb63ec8e2"
+
+[[clips]]
+id = "doclaynet-019"
+path = "clips/carmenta-doclaynet/doclaynet-019.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-019.txt"
+class = "government_tenders"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "9c31cfceed25367c753f1eb13a1f248afa52be9641c194b71109c97f191f345a"
+
+[[clips]]
+id = "doclaynet-020"
+path = "clips/carmenta-doclaynet/doclaynet-020.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-020.txt"
+class = "laws_and_regulations"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "1c0b86cc5a262b5654875e61b19ca586ec8fe0855f0e4ad596963cd2880065c9"
+
+[[clips]]
+id = "doclaynet-021"
+path = "clips/carmenta-doclaynet/doclaynet-021.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-021.txt"
+class = "laws_and_regulations"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "72cef438077fde33903dcdace4fdbf9d772e58d3ff755c5952f390074ddfbed5"
+
+[[clips]]
+id = "doclaynet-022"
+path = "clips/carmenta-doclaynet/doclaynet-022.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-022.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "d2179345f5be53cc7e225aedf34b01f696c07f5f5f8cf592677667fce22ed34f"
+
+[[clips]]
+id = "doclaynet-023"
+path = "clips/carmenta-doclaynet/doclaynet-023.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-023.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "3dd1e29d3b2279cffb45f5f1836049b8f49811519e9fddacb9a4a01dd1c9aa16"
+
+[[clips]]
+id = "doclaynet-024"
+path = "clips/carmenta-doclaynet/doclaynet-024.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-024.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "5219a1b0195e701e19a4deab105af98146783bf414a6bdfdbf384f4a0e5e816a"
+
+[[clips]]
+id = "doclaynet-025"
+path = "clips/carmenta-doclaynet/doclaynet-025.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-025.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "ad6864f9bf29a6ada7e7fb68fe2b7b63d1b32d3411349f487b57a4b246bba282"
+
+[[clips]]
+id = "doclaynet-026"
+path = "clips/carmenta-doclaynet/doclaynet-026.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-026.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "f937aacdce62ed23218fe211ca0992138a97877fcd4bca214bb631c4f301fafa"
+
+[[clips]]
+id = "doclaynet-027"
+path = "clips/carmenta-doclaynet/doclaynet-027.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-027.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "ab6f04a8e60a7d182cf3899451bcd0b81f6ce4dc89a0a5e48c17d03071d6c4f1"
+
+[[clips]]
+id = "doclaynet-028"
+path = "clips/carmenta-doclaynet/doclaynet-028.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-028.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "33191d0644ee2ee4fcf86100b9c7de494ea3465781f809459e5204b8869f955c"
+
+[[clips]]
+id = "doclaynet-029"
+path = "clips/carmenta-doclaynet/doclaynet-029.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-029.txt"
+class = "laws_and_regulations"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "38dcda38eaf0590844787cd41608ec7806d1c0a853e9a671d7e6996a59b77761"
+
+[[clips]]
+id = "doclaynet-030"
+path = "clips/carmenta-doclaynet/doclaynet-030.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-030.txt"
+class = "manuals"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "9c87b3669e61c91ef7cc38c4dabd9b0df75e4e5f9c31834814fd539f9503423a"
+
+[[clips]]
+id = "doclaynet-031"
+path = "clips/carmenta-doclaynet/doclaynet-031.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-031.txt"
+class = "manuals"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "5ae8c9c0fc737fcc69f1870276db928ab9648ae794f8eda4e7e13609b5c528c5"
+
+[[clips]]
+id = "doclaynet-032"
+path = "clips/carmenta-doclaynet/doclaynet-032.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-032.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "7cecd93bb7184a0e4432edc3f8085619013a10f02219e8098ffa9bc36237e7ea"
+
+[[clips]]
+id = "doclaynet-033"
+path = "clips/carmenta-doclaynet/doclaynet-033.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-033.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "915a59cd33653e935e30728c6f3f251a2c924036322754bb6b8d9d2233f30533"
+
+[[clips]]
+id = "doclaynet-034"
+path = "clips/carmenta-doclaynet/doclaynet-034.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-034.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "202182c9f2f4bcc18599acfbe85cc6e43acfb4f9b55de51bdea86b070278b328"
+
+[[clips]]
+id = "doclaynet-035"
+path = "clips/carmenta-doclaynet/doclaynet-035.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-035.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "e3fc4a43657e1cd2999b264ecd394ed1f2cbf43cf4aabf96b5d0d34795fc9c3f"
+
+[[clips]]
+id = "doclaynet-036"
+path = "clips/carmenta-doclaynet/doclaynet-036.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-036.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "31cdcc9eac217f074837dc0a96733ec93758bd8faa1035fb73cbbaa2370f8e3f"
+
+[[clips]]
+id = "doclaynet-037"
+path = "clips/carmenta-doclaynet/doclaynet-037.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-037.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "1556dc3e6be25d7ca1901877bb37dd9a470954b92733f957060cbe6adffbf4e2"
+
+[[clips]]
+id = "doclaynet-038"
+path = "clips/carmenta-doclaynet/doclaynet-038.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-038.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "9d150eed876eac8d35ac6cf25004cbd867100b483697b0bfc8981f5d3e521d23"
+
+[[clips]]
+id = "doclaynet-039"
+path = "clips/carmenta-doclaynet/doclaynet-039.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-039.txt"
+class = "manuals"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "d6245d3a1d5d3107619d77ed62dd14f9c2dedafa24bd6e3cd521fc24207a298d"
+
+[[clips]]
+id = "doclaynet-040"
+path = "clips/carmenta-doclaynet/doclaynet-040.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-040.txt"
+class = "patents"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "e82bc85ff97b88f063d779652271b51d6f3af7b394b46ed9e4e4fe11480623c6"
+
+[[clips]]
+id = "doclaynet-041"
+path = "clips/carmenta-doclaynet/doclaynet-041.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-041.txt"
+class = "patents"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "45672ffc698a3e01ac2cb2f936ec3d1a8bbf5f8c2b4793685c4ffb14ba2134af"
+
+[[clips]]
+id = "doclaynet-042"
+path = "clips/carmenta-doclaynet/doclaynet-042.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-042.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "09b1260cd275a9392965c42e0d99b09e0e2109726a167b4b55126d3362ef6bb3"
+
+[[clips]]
+id = "doclaynet-043"
+path = "clips/carmenta-doclaynet/doclaynet-043.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-043.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "72affd9b59d93e102a944791f7e3029071271d7357b4e5f47f09194a0d3042ce"
+
+[[clips]]
+id = "doclaynet-044"
+path = "clips/carmenta-doclaynet/doclaynet-044.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-044.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "19cfde76a5e6ede2db75cea45f4a54634561bf5a9bde7079233bc59db4917ad9"
+
+[[clips]]
+id = "doclaynet-045"
+path = "clips/carmenta-doclaynet/doclaynet-045.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-045.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "b5e76305c59c9c45f780d87c49650e809fbe4ecd7f3e303acbf9281a42c48ace"
+
+[[clips]]
+id = "doclaynet-046"
+path = "clips/carmenta-doclaynet/doclaynet-046.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-046.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "3084cef19667e475f9a25c6335edcd3cce908200668e52d2f00d60aeb0126c99"
+
+[[clips]]
+id = "doclaynet-047"
+path = "clips/carmenta-doclaynet/doclaynet-047.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-047.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "d6bb19b607ff23433828de68d22492b027db12c083dc943125f41ab74bbe7974"
+
+[[clips]]
+id = "doclaynet-048"
+path = "clips/carmenta-doclaynet/doclaynet-048.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-048.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "c3ecce25e2a88de443666d11ad8d67f1e8b05d4141358f9c0e2f997030bc25d0"
+
+[[clips]]
+id = "doclaynet-049"
+path = "clips/carmenta-doclaynet/doclaynet-049.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-049.txt"
+class = "patents"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "e4fc82f4a1ddaba16bf27b77bbbf9ec2e4c21ed1982044c1b2409333af7e1e98"
+
+[[clips]]
+id = "doclaynet-050"
+path = "clips/carmenta-doclaynet/doclaynet-050.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-050.txt"
+class = "scientific_articles"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "257e7412841664b8c13fc3fc5bea3dc5b71175b62fb952e01a316134b5ee8f03"
+
+[[clips]]
+id = "doclaynet-051"
+path = "clips/carmenta-doclaynet/doclaynet-051.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-051.txt"
+class = "scientific_articles"
+split = "train"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "b0fbe90cff7140c16a73158550c73017c53b68589aec1f2a4f3ef27edf918bff"
+
+[[clips]]
+id = "doclaynet-052"
+path = "clips/carmenta-doclaynet/doclaynet-052.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-052.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "3409adac3d448c779b5f55a1ab999ee784103b27e0b290ce3e2240c3b826127a"
+
+[[clips]]
+id = "doclaynet-053"
+path = "clips/carmenta-doclaynet/doclaynet-053.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-053.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "0619d73b6291bbbab449164cacb49d1996aabbf7568b3db310c47e6ab70a1fc5"
+
+[[clips]]
+id = "doclaynet-054"
+path = "clips/carmenta-doclaynet/doclaynet-054.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-054.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "1d99e885732786d500fc28de9b83e974798eba90dd1b6a10b12d66534f995673"
+
+[[clips]]
+id = "doclaynet-055"
+path = "clips/carmenta-doclaynet/doclaynet-055.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-055.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "c5df138c327ecebd852f44fd0ca0b6163b69ebc130e22b29eb72d767ccdc2269"
+
+[[clips]]
+id = "doclaynet-056"
+path = "clips/carmenta-doclaynet/doclaynet-056.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-056.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "a7edf2b48d12ebaf71adcd1ab24c42683f247c0acf85314369b960738c7e0945"
+
+[[clips]]
+id = "doclaynet-057"
+path = "clips/carmenta-doclaynet/doclaynet-057.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-057.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "67d2f28552fcb228fa873ec20de60142c6883289f562506d1be9afbfe01c155c"
+
+[[clips]]
+id = "doclaynet-058"
+path = "clips/carmenta-doclaynet/doclaynet-058.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-058.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "22ed833b4adef4686f9cd35abe4356567a255e3c551450bed4f34fa41fba3fd4"
+
+[[clips]]
+id = "doclaynet-059"
+path = "clips/carmenta-doclaynet/doclaynet-059.png"
+ground_truth = "clips/carmenta-doclaynet/doclaynet-059.txt"
+class = "scientific_articles"
+split = "holdout"
+license = "CDLA-Permissive-1.0 (DocLayNet-v1.1, ds4sd/IBM)"
+sha256 = "7a10a21f0a4f21dd5de0c8a964b12284834d47a602f72dda39445ac24e892d61"

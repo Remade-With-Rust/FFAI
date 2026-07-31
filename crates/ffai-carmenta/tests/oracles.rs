@@ -161,3 +161,139 @@ fn parseq_refined_text_matches_pytorch_reference() {
     let (text, _) = parseq.recognize(&x).unwrap();
     assert_eq!(text, meta["text"].as_str().unwrap(), "refined decode must match reference");
 }
+
+/// PP-OCRv5 mobile-det against paddle's OWN EXPORTED PROGRAM, not against a
+/// re-implementation of it. The fixture is a 256x256 crop of a real page at
+/// native resolution — no resize, so this also covers the preprocessing (BGR
+/// channel order, ImageNet statistics) rather than only the network.
+///
+/// The tolerance is deliberately two-sided. Probability error catches drift in
+/// the network; binarised agreement at the 0.3 threshold catches the thing that
+/// actually matters, because that is the map the postprocess consumes. A port
+/// can be numerically close and still segment differently.
+#[test]
+fn mobiledet_probability_map_matches_paddle() {
+    let crop_png = fixtures().join("mobiledet_oracle_crop.png");
+    let prob_st = fixtures().join("mobiledet_oracle_prob.safetensors");
+    let Some(weights) = model_file("ppocrv5-mobile-det", "det-fused.safetensors") else {
+        eprintln!("SKIP mobiledet oracle: fused weights not in cache \
+                   (run tools/carmenta_mobiledet_fuse.py)");
+        return;
+    };
+    if !crop_png.exists() || !prob_st.exists() {
+        eprintln!("SKIP mobiledet oracle: fixtures missing \
+                   (run tools/carmenta_mobiledet_oracle.py)");
+        return;
+    }
+
+    let img = ffai_media::load_image(&crop_png).expect("fixture crop loads");
+    assert_eq!((img.width, img.height), (256, 256));
+    // Long side pinned to the native 256 so the fixture is never resampled.
+    let (input, sx, sy) =
+        ffai_carmenta::image::mobiledet_input(&img, 256, &Device::Cpu).unwrap();
+    assert_eq!((sx, sy), (1.0, 1.0), "fixture must not be rescaled");
+
+    let vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &Device::Cpu) }.unwrap();
+    let det = ffai_carmenta::mobiledet::MobileDet::new(vb).unwrap();
+    let ours = det.forward(&input).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+    let want = candle_core::safetensors::load(&prob_st, &Device::Cpu).unwrap();
+    let want = want["prob"].flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(ours.len(), want.len(), "probability map shape mismatch");
+
+    let (mut max_d, mut disagree) = (0f32, 0usize);
+    for (a, b) in ours.iter().zip(&want) {
+        max_d = max_d.max((a - b).abs());
+        if (*a > 0.3) != (*b > 0.3) {
+            disagree += 1;
+        }
+    }
+    let fg = want.iter().filter(|&&p| p > 0.3).count();
+    eprintln!(
+        "mobiledet oracle: max|dprob| {max_d:.3e}  binarised disagreement {disagree}/{} \
+         ({:.4}%)  foreground {:.2}%",
+        want.len(),
+        100.0 * disagree as f64 / want.len() as f64,
+        100.0 * fg as f64 / want.len() as f64
+    );
+    assert!(fg > want.len() / 100, "fixture must contain real text, got {fg} foreground px");
+    assert!(max_d < 5e-3, "probability drift vs paddle: max|dprob| {max_d:.3e}");
+    assert!(
+        disagree * 1000 <= want.len(),
+        "binarised disagreement {disagree}/{} exceeds 0.1%",
+        want.len()
+    );
+}
+
+/// The DB postprocess against paddle's own `DBPostProcess` on the same
+/// probability map — components, minimum-area rectangle, Vatti unclip.
+///
+/// The network being exact does not make the postprocess exact, and the
+/// postprocess is where the boxes actually come from. Reading `processors.py`
+/// got this nearly right; only running it settles whether "nearly" matters.
+#[test]
+fn mobiledet_boxes_match_paddle_postprocess() {
+    let crop_png = fixtures().join("mobiledet_oracle_crop.png");
+    let boxes_json = fixtures().join("mobiledet_oracle_boxes.json");
+    let Some(weights) = model_file("ppocrv5-mobile-det", "det-fused.safetensors") else {
+        eprintln!("SKIP mobiledet boxes: fused weights not in cache");
+        return;
+    };
+    if !crop_png.exists() || !boxes_json.exists() {
+        eprintln!("SKIP mobiledet boxes: fixtures missing \
+                   (run tools/carmenta_mobiledet_dbref.py)");
+        return;
+    }
+
+    let img = ffai_media::load_image(&crop_png).unwrap();
+    let (input, sx, sy) = ffai_carmenta::image::mobiledet_input(&img, 256, &Device::Cpu).unwrap();
+    let vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &Device::Cpu) }.unwrap();
+    let det = ffai_carmenta::mobiledet::MobileDet::new(vb).unwrap();
+    let prob = det.forward(&input).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let mut ours = ffai_carmenta::mobiledet::boxes_from_probability(&prob, 256, 256, sx, sy);
+    ours.sort_by_key(|b| (b.y0, b.x0));
+
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&boxes_json).unwrap()).unwrap();
+    let want: Vec<Vec<f64>> = meta["boxes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect())
+        .collect();
+
+    eprintln!("mobiledet boxes: ours {} / paddle {}", ours.len(), want.len());
+    for b in &ours {
+        eprintln!("    ours   [{}, {}, {}, {}] score {:.4}", b.x0, b.y0, b.x1, b.y1, b.score);
+    }
+    for b in &want {
+        eprintln!("    paddle [{}, {}, {}, {}] score {:.4}", b[0], b[1], b[2], b[3], b[4]);
+    }
+    assert_eq!(ours.len(), want.len(), "box count differs from the reference");
+
+    // Matched pairwise in reading order: same map, same threshold, so the
+    // regions themselves are identical and only the geometry can drift.
+    for (o, w) in ours.iter().zip(&want) {
+        let inter = (o.x1.min(w[2] as usize).saturating_sub(o.x0.max(w[0] as usize))) as f64
+            * (o.y1.min(w[3] as usize).saturating_sub(o.y0.max(w[1] as usize))) as f64;
+        let ua = ((o.x1 - o.x0) * (o.y1 - o.y0)) as f64
+            + (w[2] - w[0]) * (w[3] - w[1])
+            - inter;
+        let iou = if ua > 0.0 { inter / ua } else { 0.0 };
+        assert!(
+            iou > 0.90,
+            "box [{}, {}, {}, {}] vs paddle [{}, {}, {}, {}]: IoU {iou:.3}",
+            o.x0, o.y0, o.x1, o.y1, w[0], w[1], w[2], w[3]
+        );
+        // Axis-aligned quads agree exactly; rotated ones run up to +0.047
+        // high because cv2.fillPoly's fixed-point edge walk claims one extra
+        // row. Cause isolated and bounded in `box_score_fast`'s docs — the
+        // tolerance is the MEASURED residual, not a number picked to pass.
+        assert!(
+            (o.score as f64 - w[4]) > -0.005 && (o.score as f64 - w[4]) < 0.05,
+            "score {:.4} vs paddle {:.4}", o.score, w[4]
+        );
+    }
+}

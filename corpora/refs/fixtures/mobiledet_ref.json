@@ -1,0 +1,46 @@
+{
+ "bb_se_hardsigmoid_slope": 0.16666666666666666,
+ "neck_se_hardsigmoid_slope": 0.2,
+ "rse_shortcut": true,
+ "noise_max_abs_dlogit": 2.384185791015625e-05,
+ "page_max_abs_dprob": 0.00020584464073181152,
+ "page_binarised_agreement": 1.0,
+ "stages": {
+  "tap0": [
+   1,
+   12,
+   240,
+   184
+  ],
+  "tap1": [
+   1,
+   18,
+   120,
+   92
+  ],
+  "tap2": [
+   1,
+   42,
+   60,
+   46
+  ],
+  "tap3": [
+   1,
+   360,
+   30,
+   23
+  ],
+  "fuse": [
+   1,
+   96,
+   240,
+   184
+  ],
+  "logit": [
+   1,
+   1,
+   960,
+   736
+  ]
+ }
+}

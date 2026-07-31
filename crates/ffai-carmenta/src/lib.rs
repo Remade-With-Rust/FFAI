@@ -35,6 +35,7 @@ pub mod crnn;
 pub mod engine;
 pub mod image;
 pub mod live;
+pub mod mobiledet;
 pub mod parseq;
 pub mod profile;
 
@@ -60,6 +61,8 @@ pub fn parseq_pads() -> (f32, f32) {
 pub fn register(reg: &mut EngineRegistry) {
     reg.register_ocr(Arc::new(engine::CraftCrnn::new()));
     reg.register_ocr(Arc::new(engine::CraftCrnn::new_parseq()));
+    reg.register_ocr(Arc::new(engine::CraftCrnn::new_mobiledet(engine::RecStage::Crnn)));
+    reg.register_ocr(Arc::new(engine::CraftCrnn::new_mobiledet(engine::RecStage::Parseq)));
 }
 
 #[cfg(test)]

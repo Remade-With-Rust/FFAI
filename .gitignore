@@ -28,3 +28,11 @@
 /bench/tts-out/
 /bench/mt1-substitution/
 /.piper-voices/
+
+# Mobile-det intermediates: regenerable by tools/carmenta_mobiledet_oracle.py
+# and _ref.py, and large (12 MB of float activations). The fixtures the Rust
+# oracle actually reads — the crop, its probability map, the reference boxes,
+# and the measured-constant JSONs — ARE tracked.
+corpora/refs/fixtures/mobiledet_probmap.npz
+corpora/refs/fixtures/mobiledet_stages.npz
+tools/__pycache__/
