@@ -1,0 +1,292 @@
+name = "carmenta-doc"
+version = 1
+task = "ocr"
+
+[[clips]]
+id = "doc-000"
+path = "clips/carmenta-doc/doc-000.png"
+ground_truth = "clips/carmenta-doc/doc-000.txt"
+class = "document_1col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "7b3daa1aa87bdd8190284704b2c3554e52b8ce43961e5e42cc43f947756c7cb5"
+
+[[clips]]
+id = "doc-001"
+path = "clips/carmenta-doc/doc-001.png"
+ground_truth = "clips/carmenta-doc/doc-001.txt"
+class = "document_1col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "09fcb7728108aef9eb04a87410b2742e0eb34b22e6aa081ee0ec291bab7ef9c8"
+
+[[clips]]
+id = "doc-002"
+path = "clips/carmenta-doc/doc-002.png"
+ground_truth = "clips/carmenta-doc/doc-002.txt"
+class = "document_1col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "e0260801bb78df24ab972a25414ba21452941e17159c9591cc11454a48a7de6a"
+
+[[clips]]
+id = "doc-003"
+path = "clips/carmenta-doc/doc-003.png"
+ground_truth = "clips/carmenta-doc/doc-003.txt"
+class = "document_1col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "8df084e4474cd1516c137b5348c89c66fdbe2b7a69d411eec54485e5c4eb6fc0"
+
+[[clips]]
+id = "doc-004"
+path = "clips/carmenta-doc/doc-004.png"
+ground_truth = "clips/carmenta-doc/doc-004.txt"
+class = "document_2col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "be05e36ea52d2b54cd686db936db3995c642346e503f8c8bf1a83a1e885ee4a2"
+
+[[clips]]
+id = "doc-005"
+path = "clips/carmenta-doc/doc-005.png"
+ground_truth = "clips/carmenta-doc/doc-005.txt"
+class = "document_2col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "0f459b211f75ff942476c8228128090144bc014e191ad727dbe9cb0b843a06a4"
+
+[[clips]]
+id = "doc-006"
+path = "clips/carmenta-doc/doc-006.png"
+ground_truth = "clips/carmenta-doc/doc-006.txt"
+class = "document_2col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "9031422de6ccb56f2209403c590b670e5ff342571ad166f5a7ba8ae603bc379d"
+
+[[clips]]
+id = "doc-007"
+path = "clips/carmenta-doc/doc-007.png"
+ground_truth = "clips/carmenta-doc/doc-007.txt"
+class = "document_2col"
+split = "train"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "5e66a856afe093b6a714f03f311a63786e070c3240fd9e93648342a174185c55"
+
+[[clips]]
+id = "doc-008"
+path = "clips/carmenta-doc/doc-008.png"
+ground_truth = "clips/carmenta-doc/doc-008.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "46ff41464845f62ce6c922d5df8a5c35eaba18f9e1d8f3bb664a9895191ce838"
+
+[[clips]]
+id = "doc-009"
+path = "clips/carmenta-doc/doc-009.png"
+ground_truth = "clips/carmenta-doc/doc-009.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "984765164b95ad6b299b3bb0566678ca5ec1c1a8412dd3d83cacc771f5a42614"
+
+[[clips]]
+id = "doc-010"
+path = "clips/carmenta-doc/doc-010.png"
+ground_truth = "clips/carmenta-doc/doc-010.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "d37be94bdf75d0e292dc0eb65be5063f01ddf8a0c57a3a8106e3a55ae2a11ef9"
+
+[[clips]]
+id = "doc-011"
+path = "clips/carmenta-doc/doc-011.png"
+ground_truth = "clips/carmenta-doc/doc-011.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "b8fd1c7f2ccc71271ae86daf8549db9c24142caa572825a11f45e6e13f392c81"
+
+[[clips]]
+id = "doc-012"
+path = "clips/carmenta-doc/doc-012.png"
+ground_truth = "clips/carmenta-doc/doc-012.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "73a08aeb2dbfa4301bf2422d6ead66373a969c5ac78300d8e9c6e912de770951"
+
+[[clips]]
+id = "doc-013"
+path = "clips/carmenta-doc/doc-013.png"
+ground_truth = "clips/carmenta-doc/doc-013.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "dbb2843f94ff710d98f3a7ee5cc1f1df69fcd67a4066f9aa1dd087bde30bd4d2"
+
+[[clips]]
+id = "doc-014"
+path = "clips/carmenta-doc/doc-014.png"
+ground_truth = "clips/carmenta-doc/doc-014.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "430169654f53a6e2e9b7cad866f85b129e691806ffecdc402eb534b8901a8244"
+
+[[clips]]
+id = "doc-015"
+path = "clips/carmenta-doc/doc-015.png"
+ground_truth = "clips/carmenta-doc/doc-015.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "cb63f248a4d8471966f63a71c4640553b59183bb87ce77c2bf02e7d2e2323400"
+
+[[clips]]
+id = "doc-016"
+path = "clips/carmenta-doc/doc-016.png"
+ground_truth = "clips/carmenta-doc/doc-016.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "5c732e6ed7965f5451b09d4c6c306c6cab9d93e0c6677e83d85e800cd670de44"
+
+[[clips]]
+id = "doc-017"
+path = "clips/carmenta-doc/doc-017.png"
+ground_truth = "clips/carmenta-doc/doc-017.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "54bfee7a3fc09e99bb0e1cf0388a318b3d13aec0fc2693578c3d44a99c4a4560"
+
+[[clips]]
+id = "doc-018"
+path = "clips/carmenta-doc/doc-018.png"
+ground_truth = "clips/carmenta-doc/doc-018.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "094f4cb75905e151273e696e79a09f2be986d63e9642ac8540933823da2d72f9"
+
+[[clips]]
+id = "doc-019"
+path = "clips/carmenta-doc/doc-019.png"
+ground_truth = "clips/carmenta-doc/doc-019.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "f6694b472f8a3daca48b4aee8264850283031cf099163b4374aa9a0439ceabf9"
+
+[[clips]]
+id = "doc-020"
+path = "clips/carmenta-doc/doc-020.png"
+ground_truth = "clips/carmenta-doc/doc-020.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "5f5f129e8059d600aad39306ce16d466cafa44c9a1ed0851f80205d46ee24e54"
+
+[[clips]]
+id = "doc-021"
+path = "clips/carmenta-doc/doc-021.png"
+ground_truth = "clips/carmenta-doc/doc-021.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "04225b8db8582d379b936d1883a99d3df0c5073adbe0aae1c1a4cd858559f961"
+
+[[clips]]
+id = "doc-022"
+path = "clips/carmenta-doc/doc-022.png"
+ground_truth = "clips/carmenta-doc/doc-022.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "8db8d4b360b4bd7d7e518a7600ffceb27e026e0fac6d10ca2efb661151d7808a"
+
+[[clips]]
+id = "doc-023"
+path = "clips/carmenta-doc/doc-023.png"
+ground_truth = "clips/carmenta-doc/doc-023.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "e41c6199af94d7cb4646c8ef7f19b9b59e685bc61ead751f593551c93e88e778"
+
+[[clips]]
+id = "doc-024"
+path = "clips/carmenta-doc/doc-024.png"
+ground_truth = "clips/carmenta-doc/doc-024.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "6c1b241606bbbbf1abd41fda8e5c659855ff122abb365a8ea69276daad8ddf4d"
+
+[[clips]]
+id = "doc-025"
+path = "clips/carmenta-doc/doc-025.png"
+ground_truth = "clips/carmenta-doc/doc-025.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "c2e540a10b755cb5ca93e1d80c1595a623963141a9662998cb09b7f46439d1d4"
+
+[[clips]]
+id = "doc-026"
+path = "clips/carmenta-doc/doc-026.png"
+ground_truth = "clips/carmenta-doc/doc-026.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "d9555c183b9b11a80cd56944b4c155a5e5e69bc577cf14e2297d3638561af4d2"
+
+[[clips]]
+id = "doc-027"
+path = "clips/carmenta-doc/doc-027.png"
+ground_truth = "clips/carmenta-doc/doc-027.txt"
+class = "document_1col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "4a2921b6bfa3e9ae21683bb0c2aa4071c7d5d1d24b1017e592fc9e9162f0ecf3"
+
+[[clips]]
+id = "doc-028"
+path = "clips/carmenta-doc/doc-028.png"
+ground_truth = "clips/carmenta-doc/doc-028.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "269b767272fa6f042de7d1f6980f05e1a017c1d1cac363fea668af3eb4f8a76c"
+
+[[clips]]
+id = "doc-029"
+path = "clips/carmenta-doc/doc-029.png"
+ground_truth = "clips/carmenta-doc/doc-029.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "ae7c99e4e3e075343eae76486b225b22750e7ee6491c265d2a476ec78ba6f981"
+
+[[clips]]
+id = "doc-030"
+path = "clips/carmenta-doc/doc-030.png"
+ground_truth = "clips/carmenta-doc/doc-030.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "cc7daa7b50b0fc1bf897a7fe625b4839de8cab6c00846b10120a156b387e1498"
+
+[[clips]]
+id = "doc-031"
+path = "clips/carmenta-doc/doc-031.png"
+ground_truth = "clips/carmenta-doc/doc-031.txt"
+class = "document_2col"
+split = "holdout"
+license = "synthetic (CC0) — regenerate with prepare_carmenta_synth"
+sha256 = "b0eeb4538dd737d7f1d5436ea331167bdabfed07d7bddd75b57862e3bda73a39"
+

@@ -305,6 +305,8 @@ fn main() {
         mono: load("DejaVuSansMono.ttf"),
     };
 
+    generate_docs(&fonts, &args.out);
+
     // (corpus name, clip prefix, count, class, generator)
     type Gen = fn(&Fonts, &mut Rng) -> (Canvas, String);
     let specs: [(&str, &str, usize, &str, Gen); 2] = [
@@ -433,4 +435,323 @@ fn generate_screencast(fonts: &Fonts, out: &std::path::Path) {
     let timeline = changes.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(",");
     std::fs::write(clip_dir.join("changes.csv"), timeline).expect("write timeline");
     println!("wrote {} ({FRAMES} frames, {} change events)", manifest_path.display(), changes.len());
+}
+
+// ---------------------------------------------------------------------------
+// carmenta-doc-v1 — the DOCUMENT corpus (M-C3), and LONG's seed (M-C4)
+// ---------------------------------------------------------------------------
+//
+// M-C3 gates on reading-order accuracy AND end-to-end CER, and nothing we had
+// could carry both. §8.17 measured why the obvious candidate could not:
+// DocLayNet ships full pages at 1025x1025, so a body line is 9-12 px, and
+// EVERY engine lands near 50 % CER there — PaddleOCR at 53.94 % — which makes
+// it an instrument for layout and not for reading. Upscaling was refuted
+// across a 3.5x sweep; resampling does not restore information a 9-px glyph
+// never had.
+//
+// So this renders its own, at 1700x2200 (letter at ~200 dpi) where body text
+// is ~28 px. Rendering rather than collecting buys four things a public set
+// cannot: exact reading order, exact region boxes, arbitrary resolution, and
+// CONTROLLED SKEW — §8.24 measured a 1.26 pp prize for perspective-warped
+// crops and had to park it because no corpus had any skew to fail on.
+//
+// The text is synthesised from the same fixed lexicon as the other two
+// corpora, not drawn from Gutenberg. That is deliberate and worth stating: a
+// downloaded book would add a fetch gate to a corpus whose whole point is that
+// anyone can regenerate it from a formula, and a controlled vocabulary keeps
+// out-of-vocabulary surprises from confounding a measurement about LAYOUT.
+//
+// Documents are split whole. A document whose pages straddle train and holdout
+// would leak across the split the moment M-C4 starts consuming `doc_id`.
+
+/// One laid-out region, with its place in the reading order.
+struct Region {
+    class: &'static str,
+    order: usize,
+    /// Corners, clockwise from top-left. Axis-aligned unless the page is
+    /// skewed, which is why this is a quad and not a rect.
+    quad: [(f32, f32); 4],
+    text: String,
+}
+
+impl Region {
+    fn boxed(class: &'static str, order: usize, b: (f32, f32, f32, f32), text: String) -> Self {
+        Region { class, order, quad: [(b.0, b.1), (b.2, b.1), (b.2, b.3), (b.0, b.3)], text }
+    }
+}
+
+const DOC_W: usize = 1700;
+const DOC_H: usize = 2200;
+const DOC_MARGIN: f32 = 130.0;
+
+fn doc_sentence(rng: &mut Rng, words: usize) -> String {
+    let mut s = String::new();
+    for i in 0..words {
+        if i > 0 {
+            s.push(' ');
+        }
+        let w = word(rng);
+        if i == 0 {
+            let mut c = w.chars();
+            if let Some(f) = c.next() {
+                s.extend(f.to_uppercase());
+                s.push_str(c.as_str());
+            }
+        } else {
+            s.push_str(&w);
+        }
+    }
+    s.push('.');
+    s
+}
+
+/// Word-wrap `text` into a column and draw it. Returns the region's box and the
+/// text actually drawn — which is not always the text asked for, because a
+/// column can run out before a paragraph does, and truth must follow PIXELS.
+#[allow(clippy::too_many_arguments)]
+fn draw_column_block(
+    canvas: &mut Canvas,
+    font: &fontdue::Font,
+    text: &str,
+    px: f32,
+    x0: f32,
+    y: &mut f32,
+    col_w: f32,
+    bottom: f32,
+) -> Option<((f32, f32, f32, f32), String)> {
+    let line_h = px * 1.42;
+    if *y + line_h > bottom {
+        return None;
+    }
+    let top = *y - px;
+    let (mut cx, mut drawn, mut first) = (x0, String::new(), true);
+    for tok in text.split(' ') {
+        let adv = Canvas::width_of(font, tok, px);
+        if cx + adv > x0 + col_w {
+            cx = x0;
+            *y += line_h;
+            if *y + 0.25 * px > bottom {
+                *y -= line_h;
+                break;
+            }
+        }
+        canvas.draw_text(font, tok, px, cx, *y, 20);
+        cx += adv + Canvas::width_of(font, " ", px);
+        if !first {
+            drawn.push(' ');
+        }
+        drawn.push_str(tok);
+        first = false;
+    }
+    if drawn.is_empty() {
+        return None;
+    }
+    let bbox = (x0, top, x0 + col_w, *y + 0.28 * px);
+    *y += line_h * 1.55;
+    Some((bbox, drawn))
+}
+
+/// Rotate a canvas about its centre, sampling bilinearly on a white ground.
+fn rotate_canvas(src: &Canvas, deg: f32) -> Canvas {
+    let mut dst = Canvas::new(src.w, src.h, 255);
+    let (cx, cy) = (src.w as f32 / 2.0, src.h as f32 / 2.0);
+    let (s, c) = (-deg.to_radians()).sin_cos();
+    for y in 0..dst.h {
+        for x in 0..dst.w {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let (sx, sy) = (c * dx - s * dy + cx, s * dx + c * dy + cy);
+            if sx < 0.0 || sy < 0.0 || sx >= src.w as f32 - 1.0 || sy >= src.h as f32 - 1.0 {
+                continue;
+            }
+            let (x0, y0) = (sx.floor() as usize, sy.floor() as usize);
+            let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
+            let p = |xx: usize, yy: usize| src.buf[yy * src.w + xx] as f32;
+            let v = p(x0, y0) * (1.0 - fx) * (1.0 - fy)
+                + p(x0 + 1, y0) * fx * (1.0 - fy)
+                + p(x0, y0 + 1) * (1.0 - fx) * fy
+                + p(x0 + 1, y0 + 1) * fx * fy;
+            dst.buf[y * dst.w + x] = v.round() as u8;
+        }
+    }
+    dst
+}
+
+/// Forward-rotate a point the same way `rotate_canvas` moves the pixels.
+fn rotate_pt(p: (f32, f32), deg: f32, cx: f32, cy: f32) -> (f32, f32) {
+    let (s, c) = deg.to_radians().sin_cos();
+    let (dx, dy) = (p.0 - cx, p.1 - cy);
+    (c * dx - s * dy + cx, s * dx + c * dy + cy)
+}
+
+/// Render one page. Returns its regions in reading order.
+fn render_doc_page(
+    fonts: &Fonts,
+    rng: &mut Rng,
+    doc_title: &str,
+    page_no: usize,
+    two_col: bool,
+) -> (Canvas, Vec<Region>) {
+    let mut canvas = Canvas::new(DOC_W, DOC_H, 255);
+    let mut regions: Vec<Region> = Vec::new();
+    let mut order = 0usize;
+
+    let bottom = DOC_H as f32 - DOC_MARGIN - 60.0;
+    let mut y = DOC_MARGIN + 30.0;
+
+    // Running header on every page but the first — the classic thing a LONG
+    // pipeline has to learn to suppress across pages.
+    if page_no > 0 {
+        let t = doc_title.to_string();
+        let w = Canvas::width_of(&fonts.sans, &t, 22.0);
+        canvas.draw_text(&fonts.sans, &t, 22.0, DOC_MARGIN, y, 90);
+        regions.push(Region::boxed("page-header", order, (DOC_MARGIN, y - 22.0, DOC_MARGIN + w, y + 6.0), t));
+        order += 1;
+        y += 60.0;
+    } else {
+        let w = Canvas::width_of(&fonts.serif, doc_title, 52.0);
+        canvas.draw_text(&fonts.serif, doc_title, 52.0, DOC_MARGIN, y + 40.0, 10);
+        regions.push(Region::boxed("title", order,
+            (DOC_MARGIN, y - 12.0, DOC_MARGIN + w, y + 54.0), doc_title.to_string()));
+        order += 1;
+        y += 130.0;
+    }
+
+    // Body. A two-column page lays out the LEFT column completely, then the
+    // right — which is exactly the reading order a raster-order reader gets
+    // wrong, and the reason this corpus exists.
+    let usable = DOC_W as f32 - 2.0 * DOC_MARGIN;
+    let (cols, col_w) = if two_col { (2usize, (usable - 60.0) / 2.0) } else { (1usize, usable) };
+    let col_top = if page_no == 0 { DOC_MARGIN + 160.0 } else { DOC_MARGIN + 90.0 };
+    for col in 0..cols {
+        let x0 = DOC_MARGIN + col as f32 * (col_w + 60.0);
+        let mut cy = if col == 0 { y } else { col_top };
+        while cy < bottom {
+            if rng.chance(4) {
+                let nw = 2 + rng.below(3);
+                let h = doc_sentence(rng, nw);
+                let h = h.trim_end_matches('.').to_string();
+                match draw_column_block(&mut canvas, &fonts.sans, &h, 30.0, x0, &mut cy, col_w, bottom) {
+                    Some((b, t)) => {
+                        regions.push(Region::boxed("section-header", order, b, t));
+                        order += 1;
+                    }
+                    None => break,
+                }
+            }
+            let is_list = rng.chance(5);
+            let body = if is_list {
+                {
+                    let nw = 6 + rng.below(8);
+                    format!("- {}", doc_sentence(rng, nw))
+                }
+            } else {
+                let mut p = String::new();
+                for i in 0..(2 + rng.below(3)) {
+                    if i > 0 {
+                        p.push(' ');
+                    }
+                    let nw = 8 + rng.below(12);
+                    p.push_str(&doc_sentence(rng, nw));
+                }
+                p
+            };
+            match draw_column_block(&mut canvas, &fonts.serif, &body, 26.0, x0, &mut cy, col_w, bottom) {
+                Some((b, t)) => {
+                    regions.push(Region::boxed(if is_list { "list-item" } else { "text" }, order, b, t));
+                    order += 1;
+                }
+                None => break,
+            }
+        }
+    }
+
+    let foot = format!("Page {}", page_no + 1);
+    let fw = Canvas::width_of(&fonts.sans, &foot, 22.0);
+    let fx = (DOC_W as f32 - fw) / 2.0;
+    let fy = DOC_H as f32 - DOC_MARGIN + 20.0;
+    canvas.draw_text(&fonts.sans, &foot, 22.0, fx, fy, 90);
+    regions.push(Region::boxed("page-footer", order, (fx, fy - 22.0, fx + fw, fy + 6.0), foot));
+
+    (canvas, regions)
+}
+
+fn generate_docs(fonts: &Fonts, out: &Path) {
+    const DOCS: usize = 8;
+    const PAGES: usize = 4;
+    let clip_dir = out.join("clips").join("carmenta-doc");
+    std::fs::create_dir_all(&clip_dir).expect("mkdir doc clips");
+
+    let mut manifest = String::new();
+    writeln!(manifest, "name = \"carmenta-doc\"").unwrap();
+    writeln!(manifest, "version = 1").unwrap();
+    writeln!(manifest, "task = \"ocr\"").unwrap();
+    writeln!(manifest).unwrap();
+
+    let mut rng = Rng(0x0D0C_5EED);
+    let mut n = 0usize;
+    for doc in 0..DOCS {
+        let title = format!("{} Report No. {}", CAPS[doc % CAPS.len()], 1200 + doc * 37);
+        let two_col = doc % 2 == 1;
+        // Odd documents are skewed, so BOTH splits carry both kinds and
+        // §8.24's parked quad lever finally has something that can fail it.
+        let skew = if doc % 2 == 1 { 0.8 + (doc as f32) * 0.4 } else { 0.0 };
+        // Documents split WHOLE. One straddling the split would leak the
+        // moment M-C4 starts grouping pages by `doc_id`.
+        let split = if doc < 2 { "train" } else { "holdout" };
+        for page in 0..PAGES {
+            let (canvas, mut regions) = render_doc_page(fonts, &mut rng, &title, page, two_col);
+            let canvas = if skew > 0.0 {
+                let (cx, cy) = (DOC_W as f32 / 2.0, DOC_H as f32 / 2.0);
+                for r in &mut regions {
+                    for p in &mut r.quad {
+                        *p = rotate_pt(*p, skew, cx, cy);
+                    }
+                }
+                rotate_canvas(&canvas, skew)
+            } else {
+                canvas
+            };
+
+            let stem = format!("doc-{n:03}");
+            canvas.save_png(&clip_dir.join(format!("{stem}.png"))).expect("write page");
+            regions.sort_by_key(|r| r.order);
+            let truth: String =
+                regions.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n");
+            std::fs::write(clip_dir.join(format!("{stem}.txt")), &truth).expect("write truth");
+
+            let mut js = String::from("{\n");
+            writeln!(js, " \"doc_id\": \"doc-{doc:02}\", \"page\": {page}, \"n_pages\": {PAGES},").unwrap();
+            writeln!(js, " \"columns\": {}, \"skew_deg\": {skew:.2},", if two_col { 2 } else { 1 }).unwrap();
+            writeln!(js, " \"page_size\": [{DOC_W}, {DOC_H}],").unwrap();
+            writeln!(js, " \"regions\": [").unwrap();
+            for (i, r) in regions.iter().enumerate() {
+                let q: Vec<String> =
+                    r.quad.iter().map(|p| format!("[{:.1},{:.1}]", p.0, p.1)).collect();
+                writeln!(
+                    js,
+                    "  {{\"order\": {}, \"class\": \"{}\", \"quad\": [{}], \"text\": {:?}}}{}",
+                    r.order, r.class, q.join(","), r.text,
+                    if i + 1 == regions.len() { "" } else { "," }
+                ).unwrap();
+            }
+            js.push_str(" ]\n}\n");
+            std::fs::write(clip_dir.join(format!("{stem}.json")), js).expect("write layout");
+
+            let sha = file_sha256(&std::fs::read(clip_dir.join(format!("{stem}.png"))).unwrap());
+            writeln!(manifest, "[[clips]]").unwrap();
+            writeln!(manifest, "id = \"{stem}\"").unwrap();
+            writeln!(manifest, "path = \"clips/carmenta-doc/{stem}.png\"").unwrap();
+            writeln!(manifest, "ground_truth = \"clips/carmenta-doc/{stem}.txt\"").unwrap();
+            writeln!(manifest, "class = \"{}\"",
+                     if two_col { "document_2col" } else { "document_1col" }).unwrap();
+            writeln!(manifest, "split = \"{split}\"").unwrap();
+            writeln!(manifest,
+                     "license = \"synthetic (CC0) — regenerate with prepare_carmenta_synth\"").unwrap();
+            writeln!(manifest, "sha256 = \"{sha}\"").unwrap();
+            writeln!(manifest).unwrap();
+            n += 1;
+        }
+    }
+    std::fs::write(out.join("carmenta-doc-v1.toml"), manifest).expect("write doc manifest");
+    println!("carmenta-doc: {n} pages across {DOCS} documents -> {}", clip_dir.display());
 }
