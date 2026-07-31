@@ -296,12 +296,18 @@ impl Vits {
         let scale = 1.0 / (head_dim as f64).sqrt();
         // One fused QKV projection (weights concatenated at load) — the
         // narrows are views into its output, arithmetic identical.
+        // The fused QKV projection is a 1x1 conv, i.e. a plain GEMM — routed
+        // through the matmul directly rather than candle's conv1d wrapper,
+        // which measured a 1.71x tax on the sibling k=3 shapes.
         let (wf, bf) = &self.fused_qkv[layer];
-        let qkv = x
-            .conv1d(wf, 0, 1, 1, 1)
-            .e()?
-            .broadcast_add(&bf.reshape((1, 3 * HIDDEN, 1)).e()?)
-            .e()?;
+        let qkv = if std::env::var("FFAI_CANDLE_FFN").is_err() {
+            super::decoder_kernels::conv1d_k1_gemm(x, wf, Some(bf), &self.device)?
+        } else {
+            x.conv1d(wf, 0, 1, 1, 1)
+                .e()?
+                .broadcast_add(&bf.reshape((1, 3 * HIDDEN, 1)).e()?)
+                .e()?
+        };
 
         // FLAT fused relative attention. The tensor formulation needed ~60
         // ops/layer of pad/reshape/cat purely to express two index-shifted
@@ -451,10 +457,25 @@ impl Vits {
         // The graph pads outside its Conv nodes (ONNX export artifact); the
         // same arithmetic is conv1d's own padding parameter — two fewer
         // pad allocations+copies per layer.
+        //
+        // A k=3 conv IS a GEMM, and candle's conv1d wrapper charges 1.71x to
+        // reach it: expressing the identical arithmetic as im2col + matmul
+        // measured 251 -> 147 ms over 6 layers x 20 sentences
+        // (`examples/ffn_ceiling.rs`, 74.9 -> 127.8 GFLOP/s). That matters
+        // because the feed-forward half alone was costing more than
+        // onnxruntime spends on the ENTIRE text encoder. Ceiling for reference:
+        // the same GEMMs with no data movement run 96.3 ms, so the im2col copy
+        // is ~51 ms of what remains and the N=88 column count costs a further
+        // 2.4x against a batched shape — both still on the table.
+        // `FFAI_CANDLE_FFN=1` restores the conv1d path for A/B.
+        let use_gemm = std::env::var("FFAI_CANDLE_FFN").is_err();
         let conv = |name: &str, x: &Tensor| -> Result<Tensor> {
             let w = self.t(&format!("{name}.weight"))?;
             let b = self.t(&format!("{name}.bias"))?;
             let c = b.dim(0).e()?;
+            if use_gemm {
+                return super::decoder_kernels::conv1d_k3_gemm(x, w, b, &self.device);
+            }
             x.conv1d(w, 1, 1, 1, 1).e()?.broadcast_add(&b.reshape((1, c, 1)).e()?).e()
         };
         let h = conv(&format!("{base}.conv_1"), x)?.relu().e()?;
@@ -566,6 +587,20 @@ impl Vits {
 
     fn layer_norm_named(&self, base: &str, x: &Tensor) -> Result<Tensor> {
         let c = self.t(&format!("{base}.gamma"))?.dim(0).e()?;
+        // Nine allocating tensor ops (mean/sub/sqr/mean/add/sqrt/div/mul/add)
+        // for what is two passes over 66 KB. The duration predictor runs 24 of
+        // these per sentence and the text encoder 12, so the tensor spelling
+        // costs ~216 intermediate allocations per utterance -- and dp measured
+        // 8.4 GFLOP/s, i.e. almost entirely plumbing rather than arithmetic.
+        // `FFAI_CANDLE_LN=1` restores the tensor path for A/B.
+        if std::env::var("FFAI_CANDLE_LN").is_err() {
+            let (_, cc, t) = x.dims3().e()?;
+            let xv: Vec<f32> = x.flatten_all().e()?.to_vec1().e()?;
+            let g: Vec<f32> = self.t(&format!("{base}.gamma"))?.to_vec1().e()?;
+            let b: Vec<f32> = self.t(&format!("{base}.beta"))?.to_vec1().e()?;
+            let out = super::decoder_kernels::layer_norm_flat(&xv, cc, t, &g, &b, 1e-5);
+            return Tensor::from_vec(out, (1, cc, t), &self.device).e();
+        }
         let mean = x.mean_keepdim(1).e()?;
         let centered = x.broadcast_sub(&mean).e()?;
         let var = centered.sqr().e()?.mean_keepdim(1).e()?;
@@ -850,6 +885,20 @@ impl Vits {
             let in_per_group = weight.dim(1).e()?;
             x.dim(1).e()? / in_per_group
         };
+        // Every 1x1 convolution is a GEMM wearing a costume, and candle's
+        // conv1d wrapper charges to reach it (1.71x measured on the sibling
+        // k=3 FFN shapes). This catches the text encoder's output projections
+        // AND essentially the whole duration predictor, whose dense convs are
+        // all k=1. Depthwise and transposed convs are already routed above.
+        if !g.transpose
+            && groups == 1
+            && weight.dim(2).e()? == 1
+            && g.pad == 0
+            && g.stride == 1
+            && std::env::var("FFAI_CANDLE_FFN").is_err()
+        {
+            return super::decoder_kernels::conv1d_k1_gemm(x, weight, bias, &self.device);
+        }
         let y = if g.transpose {
             x.conv_transpose1d(weight, g.pad, 0, g.stride, g.dilation, 1).e()?
         } else {
@@ -883,8 +932,16 @@ fn leaky_relu(x: &Tensor, slope: f64) -> Result<Tensor> {
     (pos + neg).e()
 }
 
+/// Exact-erf GELU. The graph specifies `Erf`, so the function is fixed; the
+/// evaluation is ours. `FFAI_CANDLE_GELU=1` restores candle's own.
 fn gelu_erf(x: &Tensor) -> Result<Tensor> {
-    x.gelu_erf().e()
+    if std::env::var("FFAI_CANDLE_GELU").is_ok() {
+        return x.gelu_erf().e();
+    }
+    let dims = x.dims().to_vec();
+    let xv: Vec<f32> = x.flatten_all().e()?.to_vec1().e()?;
+    let out = super::decoder_kernels::gelu_erf_flat(&xv);
+    Tensor::from_vec(out, dims, x.device()).e()
 }
 
 /// `[h, T, 2T-1]` relative logits → `[h, T, T]` absolute (the VITS pad /

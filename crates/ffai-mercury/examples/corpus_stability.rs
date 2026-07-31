@@ -182,8 +182,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
 
-    let clean =
-        w_diff.is_empty() && audio_diff.is_empty() && attn_diff == 0 && dec_diff == 0;
+    // ---- 4. the GEMM/flat-kernel round vs the candle baseline ----
+    // conv1d->GEMM, fused LayerNorm and the A&S GELU all reorder float
+    // arithmetic, and `durations()` ends in `.ceil()`. The measured perturbation
+    // is ~1e-6 against a corpus-wide rounding margin of 1.03e-4, so this SHOULD
+    // hold -- but "should" is what the three-fixture oracle already said, and
+    // the whole point of this probe is that three fixtures are not 200
+    // sentences. Any flipped duration changes the audio length outright.
+    let knobs = ["FFAI_CANDLE_FFN", "FFAI_CANDLE_LN", "FFAI_CANDLE_GELU"];
+    let mut k_wdiff = Vec::new();
+    let mut k_len_diff = 0usize;
+    let mut worst_audio = 0f32;
+    for (id, ids) in &ids_list {
+        for k in knobs {
+            set(k, true);
+        }
+        let (m_p, logs_p, hidden) = vits.text_encoder(ids)?;
+        let w_old = vits.durations(&hidden, 0.8, 1.0, &mut GaussRng::new(0))?;
+        let a_old = synth(&vits, &m_p, &logs_p, &w_old)?;
+
+        for k in knobs {
+            set(k, false);
+        }
+        let (m_p, logs_p, hidden) = vits.text_encoder(ids)?;
+        let w_new = vits.durations(&hidden, 0.8, 1.0, &mut GaussRng::new(0))?;
+        let a_new = synth(&vits, &m_p, &logs_p, &w_new)?;
+
+        if w_old != w_new {
+            let n = w_old.iter().zip(&w_new).filter(|(a, b)| a != b).count();
+            k_wdiff.push((id.clone(), n, w_old.iter().sum::<u32>(), w_new.iter().sum::<u32>()));
+        }
+        if a_old.len() != a_new.len() {
+            k_len_diff += 1;
+        } else {
+            for (x, y) in a_old.iter().zip(&a_new) {
+                worst_audio = worst_audio.max((x - y).abs());
+            }
+        }
+    }
+    println!("
+[4] GEMM convs + flat LayerNorm + A&S GELU vs candle baseline");
+    println!(
+        "    w_ceil   : {}",
+        if k_wdiff.is_empty() {
+            format!("IDENTICAL across all {} sentences", ids_list.len())
+        } else {
+            format!("{} sentences DIFFER", k_wdiff.len())
+        }
+    );
+    for (id, n, so, sn) in k_wdiff.iter().take(5) {
+        println!("      {id}: {n} phonemes differ, frames {so} -> {sn}");
+    }
+    println!("    audio len: {}", if k_len_diff == 0 { "identical".into() } else { format!("{k_len_diff} differ") });
+    println!("    audio max|delta| vs candle path: {worst_audio:.3e}");
+
+    let clean = w_diff.is_empty()
+        && audio_diff.is_empty()
+        && attn_diff == 0
+        && dec_diff == 0
+        && k_wdiff.is_empty()
+        && k_len_diff == 0;
     println!(
         "\nverdict: {}",
         if clean {

@@ -468,6 +468,95 @@ alone misleads.
 
 ---
 
+# Round 3 — closing the text encoder and duration predictor
+
+Round 2 left the two stages nobody had been optimizing at **~2.9x** each. The
+bet was that they could not be brought to parity. They were.
+
+## The finding that unlocked it: every conv is a GEMM, and the wrapper taxes it
+
+- ASKED: is the encoder's deficit the SHAPE of its convolutions, or the way we
+  reach them?
+- MEASURED (`examples/ffn_ceiling.rs`), five spellings of the same arithmetic
+  over 6 layers x 20 sentences:
+
+  | arm | ms | GFLOP/s |
+  |---|---|---|
+  | candle `conv1d` (shipped) | 251.0 | 74.9 |
+  | im2col + matmul | **147.0** | 127.8 |
+  | three shifted 1x1 GEMMs | 167.8 | 112.0 |
+  | pure-GEMM ceiling (no data movement) | 96.3 | 195.1 |
+  | batched, N = all 1770 columns | 40.7 | 462.1 |
+
+- ANSWER: **candle's `conv1d` wrapper costs 1.71x** to reach the GEMM the
+  convolution already is. Also priced, for later: the im2col copy is ~51 ms of
+  what remains, and the N=88 column count costs a further 2.4x against a
+  batched shape.
+- **A broken first cut of this probe claimed 3.35x.** Its arm 2 alternated
+  up/down convolutions BY LAYER, so it ran six convs per sentence where the
+  real FFN runs twelve — half the work, double the apparent win. Arms that do
+  different amounts of work do not measure the same question, which is the same
+  rule that caught the reference-profiler error in round 2.
+
+## What landed
+
+| brick | effect | gate |
+|---|---|---|
+| FFN via im2col + matmul | enc FFN **259.6 -> 109.0 ms** (72 -> 172 GFLOP/s) | oracle, `w_ceil` EXACT |
+| all 1x1 convs -> GEMM | enc 282 -> 272.5; **dp unchanged** | oracle |
+| fused flat LayerNorm | enc 269.9 -> 218.3, dp 229.5 -> **170.1** | oracle |
+| A&S 7.1.26 GELU | dp 170.1 -> **128.3** | oracle + corpus |
+
+**The 1x1 routing not helping dp was the useful result.** dp's whole arithmetic
+is ~85 MFLOP/sentence, so at its measured 8.4 GFLOP/s roughly 90% of the stage
+was never convolution at all. That sent the search to the plumbing:
+`layer_norm_named` spelled one normalisation as **nine allocating tensor ops**
+and ran 24 times per sentence — ~216 intermediate allocations per utterance for
+what is two passes over 66 KB.
+
+GELU was then priced rather than assumed, and the assumption would have been
+wrong twice over: candle's `gelu_erf` is already respectable at 6.3 ns/element,
+and a hand-rolled libm-style f64 erf measured **slower** (10.4). The win came
+from the approximation, not the flattening — A&S 7.1.26 at 3.6 ns/element,
+1.73x, max deviation 2.5e-7.
+
+## Result — parity, measured in one window
+
+Both engines, same window, our brackets agreeing to 4.6%:
+
+| stage | ours | ORT | ratio |
+|---|---|---|---|
+| text_encoder | 211.7 ms | 197.3 (16% spread) | **1.07x** |
+| duration_pred | 130.7 ms | 177.7 (47% spread, UNRESOLVED) | **0.74x** |
+| pipeline | ~1809 ms | 2201 ms | **0.82x** |
+
+Two caveats stated rather than buried. ORT's duration predictor is flagged
+UNRESOLVED by the harness's own spread test, so its 177.7 ms is not a number to
+lean on. And this window was loaded: ORT inflated ~42% against its cleanest
+reading while we inflated ~3%, because it runs roughly twice our threads and
+contention costs it more. So the load-invariant SHARE is the honest statement:
+
+| stage | ORT share | our share, round 2 | our share, now |
+|---|---|---|---|
+| text_encoder | ~9.0% | 19.8% | **11.7%** |
+| duration_pred | ~4.8-8.1% | 10.8% | **7.2%** |
+
+**Both targets moved from ~2.9x to roughly 1.0-1.3x.** Best pipeline reading of
+the campaign: **1755.8 ms, 25.62x realtime**, against 2181.9 ms / 20.61x when
+this descent began.
+
+## Correctness
+
+- `vits_oracle`: ALL STAGES PASS, `w_ceil` integer-EXACT on every fixture.
+- Corpus gate over all 200 sentences, new kernels vs the candle baseline:
+  **`w_ceil` IDENTICAL, audio lengths identical**, audio max |delta| 3.19e-4
+  (~-70 dBFS) — expected, since GEMM and A&S GELU reorder arithmetic, and
+  inside tolerances the campaign already accepts (`dec_in` gates at 1.27e-3).
+- Because those bytes DID move (unlike rounds 1-2), WER is **owed as a
+  measurement, not inferred**. Ledger run to follow.
+
+---
+
 ## Standing corrections to the ledger
 
 1. The headline gap is **1.19x at matched thread occupancy** (1.28x at each

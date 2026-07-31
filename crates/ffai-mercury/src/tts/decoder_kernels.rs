@@ -1202,3 +1202,167 @@ mod tests {
         }
     }
 }
+
+/// `conv1d(k=3, pad=1, stride=1, dilation=1, groups=1)` expressed as the GEMM
+/// it actually is: im2col the input to `[C_in*3, T]`, then one matmul against
+/// the weights viewed as `[C_out, C_in*3]`.
+///
+/// Candle's `conv1d` wrapper charges **1.71x** to do the same arithmetic on the
+/// text encoder's feed-forward shapes (251 -> 147 ms over 6 layers x 20
+/// sentences, 74.9 -> 127.8 GFLOP/s — `examples/ffn_ceiling.rs`). The FFN was
+/// costing more on its own than onnxruntime spends on the whole text encoder,
+/// which is what sent us looking.
+///
+/// Not bit-identical to `conv1d`: a GEMM accumulates in a different order, so
+/// this is gated on tolerance against the stage oracle rather than on `cmp`.
+pub fn conv1d_k3_gemm(
+    x: &Tensor,
+    w: &Tensor,
+    bias: &Tensor,
+    device: &Device,
+) -> Result<Tensor> {
+    let (_, c_in, t) = e(x.dims3())?;
+    let (c_out, _, k) = e(w.dims3())?;
+    debug_assert_eq!(k, 3);
+    let xv: Vec<f32> = e(e(x.flatten_all())?.to_vec1())?;
+
+    // [C_in*3, T]: row (ci*3 + j) holds x[ci] shifted so output i reads
+    // x[i + j - 1], zero outside the sequence (pad = 1).
+    let mut col = vec![0f32; c_in * k * t];
+    for ci in 0..c_in {
+        let src = &xv[ci * t..(ci + 1) * t];
+        // j = 0 -> reads i-1, so output 0 is pad and the copy starts at 1
+        col[(ci * k) * t + 1..(ci * k) * t + t].copy_from_slice(&src[..t - 1]);
+        // j = 1 -> reads i
+        col[(ci * k + 1) * t..(ci * k + 1) * t + t].copy_from_slice(src);
+        // j = 2 -> reads i+1, so the last output is pad
+        col[(ci * k + 2) * t..(ci * k + 2) * t + t - 1].copy_from_slice(&src[1..]);
+    }
+
+    let cm = e(Tensor::from_vec(col, (c_in * k, t), device))?;
+    let w2 = e(w.reshape((c_out, c_in * k)))?;
+    let y = e(w2.matmul(&cm))?;
+    let y = e(y.broadcast_add(&e(bias.reshape((c_out, 1)))?))?;
+    e(y.reshape((1, c_out, t)))
+}
+
+/// `conv1d(k=1, pad=0, stride=1, groups=1)` as the matmul it is.
+///
+/// A 1x1 convolution needs no im2col at all: with a contiguous `[1, C_in, T]`
+/// input, `[C_out, C_in] x [C_in, T]` is the whole operation. Candle's conv1d
+/// wrapper still charges its overhead to get there, and these are everywhere —
+/// the text encoder's fused QKV and output projections, and very nearly the
+/// entire duration predictor, whose dense convs are all k=1.
+///
+/// Not bit-identical to `conv1d` (GEMM accumulation order), so it is gated on
+/// tolerance against the stage oracle.
+pub fn conv1d_k1_gemm(
+    x: &Tensor,
+    w: &Tensor,
+    bias: Option<&Tensor>,
+    device: &Device,
+) -> Result<Tensor> {
+    let (_, c_in, t) = e(x.dims3())?;
+    let (c_out, w_in, k) = e(w.dims3())?;
+    debug_assert_eq!(k, 1);
+    debug_assert_eq!(w_in, c_in);
+    let _ = device;
+    let xm = e(e(x.reshape((c_in, t)))?.contiguous())?;
+    let wm = e(w.reshape((c_out, c_in)))?;
+    let y = e(wm.matmul(&xm))?;
+    let y = match bias {
+        Some(b) => e(y.broadcast_add(&e(b.reshape((c_out, 1)))?))?,
+        None => y,
+    };
+    e(y.reshape((1, c_out, t)))
+}
+
+/// Channel-wise LayerNorm over `[1, C, T]`, in one pass instead of nine
+/// allocating tensor ops.
+///
+/// The tensor spelling is `mean_keepdim -> broadcast_sub -> sqr ->
+/// mean_keepdim -> add -> sqrt -> broadcast_div -> broadcast_mul ->
+/// broadcast_add`: nine intermediates, each a fresh `[1, C, T]` allocation.
+/// The duration predictor runs 24 LayerNorms per sentence (4 DDS stacks x 3
+/// layers x 2) and the text encoder 12 more, so that is ~216 allocations per
+/// utterance for an operation that is two passes over 66 KB.
+///
+/// Normalisation is over the CHANNEL axis, so in channel-major layout each
+/// column is a stride-T gather; at C=192, T~88 the whole tensor is L2-resident
+/// and the strided walk costs nothing measurable. Parallel over columns.
+///
+/// Matches the tensor path to float-reassociation tolerance, not bit-exactly:
+/// the variance is accumulated in a different order.
+pub fn layer_norm_flat(
+    xv: &[f32],
+    c: usize,
+    t: usize,
+    gamma: &[f32],
+    beta: &[f32],
+    eps: f32,
+) -> Vec<f32> {
+    let mut out = vec![0f32; c * t];
+    // Each column is independent; write through a raw pointer so the columns
+    // can be filled in parallel without slicing a strided view.
+    let ptr = out.as_mut_ptr() as usize;
+    (0..t).into_par_iter().for_each(|i| {
+        let mut mean = 0f32;
+        for ci in 0..c {
+            mean += xv[ci * t + i];
+        }
+        mean /= c as f32;
+        let mut var = 0f32;
+        for ci in 0..c {
+            let d = xv[ci * t + i] - mean;
+            var += d * d;
+        }
+        var /= c as f32;
+        let inv = 1.0 / (var + eps).sqrt();
+        // SAFETY: column `i` owns exactly the elements {ci*t + i}, disjoint
+        // across i, so no two tasks touch the same address.
+        let o = ptr as *mut f32;
+        for ci in 0..c {
+            unsafe {
+                *o.add(ci * t + i) = (xv[ci * t + i] - mean) * inv * gamma[ci] + beta[ci];
+            }
+        }
+    });
+    out
+}
+
+/// Exact-erf GELU, flat and vectorisable: `0.5*x*(1 + erf(x/sqrt(2)))`.
+///
+/// The exported graph uses `Erf`, not the tanh approximation, so the shape of
+/// the function is fixed; only how erf is evaluated is ours to choose. Candle's
+/// `gelu_erf` costs 6.3 ns/element and the duration predictor calls it 24 times
+/// per sentence over 16,896 elements. Abramowitz & Stegun 7.1.26 evaluates the
+/// same function at 3.6 ns/element — **1.73x** — with |error| <= 1.5e-7 by
+/// construction and a measured max deviation of 2.5e-7 on real activations.
+///
+/// For scale, `w_ceil`'s nearest rounding boundary across the whole corpus sits
+/// 1.03e-4 away, so this perturbation is ~400x inside the margin that decides
+/// the integer contract. A hand-rolled libm-style f64 erf was also measured and
+/// was SLOWER than candle (10.4 ns/element) — the win is the approximation, not
+/// the flattening.
+pub fn gelu_erf_flat(xv: &[f32]) -> Vec<f32> {
+    let mut out = vec![0f32; xv.len()];
+    out.par_chunks_mut(4096).zip(xv.par_chunks(4096)).for_each(|(o, x)| {
+        for (o, &v) in o.iter_mut().zip(x) {
+            *o = 0.5 * v * (1.0 + erf_as(v * std::f32::consts::FRAC_1_SQRT_2));
+        }
+    });
+    out
+}
+
+/// Abramowitz & Stegun 7.1.26 — |error| <= 1.5e-7.
+#[inline]
+fn erf_as(x: f32) -> f32 {
+    let s = if x < 0.0 { -1.0f32 } else { 1.0f32 };
+    let x = x.abs();
+    let t = 1.0 / (1.0 + 0.327_591_1 * x);
+    let poly = ((((1.061_405_429 * t - 1.453_152_027) * t + 1.421_413_741) * t - 0.284_496_736)
+        * t
+        + 0.254_829_592)
+        * t;
+    s * (1.0 - poly * (-x * x).exp())
+}
