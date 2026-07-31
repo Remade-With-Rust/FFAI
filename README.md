@@ -378,10 +378,14 @@ above traces to a line in [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
 ### Carmenta OCR: live, measured against PaddleOCR — the honest split
 
-Two engines run today, both the EasyOCR-lineage stack reimplemented on
-candle and oracle-matched against PyTorch (detection maps to <5e-3,
-recognition to the exact per-step argmax): `craft-crnn` (line-level CTC,
-the default) and `craft-parseq` (word-level AR with the refinement pass).
+Four engines run today, from two detector lineages crossed with two
+recognizers, all oracle-matched against their references. The EasyOCR
+lineage on candle (detection maps to <5e-3, recognition to the exact
+per-step argmax) gives `craft-crnn` (line-level CTC, the default) and
+`craft-parseq` (word-level AR with the refinement pass). Swapping in a
+PP-OCRv5 mobile detector — DBNet on PP-LCNetV3, 4.7 MB, reproducing
+paddle's own exported program to **zero binarised disagreement** across a
+pinned page — gives `mobiledet-crnn` and `mobiledet-parseq`.
 
 **Where Carmenta wins, measured:**
 

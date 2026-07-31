@@ -1142,6 +1142,75 @@ appears. Two consequences worth carrying forward:
 This is the fourth consecutive campaign descent to terminate at depth 6 on a
 configuration difference rather than a defect.
 
+### 8.16 Mobile-det measured: speed and footprint won decisively, quality LOST
+
+The port was predicted to "close both open fronts at once". On CORD it closed
+one and reopened the other, and the prediction was wrong.
+
+Ledger `bench ocr --corpus carmenta-cord-v1 --engine mobiledet-crnn`:
+
+| CORD holdout, 45 clips | mobiledet-crnn | craft-crnn | paddleocr-mobile |
+|---|---:|---:|---:|
+| CER | **37.30 %** | 27.27 % | 15.62 % |
+| pages/s warm | **0.33** | 0.11 | 0.04 |
+| steady MiB | **649** | 2055 | 733 |
+| gates | quality FAIL, **speed PASS, footprint PASS** | all FAIL | — |
+
+**3x faster than CRAFT and 3.2x leaner**, and the first Carmenta configuration
+to pass the speed and footprint gates on real photographs at all. Also the
+first to run leaner than PaddleOCR (0.89x its steady memory). That part of the
+thesis — a 4.7 MB detector against a VGG16 — is confirmed.
+
+Quality went the other way, and consistently. Scored on one ad-hoc scorer so
+the arms are comparable (it reads ~1 pp below the ledger; used for A/B only,
+never quoted as a claim):
+
+| engine | CER, same scorer |
+|---|---:|
+| craft-parseq | **21.96 %** |
+| craft-crnn | ~26-27 % |
+| mobiledet-crnn | 36.15 % |
+| mobiledet-parseq | 38.13 % |
+
+**One cause found and banked.** DBNet's boxes arrive already unclipped, and the
+crop-time pad expanded them a second time. DB's offset is
+`area * unclip / perimeter`, which on a wide line is huge *vertically*: a
+1900x90 line grows 64 px on every side — 72 % of its own height — before
+`PAD_Y = 0.35` adds another 35 %. Setting the mobile-det crop pads to zero
+(`FFAI_MDET_PAD_X/_Y`, default 0) took **36.15 % -> 33.08 %**. Real, 3 points,
+and not nearly enough.
+
+**Why the rest, and why it is not a defect.** §8.13 diagnosed the CORD gap as
+box *quality* and named this port as the fix. That diagnosis was half right:
+mobile-det gives better LINE boxes and no word boxes at all. CORD receipts put
+a label and its amount in two widely separated columns, and DBNet merges them
+into one region — so the line recognizer reads across the gap, and PARSeq must
+recover word boundaries with the ink-gap splitter, the strategy §8.11 already
+measured at **34.16 %** on photographs against 21.70 % for CRAFT's own boxes.
+mobiledet-parseq's 38.13 % is that same number reappearing.
+
+So CRAFT's character-level components are not merely a clumsy route to word
+boxes — on two-column receipts they are carrying real structural information
+that a line detector discards. The §8.13 residual is **not** closed, and the
+hypothesis that named this port as its fix is refuted for the CORD class.
+
+**What this changes.** Mobile-det is not a replacement; it is a second lineage
+with an opposite trade, and the engine registry already expresses that — four
+engines, two detectors x two recognizers, chosen per corpus class rather than
+ranked. The open questions it leaves, in order:
+
+1. Does mobile-det WIN on documents and screens, where text is single-column
+   and the line IS the unit? `carmenta-doclaynet-v1` (§6.2) and the frames
+   corpus can answer that, and neither has been run.
+2. Would DBNet's boxes plus a word split from CRAFT's affinity map beat both?
+   That composes the two lineages rather than choosing between them.
+3. The unclip ratio is pinned at the reference's 1.5 and has never been swept
+   for OUR crop geometry, which is not the reference's.
+
+Recorded as a loss, in the shape the ledger requires: the claim that this brick
+closes the quality front is withdrawn, and the speed/footprint claim it does
+support is now measured.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

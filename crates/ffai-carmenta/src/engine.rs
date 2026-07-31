@@ -55,6 +55,17 @@ fn mobiledet_min_side() -> usize {
     })
 }
 
+/// Crop pads for the mobile-det path, as fractions of line height. Zero by
+/// default because DB's unclip has already expanded the box; sweepable because
+/// "already expanded" is a claim a gate should get to test.
+fn mobiledet_pads() -> (f32, f32) {
+    static V: OnceLock<(f32, f32)> = OnceLock::new();
+    *V.get_or_init(|| {
+        let get = |k: &str| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        (get("FFAI_MDET_PAD_X"), get("FFAI_MDET_PAD_Y"))
+    })
+}
+
 struct Models {
     craft: Option<Craft>,
     mobiledet: Option<crate::mobiledet::MobileDet>,
@@ -326,7 +337,18 @@ impl OcrEngine for CraftCrnn {
         let recognize_line = |line: &Vec<boxes::DetBox>| -> Result<Option<OcrLine>> {
                 let lb = boxes::line_bbox(line);
                 let line_h = to_img(lb.y1) - to_img(lb.y0);
-                let (px, py) = (line_h * PAD_X, line_h * PAD_Y);
+                // CRAFT's boxes hug character cores and need padding; DBNet's
+                // arrive ALREADY unclipped, and the two expansions compound
+                // badly. DB's offset is `area * 1.5 / perimeter`, which on a
+                // wide line is enormous vertically: a 1900x90 line grows 64 px
+                // on every side — 72 % of its own height — before the crop pad
+                // adds another 35 %. Padding a second time hands the recognizer
+                // mostly background and the neighbouring lines.
+                let (pad_x, pad_y) = match self.det {
+                    DetStage::Craft => (PAD_X, PAD_Y),
+                    DetStage::MobileDet => mobiledet_pads(),
+                };
+                let (px, py) = (line_h * pad_x, line_h * pad_y);
                 let x0 = (to_img(lb.x0) - px).max(0.0) as usize;
                 let y0 = (to_img(lb.y0) - py).max(0.0) as usize;
                 let x1 = (to_img(lb.x1) + px) as usize;
