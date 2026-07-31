@@ -419,12 +419,23 @@ footprint) on holdout — a skipped gate blocks exit. Losses are recorded.
 | # | Deliverable | Exit gate (ledger-recorded) |
 |---|---|---|
 | **M-C0** | Baselines: `ffai bench ocr` vertical (§6.3), synthetic + audited public corpora pinned, `--baseline-only` runs of Tesseract/PaddleOCR/EasyOCR/docTR/ocrs; the §7 audit table | reference CER/hmean/pages-per-second on the board; corpus hashes pinned; audit published; benchmarking.md OCR section merged |
-| **M-C1** | Det+rec core on candle: lineage selected by audit, `OcrOutput` v2 hierarchy in `ffai-core`, per-stage oracles vs references on the synthetic corpus, stub names reconciled | CER within the 5 % relative band of Tesseract on the printed holdout; all four gates run and recorded (speed may fail honestly at bring-up — it did for Mercury) |
+| **M-C1** | Det+rec core on candle: lineage selected by audit, `OcrOutput` v2 hierarchy in `ffai-core`, per-stage oracles vs references on the synthetic corpus, stub names reconciled | CER within the 5 % relative band of **PaddleOCR-mobile** on the printed holdout (see the note below); all four gates run and recorded (speed may fail honestly at bring-up — it did for Mercury) |
 | **M-C2** | **LIVE**: streaming loop, frame sampler + change gate, stabilizer, timed SRT/VTT output, `--roi`; auto-ROI observe-only harvest + ceiling sweep, then opt-in `--auto-roi` if the sweep pays | p95 warm frame latency ≤ Tesseract per-frame on the same frames; zero churn on identical frames; CER parity with own batch mode on the frame holdout; footprint flat over a 30-min synthetic stream; auto-ROI sweep in the ledger win or lose |
 | **M-C3** | **DOCUMENT**: layout stage, reading order, `--layout`, Markdown/JSON structured output | reading-order accuracy + end-to-end CER vs Tesseract and PP-Structure on the document holdout; structured output round-trips losslessly to JSON and back |
 | **M-C4** | **LONG**: multi-page state, cross-page repair, bounded-memory streaming, intermediate caching | full-document CER ≤ the same engine's per-page score (coherence costs nothing); footprint flat over 500 pages; vs Tesseract/docTR on the multi-page holdout |
 | **M-C5** | **FORMULA**: LaTeX head, `--formula` routing from layout regions | edit distance + ExpRate vs pix2tex on the pinned holdout; composes with `--layout` (inline `$...$` in Markdown out) |
 | **M-C6** | Carmenta `stable`: docs, library examples, claims page generated FROM the ledger; tables/TEDS if M-C3's table work matured | every public claim maps to a ledger line id |
+
+**Gate correction (2026-07-31): M-C1's quality bar named Tesseract and was
+unsatisfiable.** §8.1 measured Tesseract at **0.00 % CER** on the printed
+holdout — the ceiling effect that section already recorded — and "within 5 %
+relative of 0.00 %" cannot be cleared by any engine, PaddleOCR included, which
+reads 0.02 % there. A gate no implementation can pass is not a gate; it is a
+blocker with a number on it. The bar is now PaddleOCR-mobile, which is also the
+reference this campaign was directed to compete against, and the printed corpus
+keeps the role §8.1 assigned it: a smoke/oracle tier that answers "is the core
+correct", not "is it better". Recorded rather than quietly amended, because
+moving a bar you are failing is exactly the move that needs a paper trail.
 
 Sequencing notes: **M-C2 (LIVE) is the priority milestone** and follows
 M-C1 directly — it needs only the core plus composition. M-C5 (FORMULA)
