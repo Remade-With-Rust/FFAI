@@ -742,8 +742,10 @@ fn generate_docs(fonts: &Fonts, out: &Path) {
             writeln!(manifest, "id = \"{stem}\"").unwrap();
             writeln!(manifest, "path = \"clips/carmenta-doc/{stem}.png\"").unwrap();
             writeln!(manifest, "ground_truth = \"clips/carmenta-doc/{stem}.txt\"").unwrap();
-            writeln!(manifest, "class = \"{}\"",
-                     if two_col { "document_2col" } else { "document_1col" }).unwrap();
+            // `class` is a closed enum in the corpus schema; the 1- vs
+            // 2-column split lives in the JSON sidecar, which is where the
+            // layout ground truth belongs anyway.
+            writeln!(manifest, "class = \"document_scan\"").unwrap();
             writeln!(manifest, "split = \"{split}\"").unwrap();
             writeln!(manifest,
                      "license = \"synthetic (CC0) — regenerate with prepare_carmenta_synth\"").unwrap();
