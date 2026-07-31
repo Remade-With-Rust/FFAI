@@ -1530,6 +1530,54 @@ frames mobiledet-parseq 2.29 vs 2.48 — that one ran LOW). Every A/B conclusion
 drawn from it survives the ledger, but no absolute number from it should be
 quoted, which is what it was labelled for.
 
+### 8.22 The CORD gap is not a recognition gap — 97 % of it is INSERTIONS
+
+§8.7 listed "blur-filtered CORD GT (corpus honesty first)" as open brick #1 and
+it was never done. Doing it changes what the campaign's only open gate is
+about.
+
+CORD's receipts are privacy-blurred: store headers and footers are smeared to
+illegibility. The ground truth, built from CORD's own `valid_line`
+annotations, correctly omits them — but the pixels are still in the image, so
+every engine detects those regions and emits something for them. That text has
+no counterpart in the reference and scores as pure insertion.
+
+Decomposing the edit distance instead of quoting its total, on 15 CORD holdout
+clips (1951 GT chars):
+
+| | CER | substitutions | deletions | **insertions** |
+|---|---:|---:|---:|---:|
+| craft-parseq | 20.55 % | 3.54 pp | 5.48 pp | **11.53 pp** |
+| paddleocr-mobile | 14.61 % | 3.08 pp | 5.74 pp | **5.79 pp** |
+
+**Insertions are 56 % of our error, and 97 % of our gap to PaddleOCR** — 5.74 of
+the 5.94 pp that separate us. Our substitutions sit within 0.46 pp of the
+reference's and our deletions are *better* than its: we miss less of the real
+text than PaddleOCR does.
+
+So the standing story — "full-pipeline photo accuracy trails PaddleOCR" — is
+true in the number and wrong in the cause. **Our reading is at parity. We emit
+roughly twice as much text that should not have been emitted at all.** The
+reference suppresses low-confidence regions and we do not: paddle gates each
+box on `box_thresh = 0.6` of DB probability, while CRAFT's component walk keeps
+anything clearing a region-score threshold and nothing downstream ever asks the
+recognizer how confident it was.
+
+This does not overturn §8.13. That probe matched the SAME words on both sides,
+so it measured substitutions, and a 16-point crop-geometry effect on matched
+words is consistent with a 0.46 pp substitution gap on whole pages — the
+matched-word probe simply cannot see insertions, because it never scores a
+region the ground truth does not contain. Two true measurements of different
+things; only the full-page decomposition says which one the gate is made of.
+
+**Named next brick: rejection.** A confidence gate — CTC/AR score per line,
+detection score per box, or both — swept on the CORD train split. The ceiling
+is unusually well defined: driving our insertions to the reference's 5.79 pp
+takes CORD from 20.55 % to ~14.8 %, at parity with PaddleOCR, without touching
+detection geometry or the recognizer. That is the largest single prize left on
+the board and it was invisible for the whole campaign because CER was only ever
+read as a total.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
