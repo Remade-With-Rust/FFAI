@@ -1301,6 +1301,96 @@ gate is 241 vs 321. That entire figure was contention from concurrent work on
 this machine, and it is exactly the failure the interleaved-A/B discipline
 exists to prevent — sequential arms sampling different machines.
 
+### 8.19 Three hunts: one big win, one mechanism, one clean refutation
+
+#### Unclip belongs to the RECOGNIZER, not the detector — 8.6 points
+
+The reference pins a single `unclip_ratio = 1.5` and we had inherited it. The
+hypothesis going in was that 1.5 over-expands for our axis-aligned crops.
+**Refuted, and inverted.** Swept on the CORD train split:
+
+| unclip | 0.0 | 0.5 | 0.8 | 1.1 | 1.5 | 1.9 | 2.3 | 2.8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| mobiledet-**crnn** | 70.3 | 47.4 | 41.6 | 37.0 | **32.0** | 31.8 | 32.6 | 35.2 |
+| mobiledet-**parseq** | 45.6 | 32.8 | **32.3** | 36.5 | 41.3 | 45.4 | — | — |
+
+Two optima, on the same detector, ten values apart. CRNN's sits at the
+reference's 1.5 (1.9 is 0.26 pp better — inside the noise of 15 clips and not
+worth moving a default for); **PARSeq's sits at 0.8**, nine points better than
+the value it had been given. Both ranges are now enclosed rather than
+open-ended, which is what caught the crnn optimum being effectively at 1.5.
+
+The mechanism is the crop each recognizer consumes: CRNN reads a whole line and
+wants context around it, while PARSeq reads WORDS recovered by an ink-gap
+projection *inside* that box — and a loose box fills the gaps with background
+until the projection stops finding them.
+
+Confirmed on a second corpus class before shipping, not assumed to generalise:
+on frames, PARSeq reads 1.83 % at 0.8 against 5.42 % at 1.5. Landed as
+`UNCLIP_LINE` / `UNCLIP_WORD`, and measured on **holdout**:
+
+| mobiledet-parseq | before | after |
+|---|---:|---:|
+| frames | 10.91 % | **2.29 %** |
+| CORD | 38.13 % | **34.60 %** |
+
+§8.17 called mobiledet-parseq "dominated everywhere and not to be promoted".
+On frames that is now false: 2.29 % beats craft-parseq's 2.84 %. The pairing
+was not bad; it was mis-parameterised, by a constant copied from a reference
+whose recognizer is not ours.
+
+#### The frames batch-vs-LIVE disagreement — mechanism found
+
+§8.18 left mobile-det better in batch (1.71 % vs 1.80 %) and worse in LIVE
+(1.83 % vs 1.74 %), unexplained. The harness prints the answer:
+
+| | band coverage of detected boxes | calibration cost |
+|---|---:|---:|
+| CRAFT | **86.7 %** | 2132 ms |
+| mobile-det | 69.8 % | 1093 ms |
+
+LIVE recognises auto-ROI **bands**, not frames, and mobile-det's calibration
+produces bands covering only 69.8 % of the text it detected. Roughly 30 % of
+the text sits outside every band and is never re-read in steady state. **The
+regression is missed text, not misread text** — batch mode reads the whole
+frame, so the same detector looks better there. `calibrate_bands` unions line
+y-extents with a +-8 px tolerance, which was built for CRAFT's many small word
+boxes and does not fit DBNet's few tall ones. Band construction, not the
+detector, is the open work — and it is worth doing, because the same run also
+halves calibration cost.
+
+#### Composing the lineages — refuted
+
+`composed-*` runs BOTH detectors: CRAFT supplies the word boxes, DBNet's
+regions decide which words share a line. It isolates whether `group_lines`'
+heuristic or CRAFT's box geometry is what loses.
+
+| CER % holdout | frames | CORD |
+|---|---:|---:|
+| craft-parseq | 2.84 | **21.96** |
+| **composed-parseq** | 2.84 | 27.22 |
+| mobiledet-parseq | **2.29** | 34.60 |
+| composed-crnn | — | 30.02 |
+
+**Neither.** On frames composed ties craft-parseq to the second decimal, so
+DBNet grouping and `group_lines` are indistinguishable there; on receipts
+composed is 5.3 points WORSE than craft-parseq, so DBNet's regions are the
+inferior grouping. `group_lines` was never the binding constraint, and paying
+two detector forwards buys nothing on either class.
+
+Reverted as measured-worse (not as within-noise): `composed-*` is unregistered
+and does not ship. `CraftCrnn::new_composed` stays so the probe reproduces.
+
+#### Where the dispatch stands
+
+| corpus class | best engine | CER |
+|---|---|---:|
+| frames / screens | **mobiledet-crnn** | **1.71 %** |
+| receipts / photos | **craft-parseq** | **21.96 %** |
+
+Two lineages, opposite trades, both now parameterised for the recognizer they
+actually feed.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

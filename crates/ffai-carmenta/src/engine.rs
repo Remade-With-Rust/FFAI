@@ -41,6 +41,12 @@ pub enum DetStage {
     /// PP-OCRv5 mobile-det (DBNet/PP-LCNetV3): emits text-LINE regions
     /// directly, from 4.7 MB against CRAFT's VGG16.
     MobileDet,
+    /// Both, composed: DBNet supplies the LINE GROUPING, CRAFT supplies the
+    /// WORD BOXES. Deliberately the expensive option — it runs both detectors —
+    /// because it isolates a question neither alone can answer: when CRAFT
+    /// loses, is it the box geometry or is it `group_lines`' heuristic
+    /// stitching those boxes into the wrong lines?
+    Composed,
 }
 
 /// Minimum short side the mobile-det input is scaled UP to; larger images pass
@@ -97,6 +103,11 @@ impl CraftCrnn {
     /// reassembled character components.
     pub fn new_mobiledet(rec: RecStage) -> Self {
         Self::variant(rec, DetStage::MobileDet)
+    }
+
+    /// The composed variant: both detectors, DBNet grouping CRAFT's words.
+    pub fn new_composed(rec: RecStage) -> Self {
+        Self::variant(rec, DetStage::Composed)
     }
 
     fn variant(rec: RecStage, det: DetStage) -> Self {
@@ -163,6 +174,17 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
             .map_err(image::candle_err)?;
             (None, Some(m))
         }
+        DetStage::Composed => {
+            let cf = find("craft-mlt")?.fetch()?;
+            let c = Craft::new(load_vb(cf.file("craft.safetensors")?.to_path_buf())?)
+                .map_err(image::candle_err)?;
+            let df = find("ppocrv5-mobile-det")?.fetch()?;
+            let d = crate::mobiledet::MobileDet::new(load_vb(
+                df.file("det-fused.safetensors")?.to_path_buf(),
+            )?)
+            .map_err(image::candle_err)?;
+            (Some(c), Some(d))
+        }
     };
     let (crnn, parseq) = match rec {
         RecStage::Crnn => {
@@ -199,6 +221,14 @@ impl OcrEngine for CraftCrnn {
             (DetStage::MobileDet, RecStage::Parseq) => (
                 "mobiledet-parseq",
                 "PP-OCRv5 mobile-det (DBNet/PP-LCNetV3) + PARSeq-tiny, pure Rust on candle",
+            ),
+            (DetStage::Composed, RecStage::Crnn) => (
+                "composed-crnn",
+                "DBNet line grouping over CRAFT word boxes + english_g2 CRNN (both detectors)",
+            ),
+            (DetStage::Composed, RecStage::Parseq) => (
+                "composed-parseq",
+                "DBNet line grouping over CRAFT word boxes + PARSeq-tiny (both detectors)",
             ),
         };
         EngineInfo {
@@ -293,8 +323,15 @@ impl OcrEngine for CraftCrnn {
                     || -> Result<_> {
                         let (_, _, ph, pw) = image::ok(prob.dims4())?;
                         let flat = image::ok(prob.flatten_all()?.to_vec1::<f32>())?;
-                        let mut b =
-                            crate::mobiledet::boxes_from_probability(&flat, pw, ph, sx, sy);
+                        // Unclip is a property of the RECOGNIZER's crop, not
+                        // of the detector — see `UNCLIP_LINE` / `UNCLIP_WORD`.
+                        let unclip = match self.rec {
+                            RecStage::Crnn => crate::mobiledet::UNCLIP_LINE,
+                            RecStage::Parseq => crate::mobiledet::UNCLIP_WORD,
+                        };
+                        let mut b = crate::mobiledet::boxes_from_probability(
+                            &flat, pw, ph, sx, sy, unclip,
+                        );
                         // DBNet emits text LINES, so there is nothing to group
                         // — each region IS a line. Sorting is still needed:
                         // the component walk returns raster order, and reading
@@ -313,6 +350,80 @@ impl OcrEngine for CraftCrnn {
                             }
                         }
                         Ok((b.into_iter().map(|r| vec![r]).collect(), Vec::new(), Vec::new(), 0, 2.0))
+                    },
+                )?
+            }
+            DetStage::Composed => {
+                // Both detectors. CRAFT's components are the word boxes; DBNet's
+                // regions decide which words share a line. Everything downstream
+                // therefore sees CRAFT geometry in image coordinates, which is
+                // why the scale is the identity 2.0.
+                let (cinput, cscale) = crate::profile::timed(|p| &p.det_pre, || {
+                    image::craft_input_color(img, &m.device)
+                })?;
+                let craft = m.craft.as_ref().expect("craft loaded for DetStage::Composed");
+                let det = m.mobiledet.as_ref().expect("mobiledet loaded for DetStage::Composed");
+                let maps = crate::profile::timed(|p| &p.det_fwd, || craft.forward(&cinput))
+                    .map_err(image::candle_err)?;
+                let (dinput, sx, sy) = crate::profile::timed(|p| &p.det_pre, || {
+                    image::mobiledet_input(img, mobiledet_min_side(), &m.device)
+                })?;
+                let prob = crate::profile::timed(|p| &p.det_fwd, || det.forward(&dinput))
+                    .map_err(image::candle_err)?;
+                crate::profile::timed(
+                    |p| &p.boxes,
+                    || -> Result<_> {
+                        let (mh, mwid, _) = image::ok(maps.dims3())?;
+                        let flat = image::ok(maps.flatten_all()?.to_vec1::<f32>())?;
+                        let region: Vec<f32> = flat.iter().step_by(2).copied().collect();
+                        let affinity: Vec<f32> = flat.iter().skip(1).step_by(2).copied().collect();
+                        let k = 2.0 / cscale;
+                        let words: Vec<boxes::DetBox> =
+                            boxes::extract_boxes(&region, &affinity, mwid, mh)
+                                .into_iter()
+                                .map(|b| boxes::DetBox {
+                                    x0: (b.x0 as f32 * k).round() as usize,
+                                    y0: (b.y0 as f32 * k).round() as usize,
+                                    x1: (b.x1 as f32 * k).round() as usize,
+                                    y1: (b.y1 as f32 * k).round() as usize,
+                                    score: b.score,
+                                })
+                                .collect();
+
+                        let (_, _, ph, pw) = image::ok(prob.dims4())?;
+                        let pflat = image::ok(prob.flatten_all()?.to_vec1::<f32>())?;
+                        let regions = crate::mobiledet::boxes_from_probability(
+                            &pflat, pw, ph, sx, sy, crate::mobiledet::UNCLIP_LINE,
+                        );
+
+                        // A word joins the region containing its centre. Words
+                        // landing in no region are NOT dropped — they fall back
+                        // to `group_lines`, so composing can change grouping but
+                        // can never lose text.
+                        let mut groups: Vec<Vec<boxes::DetBox>> = vec![Vec::new(); regions.len()];
+                        let mut orphans = Vec::new();
+                        for wb in words {
+                            let cx = (wb.x0 + wb.x1) / 2;
+                            let cy = (wb.y0 + wb.y1) / 2;
+                            match regions
+                                .iter()
+                                .position(|r| cx >= r.x0 && cx < r.x1 && cy >= r.y0 && cy < r.y1)
+                            {
+                                Some(i) => groups[i].push(wb),
+                                None => orphans.push(wb),
+                            }
+                        }
+                        let mut lines: Vec<Vec<boxes::DetBox>> = groups
+                            .into_iter()
+                            .filter(|g| !g.is_empty())
+                            .map(|mut g| {
+                                g.sort_by_key(|b| b.x0);
+                                g
+                            })
+                            .collect();
+                        lines.extend(boxes::group_lines(orphans));
+                        lines.sort_by_key(|l| boxes::line_bbox(l).y0);
+                        Ok((lines, region, affinity, mwid, 2.0))
                     },
                 )?
             }
@@ -345,7 +456,10 @@ impl OcrEngine for CraftCrnn {
                 // adds another 35 %. Padding a second time hands the recognizer
                 // mostly background and the neighbouring lines.
                 let (pad_x, pad_y) = match self.det {
-                    DetStage::Craft => (PAD_X, PAD_Y),
+                    // Composed crops CRAFT's word boxes, so it inherits CRAFT's
+                    // pads — the detector that produced the geometry is the one
+                    // whose padding was tuned for it.
+                    DetStage::Craft | DetStage::Composed => (PAD_X, PAD_Y),
                     DetStage::MobileDet => mobiledet_pads(),
                 };
                 let (px, py) = (line_h * pad_x, line_h * pad_y);

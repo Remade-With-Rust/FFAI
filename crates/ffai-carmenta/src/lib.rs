@@ -63,6 +63,11 @@ pub fn register(reg: &mut EngineRegistry) {
     reg.register_ocr(Arc::new(engine::CraftCrnn::new_parseq()));
     reg.register_ocr(Arc::new(engine::CraftCrnn::new_mobiledet(engine::RecStage::Crnn)));
     reg.register_ocr(Arc::new(engine::CraftCrnn::new_mobiledet(engine::RecStage::Parseq)));
+    // `composed-*` is deliberately NOT registered. It runs both detectors and
+    // was measured dominated on every corpus class (§8.19) — on frames it ties
+    // craft-parseq exactly, on receipts it loses to it. The code path stays
+    // reachable through `CraftCrnn::new_composed` so the probe is reproducible;
+    // shipping a slower engine that never wins would be clutter.
 }
 
 #[cfg(test)]

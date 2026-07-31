@@ -252,7 +252,7 @@ fn mobiledet_boxes_match_paddle_postprocess() {
         unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &Device::Cpu) }.unwrap();
     let det = ffai_carmenta::mobiledet::MobileDet::new(vb).unwrap();
     let prob = det.forward(&input).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
-    let mut ours = ffai_carmenta::mobiledet::boxes_from_probability(&prob, 256, 256, sx, sy);
+    let mut ours = ffai_carmenta::mobiledet::boxes_from_probability(&prob, 256, 256, sx, sy, ffai_carmenta::mobiledet::UNCLIP_LINE);
     ours.sort_by_key(|b| (b.y0, b.x0));
 
     let meta: serde_json::Value =

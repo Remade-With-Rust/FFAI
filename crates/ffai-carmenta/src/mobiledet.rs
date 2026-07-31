@@ -289,11 +289,29 @@ impl MobileDet {
 // DB postprocess
 // ---------------------------------------------------------------------------
 
-/// `inference.yml`, pinned: these are the reference's own values and are not
-/// ours to tune until a gate says otherwise.
+/// `inference.yml`, pinned: these are the reference's own values.
 pub const BIN_THRESHOLD: f32 = 0.3;
 pub const BOX_THRESHOLD: f32 = 0.6;
-pub const UNCLIP_RATIO: f32 = 1.5;
+
+/// How far to unclip, per RECOGNIZER — which is where a gate did say otherwise.
+///
+/// The reference's single 1.5 is right for a line reader and badly wrong for a
+/// word reader, and the split is not subtle. Swept on the CORD train split:
+/// CRNN runs 70.3 / 47.4 / 41.6 / 37.0 / **32.0** / 31.8 / 32.6 / 35.2 % across
+/// 0.0 -> 2.8, so its optimum sits at the reference value (1.9 is 0.26 pp
+/// better, inside the noise of 15 clips, and not worth moving a default for).
+/// PARSeq runs 45.6 / 32.8 / **32.3** / 36.5 / 41.3 / 45.4 % — optimum at
+/// **0.8**, and 9 points better than the reference default.
+///
+/// The mechanism is the crop each recognizer consumes. CRNN reads a whole line
+/// and wants generous context around it; PARSeq reads WORDS recovered from an
+/// ink-gap projection inside that box, and a loose box fills the gaps with
+/// background until the projection can no longer find them.
+///
+/// Confirmed on a second corpus class rather than assumed to generalise: on
+/// frames, PARSeq reads 1.83 % at 0.8 against 5.42 % at 1.5.
+pub const UNCLIP_LINE: f32 = 1.5;
+pub const UNCLIP_WORD: f32 = 0.8;
 const MIN_SIDE: f32 = 3.0;
 
 fn env_f32(key: &str, default: f32) -> f32 {
@@ -516,10 +534,11 @@ pub fn boxes_from_probability(
     h: usize,
     sx: f32,
     sy: f32,
+    unclip: f32,
 ) -> Vec<crate::boxes::DetBox> {
     let bin_thr = env_f32("FFAI_DB_BIN", BIN_THRESHOLD);
     let box_thr = env_f32("FFAI_DB_BOX", BOX_THRESHOLD);
-    let ratio = env_f32("FFAI_DB_UNCLIP", UNCLIP_RATIO);
+    let ratio = env_f32("FFAI_DB_UNCLIP", unclip);
 
     let mut mask: Vec<bool> = prob.iter().map(|&p| p > bin_thr).collect();
     let mut out = Vec::new();
