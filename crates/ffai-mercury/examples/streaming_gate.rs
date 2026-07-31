@@ -158,15 +158,20 @@ fn main() {
                     sample_rate: SR as u32,
                     channels: 1,
                 };
+                let offset = a as f64 / SR as f64;
                 let opts = AsrOptions {
                     diarize: true,
                     persist_speakers: persist,
                     max_speakers: None,
                     diarize_threshold: diarize::DEFAULT_THRESHOLD,
+                    // These chunks ARE consecutive positions in one stream, so
+                    // say so. Without it every chunk claims to start at 0 and
+                    // the incremental path cannot engage — which would make
+                    // this gate silently measure the non-incremental code.
+                    stream_offset_secs: offset,
                     ..Default::default()
                 };
                 let Ok(t) = engine.transcribe(&chunk, &opts) else { continue };
-                let offset = a as f64 / SR as f64;
                 for s in t.speakers.iter().flatten() {
                     // Chunk-local times shift into the conversation's clock;
                     // labels are taken AS-IS, which is exactly what is under

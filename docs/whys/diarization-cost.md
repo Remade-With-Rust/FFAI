@@ -184,17 +184,76 @@ Two unit tests pin the invariant: the same audio yields the same absolute
 bounds as the buffer slides, and snapping never drops a region.
 `FFAI_DIARIZE_ABSGRID=off` restores region-anchored placement.
 
+## Coarser hop — REFUTED
+
+Forwards scale as `span / hop`, so a bigger hop looked like nearly free
+compute. Measured (`examples/hop_sweep.rs` for cost, `diarize_gate` under
+`FFAI_DIARIZE_HOP` for quality):
+
+| hop | forwards | vs 0.75 | blind DER |
+|---|---:|---:|---:|
+| **0.75 s** | 442 | 1.00× | **4.20 %** |
+| 1.00 s | 350 | 1.26× | 10.71 % |
+| 1.50 s | 257 | 1.72× | 17.56 % |
+| 2.00 s | 197 | 2.24× | 37.38 % |
+| 3.00 s | 140 | 3.16× | 53.05 % |
+
+DER degrades far faster than forwards fall — 2.24× fewer forwards costs about
+nine times the error. 0.75 s is not inherited convention after all; it sits
+near the knee. Geometry is runtime-settable (`FFAI_DIARIZE_WINDOW` / `_HOP`)
+so this stays re-measurable.
+
+## Incremental streaming — the one that worked
+
+The cache removed repeated *forwards*, but the pipeline still **asked** for
+windows it had already answered, and the ones it could not reuse were exactly
+the boundary windows whose bounds move as the buffer slides even when the
+speech does not. So keep the answers rather than re-derive the questions:
+`diarize::StreamState` holds `(abs_start, abs_end, embedding)` in absolute
+stream time, a tick sub-segments only past `processed_to`, and clustering runs
+over the union.
+
+Three load-bearing design points:
+
+- **The settled cut is on the window's START, not its end.** A window merely
+  *extending* past the mark was already generated with the audio available
+  then; regenerating it would put a second embedding of overlapping speech
+  into the clustering input and weigh that speech twice.
+- **History is bounded** (`STREAM_HORIZON_SECS`, 30 s). Clustering is O(n²) in
+  windows and the registry already carries identity across calls, so older
+  windows have nothing left to contribute.
+- **Turns return buffer-relative.** The state speaks absolute; the caller's
+  transcript timestamps do not. Returning absolute times would shift every
+  speaker label by the stream offset.
+
+| path | live median | vs original |
+|---|---:|---:|
+| original | ~1260 ms | 1.00× |
+| + content cache | ~509–535 ms | ~2.4× |
+| **+ incremental** | **~377 ms** | **~3.3×** |
+
+With incremental on, the cache's own A/B ratio collapses to **1.00×** — it is
+subsumed exactly as predicted, because nothing asks twice. The cache stays for
+the non-incremental path (a caller supplying no offset).
+
+**Gates.** Streaming DER **5.55 %** against a 5.68 % baseline — slightly
+better. Batch DER unchanged at 4.20 %. 130 tests, two new ones pinning that
+settled audio is never re-segmented and that history stays bounded.
+`FFAI_DIARIZE_INCREMENTAL=off` reverts.
+
+**A gate that measured nothing, caught before it was believed.** The streaming
+gate never passed `stream_offset_secs`, so every chunk claimed to start at 0
+and the incremental path never engaged — its first "5.68 %, unchanged" was the
+OLD code. The trace counter read **zero `diarize:incr` calls**, which is what
+gave it away. Instrument whether the path under test actually ran; a gate that
+silently exercises the old code reports a number that is true and irrelevant.
+
 ## What is left
 
-The per-forward cost is architectural (Res2Net's 8 sequential groups), so the
-remaining levers are all "ask for fewer forwards":
-
-- **Coarser hop.** Nothing forces 0.75 s. A larger hop is strictly fewer
-  windows at a DER cost that `diarize_gate.rs` can price rather than assume.
-- **Incremental streaming.** Even with a perfect cache, the pipeline still
-  clusters over the whole buffer every tick. Embedding only the new tail and
-  keeping prior embeddings with their absolute timestamps subsumes the cache
-  entirely — no window can miss if it is never requested twice.
+The per-forward cost is architectural (Res2Net's 8 sequential groups) and the
+geometry sits at its knee, so what remains is structural rather than tuning:
+clustering incrementally instead of re-clustering the horizon each tick, and
+batching windows into one forward.
 
 Also unexplored, and larger if it works: the per-forward cost itself is
 architectural, but nothing forces 1.5 s windows at 0.75 s hop. A coarser hop

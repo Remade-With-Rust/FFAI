@@ -45,6 +45,12 @@ pub struct WhisperCandle {
     /// Speaker identities carried between calls when `persist_speakers` is
     /// set. Untouched otherwise, so the default path allocates nothing.
     speakers: Mutex<Option<SpeakerRegistry>>,
+    /// Embeddings already computed this session, in absolute stream time.
+    ///
+    /// Beside the registry because they are the same lifetime: both are
+    /// per-session streaming identity, and `reset_speakers` must clear both
+    /// or a new recording would cluster against the previous one's audio.
+    stream: Mutex<Option<super::diarize::StreamState>>,
     /// Loaded on first `--word-timestamps` call and never before.
     ///
     /// Separate from `state` so the ASR path cannot be blocked behind
@@ -107,6 +113,12 @@ impl WhisperCandle {
         if let Ok(mut guard) = self.speakers.lock() {
             *guard = None;
         }
+        // The window history goes too: it is the audio those identities were
+        // learned from, and keeping it would let a new recording cluster
+        // against the previous one's speech.
+        if let Ok(mut guard) = self.stream.lock() {
+            *guard = None;
+        }
     }
 
     /// Default: `whisper-tiny-en` — the M1 bring-up target, matching the M0
@@ -130,6 +142,7 @@ impl WhisperCandle {
             aligner: Mutex::new(None),
             diarizer: Mutex::new(None),
             speakers: Mutex::new(None),
+            stream: Mutex::new(None),
         }
     }
 
@@ -149,6 +162,7 @@ impl WhisperCandle {
             aligner: Mutex::new(None),
             diarizer: Mutex::new(None),
             speakers: Mutex::new(None),
+            stream: Mutex::new(None),
         }
     }
 }
@@ -690,6 +704,16 @@ impl AsrEngine for WhisperCandle {
                 let registry = guard.get_or_insert_with(|| {
                     SpeakerRegistry::new(opts.diarize_threshold, opts.max_speakers)
                 });
+                // Incremental only when the caller actually says where it is
+                // in the stream. Without an offset every buffer claims to
+                // start at 0, so "already processed" would be meaningless and
+                // the state would suppress windows it had never seen.
+                let mut sguard = self.stream.lock().map_err(|_| {
+                    Error::Other("stream state lock poisoned by an earlier panic".into())
+                })?;
+                let incr = std::env::var("FFAI_DIARIZE_INCREMENTAL").as_deref() != Ok("off");
+                let state = (incr && opts.stream_offset_secs > 0.0)
+                    .then(|| sguard.get_or_insert_with(super::diarize::StreamState::new));
                 diarizer.diarize_streaming(
                     &mono.samples,
                     &regions,
@@ -697,6 +721,7 @@ impl AsrEngine for WhisperCandle {
                     opts.max_speakers,
                     registry,
                     opts.stream_offset_secs,
+                    state,
                 )
             } else {
                 diarizer.diarize(

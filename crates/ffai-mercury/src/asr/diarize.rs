@@ -552,3 +552,139 @@ pub fn geometry() -> (f64, f64) {
     };
     (read("FFAI_DIARIZE_WINDOW", WINDOW_SECS), read("FFAI_DIARIZE_HOP", HOP_SECS))
 }
+
+/// Embeddings already computed, in ABSOLUTE stream time.
+///
+/// The streaming path was re-deriving every window of the buffer on every
+/// call. A content-keyed cache removed the repeated *forwards*, but the
+/// pipeline still asked for windows it had already answered — and the ones it
+/// could not reuse were the boundary windows, whose bounds move as the buffer
+/// slides even when the speech does not.
+///
+/// This holds the answers instead of re-deriving the questions: window bounds
+/// in absolute time, so audio settled by an earlier call is never
+/// sub-segmented again. A tick then embeds only its NEW tail, and clustering
+/// runs over the union of stored and new.
+///
+/// Bounded by a horizon rather than growing with the session: clustering is
+/// O(n²) in windows, and a speaker registry already carries identity across
+/// calls, so windows older than the horizon have nothing left to contribute.
+#[derive(Default)]
+pub struct StreamState {
+    /// `(abs_start, abs_end, embedding)`, ascending by start.
+    windows: Vec<(f64, f64, Vec<f32>)>,
+    /// Absolute time through which windows have been generated. Audio before
+    /// this is settled and is never re-cut.
+    processed_to: f64,
+}
+
+/// How much stream history to cluster over. Long enough that a returning
+/// voice is still represented, short enough that clustering stays cheap.
+pub const STREAM_HORIZON_SECS: f64 = 30.0;
+
+impl StreamState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Absolute time already covered.
+    pub fn processed_to(&self) -> f64 {
+        self.processed_to
+    }
+
+    /// Stored window count — the clustering input size.
+    pub fn len(&self) -> usize {
+        self.windows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.windows.is_empty()
+    }
+
+    /// Windows that still need embedding for this call: those of `regions`
+    /// (already absolute) that start at or after what is settled.
+    ///
+    /// The `processed_to` cut is on the window's START, not its end: a window
+    /// that merely *extends* past the mark was already generated with the
+    /// audio available at the time, and regenerating it would produce a
+    /// second embedding of overlapping speech that clustering would then
+    /// weigh twice.
+    pub fn pending(&self, abs_regions: &[(f64, f64)], window: f64, hop: f64) -> Vec<(f64, f64)> {
+        let regions: Vec<TimedSegment<()>> = abs_regions
+            .iter()
+            .map(|&(s, e)| TimedSegment { start: s, end: e, value: (), confidence: None })
+            .collect();
+        // Offset 0: the bounds are already absolute, so the grid is absolute.
+        subsegment_at(&regions, window, hop, 0.0)
+            .into_iter()
+            .filter(|&(s, _)| s >= self.processed_to - 1e-9)
+            .collect()
+    }
+
+    /// Record newly embedded windows and advance the settled mark.
+    pub fn extend(&mut self, new: Vec<(f64, f64, Vec<f32>)>, processed_to: f64) {
+        self.windows.extend(new);
+        self.windows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.processed_to = self.processed_to.max(processed_to);
+        let cutoff = self.processed_to - STREAM_HORIZON_SECS;
+        self.windows.retain(|w| w.1 >= cutoff);
+    }
+
+    /// The stored windows and their embeddings, for clustering.
+    pub fn parts(&self) -> (Vec<(f64, f64)>, Vec<Vec<f32>>) {
+        (
+            self.windows.iter().map(|w| (w.0, w.1)).collect(),
+            self.windows.iter().map(|w| w.2.clone()).collect(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod stream_state_tests {
+    use super::*;
+
+    fn emb(v: f32) -> Vec<f32> {
+        vec![v; 4]
+    }
+
+    /// The point of the whole design: settled audio is never re-cut, so a
+    /// sliding buffer asks only for its new tail.
+    #[test]
+    fn settled_audio_is_never_resegmented() {
+        let mut st = StreamState::new();
+        // First call: a 10 s buffer at the start of the stream.
+        let first = st.pending(&[(0.0, 10.0)], 1.5, 0.75);
+        assert!(first.len() > 5, "a fresh 10 s region must yield windows");
+        let n = first.len();
+        st.extend(first.iter().map(|&(s, e)| (s, e, emb(1.0))).collect(), 10.0);
+
+        // Second call one second later: the SAME speech plus 1 s of new audio.
+        let second = st.pending(&[(0.0, 11.0)], 1.5, 0.75);
+        assert!(
+            second.len() <= 2,
+            "only the new tail should be pending, got {} of {n} windows",
+            second.len()
+        );
+        assert!(
+            second.iter().all(|&(s, _)| s >= 10.0 - 1e-9),
+            "pending windows must lie in the new tail: {second:?}"
+        );
+    }
+
+    /// History is bounded, or clustering (O(n^2)) grows without limit over a
+    /// long session.
+    #[test]
+    fn history_is_bounded_by_the_horizon() {
+        let mut st = StreamState::new();
+        for i in 0..200 {
+            let t = i as f64;
+            st.extend(vec![(t, t + 1.5, emb(t as f32))], t + 1.0);
+        }
+        assert!(
+            st.len() as f64 <= STREAM_HORIZON_SECS + 2.0,
+            "history must stay bounded, got {}",
+            st.len()
+        );
+        assert!(st.processed_to() >= 199.0);
+    }
+}

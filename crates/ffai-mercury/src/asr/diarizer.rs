@@ -140,7 +140,19 @@ impl Diarizer {
         max_speakers: Option<usize>,
         registry: &mut SpeakerRegistry,
         stream_offset_secs: f64,
+        state: Option<&mut diarize::StreamState>,
     ) -> Vec<SpeakerTurn> {
+        if let Some(state) = state {
+            return self.diarize_incremental(
+                samples,
+                regions,
+                threshold,
+                max_speakers,
+                registry,
+                stream_offset_secs,
+                state,
+            );
+        }
         let windows =
             {
                 let (win, hop) = diarize::geometry();
@@ -192,6 +204,108 @@ impl Diarizer {
 
         let labels: Vec<usize> = local.iter().map(|&c| global[c]).collect();
         diarize::turns_from_labels(&kept, &labels)
+    }
+
+    /// Streaming diarization that embeds only the NEW tail.
+    ///
+    /// The non-incremental path re-derives every window of the buffer each
+    /// call. A content-keyed cache removed the repeated forwards, but the
+    /// pipeline still ASKED for windows it had answered, and the ones it
+    /// could not reuse were exactly the boundary windows whose bounds move
+    /// as the buffer slides even when the speech does not.
+    ///
+    /// Here the answers are kept in absolute stream time
+    /// ([`diarize::StreamState`]), so settled audio is never sub-segmented
+    /// again: a tick embeds its new tail and clusters over the union.
+    ///
+    /// Turns come back in BUFFER-relative time, because that is what the
+    /// caller's transcript timestamps are in — returning absolute times here
+    /// would silently shift every speaker label by the stream offset.
+    fn diarize_incremental(
+        &self,
+        samples: &[f32],
+        regions: &[TimedSegment<()>],
+        threshold: f32,
+        max_speakers: Option<usize>,
+        registry: &mut SpeakerRegistry,
+        offset: f64,
+        state: &mut diarize::StreamState,
+    ) -> Vec<SpeakerTurn> {
+        let (win, hop) = diarize::geometry();
+        let sr = self.sample_rate as f64;
+        let buffer_end = offset + samples.len() as f64 / sr;
+
+        // Regions in absolute time; the state speaks only absolute.
+        let abs: Vec<(f64, f64)> =
+            regions.iter().map(|r| (offset + r.start, offset + r.end)).collect();
+        let pending = state.pending(&abs, win, hop);
+
+        // Embed only what is new, converting each absolute window back to a
+        // buffer offset to slice the samples we were handed.
+        let mut fresh = Vec::with_capacity(pending.len());
+        for (ws, we) in pending {
+            let a = (((ws - offset) * sr) as isize).max(0) as usize;
+            let b = ((((we - offset) * sr).ceil() as isize).max(0) as usize).min(samples.len());
+            if b <= a {
+                continue;
+            }
+            let (feats, frames) = self.fbank.compute(&samples[a..b]);
+            if frames == 0 {
+                continue;
+            }
+            if let Ok(e) = self.model.embed(&feats, frames) {
+                if e.iter().all(|v| v.is_finite()) {
+                    fresh.push((ws, we, e));
+                }
+            }
+            CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        let reused = state.len();
+        state.extend(fresh, buffer_end);
+        CACHE_HITS.fetch_add(reused, std::sync::atomic::Ordering::Relaxed);
+        self.trace(
+            "incr",
+            &format!("reused={reused} stored={} to={buffer_end:.2}", state.len()),
+        );
+
+        let (kept_abs, embeddings) = state.parts();
+        if embeddings.is_empty() {
+            return Vec::new();
+        }
+
+        let local = diarize::cluster(&embeddings, threshold, max_speakers);
+        let n_local = local.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        let dim = embeddings[0].len();
+        let mut sums = vec![vec![0.0f32; dim]; n_local];
+        let mut counts = vec![0usize; n_local];
+        for (e, &c) in embeddings.iter().zip(local.iter()) {
+            for (acc, v) in sums[c].iter_mut().zip(e.iter()) {
+                *acc += v;
+            }
+            counts[c] += 1;
+        }
+        let global: Vec<usize> = (0..n_local)
+            .map(|c| {
+                let n = counts[c].max(1) as f32;
+                let centroid: Vec<f32> = sums[c].iter().map(|v| v / n).collect();
+                registry.assign(&centroid, counts[c] as f32)
+            })
+            .collect();
+        let labels: Vec<usize> = local.iter().map(|&c| global[c]).collect();
+
+        // Back to buffer-relative, and clipped to the buffer: the state holds
+        // history the caller did not ask about, and emitting turns outside the
+        // audio it sent would put speaker labels on a timeline it has no
+        // transcript for.
+        diarize::turns_from_labels(&kept_abs, &labels)
+            .into_iter()
+            .filter(|t| t.end > offset && t.start < buffer_end)
+            .map(|t| SpeakerTurn {
+                start: (t.start.max(offset)) - offset,
+                end: (t.end.min(buffer_end)) - offset,
+                speaker: t.speaker,
+            })
+            .collect()
     }
 
     /// Observe-only trace of the window geometry and cache outcome.
