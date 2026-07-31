@@ -696,6 +696,7 @@ impl AsrEngine for WhisperCandle {
                     opts.diarize_threshold,
                     opts.max_speakers,
                     registry,
+                    opts.stream_offset_secs,
                 )
             } else {
                 diarizer.diarize(

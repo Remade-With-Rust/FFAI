@@ -59,6 +59,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sample_rate: mono.sample_rate,
             channels: 1,
         };
+        // Tell the engine where this buffer sits in the stream, which is what
+        // lets the window grid stay put while the buffer slides. Omitting it
+        // would measure the feature with the feature turned off.
+        let opts = AsrOptions { stream_offset_secs: start as f64 / sr, ..opts.clone() };
         // Cache arm first so it faces a cache warmed only by EARLIER ticks —
         // the real live condition. Running no-cache first would let it warm
         // the cache for its own comparison.

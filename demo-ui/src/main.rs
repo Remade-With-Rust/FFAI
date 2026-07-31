@@ -94,8 +94,12 @@ const RECORDER_JS: &str = r####"
   const src = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
   let pending = [];
+  let seen = 0;   // total samples captured this session, for the stream offset
   node.onaudioprocess = (e) => {
-    if (!S.stop) pending.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    if (S.stop) return;
+    const frame = new Float32Array(e.inputBuffer.getChannelData(0));
+    pending.push(frame);
+    seen += frame.length;   // absolute position in the session; see `offset`
   };
   src.connect(node); node.connect(ctx.destination);
 
@@ -135,7 +139,13 @@ const RECORDER_JS: &str = r####"
         const span = Math.floor(ctx.sampleRate * WINDOW);
         const tail = pcm.length > span ? pcm.subarray(pcm.length - span) : pcm;
         const wav = encodeWav(resample(tail, ctx.sampleRate, 16000), 16000);
-        const res = await fetch('/transcribe?diarize=__DIARIZE__', { method: 'POST', body: wav });
+        // Where this trailing window starts in the session. The diarizer
+        // places its embedding windows on an ABSOLUTE grid from this, so a
+        // sliding buffer stops re-cutting the same audio at new offsets.
+        const offset = Math.max(0, (seen - tail.length) / ctx.sampleRate);
+        const res = await fetch(
+          '/transcribe?diarize=__DIARIZE__&offset=' + offset.toFixed(3),
+          { method: 'POST', body: wav });
         const j = JSON.parse(await res.text());
         j.commit = commit;
         dioxus.send(JSON.stringify(j));

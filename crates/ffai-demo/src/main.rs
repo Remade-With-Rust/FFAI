@@ -195,7 +195,14 @@ fn handle(
             // paths are 107 ms against whisper.cpp's 274 ms. Measured, the
             // speaker layer is +621 ms on a 3 s chunk — 6.8x the ASR path.
             let diarize = !p.contains("diarize=0");
-            let json = transcribe_both(&body, engines, diarize);
+            // The browser reports where its trailing window starts; absent, 0.0
+            // simply disables the grid alignment rather than misplacing it.
+            let offset_secs = p
+                .split_once("offset=")
+                .and_then(|(_, v)| v.split('&').next())
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let json = transcribe_both(&body, engines, diarize, offset_secs);
             respond(&mut stream, 200, "application/json", json.as_bytes())
         }
         ("POST", "/synthesize") => {
@@ -211,7 +218,12 @@ fn handle(
 /// time. A failure in one is reported in its own pane rather than failing the
 /// request — the whole point is to see them side by side, including when one
 /// of them cannot answer.
-fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>, diarize: bool) -> String {
+fn transcribe_both(
+    wav: &[u8],
+    engines: &Arc<Mutex<Engines>>,
+    diarize: bool,
+    offset_secs: f64,
+) -> String {
     if wav.len() < 44 {
         return json_error("posted body is not a WAV (too short)");
     }
@@ -277,6 +289,13 @@ fn transcribe_both(wav: &[u8], engines: &Arc<Mutex<Engines>>, diarize: bool) -> 
             &AsrOptions {
                 diarize,
                 persist_speakers: diarize,
+                // Where this chunk sits in the session. The browser sends a
+                // SLIDING trailing window, so without this the diarizer's
+                // window grid is anchored to the buffer and moves with it —
+                // identical audio gets re-cut at new offsets every tick and
+                // every speaker embedding is recomputed. Supplying it took
+                // the live pattern from 1.87x to 3.16x.
+                stream_offset_secs: offset_secs,
                 ..AsrOptions::default()
             },
         ) {

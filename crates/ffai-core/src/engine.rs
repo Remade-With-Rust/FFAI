@@ -143,6 +143,25 @@ pub struct AsrOptions {
     pub vad_threshold: f32,
     /// Pack speech regions into windows of at most this many seconds.
     pub vad_chunk_secs: f32,
+    /// Where this buffer starts in the wider stream, in seconds.
+    ///
+    /// Only meaningful for a streaming caller that re-sends a sliding window
+    /// (a live transcriber sending the trailing N seconds every tick). It
+    /// costs nothing to leave at `0.0`.
+    ///
+    /// **What it buys.** Diarization sub-segments each speech region into
+    /// 1.5 s windows and embeds each one — the dominant cost, ~172 ms apiece.
+    /// Those windows are placed relative to the region, and a region clipped
+    /// by the buffer's leading edge is anchored to the *buffer*, which moves.
+    /// So consecutive ticks re-cut the same audio at shifted offsets and every
+    /// embedding is recomputed. Measured on a 10 s window at a 1 s tick: the
+    /// window grids realign only every 3 s (`lcm(1.0, 0.75)`), and the cache
+    /// hit rate sat at ~24 %.
+    ///
+    /// Given this, windows are placed on an ABSOLUTE grid, so the same audio
+    /// yields the same window bounds no matter where the buffer happens to
+    /// start — which is what makes the embedding cache actually hit.
+    pub stream_offset_secs: f64,
 }
 
 impl Default for AsrOptions {
@@ -162,6 +181,7 @@ impl Default for AsrOptions {
             vad: true,
             vad_threshold: 0.5,
             vad_chunk_secs: 30.0,
+            stream_offset_secs: 0.0,
         }
     }
 }

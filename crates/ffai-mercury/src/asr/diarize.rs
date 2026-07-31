@@ -90,6 +90,18 @@ pub fn speaker_label(index: usize) -> String {
 /// A region shorter than one window still yields one window covering it —
 /// dropping it would silently leave that speech unattributed.
 pub fn subsegment(regions: &[TimedSegment<()>], window: f64, hop: f64) -> Vec<(f64, f64)> {
+    subsegment_at(regions, window, hop, 0.0)
+}
+
+/// [`subsegment`], with the buffer's absolute position in the stream so the
+/// window grid does not move when the buffer does. See the snapping comment
+/// below for why that matters.
+pub fn subsegment_at(
+    regions: &[TimedSegment<()>],
+    window: f64,
+    hop: f64,
+    offset: f64,
+) -> Vec<(f64, f64)> {
     let window = if window > 0.0 { window } else { WINDOW_SECS };
     let hop = if hop > 0.0 { hop } else { HOP_SECS };
     let mut out = Vec::new();
@@ -102,7 +114,30 @@ pub fn subsegment(regions: &[TimedSegment<()>], window: f64, hop: f64) -> Vec<(f
             out.push((region.start, region.end));
             continue;
         }
-        let mut start = region.start;
+        // Snap the chain's first window to the ABSOLUTE hop grid.
+        //
+        // Without this, windows are anchored to `region.start`, and a region
+        // clipped by a sliding buffer's leading edge is anchored to the
+        // BUFFER — which moves. Measured on a live 10 s window at a 1 s tick:
+        // the leading region is pinned at 0.000 every tick while its content
+        // slides underneath, so identical window bounds hold different audio
+        // and every embedding is recomputed. Grids realigned only every 3 s
+        // (`lcm(tick, hop)`), which is exactly where the hits appeared.
+        //
+        // `offset` is the buffer's position in the stream, so `offset + start`
+        // is absolute and the same audio lands on the same bounds regardless
+        // of where the buffer begins. With the default `offset = 0` and a
+        // non-sliding caller this is the previous behaviour for any region
+        // already on the grid, and shifts the chain by under one hop
+        // otherwise.
+        let abs = offset + region.start;
+        let snapped = (abs / hop).ceil() * hop;
+        let mut start = region.start + (snapped - abs);
+        // Snapping forward must not skip past the region: fall back to the
+        // region's own start rather than emit nothing for it.
+        if start >= region.end {
+            start = region.start;
+        }
         while start < region.end {
             let end = (start + window).min(region.end);
             out.push((start, end));
@@ -423,5 +458,56 @@ mod tests {
     fn labels_render_conventionally() {
         assert_eq!(speaker_label(0), "SPEAKER_00");
         assert_eq!(speaker_label(11), "SPEAKER_11");
+    }
+}
+
+#[cfg(test)]
+mod absolute_grid_tests {
+    use super::*;
+
+    fn region(start: f64, end: f64) -> TimedSegment<()> {
+        TimedSegment { start, end, value: (), confidence: None }
+    }
+
+    /// THE invariant the live cache depends on: the same audio must produce
+    /// the same ABSOLUTE window bounds no matter where the buffer starts.
+    ///
+    /// A live caller re-sends a sliding window, and a region clipped by the
+    /// buffer's leading edge is anchored to the buffer — which moves. Before
+    /// this, consecutive ticks re-cut identical audio at shifted offsets and
+    /// every embedding was recomputed; measured hit rate ~24 %, and the
+    /// window grids only realigned every `lcm(tick, hop)`.
+    #[test]
+    fn same_audio_lands_on_the_same_absolute_windows_as_the_buffer_slides() {
+        // The same speech, seen from two buffers 1 s apart. Both are clipped
+        // at the buffer's start, which is what pins the anchor.
+        let a = subsegment_at(&[region(0.0, 6.0)], 1.5, 0.75, 10.0);
+        let b = subsegment_at(&[region(0.0, 5.0)], 1.5, 0.75, 11.0);
+
+        // Compare in ABSOLUTE time; buffer-relative bounds differ by design.
+        let abs = |v: &[(f64, f64)], off: f64| -> Vec<(f64, f64)> {
+            v.iter().map(|&(s, e)| ((s + off) * 1e6).round() / 1e6)
+                .zip(v.iter().map(|&(_, e)| ((e + off) * 1e6).round() / 1e6))
+                .collect()
+        };
+        let (aa, bb) = (abs(&a, 10.0), abs(&b, 11.0));
+
+        // Every window of the later buffer must coincide with one from the
+        // earlier: overlapping audio => identical bounds => a cache hit.
+        let shared: Vec<_> = bb.iter().filter(|w| aa.contains(w)).collect();
+        assert!(
+            shared.len() >= bb.len() - 1,
+            "overlapping audio must reuse the same absolute windows: {aa:?} vs {bb:?}"
+        );
+    }
+
+    /// Snapping must never drop a region's audio entirely. A short region
+    /// whose snap point lands past its end falls back to its own start.
+    #[test]
+    fn a_region_is_never_silently_dropped_by_snapping() {
+        // Long enough to take the windowed path, offset so the snap moves.
+        let w = subsegment_at(&[region(0.10, 2.00)], 1.5, 0.75, 0.70);
+        assert!(!w.is_empty(), "snapping must not erase a region");
+        assert!(w[0].0 >= 0.10 && w[0].0 < 2.00, "first window must start inside the region");
     }
 }

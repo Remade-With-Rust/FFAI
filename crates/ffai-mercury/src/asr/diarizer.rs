@@ -138,11 +138,26 @@ impl Diarizer {
         threshold: f32,
         max_speakers: Option<usize>,
         registry: &mut SpeakerRegistry,
+        stream_offset_secs: f64,
     ) -> Vec<SpeakerTurn> {
-        let windows = diarize::subsegment(regions, WINDOW_SECS, HOP_SECS);
+        let windows =
+            diarize::subsegment_at(regions, WINDOW_SECS, HOP_SECS, stream_offset_secs);
         if windows.is_empty() {
             return Vec::new();
         }
+        self.trace(
+            "call",
+            &format!(
+                "samples={} regions=[{}] windows={}",
+                samples.len(),
+                regions
+                    .iter()
+                    .map(|r| format!("{:.3}-{:.3}", r.start, r.end))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                windows.len()
+            ),
+        );
         let (kept, embeddings) = self.embed_windows(samples, &windows);
         if embeddings.is_empty() {
             return Vec::new();
@@ -173,6 +188,27 @@ impl Diarizer {
 
         let labels: Vec<usize> = local.iter().map(|&c| global[c]).collect();
         diarize::turns_from_labels(&kept, &labels)
+    }
+
+    /// Observe-only trace of the window geometry and cache outcome.
+    ///
+    /// `FFAI_DIARIZE_TRACE=1` emits one line per window and one per call's
+    /// region set. It exists to answer WHY the cache misses, which three
+    /// mechanisms could explain and which produce different fixes:
+    ///
+    ///   - same bounds, different key  -> windows are BUFFER-relative and the
+    ///     buffer slid (the fix is an absolute grid)
+    ///   - bounds shifted by the tick  -> windows are REGION-anchored and
+    ///     working; misses come from the region set, not the grid
+    ///   - bounds jittering irregularly-> VAD boundaries are unstable across
+    ///     buffers (the fix is a stable noise floor, not geometry)
+    ///
+    /// Logging the KEY next to the bounds is what separates them; bounds
+    /// alone cannot.
+    fn trace(&self, tag: &str, line: &str) {
+        if std::env::var_os("FFAI_DIARIZE_TRACE").is_some() {
+            eprintln!("[diarize:{tag}] {line}");
+        }
     }
 
     /// Shared front half: window -> features -> embedding, dropping whatever
@@ -215,12 +251,17 @@ impl Diarizer {
             if caching {
                 if let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
                     CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.trace(
+                        "win",
+                        &format!("{start:.4} {end:.4} len={} key={key:016x} HIT", b - a),
+                    );
                     kept.push((start, end));
                     embeddings.push(hit);
                     continue;
                 }
             }
             CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.trace("win", &format!("{start:.4} {end:.4} len={} key={key:016x} MISS", b - a));
 
             let (feats, frames) = self.fbank.compute(window);
             if frames == 0 {
