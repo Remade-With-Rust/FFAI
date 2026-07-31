@@ -45,7 +45,17 @@ fn main() {
         .map(|c| manifest.ground_truth(c).unwrap().unwrap_or_default())
         .collect();
 
-    let engine = std::sync::Arc::new(ffai_carmenta::engine::CraftCrnn::new());
+    // FFAI_LIVE_DET=mobiledet swaps CRAFT's VGG16 for PP-OCRv5 mobile-det.
+    // LIVE's speed gate passed by 3 ms, and the frames holdout says the swap
+    // is not a quality trade there (1.71 % vs 1.80 % CER) — so the headroom
+    // is worth measuring rather than assuming.
+    let engine = std::sync::Arc::new(
+        if std::env::var("FFAI_LIVE_DET").as_deref() == Ok("mobiledet") {
+            ffai_carmenta::engine::CraftCrnn::new_mobiledet(ffai_carmenta::engine::RecStage::Crnn)
+        } else {
+            ffai_carmenta::engine::CraftCrnn::new()
+        },
+    );
     // Warm-up, untimed.
     let first = ffai_media::load_image(&paths[0]).expect("frame 0");
     engine.recognize(&first, &OcrOptions::default()).expect("warm-up");

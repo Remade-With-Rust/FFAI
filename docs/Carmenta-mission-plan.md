@@ -1211,6 +1211,96 @@ Recorded as a loss, in the shape the ledger requires: the claim that this brick
 closes the quality front is withdrawn, and the speed/footprint claim it does
 support is now measured.
 
+### 8.17 The detector sign-flip, and a corpus that cannot gate what it was pinned for
+
+§8.16 left one question: does mobile-det win where the LINE is the unit? Run
+across every engine and corpus on one fixed scorer (it reads ~1 pp below the
+ledger; used for A/B only, never quoted as a claim):
+
+| CER % | frames (HUD) | CORD (receipts) | DocLayNet (documents) |
+|---|---:|---:|---:|
+| craft-crnn | 1.80 | **~27** | 47.70 |
+| **mobiledet-crnn** | **1.71** | 37.30 | 48.70 |
+| craft-parseq | 2.84 | **21.96** | 55.94 |
+| mobiledet-parseq | 10.91 | 38.13 | 81.52 |
+
+**The sign-flip is real and it is the detector's.** Mobile-det wins the frames
+class outright — and does it while running 3x faster — then loses receipts by
+ten points. Single-column screen text is exactly the case where a line region
+IS the unit, and two-column receipts are exactly the case where it is not.
+That is a third measured dispatch axis, alongside §8.11's content flip.
+
+**mobiledet-parseq is dominated everywhere and should not be promoted.** Its
+losses track the ink-gap splitter, not the detector: PARSeq needs word boxes,
+DBNet supplies none, and the fallback splitter was already measured at 34 % on
+photographs. The pairing is a mistake the registry currently lets you make.
+
+#### The document corpus cannot gate absolute quality — measured, not assumed
+
+DocLayNet came back at 47.70 % / 48.70 %, and two detectors that disagree
+about everything else landing within one point is a tell. Three probes:
+
+1. **Reading order — REFUTED as the cause.** Scoring each page twice, once
+   as-is and once with both sides' lines sorted (which destroys order
+   information symmetrically), moves 44.19 % to 40.99 %. Order is worth
+   **3.21 pp** of a 44-point hole.
+2. **The reference fails too.** PaddleOCR on the same 12 pages: **53.94 %**.
+   When every engine lands at 50 %, the instrument is the suspect. (Our 56.83 %
+   on that same split is the honest comparison — an earlier read of "we beat
+   paddle by 6" was our *holdout* against paddle's *train*, and did not
+   survive matching the splits.)
+3. **The pixels explain it.** DocLayNet ships full pages at 1025x1025, so a
+   body-text line is 9-12 px tall — below what any OCR reads reliably.
+
+**Upscaling refuted as a fix.** Sweeping the detector input across 3.5x
+(`FFAI_DET_MIN_SIDE` 736 -> 1536 -> 2048 -> 2560) gives 57.22 / 57.68 / 57.53 /
+59.12 %. Flat, then worse. Resampling does not create information a 9-px glyph
+never had.
+
+So the corpus pinned in §6.2 is sound for the gate DocLayNet was *built* for —
+layout regions and reading order, whose ground truth is exact at any raster
+resolution — and **cannot support M-C3's end-to-end CER gate**. It remains
+valid as a *relative* comparison on matched pixels, where paddle currently
+leads by ~3 points. M-C3's CER gate needs a higher-resolution document source;
+DocLayNet's own release does not ship one, so that is open work.
+
+Recorded rather than quietly re-scoped: pinning a corpus is not the same as
+validating it, and the validation here cost four measurements and changed the
+milestone's plan.
+
+### 8.18 LIVE with mobile-det — 18 % lower p95, and a default left alone
+
+§8.17's frames win is worth something only if it survives into LIVE, where the
+speed gate is the one that has always been tightest. Same harness, same
+screencast, best-of-3, each detector at its own best setting:
+
+| LIVE, per band call | CRAFT | **mobile-det** |
+|---|---:|---:|
+| p50 | 156 ms | **114 ms** |
+| p95 | 241 ms | **198 ms** |
+| best-of-3 p95 range | [241, 247, 266] | **[198, 203, 206]** |
+| CER on change frames | **1.74 %** | 1.83 % |
+| churn | 0 / 156 | 0 / 156 |
+| four gates | PASS | PASS |
+
+**The p95 ranges do not overlap**, so the 18 % is a result and not a coin flip
+— the best-of-N rule this campaign runs on. Against per-frame Tesseract the
+margin widens from 1.33x to 1.6x.
+
+**The default stays CRAFT anyway.** LIVE's own quality metric moved the wrong
+way (+0.09 pp), and it passes only because the band is +0.25 pp. Flipping a
+default on a metric that regressed — even inside its band — is how a campaign
+accumulates quiet losses; the frames *batch* holdout says mobile-det is the
+better reader there (1.71 % vs 1.80 %), and the disagreement between the two
+measurements is itself unexplained. `FFAI_LIVE_DET=mobiledet` exposes it, and
+the sweep that resolves the disagreement is what would earn the default.
+
+This also retires a number: the full-suite run reported LIVE p95 **838 ms vs
+tesseract 841 ms**, a 3 ms pass that read as alarming. On a quiet box the same
+gate is 241 vs 321. That entire figure was contention from concurrent work on
+this machine, and it is exactly the failure the interleaved-A/B discipline
+exists to prevent — sequential arms sampling different machines.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
