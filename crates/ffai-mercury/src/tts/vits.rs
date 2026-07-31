@@ -335,42 +335,70 @@ impl Vits {
             }
         }
 
+        // Each output row (h, i) reads all of k/v/relk/relv but writes only its
+        // own hd values, so the (h, i) grid is embarrassingly parallel. It ran
+        // serial while the convs on either side of it were candle-threaded,
+        // which is why the attention half measured 3.94 cores and 16.4 GFLOP/s
+        // against the feed-forward's 9.21 and 72.1 in the same stage.
+        //
+        // Accumulate in [h][i][d] so each task owns one contiguous chunk, then
+        // transpose once into the [C][T] the output conv wants. Per-row
+        // arithmetic and its summation order are untouched, so this is
+        // BIT-IDENTICAL to the serial form.
+        let mut outh = vec![0f32; HEADS * t_len * hd];
+        let row_kernel = |p: &mut Vec<f32>, hi: usize, orow: &mut [f32]| {
+            let (h, i) = (hi / t_len, hi % t_len);
+            let qr = &q[(h * t_len + i) * hd..(h * t_len + i + 1) * hd];
+            for (j, pj) in p.iter_mut().enumerate() {
+                let kr = &kk[(h * t_len + j) * hd..(h * t_len + j + 1) * hd];
+                let rr = &relk[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
+                let mut s = 0f32;
+                for d in 0..hd {
+                    s += qr[d] * (kr[d] + rr[d]);
+                }
+                *pj = s;
+            }
+            // Softmax over the row, in place.
+            let m = p.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut sum = 0f32;
+            for pj in p.iter_mut() {
+                *pj = (*pj - m).exp();
+                sum += *pj;
+            }
+            let inv = 1.0 / sum;
+            // out[h,i] = Σⱼ p·(v[j] + relv[j−i+T−1]).
+            orow.iter_mut().for_each(|o| *o = 0.0);
+            for (j, pj) in p.iter().enumerate() {
+                let w = pj * inv;
+                let vr = &vv[(h * t_len + j) * hd..(h * t_len + j + 1) * hd];
+                let rr = &relv[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
+                for d in 0..hd {
+                    orow[d] += w * (vr[d] + rr[d]);
+                }
+            }
+        };
+        // Below this the rayon grid costs more than the rows do, matching the
+        // size-adaptive guard the decoder kernels already use.
+        let parallel = HEADS * t_len >= 32 && std::env::var("FFAI_SERIAL_ATTN").is_err();
+        if parallel {
+            use rayon::prelude::*;
+            outh.par_chunks_mut(hd).enumerate().for_each_init(
+                || vec![0f32; t_len],
+                |p, (hi, orow)| row_kernel(p, hi, orow),
+            );
+        } else {
+            let mut p = vec![0f32; t_len];
+            for (hi, orow) in outh.chunks_mut(hd).enumerate() {
+                row_kernel(&mut p, hi, orow);
+            }
+        }
+
         let mut out = vec![0f32; HIDDEN * t_len];
-        let mut p = vec![0f32; t_len];
-        let mut orow = vec![0f32; hd];
         for h in 0..HEADS {
             for i in 0..t_len {
-                let qr = &q[(h * t_len + i) * hd..(h * t_len + i + 1) * hd];
-                for (j, pj) in p.iter_mut().enumerate() {
-                    let kr = &kk[(h * t_len + j) * hd..(h * t_len + j + 1) * hd];
-                    let rr = &relk[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
-                    let mut s = 0f32;
-                    for d in 0..hd {
-                        s += qr[d] * (kr[d] + rr[d]);
-                    }
-                    *pj = s;
-                }
-                // Softmax over the row, in place.
-                let m = p.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                let mut sum = 0f32;
-                for pj in p.iter_mut() {
-                    *pj = (*pj - m).exp();
-                    sum += *pj;
-                }
-                let inv = 1.0 / sum;
-                // out[h,i] = Σⱼ p·(v[j] + relv[j−i+T−1]), accumulated in a
-                // local row, scattered once.
-                orow.iter_mut().for_each(|o| *o = 0.0);
-                for (j, pj) in p.iter().enumerate() {
-                    let w = pj * inv;
-                    let vr = &vv[(h * t_len + j) * hd..(h * t_len + j + 1) * hd];
-                    let rr = &relv[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
-                    for d in 0..hd {
-                        orow[d] += w * (vr[d] + rr[d]);
-                    }
-                }
-                for d in 0..hd {
-                    out[(h * hd + d) * t_len + i] = orow[d];
+                let src = &outh[(h * t_len + i) * hd..(h * t_len + i + 1) * hd];
+                for (d, s) in src.iter().enumerate() {
+                    out[(h * hd + d) * t_len + i] = *s;
                 }
             }
         }
@@ -394,6 +422,22 @@ impl Vits {
             }
         }
         Ok(rows)
+    }
+
+    /// One encoder layer's attention half, exposed for `enc_anatomy`.
+    pub fn enc_attn_probe(&self, layer: usize, x: &Tensor, t_len: usize) -> Result<Tensor> {
+        let base = format!("enc_p.encoder.attn_layers.{layer}");
+        self.rel_attention(&base, layer, x, t_len)
+    }
+
+    /// One encoder layer's feed-forward half, exposed for `enc_anatomy`.
+    pub fn enc_ffn_probe(&self, layer: usize, x: &Tensor) -> Result<Tensor> {
+        self.ffn(&format!("enc_p.encoder.ffn_layers.{layer}"), x)
+    }
+
+    /// One encoder layer's LayerNorm, exposed for `enc_anatomy`.
+    pub fn enc_norm_probe(&self, layer: usize, x: &Tensor) -> Result<Tensor> {
+        self.layer_norm_named(&format!("enc_p.encoder.norm_layers_1.{layer}"), x)
     }
 
     fn ffn(&self, base: &str, x: &Tensor) -> Result<Tensor> {
