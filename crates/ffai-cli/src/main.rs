@@ -303,6 +303,9 @@ fn main() -> Result<()> {
                 vad: vad_on,
                 vad_threshold,
                 vad_chunk_secs,
+                // A one-shot file run starts at the beginning; the absolute
+                // window grid only matters to streaming callers.
+                stream_offset_secs: 0.0,
             };
             let transcript = reg.asr(engine.as_deref())?.transcribe(&audio, &opts)?;
             match output {
