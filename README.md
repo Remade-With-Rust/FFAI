@@ -387,6 +387,15 @@ PP-OCRv5 mobile detector — DBNet on PP-LCNetV3, 4.7 MB, reproducing
 paddle's own exported program to **zero binarised disagreement** across a
 pinned page — gives `mobiledet-crnn` and `mobiledet-parseq`.
 
+The two detector lineages trade against each other rather than ranking, and
+the measurement says so plainly. On real-photo receipts mobile-det is **3×
+faster and 3.2× leaner** than CRAFT — the first configuration to pass the
+speed and footprint gates there, and leaner than PaddleOCR itself — and
+**worse on quality** (37.3 % vs 27.3 % CER), because DBNet emits line regions
+and a receipt separates its labels from its amounts across two columns.
+CRAFT's character components carry structure a line detector discards. Pick by
+corpus class, not by leaderboard.
+
 **Where Carmenta wins, measured:**
 
 - **The recognition stage beats PaddleOCR's own mobile recognizer** on 400
