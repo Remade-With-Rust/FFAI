@@ -154,6 +154,37 @@ fn main() {
     }
     let coverage = covered as f64 / total.max(1) as f64;
 
+    // Diagnostic: is the miss STRICTNESS or genuinely-outside-band text?
+    // Strict containment demands the whole later box sit inside a calibrated
+    // band; centre containment only asks that its middle does. If centre is
+    // high while strict is low, the bands are in the right places and the pad
+    // is too tight for this detector's box-height jitter — which is a pad
+    // problem, not a band-set problem.
+    let (mut centre_cov, mut c_total) = (0usize, 0usize);
+    let mut heights: Vec<f32> = Vec::new();
+    for f in line_bands.iter().skip(30) {
+        for &(y0, y1) in f {
+            c_total += 1;
+            heights.push(y1 - y0);
+            let c = (y0 + y1) / 2.0;
+            if bands.iter().any(|b| c >= b.0 && c < b.1) {
+                centre_cov += 1;
+            }
+        }
+    }
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let med_h = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+    let mut band_hs: Vec<f32> = bands.iter().map(|b| b.1 - b.0).collect();
+    band_hs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!(
+        "  auto-ROI diagnosis:     {} bands (median {:.0}px); boxes median {:.0}px;          strict {:.1}% vs centre {:.1}%",
+        bands.len(),
+        band_hs.get(band_hs.len() / 2).copied().unwrap_or(0.0),
+        med_h,
+        coverage * 100.0,
+        100.0 * centre_cov as f64 / c_total.max(1) as f64,
+    );
+
     // ---- tesseract, stateless, same frames: the C++ bar + its churn ----
     let refs = ffai_bench::reference::ReferenceFile::load(Path::new("corpora/references.toml"))
         .expect("references.toml");

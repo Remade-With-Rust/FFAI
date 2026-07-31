@@ -147,6 +147,36 @@ struct Band {
     cached: Vec<ffai_core::types::OcrBlock>,
 }
 
+/// Vertical slack added to each side of a calibrated band, as a fraction of
+/// the band's own height.
+///
+/// Was a flat 8 px. The pad absorbs frame-to-frame jitter in a line's detected
+/// extent and bounds how much of a glyph the band crop can clip, and both scale
+/// with the line — so a constant is the wrong shape. Swept on the screencast
+/// corpus, CER on change frames:
+///
+/// | frac | 0.0 | 0.12 | 0.25 | 0.29 | **0.33** | 0.36 | 0.40 | 0.50 | 0.65 |
+/// |---|---|---|---|---|---|---|---|---|---|
+/// | CRAFT | 1.74 | 1.74 | 1.77 | 1.74 | **1.43** | 1.47 | 1.54 | 2.47 | 3.42 |
+///
+/// A real basin, not a spike: three values inside it and a monotone rise on
+/// both sides. Confirmed on the other detector rather than assumed to be
+/// CRAFT-specific — mobile-det goes 1.83 % -> 1.80 % at the same setting.
+///
+/// **The cliff past ~0.45 is mechanical and worth knowing.** Bands are clamped
+/// to the midpoint of the gap to their neighbour, so a large fraction grows a
+/// band until its crop reaches halfway into the next line and the CRNN starts
+/// reading two lines as one. Where that cliff sits therefore depends on the
+/// corpus's line SPACING, and 0.33 leaves roughly 0.12 of margin on this one.
+/// A denser corpus would want less; `FFAI_BAND_PAD` is the knob.
+fn band_pad(span_h: usize) -> usize {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    let frac = *V.get_or_init(|| {
+        std::env::var("FFAI_BAND_PAD").ok().and_then(|v| v.parse().ok()).unwrap_or(0.33)
+    });
+    8.max((span_h as f32 * frac).round() as usize)
+}
+
 /// Build bands from a full-frame result and cache each band's blocks:
 /// loose +-8 px unions of line y-bands (the harvest's construction), output
 /// lines assigned to their band for the dirty-band cache.
@@ -172,8 +202,15 @@ fn calibrate_bands(full: &OcrOutput, frame_h: usize) -> Vec<Band> {
     for i in 0..spans.len() {
         let lo = if i == 0 { 0 } else { raw[i - 1].1.midpoint(raw[i].0) };
         let hi = if i + 1 == spans.len() { frame_h } else { raw[i].1.midpoint(raw[i + 1].0) };
-        spans[i].0 = spans[i].0.saturating_sub(8).max(lo);
-        spans[i].1 = (spans[i].1 + 8).min(hi);
+        // The pad absorbs frame-to-frame jitter in a line's detected extent,
+        // and that jitter scales with the line — so a flat 8 px is the wrong
+        // shape. It was tuned against CRAFT, whose many small word boxes union
+        // into generous spans; DBNet's few line-level boxes union tightly, and
+        // the same 8 px left its band crops clipping ascenders. Proportional,
+        // with the old value as the floor.
+        let pad = band_pad(raw[i].1.saturating_sub(raw[i].0));
+        spans[i].0 = spans[i].0.saturating_sub(pad).max(lo);
+        spans[i].1 = (spans[i].1 + pad).min(hi);
     }
     spans
         .into_iter()

@@ -379,6 +379,12 @@ pub fn mobiledet_input(
         .and_then(|v| v.parse().ok())
         .unwrap_or(4000);
 
+    // A shape-aware floor was tried here — a smaller `min_side` for band STRIPS
+    // (aspect > 4) than for pages — on the theory that LIVE's 1280x45 bands were
+    // what a page-shaped floor mishandles. It measured INERT: LIVE stayed at
+    // 1.83 % while a global lower floor reaches 1.62 %, which locates the effect
+    // in the full-frame calibration call, not in the strips. Reverted rather
+    // than kept as a plausible-looking knob that buys nothing. See §8.20.
     let short = w.min(h) as f32;
     let ratio = if (short as usize) < min_side { min_side as f32 / short } else { 1.0 };
     let (mut rw, mut rh) = ((w as f32 * ratio).trunc(), (h as f32 * ratio).trunc());

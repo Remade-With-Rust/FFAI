@@ -1391,6 +1391,73 @@ and does not ship. `CraftCrnn::new_composed` stays so the probe reproduces.
 Two lineages, opposite trades, both now parameterised for the recognizer they
 actually feed.
 
+### 8.20 calibrate_bands — the fix landed, and §8.19's stated mechanism was wrong
+
+**Correction first.** §8.19 reported that LIVE's mobile-det regression was
+missed text: auto-ROI bands covering 86.7 % of CRAFT's boxes against 69.8 % of
+mobile-det's, so "~30 % of the text is never re-read". **That mechanism is
+wrong.** The harvest scores coverage by STRICT containment — the whole later
+box must sit inside a calibrated band — while `calibrate_bands` assigns lines
+to bands by their CENTRE. Measured on the rule the system actually uses:
+
+| | strict containment | CENTRE containment |
+|---|---:|---:|
+| CRAFT | 86.7 % | **100.0 %** |
+| mobile-det | 69.8 % | **100.0 %** |
+
+Every box's centre lands in a band, for both detectors. Six bands each, in the
+right places. No text was being missed, and the number that said otherwise was
+an observe-only ceiling estimate measured with a stricter rule than the code
+obeys. A metric that does not match the code path is not evidence about the
+code path.
+
+**The right place to look was still the pad, for a different reason.** Bands
+are what the recognizer is CROPPED to, so a band that is tight around its line
+clips ascenders. Mobile-det's bands measured tighter (median 45 px vs CRAFT's
+50) around boxes of the same size, because DBNet's few line-level boxes union
+tightly where CRAFT's many word boxes union generously — and the pad absorbing
+that was a flat 8 px, tuned against CRAFT.
+
+Made proportional to the band's own height and swept (CER on change frames):
+
+| frac | 0.0 | 0.12 | 0.25 | 0.29 | **0.33** | 0.36 | 0.40 | 0.50 | 0.65 |
+|---|---|---|---|---|---|---|---|---|---|
+| CRAFT | 1.74 | 1.74 | 1.77 | 1.74 | **1.43** | 1.47 | 1.54 | 2.47 | 3.42 |
+| mobile-det | 1.83 | 1.83 | 1.83 | — | **1.80** | — | 2.21 | — | — |
+
+**LIVE's quality gate goes 1.74 % -> 1.43 %**, an 18 % relative improvement on
+the default engine, with churn still 0/156 and all four gates PASS. A basin
+rather than a spike — three values inside, monotone rise on both sides — and
+confirmed on the second detector rather than assumed to generalise.
+
+The cliff past ~0.45 is mechanical: bands are clamped to the midpoint of the
+gap to their neighbour, so a large fraction eventually grows a crop halfway
+into the next line and the CRNN reads two lines as one. Its position therefore
+depends on the corpus's line spacing; 0.33 keeps ~0.12 of margin here, and
+`FFAI_BAND_PAD` is the knob for a denser one.
+
+#### Tried and reverted: a shape-aware detector floor
+
+Mobile-det's remaining LIVE deficit had an obvious suspect: LIVE hands the
+detector band STRIPS (1280x45 is an aspect of 28), and a minimum-SHORT-side
+floor of 736 demands a 16x upscale that lands straight on the 4000 px cap. So
+the floor was made shape-aware — a smaller value for strips than for pages.
+
+**Measured inert.** LIVE stayed at 1.83 % while a globally lower floor reaches
+1.62 %, which places the effect in the full-frame CALIBRATION call rather than
+in the strips. Reverted rather than kept as a plausible knob that buys nothing.
+
+#### Left open, and stated as open
+
+A global `FFAI_DET_MIN_SIDE` of 48, 96 or 320 all give mobile-det **1.62 %** in
+LIVE against **1.83 %** at the 736 default — three settings agreeing exactly, so
+the effect is real. Batch wants the opposite: on full frames 736 reads 1.71 %
+and 320 reads 1.80 %. Same detector, same corpus, opposite optima, and the
+shape probe rules out the strips. The remaining difference is what the boxes
+are USED for — final crops in batch, band GEOMETRY in LIVE's calibration — but
+that is a hypothesis, not a measurement, and it is recorded as one. Plumbing a
+per-call floor needs an `OcrOptions` field, which is a shared-crate change.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
