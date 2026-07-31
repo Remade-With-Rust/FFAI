@@ -79,7 +79,21 @@ def main() -> int:
         if os.path.exists(txt):
             with open(txt, encoding="utf-8", errors="replace") as fh:
                 text = " ".join(fh.read().split())
-            os.remove(txt)
+            # Best-effort cleanup ONLY. On Windows this raised
+            # PermissionError(WinError 32) partway through a 134-clip TTS judge
+            # run -- a transient lock from an AV scanner or a not-yet-released
+            # whisper-cli handle -- which aborted the whole reference and made
+            # the bench report 0/134 clips and three SKIPPED gates. The text is
+            # already in memory by this point, so failing to unlink a temp file
+            # must never cost the run its results.
+            for attempt in range(3):
+                try:
+                    os.remove(txt)
+                    break
+                except OSError:
+                    if attempt == 2:
+                        break
+                    time.sleep(0.1)
         print(json.dumps({"path": path, "text": text}), flush=True)
     return 0
 

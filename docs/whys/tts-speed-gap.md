@@ -431,6 +431,43 @@ win-rate per length):
 
 ---
 
+## The corpus bench — ALL FOUR GATES PASS
+
+Run after round 2 (`examples/bench_tts.rs`, 134 holdout utterances, best-of-3,
+round-trip WER judged by frozen whisper.cpp base.en):
+
+| gate | outcome | numbers |
+|---|---|---|
+| correctness | **pass** | 134/134 holdout clips |
+| quality | **pass** | ours 5.91% WER vs piper1-gpl 5.76% (inside band) |
+| speed | **pass** | ours **13.8x realtime warm** vs piper **11.1x**; e2e 13.4x |
+| footprint | **pass** | ours 206 MiB steady (peak 243) vs piper 219 MiB — 0.94x |
+
+Two things had to be fixed to get a valid line, and both are worth recording.
+
+1. **The CLI could not run it.** A concurrent session had uncommitted Diana
+   wiring in `crates/ffai-cli/src/main.rs` against a crate not in ffai-cli's
+   dependencies. The bench is a library call, so `examples/bench_tts.rs` invokes
+   `ffai_bench::tts::run_tts` directly — same corpus, same references, same
+   ledger — rather than editing another session's in-flight work.
+2. **The judge aborted the reference.** `whisper_cpp_ref.py` did a bare
+   `os.remove()` on its temp transcript; on Windows a transient lock raised
+   `PermissionError(WinError 32)` partway through, which killed the whole piper
+   arm and produced `0/134 clips` and **three SKIPPED gates**. The text is
+   already in memory at that point, so cleanup must never cost the run its
+   results — now best-effort with retries. Note how this failure presented:
+   not as an error, but as a bench that completed and reported our engine's
+   numbers with the comparison silently missing. A skipped gate is never a pass.
+
+**Read the two speed numbers together, not separately.** End-to-end — what a
+user actually invokes — we are **1.24x faster than piper1** (13.8x vs 11.1x).
+At the raw ONNX-graph level ORT is still ~1.2-1.3x ahead of our VITS core. The
+difference between those facts is piper's Python and plumbing overhead against
+our Rust. Both are true and they answer different questions; quoting either one
+alone misleads.
+
+---
+
 ## Standing corrections to the ledger
 
 1. The headline gap is **1.19x at matched thread occupancy** (1.28x at each
