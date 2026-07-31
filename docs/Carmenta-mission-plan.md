@@ -945,6 +945,51 @@ Dispatch is confirmed on BOTH sides — rendered content routes to the
 splitter, photographs to the direct feed — and the frames improvement is the
 dispatcher working, not a discrepancy.
 
+### 8.13 Crop geometry — the 16-point cause, isolated and partly banked
+
+The last standing hypothesis, tested by isolation rather than argument: cut
+the SAME 400 CORD words two ways — from the corpus's ground-truth quads and
+from our detector's boxes — and read both with the same recognizer. Any
+difference is geometry with every other variable held fixed.
+
+| crops from | parseq CER | exact | crnn CER |
+|---|---:|---:|---:|
+| CORD ground-truth quads | **1.30 %** | 94 % | 10.95 % |
+| our detector's boxes | **17.41 %** | 68 % | 35.26 % |
+
+**A 16-point penalty from box geometry alone**, and it hits both recognizers.
+That is the bulk of the remaining pipeline gap to paddle. Matched against the
+quads our boxes measure **0.69x their height, 0.82x their width**, shifted
++0.17/+0.18 line-heights, median IoU **0.537**.
+
+**What did NOT work, and why it is worth knowing.** Correcting the boxes by
+that measured MEDIAN bias recovered only 1.4 of the 16 points (17.41 ->
+15.97 %). The bias is not systematic: an IoU of 0.537 for the SAME word means
+boxes are individually wrong — fragmenting and merging — not uniformly
+shifted. No constant pad can fix that, which is also why the earlier pad
+sweep found wider padding worse.
+
+**PRUNED: reference dilation inside `extract_boxes`.** Porting clovaai's
+component dilation regressed everything — CORD 21.70 -> 32.5 %, render
+0.710 -> 2.260 %, frames 1.602 -> 5.187 %. Two causes, both instructive:
+(1) `cv2.dilate` with a `(1+niter)²` kernel grows by niter/2 per side, not
+niter — a 2x over-expansion; (2) more fundamentally, **detection boxes do TWO
+jobs** — they define line GROUPING and they define recognition CROPS. Widening
+them for the crops broke the grouping, and that cascade swamped the crop win.
+Test the chain, not the link.
+
+**KEPT: per-word crop geometry (CORD 21.70 -> 20.9 %, render unchanged).**
+The expansion moved to crop time only, so `extract_boxes` and therefore
+grouping are untouched, and each word is cut from its OWN vertical extent
+rather than the shared line band — a line's tallest word no longer dictates
+every crop in it.
+
+**The residual ~15 points is box QUALITY, not padding**, and it has a named
+fix that removes the problem rather than tuning it: the staged PP-OCRv5
+mobile detector emits word/line polygons directly, so no component
+reconstruction is needed at all. Weights, shape map and behavioural oracle
+are already on disk (§7.1, `docs/whys/mobiledet-port-notes.md`).
+
 ### 8.4 PARSeq-tiny port: oracle PASS; engine variant open with a localized defect
 
 The port landed and is PROVEN at the stage level: ViT-tiny encoder +

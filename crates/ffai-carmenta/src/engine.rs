@@ -266,7 +266,7 @@ impl OcrEngine for CraftCrnn {
                         // Neither wins everywhere, so the strategy is chosen
                         // per image — see `content` for the signal and its
                         // empty-band margin.
-                        let word_ranges: Vec<(usize, usize)> = match content_kind {
+                        let word_ranges: Vec<(usize, usize, usize, usize)> = match content_kind {
                             crate::content::ContentKind::Rendered => {
                                 let lb_map = boxes::line_bbox(line);
                                 let bh = (to_img(lb_map.y1) - to_img(lb_map.y0)).max(1.0);
@@ -275,10 +275,36 @@ impl OcrEngine for CraftCrnn {
                                 let sx0 = (to_img(lb_map.x0) - bh * 0.5).max(0.0) as usize;
                                 let sx1 = ((to_img(lb_map.x1) + bh * 0.5) as usize).min(w);
                                 image::split_ink_words(&gray, w, sy0, sy1, sx0, sx1)
+                                    .into_iter()
+                                    .map(|(a, b)| (a, sy0, b, sy1))
+                                    .collect()
                             }
+                            // PER-WORD geometry, expanded by the MEASURED
+                            // bias. Matched against CORD's ground-truth word
+                            // quads our boxes run 0.69x their height and
+                            // 0.82x their width, shifted +0.17/+0.18 — and
+                            // reading the same words from our boxes instead
+                            // of theirs costs PARSeq 1.30 % -> 17.41 % CER.
+                            //
+                            // The expansion happens HERE, at crop time, and
+                            // NOT in `extract_boxes`: widening the detector's
+                            // boxes changes line GROUPING, and that cascade
+                            // measured far worse than the crop win (CORD
+                            // 21.70 -> 32.5 %). Tight boxes for structure,
+                            // expanded boxes for reading.
                             crate::content::ContentKind::Photographic => line
                                 .iter()
-                                .map(|b| (to_img(b.x0).max(0.0) as usize, to_img(b.x1) as usize))
+                                .map(|b| {
+                                    let (bx0, by0) = (to_img(b.x0), to_img(b.y0));
+                                    let (bx1, by1) = (to_img(b.x1), to_img(b.y1));
+                                    let bh = (by1 - by0).max(1.0);
+                                    (
+                                        (bx0 - bh * 0.27).max(0.0) as usize,
+                                        (by0 - bh * 0.24).max(0.0) as usize,
+                                        ((bx1 + bh * 0.20) as usize).min(w),
+                                        ((by1 + bh * 0.21) as usize).min(h),
+                                    )
+                                })
                                 .collect(),
                         };
                         let lb_map = boxes::line_bbox(line);
@@ -291,12 +317,13 @@ impl OcrEngine for CraftCrnn {
                         let ly0 = (to_img(lb_map.y0) - bh_img * pad_y).max(0.0) as usize;
                         let ly1 = ((to_img(lb_map.y1) + bh_img * pad_y) as usize).min(h);
                         let _ = (&region, &affinity, mw);
-                        for &(wx0, wx1) in word_ranges.iter() {
+                        let _ = (ly0, ly1);
+                        for &(wx0, wy0, wx1, wy1) in word_ranges.iter() {
                             let pad = (bh_img * pad_x) as usize;
                             let bx0 = wx0.saturating_sub(pad);
-                            let by0 = ly0;
+                            let by0 = wy0.saturating_sub((bh_img * pad_y * 0.0) as usize);
                             let bx1 = (wx1 + pad).min(w);
-                            let by1 = ly1;
+                            let by1 = wy1.min(h);
                             if bx1 <= bx0 + 1 || by1 <= by0 + 1 {
                                 continue;
                             }
