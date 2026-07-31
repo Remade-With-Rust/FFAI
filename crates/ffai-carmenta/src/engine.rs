@@ -72,6 +72,18 @@ fn mobiledet_pads() -> (f32, f32) {
     })
 }
 
+/// Minimum recognition confidence for a line to be emitted at all.
+///
+/// Zero by default — off until a gate says otherwise, and the sweep that sets
+/// it lives on the CORD train split. Raising it trades deletions for
+/// insertions, so the optimum is wherever that exchange stops paying.
+fn reject_threshold() -> f32 {
+    static V: OnceLock<f32> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("FFAI_REJECT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
+    })
+}
+
 struct Models {
     craft: Option<Craft>,
     mobiledet: Option<crate::mobiledet::MobileDet>,
@@ -605,6 +617,19 @@ impl OcrEngine for CraftCrnn {
                 };
                 if text.is_empty() {
                     return Ok(None);
+                }
+                // REJECTION. §8.22 decomposed the CORD gap and found 97 % of it
+                // is INSERTIONS — text emitted for regions the ground truth does
+                // not contain, because CORD's receipts are privacy-blurred and
+                // we read the smear. Our substitutions are within 0.46 pp of
+                // PaddleOCR's; what it does that we do not is refuse to answer.
+                // A recognizer asked to read an illegible crop still returns its
+                // best guess, and the confidence it returns alongside is the
+                // signal that the guess is worthless.
+                if let Some(c) = confidence {
+                    if c < reject_threshold() {
+                        return Ok(None);
+                    }
                 }
                 Ok(Some(OcrLine {
                     text,

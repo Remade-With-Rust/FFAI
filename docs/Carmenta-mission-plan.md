@@ -1570,13 +1570,61 @@ matched-word probe simply cannot see insertions, because it never scores a
 region the ground truth does not contain. Two true measurements of different
 things; only the full-page decomposition says which one the gate is made of.
 
-**Named next brick: rejection.** A confidence gate — CTC/AR score per line,
-detection score per box, or both — swept on the CORD train split. The ceiling
-is unusually well defined: driving our insertions to the reference's 5.79 pp
-takes CORD from 20.55 % to ~14.8 %, at parity with PaddleOCR, without touching
-detection geometry or the recognizer. That is the largest single prize left on
-the board and it was invisible for the whole campaign because CER was only ever
-read as a total.
+**Named next brick: rejection** — and §8.23 measured it and refuted it. The
+ceiling quoted here ("~14.8 %, at parity with PaddleOCR") assumed insertions
+could be removed for free. They cannot: every mechanism that removes them
+removes real text at a similar or faster rate. The decomposition in this
+section stands; the prize computed from it did not survive contact.
+
+### 8.23 Rejection — refuted, and the ceiling with it
+
+§8.22 named a prize: our insertions are twice the reference's, so suppress them
+and CORD lands at parity. Three levers, swept on the CORD train split, plus two
+separability probes. **All negative.**
+
+| lever | best | vs off | what happened |
+|---|---|---|---|
+| recognition confidence (PARSeq) | 18.10 % @ 0.8 | −0.70 pp | insertions 9.87 -> 8.99; at 0.9 insertions reach 7.22 but deletions go 4.68 -> **9.49** |
+| recognition confidence (CRNN) | 21.20 % @ off | — | every threshold made it worse |
+| CRAFT detection threshold | 18.54 % @ 0.78 | −0.26 pp | insertions 9.87 -> 6.46 at 0.94, deletions 4.68 -> **13.73** |
+| the other detector | 32.03 % | — | mobile-det's insertions are 13.73–18.61 pp, WORSE than CRAFT's 9.87 |
+
+Every one trades insertions for deletions at roughly 1:1. That is the signature
+of a constant applied to a content-dependent question, so the next question was
+whether any per-page signal separates the two populations at all. Classifying
+each emitted line by whether the ground truth contains it:
+
+| signal | in-GT lines | NOT-in-GT lines |
+|---|---|---|
+| PARSeq confidence, absolute | median 0.997, p10 0.970 | median 0.976, p10 0.853, **p90 0.998** |
+| confidence, relative to page median | median +0.000, p10 −0.021 | median −0.005, p10 −0.132 |
+| crop sharpness, absolute | median 0.546 | median 0.414 |
+| sharpness, relative to page | median 1.015 | median 0.933 |
+
+**Nothing separates them.** A tenth of the bad lines carry confidence 0.998 —
+inside the good lines' body, not their tail. An autoregressive decoder handed
+an illegible crop returns a fluent word and full confidence, and **its opinion
+is not evidence about its input**. Sharpness, which is a property of the pixels
+rather than of a model's belief, does better on medians and still overlaps
+almost completely.
+
+So the honest verdict: **the insertion gap is real, the ceiling computed from it
+is not.** §8.22's "~14.8 %, parity with PaddleOCR" assumed those 5.74 pp could
+be removed for free; they cannot be removed at all by any gate tried, and the
+number should never have been stated as a prize without a mechanism that
+collects it. Recorded as a correction to my own section, one entry later.
+
+`FFAI_REJECT` stays as a knob and stays **off** by default. A 0.70 pp gain on 15
+train clips, bought by trading one error class for another, is exactly the
+fragile tuning this campaign is supposed to refuse.
+
+**What this leaves.** Paddle emits half our junk and no gate explains how, which
+means the difference is upstream of anything a threshold can see — most likely
+in what its detector proposes at all on smeared regions, since its recogniser
+is measurably worse than ours on matched crops (1.5 % vs 3.0 %, §Status). The
+next probe is not another threshold: it is a direct comparison of the two
+detectors' box SETS on a blurred region, which is a different question from the
+box GEOMETRY §8.13 measured.
 
 ## 9. Pure-Rust boundary and watchlist
 

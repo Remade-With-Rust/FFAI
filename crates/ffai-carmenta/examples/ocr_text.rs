@@ -34,9 +34,24 @@ fn main() {
 
     let img = ffai_media::load_image(std::path::Path::new(&path)).expect("load image");
     let out = engine.recognize(&img, &OcrOptions::default()).expect("recognize");
+    // FFAI_OCR_CONF=1 prefixes each line with its recognition confidence, so a
+    // probe can ask whether low-confidence output is separable from good output
+    // — globally, or only relative to the page it came from.
+    let with_conf = std::env::var("FFAI_OCR_CONF").is_ok();
     for block in &out.blocks {
         for line in &block.lines {
-            println!("{}", line.text);
+            if with_conf {
+                let b = line.bbox.as_ref();
+                println!(
+                    "{:.4}	{}	{}	{}	{}	{}",
+                    line.confidence.unwrap_or(-1.0),
+                    b.map_or(0.0, |b| b.x), b.map_or(0.0, |b| b.y),
+                    b.map_or(0.0, |b| b.width), b.map_or(0.0, |b| b.height),
+                    line.text
+                );
+            } else {
+                println!("{}", line.text);
+            }
         }
     }
 }
