@@ -417,6 +417,16 @@ impl Vits {
     /// Two graph-confirmed quirks: `dp.flows.1` never runs (the VITS
     /// reversal drops it), and durations are NOT clamped — only the total
     /// length is, downstream.
+    /// The duration predictor's conditioning half (pre -> DDSConv -> proj),
+    /// exposed so `dp_anatomy` can separate it from the flow half. Nearly all
+    /// of this stage's multiply-accumulate lives here: 192 channels against the
+    /// flow half's 2.
+    pub fn dp_conditioning_probe(&self, hidden: &Tensor) -> Result<Tensor> {
+        let g = self.conv("dp.pre", hidden)?;
+        let g = self.dds_conv("dp.convs", &g, None)?;
+        self.conv("dp.proj", &g)
+    }
+
     pub fn durations(
         &self,
         hidden: &Tensor,
@@ -706,7 +716,22 @@ impl Vits {
                 return Tensor::from_vec(out, (1, c, l_out), &self.device).e();
             }
             if x_ch / in_per_group == 1 {
-                return super::decoder_kernels::conv1d_direct(x, weight, bias, g.pad, g.dilation);
+                // `conv1d_direct` is serial. That is right for dec.*, whose
+                // shapes are large enough to win anyway, but dp's dense convs
+                // are 192x192xT — the very shape the note above records as
+                // LOSING to candle's threaded matmul in enc_p. Routing dp here
+                // is why the duration predictor runs at 0.88 cores while every
+                // other stage reaches 11+. Depthwise dp convs still take the
+                // flat kernel above (measured 395 -> 254 ms), only the dense
+                // ones fall through. `FFAI_DP_DIRECT_1X1=1` restores the old
+                // routing for A/B.
+                let dp_dense_to_candle =
+                    name.starts_with("dp.") && std::env::var("FFAI_DP_DIRECT_1X1").is_err();
+                if !dp_dense_to_candle {
+                    return super::decoder_kernels::conv1d_direct(
+                        x, weight, bias, g.pad, g.dilation,
+                    );
+                }
             }
         }
         let groups = if g.transpose {
