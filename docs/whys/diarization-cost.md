@@ -94,16 +94,75 @@ clears |z| > 2 comfortably.
 the cache on and off, exactly as content-keying guarantees. 126 tests pass.
 `FFAI_DIARIZE_CACHE=off` reproduces the old path.
 
-## What is left, honestly
+## The 24 % hit rate — measured, and it overturned my correction
 
-**The hit rate is only ~24 %, and it should be far higher.** Windows are
-placed on a 0.75 s hop *relative to the buffer*, while the demo slides the
-buffer by 1 s. Those grids are incommensurate, so window boundaries realign
-only every 3 s — most ticks re-cut the same audio at new offsets and miss.
-Placing windows on an **absolute** grid (aligned to the source's own
-timeline, not the buffer's start) would make nearly every shared window a
-hit, and is the obvious next brick. The 1.6–1.9× measured here is what the
-cache achieves *despite* the misalignment.
+I first said the misses were hop/tick incommensurability. Then I read
+`subsegment`, saw windows anchored to `region.start` (a VAD-detected speech
+onset, which tracks content), and publicly withdrew that: if windows follow
+the speech, a sliding buffer should still hit. **The trace says the first
+answer was right, by a mechanism neither statement contained.**
+
+`FFAI_DIARIZE_TRACE=1` over the sliding pattern, cache arm only:
+
+| tick | regions | windows | hits |
+|---|---|---:|---:|
+| 1 | `0.400-10.000` | 12 | 12 (vs warm-up, same buffer) |
+| 2 | `0.000-9.250` | 12 | **0** |
+| 3 | `0.000-8.250, 9.310-10.000` | 11 | **0** |
+| 4 | `0.000-7.250, 8.310-9.720` | 10 | **0** |
+| 5 | `0.000-6.250, 7.310-8.720, 9.210-10.000` | 10 | **8** |
+| 6 | `0.000-5.250, 6.310-7.720, 8.210-9.810` | 10 | **6** |
+
+Two things fall out. Hits appear only at ticks 5 and 6 — **exactly three
+ticks** after 2 and 3, which is `lcm(1 s tick, 0.75 s hop) = 3 s`. And the
+leading region is **clipped to `0.000`** from tick 2 onward: the buffer's
+edge cuts it, so its windows anchor to the *buffer* while the audio beneath
+slides. Regions that are *not* clipped track their content correctly (ends
+moving −1.0 s per tick) and hit.
+
+So windows were effectively buffer-relative after all — via **clipping**,
+not via the hop arithmetic — and both mechanisms compound. Ten of 34 distinct
+window bounds recurred holding *different* audio, `0.000-1.500` alone under
+five different keys. That is the entire miss population.
+
+*The lesson is not "I was right all along". It is that I stated a mechanism,
+then withdrew it on a second reading, and both moves were guesses. The trace
+took ten minutes and settled what two rounds of reasoning could not.*
+
+## The fix: an absolute window grid
+
+`AsrOptions::stream_offset_secs` tells the engine where the buffer sits in
+the stream; `subsegment_at` snaps each chain's first window to the absolute
+hop grid. The same audio then lands on the same bounds regardless of where
+the buffer begins — which is the precondition the content-keyed cache needed
+to hit. `0.0` (the default, and every batch caller) reproduces the previous
+behaviour for any region already on the grid.
+
+| | median cache | median no-cache | speedup | paired | hit rate |
+|---|---:|---:|---:|---|---:|
+| cache only | 1069 ms | 2000 ms | 1.87× | 8/10 | 24 % |
+| **+ absolute grid** | **641 ms** | 2024 ms | **3.16×** | **10/10** | 39 % |
+
+The 39 % is understated — the counters include the no-cache arm's forced
+misses, so the cache arm's own rate is considerably higher.
+
+**Gate.** Unlike the cache, this *moves* window placement, so it is not
+neutral by construction and the batch path is affected too. DER measured
+**4.21 % blind / 5.00 % oracle — identical**. Two new unit tests pin the
+invariant it rests on: the same audio must yield the same absolute bounds as
+the buffer slides, and snapping must never drop a region.
+
+## What is left
+
+The per-forward cost is architectural (Res2Net's 8 sequential groups), so the
+remaining levers are all "ask for fewer forwards":
+
+- **Coarser hop.** Nothing forces 0.75 s. A larger hop is strictly fewer
+  windows at a DER cost that `diarize_gate.rs` can price rather than assume.
+- **Incremental streaming.** Even with a perfect cache, the pipeline still
+  clusters over the whole buffer every tick. Embedding only the new tail and
+  keeping prior embeddings with their absolute timestamps subsumes the cache
+  entirely — no window can miss if it is never requested twice.
 
 Also unexplored, and larger if it works: the per-forward cost itself is
 architectural, but nothing forces 1.5 s windows at 0.75 s hop. A coarser hop
