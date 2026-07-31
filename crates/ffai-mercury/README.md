@@ -164,7 +164,10 @@ piper is GPL-3.0 because it embeds espeak-ng. Mercury's G2P is a clean-room pure
 - **Quality: parity.** Round-trip WER through a frozen whisper.cpp judge (never our own ASR — no self-grading): **5.91 %, byte-stable on every run**, against piper's own 4.8–6.5 % across runs. Piper samples noise in-graph and cannot repeat a number, so it is scored as the mean of independent draws with the range recorded. Parity through this instrument — not superiority; the instrument cannot support more.
 - **Determinism**: verified at both library and file-hash level. Piper structurally cannot offer it.
 - **Footprint and load ahead**: 172–208 MiB steady vs piper's 217–240; load 0.26–0.35 s vs ~1.8–2.6 s.
-- **Speed behind, closing, not claimable**: 3.2× → 19–20× realtime warm across five profiled campaigns; piper measures 25–32× here. Function-by-function against piper's runtime, Mercury's upsamplers and duration predictor are ~1.9× **faster** and the text encoder is at parity — the gap lives in two convolution kernels with measured targets. The speed gate reads FAIL on every fair ledger line.
+- **Speed: gate passes, reported as parity.** The latest ledger line (`bench-tts-1785530770`) reads **13.8× realtime warm against piper's 11.1×**, all four gates green. It is not headlined as a win: piper's own throughput spans **4.5×–29× across twenty ledger lines** on this machine, a 6.4× spread wider than any gain this campaign has made, and the gate has flipped pass/fail in step with it. A ratio whose denominator drifts more than the improvement is not a claim.
+- **The per-stage picture was wrong until recently, and is corrected here.** An earlier reading from onnxruntime's own profiler said our upsamplers and duration predictor were ~1.9× faster with the text encoder at parity. Enabling that profiler slows ORT **1.75–1.93×** with a per-node tax that is not uniform — correcting for it drove a stage to a *negative* time, which is what exposed it. Re-measured by cutting the ONNX graph into cumulative prefixes and timing each unprofiled: **our decoder (52 % of the pipeline) and flow are at parity with onnxruntime; the text encoder and duration predictor are each ~2.9× slower.** Prior per-stage deficit figures are withdrawn.
+- **Bit-identity, gated at corpus scale.** The current round's two speed changes are output-neutral across all **200 corpus sentences** — durations integer-identical, audio bit-identical — with the nearest `ceil()` rounding boundary anywhere in the corpus ~100× further away than the float perturbation that could cross it. WER cannot have moved because the bytes did not; the bench returned 5.91 % unchanged.
+- **Rejected levers are recorded too**: spline-column parallelism (no crossover at any length from T=32 to 1024), decoder scratch-buffer reuse (bit-identical but inside noise; the cost moved rather than vanished), and P-core pinning (the re-probe's own null arm manufactured a 2σ verdict, so that question is reopened, not closed).
 
 ## Status: `experimental`, honestly
 
@@ -193,11 +196,11 @@ default. Pooled across both holdouts it is a significant improvement over
 greedy (WER 44 improved / 24 worsened, **z = +2.43**; CER z = +2.32), worth
 0.6–0.75 pp, at roughly 5× the cost. Greedy remains the default.
 
-**TTS** — three of four gates pass against piper1-gpl on a pinned 200-sentence corpus (correctness, quality, footprint); speed does not, and is reported as failing.
+**TTS** — **all four gates pass** against piper1-gpl on a pinned 200-sentence corpus (134-clip holdout): correctness 134/134, quality 5.91 % vs 5.76 % round-trip WER, speed 13.8× vs 11.1× realtime warm, footprint 206 MiB vs 219 MiB steady. The speed gate is reported as **parity rather than a win** — piper's own throughput spans 4.5×–29× across the ledger's twenty TTS lines, and that spread, not our code, is what has decided the gate historically.
 
 Every number traces to a line in [`bench/ledger.jsonl`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl). Full campaign histories, every reverted experiment included: [ASR](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/finished/mercury-mission-plan.md) · [TTS](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/mercury-tts-mission.md).
 
-Not yet `stable`: ASR word-timestamp error is gated at utterance granularity rather than milliseconds and the diarization corpus has no speaker overlap — those gate regression, not readiness. TTS is en-US, single-voice, and behind on synthesis speed. `any-tts` and `voirs` remain registered stubs.
+Not yet `stable`: ASR word-timestamp error is gated at utterance granularity rather than milliseconds and the diarization corpus has no speaker overlap — those gate regression, not readiness. TTS is en-US and single-voice, and its speed margin over piper sits inside the reference's own run-to-run spread rather than clear of it. `any-tts` and `voirs` remain registered stubs.
 
 ## License
 
