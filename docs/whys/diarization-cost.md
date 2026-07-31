@@ -248,6 +248,54 @@ OLD code. The trace counter read **zero `diarize:incr` calls**, which is what
 gave it away. Instrument whether the path under test actually ran; a gate that
 silently exercises the old code reports a number that is true and irrelevant.
 
+## Hardening: four gaps, and one was a real defect
+
+Gating a change proves it works on the harness's inputs. It says nothing about
+callers who behave differently — and asking "what is still untested?" found a
+silent failure no DER number could have shown.
+
+**1. A backwards offset swallowed audio, silently.** `processed_to` is the
+furthest buffer end seen, so every window of rewound audio sorts before it:
+`pending` returned nothing, that audio was never embedded, and the turns were
+clipped to a range the stored windows did not overlap. **No speaker labels at
+all, and no error.** Reachable in ordinary use — a second recording in one
+session without `reset_speakers`, or any caller whose offset bookkeeping
+restarts. Probed directly (`pending = 0`) rather than argued about. Fixed by
+`note_buffer`: a buffer ending earlier than everything seen is a different
+stream, so the history is dropped. Only the history — speaker identity stays
+the caller's to keep or clear, since discarding it here would overrule them.
+
+Verified through the demo's HTTP path, not only in a unit test:
+
+```
+[diarize:incr] reused=25 stored=25 to=70.44
+[diarize:incr] stream rewound to 5.00 — history dropped
+[diarize:incr] reused=0  stored=13 to=15.44
+[diarize:incr] reused=13 stored=25 to=25.44
+```
+
+and the rewound request still returns `SPEAKER_00: …` where before it returned
+nothing.
+
+**2. The buffer-relative conversion had no test.** It is the arithmetic that
+shifts every speaker label by the stream offset when wrong — a
+diarization-looking bug that is not one. Extracted to a model-free
+`clip_to_buffer` (this module's split: algorithm here, weights elsewhere) and
+pinned with a five-case test covering both straddling boundaries and both
+exclusions.
+
+**3. `reset_speakers` clearing the window history was written and unverified.**
+Now asserted. It matters twice: the history is the audio those identities were
+learned from, and a new session starting at t=0 sits before the old
+`processed_to` — gap 1 again, by another route.
+
+**4. The demo's offset wiring had only been reasoned about.** Driven through
+HTTP with advancing offsets, the trace shows reuse climbing 0 → 13 → 25 with
+the horizon holding the store at 25. After a session where wiring that looked
+correct silently was not, "I read the code" is not evidence.
+
+Streaming DER after all four: **5.55 %**, unchanged. 134 tests.
+
 ## What is left
 
 The per-forward cost is architectural (Res2Net's 8 sequential groups) and the

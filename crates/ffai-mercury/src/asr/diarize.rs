@@ -630,6 +630,38 @@ impl StreamState {
         self.windows.retain(|w| w.1 >= cutoff);
     }
 
+    /// Forget everything. The stream has moved backwards, so the history
+    /// describes audio that is no longer where it was.
+    pub fn reset(&mut self) {
+        self.windows.clear();
+        self.processed_to = 0.0;
+    }
+
+    /// Note the buffer about to be processed; returns `true` if it forced a
+    /// reset because the stream went BACKWARDS.
+    ///
+    /// `processed_to` is the furthest buffer end seen, and normal streaming
+    /// only ever advances it — a sliding window overlaps its predecessor but
+    /// always ends later. A buffer that ends EARLIER is a different stream: a
+    /// seek, a restart, or a second recording without `reset_speakers`.
+    ///
+    /// Without this the failure is silent and total: every window of the
+    /// rewound audio sorts before `processed_to`, so `pending` returns
+    /// nothing, that audio is never embedded, and the turns get clipped to a
+    /// range the stored windows do not overlap — **no speaker labels at all,
+    /// and no error**. Measured directly before this existed.
+    ///
+    /// Only the window history is dropped. Speaker IDENTITY is the caller's
+    /// to keep or clear (`reset_speakers`); discarding it here would silently
+    /// overrule them.
+    pub fn note_buffer(&mut self, buffer_end: f64) -> bool {
+        if !self.windows.is_empty() && buffer_end < self.processed_to - 1e-6 {
+            self.reset();
+            return true;
+        }
+        false
+    }
+
     /// The stored windows and their embeddings, for clustering.
     pub fn parts(&self) -> (Vec<(f64, f64)>, Vec<Vec<f32>>) {
         (
@@ -639,13 +671,93 @@ impl StreamState {
     }
 }
 
+/// Clip turns to the buffer the caller actually sent, and return them in
+/// BUFFER-relative time.
+///
+/// The stream state speaks absolute; a caller's transcript timestamps do not.
+/// Getting this wrong shifts every speaker label by the stream offset — the
+/// kind of error that looks like a diarization bug and is arithmetic. Kept
+/// model-free so it is testable without weights, like the rest of this module.
+pub fn clip_to_buffer(turns: Vec<SpeakerTurn>, offset: f64, buffer_end: f64) -> Vec<SpeakerTurn> {
+    turns
+        .into_iter()
+        .filter(|t| t.end > offset && t.start < buffer_end)
+        .map(|t| SpeakerTurn {
+            start: t.start.max(offset) - offset,
+            end: t.end.min(buffer_end) - offset,
+            speaker: t.speaker,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod stream_state_tests {
     use super::*;
 
+
+
     fn emb(v: f32) -> Vec<f32> {
         vec![v; 4]
     }
+
+    /// The defect this was written against: after a rewind the old code
+    /// returned ZERO pending windows, so the new audio was never embedded and
+    /// the caller got no speaker labels at all — silently, with no error.
+    #[test]
+    fn a_rewound_stream_is_re_embedded_not_silently_dropped() {
+        let mut st = StreamState::new();
+        let first = st.pending(&[(100.0, 110.0)], 1.5, 0.75);
+        assert!(!first.is_empty());
+        st.extend(first.iter().map(|&(s, e)| (s, e, emb(1.0))).collect(), 110.0);
+
+        // A new recording, back at the start of the clock.
+        assert!(st.note_buffer(10.0), "a buffer ending before everything seen is a rewind");
+        let after = st.pending(&[(0.0, 10.0)], 1.5, 0.75);
+        assert!(
+            !after.is_empty(),
+            "rewound audio must be embedded, not swallowed by a stale processed_to"
+        );
+        assert!(st.is_empty(), "stale history describes audio that has moved");
+    }
+
+    /// A normal sliding window overlaps its predecessor heavily and must NOT
+    /// be mistaken for a rewind — that would throw away the reuse the whole
+    /// design exists for.
+    #[test]
+    fn ordinary_sliding_is_not_mistaken_for_a_rewind() {
+        let mut st = StreamState::new();
+        let w = st.pending(&[(0.0, 10.0)], 1.5, 0.75);
+        st.extend(w.iter().map(|&(s, e)| (s, e, emb(1.0))).collect(), 10.0);
+        let n = st.len();
+        // Next tick: starts 1 s later, ends 1 s later.
+        assert!(!st.note_buffer(11.0), "advancing buffer end is not a rewind");
+        assert_eq!(st.len(), n, "history must survive ordinary sliding");
+    }
+
+    /// Turns come back in BUFFER-relative time. An error here shifts every
+    /// speaker label by the stream offset, which reads as a diarization bug
+    /// and is arithmetic.
+    #[test]
+    fn turns_are_clipped_and_returned_buffer_relative() {
+        let t = |start: f64, end: f64| SpeakerTurn { start, end, speaker: 0 };
+        let turns = vec![
+            t(90.0, 95.0),    // entirely before the buffer -> dropped
+            t(99.0, 102.0),   // straddles the start -> clipped to 0.0
+            t(103.0, 106.0),  // inside -> shifted by the offset
+            t(108.0, 115.0),  // straddles the end -> clipped to the buffer end
+            t(120.0, 125.0),  // entirely after -> dropped
+        ];
+        let out = clip_to_buffer(turns, 100.0, 110.0);
+        assert_eq!(out.len(), 3, "only overlapping turns survive: {out:?}");
+        assert!((out[0].start - 0.0).abs() < 1e-9 && (out[0].end - 2.0).abs() < 1e-9);
+        assert!((out[1].start - 3.0).abs() < 1e-9 && (out[1].end - 6.0).abs() < 1e-9);
+        assert!((out[2].start - 8.0).abs() < 1e-9 && (out[2].end - 10.0).abs() < 1e-9);
+        assert!(
+            out.iter().all(|t| t.start >= 0.0 && t.end <= 10.0),
+            "nothing may fall outside the buffer the caller sent"
+        );
+    }
+
 
     /// The point of the whole design: settled audio is never re-cut, so a
     /// sliding buffer asks only for its new tail.

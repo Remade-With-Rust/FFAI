@@ -235,6 +235,12 @@ impl Diarizer {
         let sr = self.sample_rate as f64;
         let buffer_end = offset + samples.len() as f64 / sr;
 
+        // A backwards jump means a different stream; drop the history rather
+        // than silently refuse to embed the new audio.
+        if state.note_buffer(buffer_end) {
+            self.trace("incr", &format!("stream rewound to {offset:.2} — history dropped"));
+        }
+
         // Regions in absolute time; the state speaks only absolute.
         let abs: Vec<(f64, f64)> =
             regions.iter().map(|r| (offset + r.start, offset + r.end)).collect();
@@ -297,15 +303,11 @@ impl Diarizer {
         // history the caller did not ask about, and emitting turns outside the
         // audio it sent would put speaker labels on a timeline it has no
         // transcript for.
-        diarize::turns_from_labels(&kept_abs, &labels)
-            .into_iter()
-            .filter(|t| t.end > offset && t.start < buffer_end)
-            .map(|t| SpeakerTurn {
-                start: (t.start.max(offset)) - offset,
-                end: (t.end.min(buffer_end)) - offset,
-                speaker: t.speaker,
-            })
-            .collect()
+        diarize::clip_to_buffer(
+            diarize::turns_from_labels(&kept_abs, &labels),
+            offset,
+            buffer_end,
+        )
     }
 
     /// Observe-only trace of the window geometry and cache outcome.

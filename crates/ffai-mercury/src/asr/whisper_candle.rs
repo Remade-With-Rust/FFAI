@@ -787,3 +787,43 @@ mod adaptive_ctx_tests {
         assert_eq!(adaptive_ctx_secs(30.0), None);
     }
 }
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+
+    /// `reset_speakers` must clear the WINDOW HISTORY as well as the
+    /// registry.
+    ///
+    /// The two are one lifetime: the history is the audio those identities
+    /// were learned from. Leaving it behind would let a new recording cluster
+    /// against the previous one's speech, and — worse — a new session that
+    /// starts at t=0 would sit before the old `processed_to`, which is
+    /// exactly the rewind case that used to yield no labels at all.
+    ///
+    /// No weights are touched: the engine loads lazily, so this exercises the
+    /// bookkeeping without fetching an 83 MB model.
+    #[test]
+    fn reset_speakers_clears_the_stream_history_too() {
+        let engine = WhisperCandle::new();
+        {
+            let mut g = engine.stream.lock().expect("fresh lock");
+            let st = g.get_or_insert_with(super::super::diarize::StreamState::new);
+            st.extend(vec![(0.0, 1.5, vec![1.0f32; 4])], 10.0);
+            assert_eq!(st.len(), 1, "seeded");
+        }
+        {
+            let mut g = engine.speakers.lock().expect("fresh lock");
+            *g = Some(SpeakerRegistry::new(0.8, None));
+        }
+
+        engine.reset_speakers();
+
+        assert!(
+            engine.stream.lock().expect("lock").is_none(),
+            "window history must not survive a reset — a new recording would \
+             cluster against the old one's audio"
+        );
+        assert!(engine.speakers.lock().expect("lock").is_none(), "registry cleared");
+    }
+}
