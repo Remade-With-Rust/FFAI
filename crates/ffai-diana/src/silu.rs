@@ -45,15 +45,22 @@ fn exp_fast(x: f32) -> f32 {
     //
     // Adding 1.5*2^23 forces every value below 2^22 to be rounded into the
     // mantissa's last bit; subtracting it back leaves `t` rounded to
-    // nearest-even. Measured over 16 M elements, best of 7, single thread:
+    // nearest-even. Measured over 16 M elements, best of 7, single thread
+    // (`examples/silu_ceiling.rs`):
     //
-    //   `round()`            130.90 ms
-    //   `round_ties_even()`  104.22 ms
-    //   this                  67.45 ms   <- 1.94x, and BIT-IDENTICAL output
+    //   memcpy (the roofline)  5.58 ms   24.04 GB/s
+    //   `round()`             60.84 ms    2.21 GB/s
+    //   `round_ties_even()`   38.85 ms    3.45 GB/s
+    //   this                  12.91 ms   10.40 GB/s   <- 4.71x, BIT-IDENTICAL
+    //
+    // 10.4 GB/s against a 24 GB/s copy is a transcendental within 2.3x of
+    // pure memory traffic, i.e. it now vectorises; `round()` did not.
     //
     // The bit-identical part is why this is a free win rather than a
     // tolerance question: max relative disagreement against the old kernel
-    // over the activation range is exactly 0.
+    // over the activation range is exactly 0. In-context on the serial path
+    // the bench times, the pipeline gain is 1.079x (17/21, z = +2.84) —
+    // quote THAT for the engine, and these for the kernel.
     const MAGIC: f32 = 12582912.0; // 1.5 * 2^23
     // `FFAI_DIANA_SILU_ROUND=1` restores `f32::round`, so the pipeline-level
     // A/B stays runnable instead of being a claim in a commit message. The

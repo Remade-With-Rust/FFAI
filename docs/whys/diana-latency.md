@@ -206,9 +206,50 @@ previous fix removed one libm call and left another.
   That CPU time did NOT move while wall did is consistent with D6e: at 24
   threads the fork-join overhead dominates the CPU column and swamps a 7 %
   work saving, while wall sees the shortened critical path.
-- **STILL OPEN:** even the fixed kernel runs 8x below memory bandwidth, so
-  it is still not vectorising. Next suspect is `f32::clamp`, whose NaN
-  semantics are branchy. Worth another 1.2x of pipeline if it lands.
+- **★★ THE TABLE ABOVE IS WRONG — the harness was measuring itself.** Two
+  defects, both mine, both while quoting the skill that names them:
+
+  1. `bench` took `f: fn(f32) -> f32`, a function POINTER — an indirect
+     call per element, so nothing inlined or vectorised in ANY arm.
+  2. Once that was made generic, LLVM deleted every loop, because `dst` is
+     never read. All five arms reported **0.00 ms**, which is the
+     instrument screaming rather than a result.
+
+  Fixed by monomorphising and adding `std::hint::black_box(&*dst)` after
+  the loop **identically in every arm**, including the roofline — an
+  asymmetric `black_box` is itself a listed way to change what vectorises
+  in one arm only. Re-measured:
+
+  | variant | ms / 16 M | GB/s | vs shipped |
+  |---|---:|---:|---:|
+  | memcpy (roofline) | 5.58 | **24.04** | — |
+  | `round()` (was shipped) | 60.84 | 2.21 | — |
+  | `round_ties_even()` | 38.85 | 3.45 | 1.57x |
+  | **magic-number** | **12.91** | **10.40** | **4.71x** |
+  | magic + `max`/`min` | 13.61 | 9.86 | 4.47x |
+
+  **The real kernel win is 4.71x, not 1.94x**, and at 10.4 GB/s against a
+  24 GB/s copy the fixed kernel is within 2.3x of pure memory traffic — it
+  DOES vectorise, and `round()` was what stopped it. The earlier "17x below
+  bandwidth / not vectorising at all" was the function pointer.
+
+  **What survived the correction: the RANKING.** Every arm paid the same
+  indirection, so the ordering that selected the change was right, and the
+  in-context gate (1.079x, z = +2.84) never depended on the microbench at
+  all. What did not survive: every magnitude, and the "a perfect SiLU is
+  worth 1.447x" ceiling, which was computed against a corrupted v0. Left in
+  the log rather than quietly rewritten, because *isolation misleads in both
+  directions* is a rule I was reciting at the time.
+
+- **`f32::clamp` as the remaining blocker: REFUTED.** On the corrected
+  harness `max`/`min` is 13.61 ms against clamp's 12.91 — the clamp is
+  marginally FASTER, i.e. it was never blocking anything. Refuted on the
+  good instrument, which is the only reason this is stated as closed.
+
+- **STILL OPEN:** the fixed kernel sits 2.3x off a memory copy. That is a
+  reasonable place for a transcendental and the remaining headroom is
+  small; the next latency lever is NOT here. It is `target-cpu` (D6f) and
+  the ~120 fork-joins per image (D6c).
 
 ## D6f — ★ the build has no `target-cpu`
 

@@ -77,7 +77,16 @@ fn silu_v2(x: f32) -> f32 {
     x / (1.0 + poly(f) * scale)
 }
 
-fn bench(name: &str, n: usize, iters: usize, src: &[f32], dst: &mut [f32], f: fn(f32) -> f32) -> f64 {
+/// GENERIC over the kernel, not a `fn` pointer.
+///
+/// It was a `fn(f32) -> f32` first, and that made every arm pay an indirect
+/// call per element — so nothing inlined, nothing vectorised, and the
+/// absolute GB/s described this function rather than the code under test.
+/// The ratios survived (all arms paid it equally) but the conclusion drawn
+/// from the absolute figure — "the kernel is 17x off memory bandwidth and
+/// therefore not vectorising" — was about the harness. Monomorphising is
+/// the whole fix.
+fn bench<F: Fn(f32) -> f32>(name: &str, n: usize, iters: usize, src: &[f32], dst: &mut [f32], f: F) -> f64 {
     // Warm, then best-of: upward noise is what a loaded box adds, so the
     // minimum is the honest estimate of the code's own cost.
     for (o, i) in dst.iter_mut().zip(src) {
@@ -89,11 +98,34 @@ fn bench(name: &str, n: usize, iters: usize, src: &[f32], dst: &mut [f32], f: fn
         for (o, i) in dst.iter_mut().zip(src) {
             *o = f(*i);
         }
+        // Without this the whole loop is dead code — `dst` is never read, so
+        // LLVM deletes it and every arm reports 0.00 ms. Placed AFTER the
+        // loop and IDENTICALLY in every arm (including the roofline below),
+        // because a `black_box` in one arm only is a known way to change
+        // what vectorises in that arm and nothing else.
+        std::hint::black_box(&*dst);
         best = best.min(t.elapsed().as_secs_f64());
     }
     let gbs = (n as f64 * 8.0) / best / 1e9; // 4 B in + 4 B out
     println!("{name:<28} {:>8.2} ms  {:>7.2} GB/s  {:>8.2} Gelem/s", best * 1e3, gbs, n as f64 / best / 1e9);
     best
+}
+
+/// v3 — magic rounding AND `max`/`min` instead of `clamp`.
+///
+/// `f32::clamp` is specified in terms of `<`/`>` comparisons with a
+/// `min <= max` precondition and NaN propagation rules; `max`/`min` lower to
+/// `maxss`/`minss` (and their packed forms) directly. If the clamp is what
+/// still blocks vectorisation, this is where it shows.
+#[inline(always)]
+fn silu_v3(x: f32) -> f32 {
+    const MAGIC: f32 = 12582912.0;
+    let t = (-x * LOG2_E).max(-125.0).min(125.0);
+    let z = t + MAGIC;
+    let n = z - MAGIC;
+    let f = t - n;
+    let scale = f32::from_bits((z.to_bits() << 23).wrapping_add(0x3f80_0000));
+    x / (1.0 + poly(f) * scale)
 }
 
 fn main() {
@@ -110,6 +142,7 @@ fn main() {
     for _ in 0..iters {
         let t = Instant::now();
         dst.copy_from_slice(&src);
+        std::hint::black_box(&*dst);
         best = best.min(t.elapsed().as_secs_f64());
     }
     println!(
@@ -125,22 +158,25 @@ fn main() {
     let t0 = bench("v0 round() [ships today]", n, iters, &src, &mut dst, silu_v0);
     let t1 = bench("v1 round_ties_even()", n, iters, &src, &mut dst, silu_v1);
     let t2 = bench("v2 magic-number rounding", n, iters, &src, &mut dst, silu_v2);
+    let t3 = bench("v3 magic + max/min clamp", n, iters, &src, &mut dst, silu_v3);
 
     // Agreement first: a faster kernel that computes something else is not a
     // faster kernel. Checked over the same distribution, not a happy sample.
-    let (mut d1, mut d2) = (0f32, 0f32);
+    let (mut d1, mut d2, mut d3) = (0f32, 0f32, 0f32);
     for &x in src.iter().step_by(97) {
         let a = silu_v0(x);
         let s = a.abs().max(1e-6);
         d1 = d1.max((silu_v1(x) - a).abs() / s);
         d2 = d2.max((silu_v2(x) - a).abs() / s);
+        d3 = d3.max((silu_v3(x) - a).abs() / s);
     }
     println!();
-    println!("max relative disagreement vs v0:  v1 {d1:.3e}   v2 {d2:.3e}");
+    println!("max relative disagreement vs v0:  v1 {d1:.3e}   v2 {d2:.3e}   v3 {d3:.3e}");
     println!();
     println!("v0 is {:.2}x off the copy ceiling", t0 / roof);
     println!("prize if SiLU hit the ceiling: it is 30.9% of detect, so");
     println!("  v1 would cut detect by {:.1}%  (pipeline {:.3}x)", 30.9 * (1.0 - t1 / t0), 1.0 / (1.0 - 0.309 * (1.0 - t1 / t0)));
     println!("  v2 would cut detect by {:.1}%  (pipeline {:.3}x)", 30.9 * (1.0 - t2 / t0), 1.0 / (1.0 - 0.309 * (1.0 - t2 / t0)));
+    println!("  v3 would cut detect by {:.1}%  (pipeline {:.3}x)", 30.9 * (1.0 - t3 / t0), 1.0 / (1.0 - 0.309 * (1.0 - t3 / t0)));
     println!("  a PERFECT silu would cut it by {:.1}%  (pipeline {:.3}x) <- the hard ceiling", 30.9 * (1.0 - roof / t0), 1.0 / (1.0 - 0.309 * (1.0 - roof / t0)));
 }
