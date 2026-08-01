@@ -16,6 +16,32 @@ use std::time::Instant;
 use ffai_mercury::tts::phonemize::Phonemizer;
 use ffai_mercury::tts::vits::Vits;
 
+#[cfg(windows)]
+unsafe extern "system" {
+    fn GetCurrentProcess() -> isize;
+    fn GetProcessTimes(h: isize, c: *mut u64, e: *mut u64, k: *mut u64, u: *mut u64) -> i32;
+}
+
+/// Process CPU time (kernel + user), seconds.
+///
+/// On a box another session is saturating, WALL time is dominated by how often
+/// we were descheduled, which is why the wall-clock A/B of the flat FFN
+/// returned a null arm 16% off unity. CPU time does not accrue while
+/// descheduled, so for a change that removes WORK it is the instrument that
+/// still resolves under foreign load.
+fn cpu_secs() -> f64 {
+    #[cfg(windows)]
+    unsafe {
+        let (mut c, mut e, mut k, mut u) = (0u64, 0u64, 0u64, 0u64);
+        if GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) == 0 {
+            return 0.0;
+        }
+        (k + u) as f64 * 1e-7
+    }
+    #[cfg(not(windows))]
+    0.0
+}
+
 /// Which knob this run A/Bs. Defaults to the attention kernel it was written
 /// for; `FFAI_AB_KNOB` retargets it at any other encoder knob, so a change too
 /// small for the whole-pipeline harness can still be resolved at the stage it
@@ -86,13 +112,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
 
+    // Measure BOTH: wall for the headline, CPU for the verdict under load.
+    let use_cpu = std::env::var("FFAI_AB_WALL").is_err();
     let run_once = |serial: bool| -> Result<f64, Box<dyn std::error::Error>> {
         set_arm_serial(serial && !null);
-        let t0 = Instant::now();
+        let (t0, c0) = (Instant::now(), cpu_secs());
         for ids in &ids_list {
             std::hint::black_box(vits.text_encoder(ids)?);
         }
-        Ok(t0.elapsed().as_secs_f64())
+        Ok(if use_cpu { cpu_secs() - c0 } else { t0.elapsed().as_secs_f64() })
     };
 
     run_once(false)?;
@@ -125,7 +153,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let z = (par_wins as f64 - n / 2.0) / (0.5 * n.sqrt());
     let (mp, ms) = (median(&mut par_times), median(&mut ser_times));
 
-    println!("{} rounds{}", rounds, if null { "  [NULL ARM]" } else { "" });
+    println!(
+        "{} rounds, metric = {}{}",
+        rounds,
+        if use_cpu { "CPU TIME (load-robust)" } else { "wall" },
+        if null { "  [NULL ARM]" } else { "" }
+    );
     println!("  parallel median {mp:8.2} ms   serial median {ms:8.2} ms   ratio {:.3}x", ms / mp);
     println!(
         "  parallel wins {par_wins}/{rounds}  z = {z:+.2}  -> {}",
