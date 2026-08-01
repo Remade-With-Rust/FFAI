@@ -141,6 +141,29 @@ config = "en/printed"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/ppstructure_ref.py", "--batch", "{filelist}", "--lang", "en", "--mkldnn", "off"]
 version_command = [".venv-bench/Scripts/python.exe", "-c", "import paddleocr; print('pp-structurev3 (paddleocr)', paddleocr.__version__)"]
 
+# Unlimited-OCR (Baidu, MIT, released 2026-06-22) — best-in-class document OCR.
+#
+# A 3B Mixture-of-Experts VLM (~500M active) continue-trained from DeepSeek-OCR,
+# whose Reference Sliding Window Attention keeps the KV cache flat across a
+# whole document. Holds the OmniDocBench v1.5/v1.6 record.
+#
+# CROSS-TIER, and the ledger must read it that way. Every other OCR reference
+# here is a conventional detector+recogniser on CPU; this is a 3B generative
+# model on an RTX 4060. Against Carmenta's 4.7 MB detector the QUALITY
+# comparison is the interesting one and the speed/footprint comparison is not
+# apples-to-apples in either direction — same class of caveat as tesseract's
+# spawn tax and paddle's forced mkldnn-off, one tier up.
+#
+# Runs in its OWN venv: .venv-bench pins a CPU-only torch that EasyOCR's
+# reference depends on, and upgrading it in place to get CUDA would put every
+# existing OCR comparison at risk to add one new one.
+[[references]]
+name = "unlimited-ocr"
+task = "ocr"
+config = "en/printed"
+batch_command = [".venv-unlimited/Scripts/python.exe", "corpora/refs/unlimited_ocr_ref.py", "--batch", "{filelist}"]
+version_command = [".venv-unlimited/Scripts/python.exe", "-c", "import torch; print('baidu/Unlimited-OCR 3B on torch', torch.__version__)"]
+
 # ---- Detection (Diana M-D0): official Ultralytics + the ORT CPU export ----
 # Two stacks x two tiers, all pinned to the COCO-eval decode settings (conf
 # 0.001, max-dets 100, imgsz 640, natively end-to-end — no NMS knob to pin
