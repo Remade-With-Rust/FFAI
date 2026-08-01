@@ -81,26 +81,29 @@ pub fn save_wav(path: &Path, audio: &AudioBuffer) -> Result<()> {
 
 /// Decode a still image — PNG and JPEG today; WebP/AVIF/GIF follow.
 ///
-/// **JPEG comes from home** (Principle 7): it decodes through
-/// `rff-codec-jpeg` in our own pure-Rust ffmpeg, on rff's `CodecRegistry`
-/// seam, so improvements to rff land here without a change on this side.
+/// **Both decoders are ours, and both come from crates.io**: `rusty_png`
+/// (our performance fork of image-rs/image-png) and `rusty_jpeg` (baseline
+/// and progressive DCT, AVX2 FDCT/quantize, two-block AVX2 IDCT). Principle
+/// 7 without the tax that used to come with it.
 ///
-/// **PNG now comes from home too.** It decodes through `rff-codec-png` on
-/// the same registry seam. The obstacle was real and is handled rather than
-/// waved away: rff normalises grayscale to packed `Rgb24`, while this
-/// path's contract is `Gray8`, and Carmenta's OCR consumes `load_image`
-/// with a grayscale document corpus. The colour type is therefore read from
-/// the PNG header and grayscale sources are contracted back — which is
-/// exact, not approximate, because rff wrote `g` into all three lanes. A
-/// standing test decodes every corpus image both ways and asserts the bytes
-/// are identical.
+/// The route here was PNG/`png` + JPEG/`rff-codec-jpeg`, then both through
+/// rff's `CodecRegistry`, and now both direct. The registry seam is the
+/// right home for demuxers and video codecs, where rff provides something
+/// nothing else does. For a still-image decoder it cost two things that the
+/// standalone crates give back:
 ///
-/// One consequence of depending on rff, recorded so it is not rediscovered:
-/// rff is not on crates.io, and `cargo publish` refuses a git dependency
-/// ("all dependencies must have a version requirement specified when
-/// publishing"). Any FFai crate downstream of this one therefore cannot be
-/// published until rff publishes — a deliberate trade of distribution for
-/// owning the stack.
+/// * **Publication.** rff is a git dependency and `cargo publish` refuses
+///   one, which made every FFai crate downstream of this one unpublishable.
+///   `cargo publish --dry-run -p ffai-media` passes again.
+/// * **Grayscale.** `rff_core::PixelFormat` has no single-channel variant,
+///   so a gray PNG had to expand to `Rgb24` and contract back — measured
+///   2.36x slower on Carmenta's 32/32-grayscale corpus. `rusty_png` carries
+///   `ColorType::Grayscale` natively, so the round-trip is gone rather than
+///   optimised.
+///
+/// Both are gated by standing tests: `rusty_png` byte-identical to upstream
+/// `png` across every corpus image, and `rusty_jpeg` within 3/255 of
+/// libjpeg using the corpus's own JPEG/PNG twins.
 pub fn load_image(path: &Path) -> Result<ImageBuffer> {
     // MAGIC BYTES FIRST, extension only as a fallback.
     //
@@ -136,226 +139,104 @@ pub fn load_image(path: &Path) -> Result<ImageBuffer> {
     }
 }
 
-/// JPEG, decoded by **our own ffmpeg** — `rff-codec-jpeg` through rff's
-/// codec registry, the same path `rff` itself takes.
+/// JPEG, decoded by **`rusty_jpeg`** — ours, from crates.io.
 ///
-/// Going through `CodecRegistry` rather than calling the decoder directly is
-/// deliberate: it is the seam every other rff codec arrives on, so adding
-/// WebP/AVIF/GIF later is a `register()` line rather than another bespoke
-/// function. rff always hands back packed `Rgb24` for JPEG (it expands
-/// grayscale itself), so callers see one layout regardless of how the file
-/// was encoded.
+/// Moved off `rff-codec-jpeg` for the same reason PNG did: rff is a git
+/// dependency and `cargo publish` refuses those, which made every crate
+/// downstream of this one unpublishable. `rusty_jpeg` is the same decoder
+/// rff wraps, published directly, with AVX2 FDCT/quantize and a two-block
+/// AVX2 IDCT.
+///
+/// **Grayscale JPEGs are expanded to RGB here on purpose.** `rusty_jpeg`
+/// reports `L8` natively and returning `Gray8` would be leaner — but this
+/// function's existing contract is packed RGB for every JPEG, Carmenta's
+/// OCR corpus is read through it, and changing an output FORMAT is a
+/// different decision from changing a decoder. Made separately, or not at
+/// all.
 fn decode_jpeg(data: Vec<u8>) -> Result<ImageBuffer> {
     use ffai_core::types::PixelFormat;
-    use rff_codec::CodecRegistry;
-    use rff_core::{CodecId, Frame, Packet};
+    use rusty_jpeg::{Decoder, PixelFormat as JpegFormat};
 
-    let mut registry = CodecRegistry::new();
-    rff_codec_jpeg::register(&mut registry);
-    let mut decoder = registry
-        .find_decoder(CodecId::Jpeg)
-        .map_err(|e| Error::Media(format!("rff jpeg decoder: {e}")))?;
+    let mut decoder = Decoder::new(std::io::Cursor::new(data));
+    let pixels = decoder.decode().map_err(|e| Error::Media(format!("JPEG decode: {e}")))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| Error::Media("JPEG decoded without image info".into()))?;
+    let (w, h) = (info.width as usize, info.height as usize);
 
-    // A still image is one packet: JPEG is self-describing, so the file IS
-    // the packet (rff's own framing for still-image codecs).
-    let packet = Packet { data, ..Default::default() };
-    decoder.send_packet(&packet).map_err(|e| Error::Media(format!("JPEG decode: {e}")))?;
-    decoder.flush();
-    let frame = decoder.receive_frame().map_err(|e| Error::Media(format!("JPEG decode: {e}")))?;
-
-    let Frame::Video(v) = frame else {
-        return Err(Error::Media("rff returned an audio frame for a JPEG".into()));
-    };
-    let format = match v.format {
-        rff_core::PixelFormat::Rgb24 => PixelFormat::Rgb8,
-        rff_core::PixelFormat::Rgba => PixelFormat::Rgba8,
+    let (data, format) = match info.pixel_format {
+        JpegFormat::RGB24 => (pixels, PixelFormat::Rgb8),
+        JpegFormat::L8 => {
+            let mut rgb = vec![0u8; w * h * 3];
+            for (i, &g) in pixels.iter().take(w * h).enumerate() {
+                rgb[i * 3..i * 3 + 3].copy_from_slice(&[g, g, g]);
+            }
+            (rgb, PixelFormat::Rgb8)
+        }
         other => {
             return Err(Error::Media(format!(
-                "rff decoded this JPEG as {other:?}; ffai-media handles packed RGB/RGBA"
+                "JPEG pixel format {other:?} unsupported — ffai-media handles RGB and grayscale"
             )))
         }
     };
-    let bpp = if format == PixelFormat::Rgba8 { 4 } else { 3 };
-    let (w, h) = (v.width as usize, v.height as usize);
-    let plane = v
-        .planes
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::Media("rff video frame has no planes".into()))?;
-    let stride = v.strides.first().copied().unwrap_or(w * bpp);
-
-    // Honour the stride rather than assuming it equals the row: rff states
-    // it "may exceed width for alignment", and a packed codec today can
-    // become an aligned one tomorrow without changing this signature.
-    let data = if stride == w * bpp {
-        plane
-    } else {
-        let mut packed = Vec::with_capacity(w * h * bpp);
-        for row in 0..h {
-            let start = row * stride;
-            packed.extend_from_slice(&plane[start..start + w * bpp]);
-        }
-        packed
-    };
-    Ok(ImageBuffer { width: v.width, height: v.height, format, data })
+    Ok(ImageBuffer { width: info.width as u32, height: info.height as u32, format, data })
 }
 
-/// The PNG header's colour-type byte, read from the raw file.
+/// PNG, decoded by **`rusty_png`** — our own performance fork of
+/// image-rs/image-png, from crates.io.
 ///
-/// rff normalises every PNG to packed `Rgb24`/`Rgba` — correct for a codec,
-/// and it throws away the one fact this crate's contract depends on: whether
-/// the source was GRAYSCALE. `ImageBuffer`'s consumers care. Carmenta's OCR
-/// has explicit `Gray8` paths and its document corpus is 32/32 grayscale, so
-/// silently handing it three-channel data would triple that corpus's memory
-/// and change which code path reads it.
+/// This is the third home for this function in two days and the reasoning is
+/// worth keeping, because each move was for a different reason:
 ///
-/// The colour type sits at a fixed offset in IHDR, which is required to be
-/// the first chunk: 8-byte signature, 4-byte length, 4-byte `IHDR`, then
-/// width(4) height(4) bit-depth(1) **colour-type(1)**. Byte 25. Verified
-/// against the chunk name rather than assumed, so a malformed file falls
-/// back to trusting rff instead of misreading a random byte.
-fn png_colour_type(bytes: &[u8]) -> Option<u8> {
-    (bytes.len() > 25 && &bytes[12..16] == b"IHDR").then(|| bytes[25])
-}
-
-/// PNG, decoded by **our own ffmpeg** — `rff-codec-png` through the same
-/// `CodecRegistry` seam JPEG arrives on (Principle 7).
+/// 1. The `png` crate. Worked; not ours.
+/// 2. `rff-codec-png` through rff's `CodecRegistry`. Ours, and the registry
+///    seam is genuinely nice — but it forced two costs. rff is a GIT
+///    dependency, and `cargo publish` refuses those outright, so every FFai
+///    crate downstream became unpublishable. And `rff_core::PixelFormat` has
+///    no single-channel variant, so grayscale had to expand to `Rgb24` and
+///    contract back: measured **2.36x slower** on Carmenta's 32/32-grayscale
+///    document corpus.
+/// 3. `rusty_png`, published on crates.io. Ours, no git dependency, and
+///    API-compatible with the `png` crate — including `ColorType::Grayscale`,
+///    so gray stays one channel the whole way through and the round-trip
+///    disappears rather than being optimised.
 ///
-/// This replaced a direct `png`-crate call. Two things made the swap safe
-/// rather than merely ideological:
-///
-/// 1. **rff is strictly more capable.** It sets
-///    `Transformations::EXPAND | STRIP_16`, so palette and 16-bit PNGs decode
-///    instead of erroring — both were hard rejections here before.
-/// 2. **The grayscale round-trip is exact.** rff expands `g` to `[g, g, g]`,
-///    so taking every third byte recovers `g` bit-for-bit; likewise every
-///    fourth from `Rgba` for grayscale+alpha, which is what dropping alpha
-///    always did. Contracting back is not an approximation.
-///
-/// The contract is therefore unchanged for every input the old path
-/// accepted, which is what let this land while another session was
-/// benchmarking OCR on the grayscale corpus.
-/// `FFAI_PNG_LEGACY=1` routes PNG back through the `png` crate.
-///
-/// Present for one transitional reason, with numbers. On the rff revision
-/// currently on the default branch (54df3fe, 2026-07-29) the rff path is
-/// **1.15x slower on RGB and 2.36x slower on grayscale** than the code it
-/// replaced. The RGB gap is decoder work in progress upstream. The
-/// GRAYSCALE gap is structural and will not close by itself:
-/// `rff_core::PixelFormat` has no grayscale variant, so a gray PNG must be
-/// expanded to `Rgb24` and contracted back here — three times the bytes,
-/// twice, for data that started and ended one channel wide.
-///
-/// Carmenta's document corpus is 32/32 grayscale and another session
-/// benchmarks OCR on it, so the escape exists to keep a transitional
-/// slowdown out of somebody else's gate. Delete it once rff's PNG work
-/// lands (and, for grayscale, once rff can carry a single-channel format).
-fn png_legacy() -> bool {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    static CACHED: AtomicU8 = AtomicU8::new(u8::MAX);
-    match CACHED.load(Ordering::Relaxed) {
-        u8::MAX => {
-            let on = std::env::var("FFAI_PNG_LEGACY").is_ok_and(|v| v == "1");
-            CACHED.store(on as u8, Ordering::Relaxed);
-            on
-        }
-        v => v == 1,
-    }
-}
-
-/// The `png`-crate path, retained as the legacy arm and as the ORACLE the
-/// tests compare rff against. It is not dead code: a decoder swap changes
-/// the pixels every downstream gate is computed from, so the thing being
-/// replaced has to stay runnable.
-fn decode_png_legacy(data: &[u8]) -> Result<ImageBuffer> {
+/// `EXPAND | STRIP_16` is set so palette and 16-bit PNGs decode instead of
+/// erroring, which is the capability the rff path added and this keeps.
+fn decode_png(data: &[u8]) -> Result<ImageBuffer> {
     use ffai_core::types::PixelFormat;
-    let decoder = png::Decoder::new(std::io::Cursor::new(data));
+    use rusty_png::{BitDepth, ColorType, Decoder, Transformations};
+
+    let mut decoder = Decoder::new(std::io::Cursor::new(data));
+    decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(|e| Error::Media(format!("PNG header: {e}")))?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).map_err(|e| Error::Media(format!("PNG decode: {e}")))?;
     buf.truncate(info.buffer_size());
-    if info.bit_depth != png::BitDepth::Eight {
+
+    if info.bit_depth != BitDepth::Eight {
         return Err(Error::Media(format!(
-            "PNG bit depth {:?} unsupported by the legacy path (rff handles it)",
+            "PNG bit depth {:?} survived STRIP_16 — unsupported",
             info.bit_depth
         )));
     }
     let format = match info.color_type {
-        png::ColorType::Grayscale => PixelFormat::Gray8,
-        png::ColorType::Rgb => PixelFormat::Rgb8,
-        png::ColorType::Rgba => PixelFormat::Rgba8,
-        png::ColorType::GrayscaleAlpha => {
+        ColorType::Grayscale => PixelFormat::Gray8,
+        ColorType::Rgb => PixelFormat::Rgb8,
+        ColorType::Rgba => PixelFormat::Rgba8,
+        ColorType::GrayscaleAlpha => {
+            // Drop alpha: every consumer of a gray page reads luminance.
             buf = buf.chunks_exact(2).map(|p| p[0]).collect();
             PixelFormat::Gray8
         }
-        png::ColorType::Indexed => {
-            return Err(Error::Media("indexed PNG needs the rff path".into()))
+        // EXPAND turns palettes into RGB/RGBA before we get here, so this
+        // arm means the transformation did not apply rather than that the
+        // file is exotic.
+        ColorType::Indexed => {
+            return Err(Error::Media("indexed PNG survived EXPAND".into()))
         }
     };
     Ok(ImageBuffer { width: info.width, height: info.height, format, data: buf })
-}
-
-fn decode_png(data: &[u8]) -> Result<ImageBuffer> {
-    if png_legacy() {
-        return decode_png_legacy(data);
-    }
-    use ffai_core::types::PixelFormat;
-    use rff_codec::CodecRegistry;
-    use rff_core::{CodecId, Frame, Packet};
-
-    let src_colour = png_colour_type(data);
-
-    let mut registry = CodecRegistry::new();
-    rff_codec_png::register(&mut registry);
-    let mut decoder = registry
-        .find_decoder(CodecId::Png)
-        .map_err(|e| Error::Media(format!("rff has no PNG decoder registered: {e}")))?;
-
-    let packet = Packet { data: data.to_vec(), ..Default::default() };
-    decoder.send_packet(&packet).map_err(|e| Error::Media(format!("PNG decode: {e}")))?;
-    decoder.flush();
-    let frame = decoder.receive_frame().map_err(|e| Error::Media(format!("PNG decode: {e}")))?;
-    let Frame::Video(v) = frame else {
-        return Err(Error::Media("PNG decoded to a non-video frame".into()));
-    };
-
-    // Honour the frame's own stride rather than assuming stride == row width;
-    // a decoder is entitled to pad rows and this one is not required to say so.
-    let (w, h) = (v.width as usize, v.height as usize);
-    let src_bpp = match v.format {
-        rff_core::PixelFormat::Rgb24 => 3,
-        rff_core::PixelFormat::Rgba => 4,
-        other => return Err(Error::Media(format!("rff PNG returned unexpected format {other:?}"))),
-    };
-    let plane = v
-        .planes
-        .first()
-        .ok_or_else(|| Error::Media("rff PNG frame has no planes".into()))?;
-    let stride = v.strides.first().copied().unwrap_or(w * src_bpp);
-
-    // Grayscale sources contract back to one channel; everything else is
-    // packed as-is. `step_by(src_bpp)` on a row IS the contraction, because
-    // rff wrote g into all three (or four) lanes.
-    let gray = matches!(src_colour, Some(0) | Some(4));
-    let out_bpp = if gray { 1 } else { src_bpp };
-    let mut out = Vec::with_capacity(w * h * out_bpp);
-    for row in 0..h {
-        let r = &plane[row * stride..row * stride + w * src_bpp];
-        if gray {
-            out.extend(r.iter().step_by(src_bpp));
-        } else {
-            out.extend_from_slice(r);
-        }
-    }
-
-    let format = if gray {
-        PixelFormat::Gray8
-    } else if src_bpp == 4 {
-        PixelFormat::Rgba8
-    } else {
-        PixelFormat::Rgb8
-    };
-    Ok(ImageBuffer { width: v.width, height: v.height, format, data: out })
 }
 
 /// Sample frames from a video at `fps` frames/second (for Argus video
@@ -404,10 +285,41 @@ mod png_oracle {
     use super::*;
     use ffai_core::types::PixelFormat;
 
-    /// The pre-rff implementation is `decode_png_legacy`, kept in the
-    /// crate rather than copied here so the oracle and the escape hatch are
-    /// the SAME code — a divergent copy would stop being an oracle the
-    /// first time one of them was edited.
+    /// Upstream `png` — the crate `rusty_png` is a performance FORK of.
+    ///
+    /// That is the right oracle for a fork: it is the implementation whose
+    /// behaviour ours is supposed to reproduce, maintained by someone else,
+    /// so it cannot drift with our edits. A decoder swap changes the pixels
+    /// every downstream gate is computed from, which is why this is a
+    /// standing test and not a one-off check.
+    fn decode_png_upstream(data: &[u8]) -> Result<ImageBuffer> {
+        use ffai_core::types::PixelFormat;
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
+        decoder.set_transformations(
+            png::Transformations::EXPAND | png::Transformations::STRIP_16,
+        );
+        let mut reader =
+            decoder.read_info().map_err(|e| Error::Media(format!("PNG header: {e}")))?;
+        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let info =
+            reader.next_frame(&mut buf).map_err(|e| Error::Media(format!("PNG decode: {e}")))?;
+        buf.truncate(info.buffer_size());
+        if info.bit_depth != png::BitDepth::Eight {
+            return Err(Error::Media("non-8-bit".into()));
+        }
+        let format = match info.color_type {
+            png::ColorType::Grayscale => PixelFormat::Gray8,
+            png::ColorType::Rgb => PixelFormat::Rgb8,
+            png::ColorType::Rgba => PixelFormat::Rgba8,
+            png::ColorType::GrayscaleAlpha => {
+                buf = buf.chunks_exact(2).map(|p| p[0]).collect();
+                PixelFormat::Gray8
+            }
+            png::ColorType::Indexed => return Err(Error::Media("indexed".into())),
+        };
+        Ok(ImageBuffer { width: info.width, height: info.height, format, data: buf })
+    }
+
     fn repo_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -416,12 +328,51 @@ mod png_oracle {
             .to_path_buf()
     }
 
+    /// `rusty_jpeg` against libjpeg, for free, using the corpus's own twins.
+    ///
+    /// `tools/diana_coco_corpus.py` builds each `coco-NNN.png` by decoding
+    /// `coco-NNN.src.jpg` with Pillow (libjpeg) and re-encoding LOSSLESSLY.
+    /// So the PNG carries libjpeg's decode of that exact JPEG, and decoding
+    /// both through this crate compares our JPEG decoder against libjpeg's
+    /// with no reference implementation to install.
+    ///
+    /// The bound is a TOLERANCE, not equality, and deliberately so: the JPEG
+    /// spec does not mandate a single IDCT, so conforming decoders disagree
+    /// in the last bit or two. Measured worst channel delta here is **3 of
+    /// 255**. A regression that broke the decoder would blow through this by
+    /// orders of magnitude; a legitimate IDCT change would not.
+    #[test]
+    fn rusty_jpeg_agrees_with_libjpeg_via_the_corpus_twins() {
+        let root = repo_root().join("corpora/clips/diana-coco");
+        let (mut n, mut worst) = (0usize, 0i32);
+        for i in 0..8 {
+            let (j, p) = (root.join(format!("coco-{i:03}.src.jpg")), root.join(format!("coco-{i:03}.png")));
+            if !j.exists() || !p.exists() {
+                continue;
+            }
+            let a = load_image(&j).expect("jpeg");
+            let b = load_image(&p).expect("png");
+            assert_eq!((a.width, a.height), (b.width, b.height), "coco-{i:03}: dimensions");
+            assert_eq!(a.data.len(), b.data.len(), "coco-{i:03}: buffer length");
+            worst = worst.max(
+                a.data.iter().zip(&b.data).map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap_or(0),
+            );
+            n += 1;
+        }
+        if n == 0 {
+            eprintln!("SKIP jpeg/libjpeg twin check: corpus absent");
+            return;
+        }
+        assert!(worst <= 8, "rusty_jpeg diverges from libjpeg by {worst}/255 over {n} images");
+        eprintln!("rusty_jpeg vs libjpeg: {n} images, worst channel delta {worst}/255");
+    }
+
     /// Every corpus PNG must decode BIT-IDENTICALLY through rff and through
     /// the implementation it replaced — RGB (Diana) and grayscale
     /// (Carmenta) alike, since the grayscale contraction is the part that
     /// could plausibly differ.
     #[test]
-    fn rff_png_matches_the_implementation_it_replaced() {
+    fn rusty_png_matches_upstream_png() {
         let root = repo_root();
         let dirs = [
             "corpora/clips/diana-coco-v3",
@@ -441,7 +392,7 @@ mod png_oracle {
             paths.truncate(12);
             for p in paths {
                 let Ok(bytes) = std::fs::read(&p) else { continue };
-                let Ok(want) = decode_png_legacy(&bytes) else { continue };
+                let Ok(want) = decode_png_upstream(&bytes) else { continue };
                 let got = decode_png(&bytes).unwrap_or_else(|e| panic!("rff failed on {}: {e}", p.display()));
                 assert_eq!(got.width, want.width, "{}: width", p.display());
                 assert_eq!(got.height, want.height, "{}: height", p.display());
@@ -452,6 +403,6 @@ mod png_oracle {
             }
         }
         assert!(dirs_seen > 0, "no corpus directories present to check against");
-        eprintln!("rff PNG == previous implementation on {checked} images across {dirs_seen} corpora");
+        eprintln!("rusty_png == upstream png on {checked} images across {dirs_seen} corpora");
     }
 }

@@ -14,41 +14,50 @@ categories = ["multimedia::audio", "multimedia::encoding"]
 [dependencies]
 ffai-core = { workspace = true }
 hound = { workspace = true }
-png = { workspace = true }
 
-# CODECS COME FROM HOME (Principle 7). JPEG decodes through our own pure-Rust
-# ffmpeg rather than a third-party crate, so improvements to rff land here.
-rff-core = { workspace = true }
-rff-codec = { workspace = true }
-rff-codec-jpeg = { workspace = true }
-rff-codec-png = { workspace = true }
-
-# DEFAULT CODEC BACKEND (Phase 1): remade_ffmpeg_rs — our own pure-Rust ffmpeg
-# (https://github.com/Remade-With-Rust/remade_ffmpeg_rs, the `rff-*` workspace).
+# CODECS COME FROM HOME (Principle 7) — and now from CRATES.IO.
 #
-# WHY IT IS STILL NOT A DEPENDENCY HERE, measured rather than assumed
-# (2026-07-31): the rff crates are not on crates.io, and FFai is. A git
-# dependency — even an OPTIONAL one — makes `cargo publish` fail outright:
+# `rusty_jpeg` and `rusty_png` are our own decoders, published as standalone
+# crates. Depending on them directly rather than through the `rff-*` git
+# workspace is what makes every FFai crate downstream of this one
+# PUBLISHABLE again: `cargo publish` refuses a git dependency outright ("all
+# dependencies must have a version requirement specified when publishing"),
+# and that single constraint had blocked the whole chain.
+#
+# The registry seam (`rff_codec::CodecRegistry`) is still the right home for
+# DEMUXERS and video codecs, where rff provides something nothing else does.
+# For a still-image decoder it bought an indirection and cost publication.
+rusty_png = "0.1"
+rusty_jpeg = "0.1"
+
+# THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
+# real time to establish.
+#
+# Until these crates existed the rule here was: rff is a GIT dependency, and
+# `cargo publish` refuses one outright —
 #
 #   error: failed to verify manifest ...
 #     all dependencies must have a version requirement specified when publishing.
 #
-# Adding `version = "0.0.1"` alongside the git source publishes, but then
-# downstream users resolve a version that does not exist in the registry, so
-# the crate is unbuildable for everyone who is not us. That is worse than
-# waiting: a broken published crate rather than a missing feature.
+# — so every FFai crate downstream of ffai-media was unpublishable. Pinning a
+# fake `version =` alongside the git source publishes but leaves downstream
+# users resolving a version that does not exist, which is worse.
 #
-# So the rule for now: where rff wraps a published pure-Rust decoder, depend
-# on that decoder directly and get byte-identical pixels (PNG -> `png`,
-# JPEG -> `jpeg-decoder`, which is exactly what `rff-codec-jpeg` calls).
-# Where rff provides something NOTHING else does — demuxers, H.264/VP9,
-# video ingest for LIVE — the dependency has real content and the publishing
-# question has to be answered first (publish rff, or vendor it).
+# `rusty_jpeg` and `rusty_png` ARE those decoders, published standalone. The
+# stack is still ours end to end; it now also ships. Where rff provides
+# something nothing else does — demuxers, H.264/VP9, video ingest for LIVE —
+# the git dependency still has real content and that question returns when
+# video lands.
 
 [features]
-# Reserved for the rff-* backend. Blocked on rff publishing to crates.io —
-# see the note above; this is a distribution problem, not a technical one.
+# Reserved for the rff-* backend where it still adds something a standalone
+# decoder cannot: demux and video codecs. Still a distribution question, no
+# longer a blocker for still images.
 remade-ffmpeg = []
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Upstream png: the ORACLE rusty_png (a fork of it) is tested against.
+png = { workspace = true }

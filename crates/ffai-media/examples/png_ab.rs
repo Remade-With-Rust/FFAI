@@ -1,4 +1,4 @@
-//! Paired A/B: rff's PNG decoder against the `png`-crate path it replaced.
+//! Paired A/B: `rusty_png` (ours) against upstream `png`, the crate it forks.
 //!
 //! The swap was justified by ownership (Principle 7 — codecs come from home)
 //! and by capability (rff sets `EXPAND | STRIP_16`, so palette and 16-bit
@@ -21,10 +21,11 @@ use std::time::Instant;
 
 use ffai_core::types::{ImageBuffer, PixelFormat};
 
-/// The pre-rff implementation, kept as the comparison arm.
+/// Upstream `png` — the crate `rusty_png` forks, and the comparison arm.
 fn load_png_reference(path: &Path) -> Option<ImageBuffer> {
     let file = std::fs::File::open(path).ok()?;
-    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
@@ -99,9 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("{dir} · {} images · {:.1} MiB decoded · best of {rounds}", paths.len(), bytes as f64 / 1048576.0);
-    println!("  rff-codec-png : {rff_best:8.2} ms   ({:.1} MiB/s)", bytes as f64 / 1048576.0 / (rff_best / 1e3));
-    println!("  png crate     : {png_best:8.2} ms   ({:.1} MiB/s)", bytes as f64 / 1048576.0 / (png_best / 1e3));
-    println!("  rff is {:.3}x the png crate's time  ({})", rff_best / png_best,
-             if rff_best < png_best { "rff FASTER" } else { "rff slower" });
+    println!("  rusty_png     : {rff_best:8.2} ms   ({:.1} MiB/s)", bytes as f64 / 1048576.0 / (rff_best / 1e3));
+    println!("  upstream png  : {png_best:8.2} ms   ({:.1} MiB/s)", bytes as f64 / 1048576.0 / (png_best / 1e3));
+    println!("  rusty_png is {:.3}x upstream's time  ({})", rff_best / png_best,
+             if rff_best < png_best { "OURS FASTER" } else { "ours slower" });
     Ok(())
 }
