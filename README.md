@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a documented concurrent batch API. **Per-image latency is ~1.9× behind at every tier — the one gate that fails, published with its number** ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is ~1.6× ahead at every tier, both from one structural cause** ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -583,12 +583,40 @@ landed** (z = +0.65, inside the noise), because AVX2 was mostly rescuing
 dispatch would have been built on a number that no longer existed.
 
 What remains is structural: **~120 fork-joins per image cost 2.3–3.8× the CPU
-of the work they perform.** That tax does fall with model size — 3.81× at n
-to 0.83× at x, measured on our own serial baseline — so our parallel
-efficiency genuinely improves as tensors grow. It just doesn't open a gap
-against Ultralytics, because theirs improves in step. Both amortize; neither
-pulls ahead. That is the largest named thing between Diana and the
-reference, and it is not a flag.
+of the work they perform.** That is the largest named thing between Diana and
+the reference on latency, and it is not a flag.
+
+### The same structure that loses latency wins throughput
+
+Latency is one question. A server asks a different one: given N images and a
+whole machine, how many per second? There the answer inverts, at every tier —
+**Diana is ~1.6× ahead:**
+
+| tier | Diana img/s | Ultralytics img/s | ratio |
+|---|---:|---:|---:|
+| n | **30.35** | 18.81 | **1.61×** |
+| s | **14.15** | 8.24 | **1.72×** |
+| m | **5.90** | 3.55 | **1.66×** |
+| l | **4.50** | 2.77 | **1.62×** |
+| x | **2.15** | 1.42 | **1.52×** |
+
+**One structural fact explains both directions.** Diana puts parallelism
+*across images* — `detect_batch` gives each core a whole image and runs the
+kernels serially inside it, so the per-layer barriers vanish entirely.
+Ultralytics cannot do that: Python's GIL rules out real in-process threads,
+so its throughput path is a batched tensor — bigger GEMMs instead of more
+cores. For **one** image our fork-join overhead dominates and we lose ~1.9×.
+For **many**, that overhead disappears and the cores win.
+
+Two honesty notes, because this is the flattering direction and that is when
+to check hardest. **The reference is measured at its best, not its default**:
+`predict(list)` defaults to batch=1 and loops at 15.76 img/s, while an
+explicit `batch=4` reaches 18.79 — measuring the default would have inflated
+our margin from 1.6× to 1.58× against a hobbled baseline. And **detection
+counts differ by 1–3 out of 68–86** (n matches exactly), the same
+threshold-boundary effect as the 0.08 pp mAP difference: a box at confidence
+0.2501 versus 0.2499 flips. Not identical work, and small enough to state
+rather than hide.
 
 **One gate turned out to be measuring luck, and the way that was
 established is the point.** The oracle asserted that our 300-row top-k

@@ -241,8 +241,22 @@ previous fix removed one libm call and left another.
   the log rather than quietly rewritten, because *isolation misleads in both
   directions* is a rule I was reciting at the time.
 
-- **"A concurrent batch path PyTorch's GIL cannot match" (22.73 vs 17.29
-  img/s): WITHDRAWN from the README, not refuted.** It was a wall-clock
+- **"A concurrent batch path PyTorch's GIL cannot match": WITHDRAWN, then
+  RE-EARNED at a smaller size.** The original 22.73 vs 17.29 img/s was a
+  single-run wall comparison taken before the null arm and the ordering
+  confound were known, and it was withdrawn. Re-measured properly
+  (`tools/diana_throughput.py`, min-of-N, arms alternated, counts compared)
+  it holds at **~1.6x ahead at every tier** — n 1.61x, s 1.72x, m 1.66x,
+  l 1.62x, x 1.52x.
+
+  **Crucially the reference is given its BEST configuration, not its
+  default.** `predict(list)` defaults to batch=1 and loops at 15.76 img/s;
+  explicit `batch=4` reaches 18.79. Measuring the default would have made
+  our margin look like 1.58x against a hobbled baseline. Caveat kept in the
+  open: detection counts differ by 1-3 of 68-86 at conf 0.25 (n exact) —
+  the same threshold-boundary effect as the 0.08 pp mAP delta.
+
+  **The old, withdrawn form for reference:** It was a wall-clock
   throughput comparison on a loaded box, single run, measured before the
   null arm established a 27 % resolution and before the ordering confound
   was known. The batch API is real and is still described; the comparative
