@@ -67,6 +67,14 @@ pub fn conv3x3_strided(
     // im2col reads the activation IN PLACE via SliceOp and hands its output
     // Vec straight to the tensor's storage. Two copies of a multi-megabyte
     // buffer removed per convolution, with no arithmetic changed.
+    // Deterministic byte counter, `FFAI_DIANA_COUNT=1`.
+    //
+    // Wall time on this box drifts further than the effects being measured
+    // — a thread sweep read im2col at 6.855 s ascending and 1.112 s
+    // descending for the SAME thread count. A counter does not care: it
+    // answers "is this bandwidth-bound?" arithmetically, which is the
+    // question that decides whether more threads can ever help.
+    crate::conv3x3::count_im2col(c_in * 9 * ohw);
     let col = crate::profile::timed(|p| &p.im2col, || {
         crate::cpuop::SliceOp::new("ffai-im2col3x3", move |xs, _| {
     let mut col = vec![0f32; c_in * 9 * ohw];
@@ -201,4 +209,37 @@ mod tests {
             assert!(d < 1e-5, "{ci}->{co} {h}x{w} s2: max rel {d:.3e}");
         }
     }
+}
+
+/// Total im2col output elements produced since process start.
+///
+/// Counted, never timed. im2col EXPANDS a 3x3 convolution's input ninefold
+/// before the GEMM consumes it, so the buffer it writes is the dominant
+/// memory traffic in the convolution path — and whether that traffic is
+/// near the machine's bandwidth decides whether the fix is more threads or
+/// fewer bytes.
+static IM2COL_ELEMS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn count_im2col(n: usize) {
+    if counting() {
+        IM2COL_ELEMS.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn counting() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static C: AtomicU8 = AtomicU8::new(u8::MAX);
+    match C.load(Ordering::Relaxed) {
+        u8::MAX => {
+            let on = std::env::var("FFAI_DIANA_COUNT").is_ok_and(|v| v == "1");
+            C.store(on as u8, Ordering::Relaxed);
+            on
+        }
+        v => v == 1,
+    }
+}
+
+/// Elements written by im2col so far, and reset.
+pub fn take_im2col_elems() -> u64 {
+    IM2COL_ELEMS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }

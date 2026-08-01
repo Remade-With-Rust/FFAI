@@ -574,3 +574,60 @@ reasons.
 mAP is load-independent; latency is not. The v3 corpus work (items 2 and 3)
 therefore runs FIRST and to completion, and the latency descent resumes on a
 quiet box. Attempting them concurrently produced the 19 372 ms reading above.
+
+---
+
+## ★★★ D3b — im2col is a MEMORY FLOOR, and that is why threads stopped helping
+
+The parallel-efficiency descent kept finding ops that would not scale and
+kept assuming the cause was scheduling. It is not, for the largest of them.
+
+- **ASKED:** per-op speedup from 1 to 24 threads showed gemm at 3.33x, silu
+  at 2.52x, but **im2col at 1.55x** and the 3x3/1x1 convolutions that
+  contain it at ~1.62x. Overall 1.72x. Why does im2col refuse to scale?
+
+- **FIRST ATTEMPT, REFUTED.** im2col chunks one task per INPUT CHANNEL, and
+  counting showed the stem convolution (3 -> 16 at 640x640) produces **3
+  tasks for 24 threads** — 21 idle on the largest-spatial layer. Chunking
+  per (channel, tap) instead gives 9x the tasks. Measured: serial im2col
+  went **0.611 -> 1.366 s, 2.2x WORSE**, and 24-thread 0.394 -> 0.568.
+  Reverted. The old per-channel task reads the source plane once and reuses
+  it across all nine taps; the finer task re-reads it nine times. **Occupancy
+  bought less than locality cost** — and the occupancy defect was real, so
+  this is a case where the diagnosis was right and the fix was still wrong.
+
+- **THE INSTRUMENT THEN FAILED OUTRIGHT.** A thread sweep to locate the
+  saturation point read im2col at **6.855 s ascending and 1.112 s
+  descending at the same thread count**; 8 threads read 0.700 and 2.159.
+  Drift exceeded the effect in both directions. No wall measurement on this
+  box could answer the question.
+
+- **MEASURED WITH A COUNTER INSTEAD** (`FFAI_DIANA_COUNT=1`), which is
+  immune to every timing artifact:
+
+  | tier | im2col writes / image | + GEMM read-back | at 17.6 GB/s | at 24 GB/s |
+  |---|---:|---:|---:|---:|
+  | n | 108.4 MiB | **216.9 MiB** | 12.9 ms | 9.5 ms |
+  | s | — | 419.0 MiB | 24.9 ms | 18.3 ms |
+  | m | — | 855.2 MiB | 50.9 ms | 37.3 ms |
+  | x | — | 1939.8 MiB | 115.4 ms | 84.6 ms |
+
+- **★ ANSWER: im2col is a BANDWIDTH FLOOR, not a scheduling problem.**
+  A 3x3 convolution's im2col buffer is NINE TIMES its input, materialised to
+  memory and read straight back by the GEMM. Memory bandwidth is shared
+  across cores, so that time does not divide by the thread count — which is
+  precisely what a 1.55x speedup on 24 threads looks like.
+
+  At the n tier this is **9.5-12.9 ms per image against a ~66 ms reference
+  total**: a seventh to a fifth of the entire budget we are trying to match,
+  spent materialising a buffer a direct convolution would never write.
+
+- **CONSEQUENCE — the campaign's direction inverts.** Every lever tried so
+  far (thread count, pool size, batch dispatch, per-tap chunking) moved
+  work between cores. None of them can move a shared-bandwidth floor. The
+  levers that CAN are the ones that move fewer bytes: tile the im2col so
+  each block is GEMM'd while still in L2, or skip materialisation entirely
+  with an implicit-GEMM/direct convolution.
+
+- **CONFIDENCE:** high, and it needs no quiet box — this is arithmetic on a
+  deterministic counter, cross-checked against a memcpy-measured roofline.
