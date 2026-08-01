@@ -134,7 +134,7 @@ version_command = [".venv-bench/Scripts/python.exe", "-c", "import paddleocr; pr
 # disabled, so the compared work is layout + read and nothing else. Slow —
 # ~170 s per page on this box — which is a fact about the reference, recorded
 # rather than hidden.
-[[references]]
+[[reference]]
 name = "ppstructure-v3"
 task = "ocr"
 config = "en/printed"
@@ -157,7 +157,7 @@ version_command = [".venv-bench/Scripts/python.exe", "-c", "import paddleocr; pr
 # Runs in its OWN venv: .venv-bench pins a CPU-only torch that EasyOCR's
 # reference depends on, and upgrading it in place to get CUDA would put every
 # existing OCR comparison at risk to add one new one.
-[[references]]
+[[reference]]
 name = "unlimited-ocr"
 task = "ocr"
 config = "en/printed"
