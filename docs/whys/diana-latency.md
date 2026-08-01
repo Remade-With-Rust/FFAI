@@ -297,6 +297,108 @@ previous fix removed one libm call and left another.
 
 ---
 
+## ★★★ D6g — THE NULL ARM. Per-tier speed verdicts are not resolvable in one run
+
+Run this before believing any cross-implementation ratio on this box,
+including the ones above.
+
+- **ASKED:** what is the resolution limit of the bench's engine-vs-reference
+  comparison? Not "is the box noisy" — what delta can this harness actually
+  distinguish?
+- **MEASURED:** two full v3 runs of `yolo26n`, **same code, same corpus, same
+  configuration**, hours apart. That is a null arm: any difference is the
+  instrument.
+
+  | run | our p50 | ref p50 | ratio | ref throughput |
+  |---|---:|---:|---:|---:|
+  | `bench-detect-1785551014` | 132 ms | 75 ms | **1.76x** | 12.73 img/s |
+  | `bench-detect-1785595308` | 123 ms | 55 ms | **2.24x** | 17.38 img/s |
+
+- **ANSWER: the headline ratio moved 27 % with nothing changed, and the
+  REFERENCE's own throughput moved 37 %.** The denominator drifts further
+  than most of the effects being reported.
+
+- **★ WHAT THIS INVALIDATES, including my own correction.** The blanket
+  claim "speed FAILS, ~2.5x behind" was wrong because it generalised the n
+  tier. But the fix I proposed — "the gate PASSES at m and we are at parity
+  at x" — is wrong the same way, in the other direction:
+
+  | tier | single-run ratio | inside a +/-27 % band? |
+  |---|---:|---|
+  | n | 2.24x | outside — really behind |
+  | s | 1.67x | outside — really behind |
+  | m | 1.17x | **INSIDE — not resolvable** |
+  | l | 1.06x | **INSIDE — not resolvable** |
+  | x | 0.94x | **INSIDE — not resolvable** |
+
+  The harness's own per-row `speed: pass` at m rests on a 9 % margin against
+  a 27 % resolution. It is a coin flip wearing a gate.
+
+- **★ WHAT SURVIVES: the TREND, because it spans more than the noise.**
+  The ratio goes 2.24 -> 1.67 -> 1.17 -> 1.06 -> 0.94 across five
+  independent tiers — a **2.4x span** against a 27 % per-point resolution,
+  and monotone. A trend across five points whose range exceeds the
+  resolution by ~9x is a real finding even when no single point is.
+
+  So the defensible statement is *"the gap narrows monotonically with model
+  size, from clearly behind at n to indistinguishable at m/l/x"* — NOT
+  "we win at x".
+
+- **CONSEQUENCE:** per-tier verdicts need a load-robust instrument. CPU time
+  is the one this campaign already trusts (`tools/diana_cpu_ratio.py`), and
+  the structural prediction is separately falsifiable
+  (`tools/diana_overhead_amortization.py`).
+
+- **METHOD NOTE:** the null arm cost nothing — it was two runs already in
+  the ledger. It was not run until the measurement core skill demanded it,
+  after two sessions of quoting ratios from single runs. Cheapest instrument
+  in the box, and the last one reached for.
+
+## D5b — WHY the trend exists, on a load-robust instrument
+
+The trend needs a mechanism or it is a coincidence with five points. The
+claim is that Diana pays ~120 fork-joins per image whose cost is set by
+thread count and barrier latency rather than by tensor size, so bigger
+tiers spread a slowly-growing fixed cost over rapidly-growing arithmetic.
+
+That predicts: **overhead should grow much more slowly than the work.**
+Measured with `tools/diana_overhead_amortization.py` — CPU ms/image at 1
+thread (the work) against 24 threads (work + overhead), which is load-robust
+because CPU time does not accrue while descheduled:
+
+| tier | serial work | at 24t | overhead | **tax = overhead / work** |
+|---|---:|---:|---:|---:|
+| n | 232 | 1115 | 883 | **3.81x** |
+| s | 688 | 1677 | 990 | 1.44x |
+| m | 1344 | 3664 | 2320 | 1.73x |
+| l | 1729 | 5268 | 3539 | 2.05x |
+| x | 4177 | 7656 | 3479 | **0.83x** |
+
+**Work grows 18.0x from n to x; overhead grows 3.9x.** The prediction holds
+in direction and comfortably in magnitude.
+
+It does NOT hold in the stronger form I first wrote ("roughly constant").
+Overhead grows nearly 4x, and it should: m/l/x have more layers (224 and
+332 tensors against n's 204) so there are more barriers, and larger tensors
+mean more chunks to schedule at each one. The honest mechanism is *a cost
+that grows sub-linearly in the work*, not a fixed one.
+
+**The corroboration is the number that matters.** The parallel tax falls
+4.81x -> 1.83x of total cost from n to x, a **2.6x efficiency gain**. The
+wall gap against Ultralytics improves **2.4x** over the same span. Two
+independent instruments — one a cross-implementation wall ratio, one our own
+CPU time against our own serial baseline — agree on the magnitude of the
+trend to within 10 %. That is what promotes "the gap narrows" from an
+observation to an explanation.
+
+**Sanity check that fell out of it:** n's serial work reads 232 ms here
+against 363 ms measured before the SiLU fix — 1.56x, in the range that fix
+predicted (1.32x from its 30.9 % share, plus the measurement's own spread).
+The instrument agrees with a change made hours earlier for unrelated
+reasons.
+
+---
+
 ## Refuted / parked
 
 - **H1 — "fewer rayon threads lowers single-image latency": REFUTED**,
