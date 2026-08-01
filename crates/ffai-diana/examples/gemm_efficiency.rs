@@ -13,14 +13,19 @@ fn main() -> candle_core::Result<()> {
     let dev = Device::Cpu;
     println!("{:>22} {:>10} {:>12} {:>10}", "shape (M x K x N)", "ms", "GFLOP/s", "note");
     // (c_out, K = c_in*9 or c_in, ohw)
+    // M and K co-vary in the real layers, so the first table could not tell
+    // which one drives efficiency. These two sweeps hold one fixed.
     let cases = [
-        (16usize, 27usize, 102400usize, "stem 3x3, 640->320"),
-        (32, 144, 25600, "l1 3x3 s2"),
-        (64, 288, 25600, "l2 3x3"),
-        (128, 576, 6400, "deep 3x3"),
-        (256, 1152, 1600, "deepest 3x3"),
-        (64, 64, 25600, "1x1 pointwise"),
-        (256, 256, 1600, "1x1 deep"),
+        (16usize, 27usize, 102400usize, "real: stem"),
+        (256, 1152, 1600, "real: deepest"),
+        // K fixed at 27, M swept: does M matter?
+        (16, 27, 102400, "K=27  M=16"),
+        (64, 27, 102400, "K=27  M=64"),
+        (256, 27, 102400, "K=27  M=256"),
+        // M fixed at 16, K swept: does K matter?
+        (16, 27, 102400, "M=16  K=27"),
+        (16, 288, 25600, "M=16  K=288"),
+        (16, 1152, 6400, "M=16  K=1152"),
     ];
     for (m, k, n, note) in cases {
         let a = Tensor::zeros((m, k), DType::F32, &dev)?;

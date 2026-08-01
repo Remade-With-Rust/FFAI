@@ -832,3 +832,52 @@ over a matrix dimension the architecture pins at 16.
 
 **That is the next campaign, and it now has a target, a ceiling, and a
 per-shape table to gate against.**
+
+## ★★ D4c — CORRECTION: it is not small M. It is ARITHMETIC INTENSITY, and im2col destroys it
+
+The table above concluded "efficiency tracks M, and M is c_out". That was
+committed and it is wrong. M and K co-vary across real layers, so the table
+could not separate them. Holding each fixed:
+
+| sweep | GFLOP/s |
+|---|---|
+| K=27, M = 16 / 64 / 256 | 27.5 / 26.0 / **32.9** — flat, M is not the driver |
+| M=16, K = 27 / 288 / 1152 | 31.4 / 26.1 / **19.7** — *worse* with larger K |
+
+Neither dimension explains it. Arithmetic intensity does —
+`2MKN / (4(MK + KN + MN))`:
+
+| shape | working set | flops/byte | GFLOP/s |
+|---|---:|---:|---:|
+| 256x1152x1600 | 10 MB | **92** | **78.0** |
+| 256x27x102400 | 116 MB | 6 | 32.9 |
+| 16x27x102400 | 18 MB | 5 | 27.5 |
+| 16x1152x6400 | 30 MB | 7.9 | 19.7 |
+
+**Every conv GEMM we issue is memory-bound, and im2col is why.** The B
+operand IS the ninefold-expanded buffer, so the GEMM reads nine times the
+bytes for the same arithmetic. Intensity collapses from ~90 flops/byte (a
+balanced GEMM) to 5-8, and a matmul at 5 flops/byte cannot reach peak on any
+machine.
+
+This unifies everything the descent found and could not previously connect:
+
+* im2col scaling 1.55x on 24 threads — memory-bound, as measured.
+* conv GEMMs at 20-33 GFLOP/s against a 128 peak — memory-bound, not a bad
+  microkernel.
+* the whole-network ~35 GFLOP/s against the reference's ~70 — they use
+  direct/blocked convolution and never build the expanded operand.
+
+**And it explains why the tiled im2col failed for the right reason after
+all.** Tiling reduced where the buffer LIVED; it did not reduce how many
+bytes the GEMM READS, because the operand is still 9x. Intensity was
+unchanged, so the ceiling was unchanged.
+
+The lever is therefore not tiling, not threads, not ISA: it is **not
+materialising the expanded operand at all**. A direct convolution reads the
+original activation once and holds the output tile in registers, so its
+intensity is set by the output tile rather than by a 9x-redundant matrix.
+
+**Recorded as a correction rather than an edit**, because "efficiency tracks
+M" is already committed and would otherwise send the next campaign after a
+microkernel that is not the problem.
