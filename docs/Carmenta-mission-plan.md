@@ -1857,6 +1857,66 @@ single-column pages and 15.20 % on skewed two-column. That is §8.24's parked
 quad-crop lever, which was measured at a 1.26 pp ceiling on near-upright CORD
 words and pruned for want of a corpus with real skew. It has one now.
 
+### 8.29 Recursive XY-cut on real documents — and the confound that nearly buried it
+
+§8.28's one-level cut computed ONE set of gutters per page. On OmniDocBench
+that is right for a report and wrong for a newspaper, which is a headline over
+a 3-column block beside a boxed sidebar. Made recursive: at each node compare
+the widest horizontal valley against the widest vertical one, cut along the
+larger, recurse. Spanning elements force a horizontal split whatever the valley
+measures, because a headline is a separator even with ordinary leading.
+
+All three strategies, ONE binary, one variable (`FFAI_ORDER`):
+
+| CER %, 236 pages | raster | one-level | **recursive** |
+|---|---:|---:|---:|
+| newspaper (47) | 76.92 | 34.51 | **20.07** |
+| magazine (60) | 72.49 | **20.69** | 24.34 |
+| book (33) | 64.14 | **42.78** | 44.36 |
+| colorful_textbook (23) | 43.89 | 27.27 | 27.29 |
+| PPT2PDF (20) | **21.96** | 23.70 | 22.48 |
+| exam_paper (10) | **33.80** | 34.22 | 34.30 |
+| academic_literature (43) | 85.66 | 75.93 | **73.16** |
+| **ALL** | **74.39** | **39.17** | **33.02** |
+
+**33.02 % against 39.17 %** — 6.15 points over the one-level cut, 41 points over
+no ordering at all, and newspapers 34.51 -> 20.07 with their order component
+falling from 21.40 pp to 6.96. Kept.
+
+#### The confound, which is the real lesson
+
+The recursive cut first measured 35.46 %, then 33.02 %, against a "baseline" of
+29.61 % — so it read as a clear regression and was nearly reverted twice. The
+baseline was wrong. It had been measured on an EARLIER BINARY: a sibling
+session swapped the PNG and JPEG decoders in the same window, so the two arms
+differed by an image decoder as well as by the thing under test.
+
+The tell was in the data and I nearly talked past it. Academic literature's
+**order-free** score also doubled, 34.92 % -> 73.66 %. Order-free is a
+bag-of-tokens comparison; reordering lines cannot move it. A metric that is
+order-independent changing under an order-only change means something ELSE
+changed — and that is not a subtle inference, it is arithmetic.
+
+On one binary the true baseline is 74.39 %, not 29.61 %, and the recursive cut
+is a 41-point win rather than a 3-point loss.
+
+Two things landed to stop it recurring:
+
+* `FFAI_ORDER=raster|onelevel|xycut` keeps all three strategies in ONE binary.
+  The one-level cut had been *replaced* rather than kept, so the comparison
+  required two builds — and in a shared worktree two builds is two variables.
+* Recorded as §8.12's law restated: when a number contradicts a change you just
+  made, indict the artifact before the code. This time the artifact was not
+  stale, it was a *different binary* — same failure, new disguise.
+
+#### Still open, and now cleanly separated
+
+`academic_literature` at 73.16 % is the worst cell by 29 points, and its order
+component is **-0.49 pp** — ordering is not its problem. Same for book (0.62)
+and exam_paper (-3.12). Those are recognition, and the three-way against
+PP-StructureV3 and Unlimited-OCR is what will say whether 73 % on academic text
+is our recognizer or the corpus being genuinely hard.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

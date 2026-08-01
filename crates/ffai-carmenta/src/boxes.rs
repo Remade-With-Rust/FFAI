@@ -327,7 +327,21 @@ fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
 ///
 /// With no gutter this is exactly the previous behaviour — top-to-bottom — so
 /// single-column pages cannot regress.
-pub fn order_reading(mut lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
+pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
+    // FFAI_ORDER selects the strategy so all three can be A/B'd on ONE binary.
+    // They could not be before: the recursive cut replaced the one-level cut in
+    // place while a sibling session swapped the image decoders in the same
+    // window, so the arms were compared across different binaries — which is
+    // how a 29.61 % "baseline" came to be set against a 33.02 % result that was
+    // really measured against a 74.39 % one.
+    match std::env::var("FFAI_ORDER").as_deref() {
+        Ok("raster") => sorted_by_y(lines),
+        Ok("onelevel") => order_one_level(lines, page_w),
+        _ => xy_cut(lines, page_w, 0),
+    }
+}
+
+fn order_one_level(mut lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
     lines.sort_by_key(|l| line_bbox(l).y0);
     let gutters = find_gutters(&lines, page_w);
     if gutters.is_empty() {
@@ -367,6 +381,201 @@ pub fn order_reading(mut lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetB
     flush(&mut stripe, &mut out);
     out
 }
+
+
+/// Recursive XY-cut.
+///
+/// §8.28's one-level cut computed ONE set of gutters for the whole page and let
+/// spanning elements separate stripes. That is right for a report and wrong for
+/// a newspaper: measured on OmniDocBench, newspapers score 34.51 % as-is and
+/// **13.11 % order-free — 21.40 pp of pure ordering**, and they are the only
+/// source where order dominates. A newspaper is not one column grid; it is a
+/// headline over a 3-column block beside a boxed sidebar over a 2-column block,
+/// and a single page-wide projection cannot describe it.
+///
+/// So the cut recurses, and at each node it compares the widest HORIZONTAL
+/// valley against the widest VERTICAL one and cuts along whichever is larger.
+/// That ordering matters and is not arbitrary: cutting a newspaper vertically
+/// first would slice through its headline, while cutting horizontally first
+/// isolates the headline band and lets each body band find its own columns.
+///
+/// Both valleys are measured in units of the local median line height, which is
+/// what makes them comparable — and is why inter-line leading (~1x) never beats
+/// a real column gutter or a section break.
+fn xy_cut(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
+        return sorted_by_y(lines);
+    }
+    let heights: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
+    let mut hs = heights.clone();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1) as f32;
+
+    let h = best_gap(&lines, lh, page_w, Axis::Horizontal);
+    let v = best_gap(&lines, lh, page_w, Axis::Vertical);
+    // Prefer the larger valley; ties go to horizontal, which keeps a headline
+    // whole instead of splitting it down the middle.
+    let cut = match (h, v) {
+        (Some(a), Some(b)) => Some(if a.1 >= b.1 { (Axis::Horizontal, a.0) } else { (Axis::Vertical, b.0) }),
+        (Some(a), None) => Some((Axis::Horizontal, a.0)),
+        (None, Some(b)) => Some((Axis::Vertical, b.0)),
+        (None, None) => None,
+    };
+    // A page-spanning element — a headline, a rule, a full-width caption — is a
+    // structural separator whatever the valley around it measures. §8.28's
+    // one-level cut got this right by construction and the valley-only version
+    // regressed it: a title with ordinary leading above and below produced no
+    // horizontal valley, so the title was sorted into a COLUMN. Split on it
+    // explicitly, topmost first, and recurse either side.
+    if let Some(i) = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_spanning(&line_bbox(l), page_w))
+        .min_by_key(|(_, l)| line_bbox(l).y0)
+        .map(|(i, _)| i)
+    {
+        let sep = line_bbox(&lines[i]);
+        let (mut above, mut below, mut sep_lines) = (Vec::new(), Vec::new(), Vec::new());
+        for (j, l) in lines.into_iter().enumerate() {
+            let b = line_bbox(&l);
+            if j == i {
+                sep_lines.push(l);
+            } else if b.y0.midpoint(b.y1) < sep.y0.midpoint(sep.y1) {
+                above.push(l);
+            } else {
+                below.push(l);
+            }
+        }
+        if !above.is_empty() || !below.is_empty() {
+            let mut out = xy_cut(above, page_w, depth + 1);
+            out.append(&mut sep_lines);
+            out.extend(xy_cut(below, page_w, depth + 1));
+            return out;
+        }
+        return sorted_by_y(sep_lines);
+    }
+
+    let Some((axis, at)) = cut else { return sorted_by_y(lines) };
+
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    for l in lines {
+        let b = line_bbox(&l);
+        let key = match axis {
+            Axis::Horizontal => b.y0.midpoint(b.y1),
+            Axis::Vertical => b.x0.midpoint(b.x1),
+        };
+        if key < at { near.push(l) } else { far.push(l) }
+    }
+    // A cut that does not actually divide would recurse forever.
+    if near.is_empty() || far.is_empty() {
+        return sorted_by_y(if near.is_empty() { far } else { near });
+    }
+    let mut out = xy_cut(near, page_w, depth + 1);
+    out.extend(xy_cut(far, page_w, depth + 1));
+    out
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+/// Widest empty band on `axis`, as `(cut position, width in line-heights)`.
+///
+/// Vertical scans use ERODED boxes and skip page-spanning ones, for the reasons
+/// §8.28 measured: DBNet's 1.5x unclip closes a real gutter outright, and one
+/// centred page number must not veto a column break. Horizontal scans use the
+/// boxes as they are — a line's vertical extent is not inflated the same way,
+/// and a heading that spans the page is exactly what a horizontal cut wants to
+/// separate rather than ignore.
+fn best_gap(lines: &[Vec<DetBox>], line_h: f32, page_w: usize, axis: Axis) -> Option<(usize, f32)> {
+    let span_lo = |b: &DetBox| if axis == Axis::Horizontal { b.y0 } else { b.x0 };
+    let span_hi = |b: &DetBox| if axis == Axis::Horizontal { b.y1 } else { b.x1 };
+
+    // Extent of the whole set on this axis, so margins are never "gaps".
+    let (mut lo, mut hi) = (usize::MAX, 0usize);
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(lines.len());
+    // Spanning is judged against the MEDIAN width of this set, not the widest
+    // member: with `widest` every box in a uniform two-column block counts as
+    // spanning, every box is skipped, and the gutter disappears. A unit test
+    // caught exactly that.
+    let _ = median_width(lines);
+    for l in lines {
+        let b = line_bbox(l);
+        if axis == Axis::Vertical {
+            // Page-spanning elements legitimately cross every gutter.
+            if is_spanning(&b, page_w) {
+                continue;
+            }
+            let h = b.y1.saturating_sub(b.y0) as f32;
+            let w = b.x1.saturating_sub(b.x0) as f32;
+            let e = (h * 0.6).min(w * 0.25) as usize;
+            spans.push((b.x0 + e, b.x1.saturating_sub(e)));
+        } else {
+            spans.push((span_lo(&b), span_hi(&b)));
+        }
+        lo = lo.min(span_lo(&b));
+        hi = hi.max(span_hi(&b));
+    }
+    if spans.len() < 2 || hi <= lo {
+        return None;
+    }
+    spans.sort_unstable();
+
+    // Sweep for the widest interval covered by nothing.
+    let (mut best, mut reach) = (None::<(usize, f32)>, spans[0].1);
+    for &(s, e) in &spans[1..] {
+        if s > reach {
+            let width = (s - reach) as f32 / line_h;
+            if best.is_none_or(|(_, w)| width > w) {
+                best = Some((reach.midpoint(s), width));
+            }
+        }
+        reach = reach.max(e);
+    }
+    let floor = if axis == Axis::Horizontal { H_GAP_MIN } else { V_GAP_MIN };
+    best.filter(|&(_, w)| w >= floor)
+}
+
+fn median_width(lines: &[Vec<DetBox>]) -> usize {
+    let mut w: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.x1.saturating_sub(b.x0) }).collect();
+    if w.is_empty() {
+        return 0;
+    }
+    w.sort_unstable();
+    w[w.len() / 2]
+}
+
+/// Spanning is judged against the PAGE, not against the set.
+///
+/// Judging it against the set's MEDIAN line width measured 29.61 % -> 35.46 %
+/// overall, and academic literature 34.50 % -> 73.49 %: a page thick with short
+/// lines (references, captions, equation labels) has a small median, so
+/// ordinary body lines clear 1.8x it, every one forces a split, and the reading
+/// order shatters. The page width cannot be dragged down that way.
+fn is_spanning(b: &DetBox, page_w: usize) -> bool {
+    page_w > 0 && (b.x1.saturating_sub(b.x0)) as f32 >= page_w as f32 * SPAN_FRAC
+}
+
+fn sorted_by_y(mut lines: Vec<Vec<DetBox>>) -> Vec<Vec<DetBox>> {
+    lines.sort_by_key(|l| { let b = line_bbox(l); (b.y0, b.x0) });
+    lines
+}
+
+/// A horizontal valley must beat ordinary leading, which is ~1 line height by
+/// construction; a column gutter is judged against the same yardstick but can
+/// be narrower than a section break and still be real.
+const H_GAP_MIN: f32 = 1.35;
+const V_GAP_MIN: f32 = 0.55;
+/// Depth bound: a page that keeps splitting is a page whose structure we have
+/// already lost, and unbounded recursion on adversarial input is a hazard.
+const MAX_CUT_DEPTH: usize = 12;
+/// How much wider than the median line a box must be to count as spanning.
+const SPAN_RATIO: f32 = 1.8;
+
 
 #[cfg(test)]
 mod column_tests {
