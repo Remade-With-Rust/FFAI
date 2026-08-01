@@ -691,13 +691,17 @@ fn generate_docs(fonts: &Fonts, out: &Path) {
     let mut n = 0usize;
     for doc in 0..DOCS {
         let title = format!("{} Report No. {}", CAPS[doc % CAPS.len()], 1200 + doc * 37);
-        let two_col = doc % 2 == 1;
-        // Odd documents are skewed, so BOTH splits carry both kinds and
-        // §8.24's parked quad lever finally has something that can fail it.
+        // Columns and skew are CROSSED, not correlated — a 2x2 with two
+        // documents per cell. The first cut tied them together (`doc % 2` for
+        // both), and the corpus duly separated 0.40 % from 71.61 % while being
+        // unable to say WHICH variable did it. A corpus that cannot attribute
+        // is half-built.
+        let two_col = (doc / 2) % 2 == 1;
         let skew = if doc % 2 == 1 { 0.8 + (doc as f32) * 0.4 } else { 0.0 };
-        // Documents split WHOLE. One straddling the split would leak the
-        // moment M-C4 starts grouping pages by `doc_id`.
-        let split = if doc < 2 { "train" } else { "holdout" };
+        // Documents split WHOLE — one straddling the split would leak the
+        // moment M-C4 groups pages by `doc_id` — and each split gets one
+        // document from every cell, so neither is missing a condition.
+        let split = if doc < 4 { "train" } else { "holdout" };
         for page in 0..PAGES {
             let (canvas, mut regions) = render_doc_page(fonts, &mut rng, &title, page, two_col);
             let canvas = if skew > 0.0 {
