@@ -269,9 +269,33 @@ fn forward(m: &Model, input: &Tensor, opts: &DetectOptions) -> Result<Vec<crate:
         Ok::<_, Error>((per_level, boxes, scores, anchors))
     })?;
     let _ = per_level;
-    // The head's own max_det bounds the top-k; the caller's max_detections
-    // trims afterwards, so a small caller limit cannot change WHICH
-    // detections the two-stage selection produces.
-    let k = m.cfg.max_det.max(opts.max_detections);
+    // Decode exactly what the caller asked for, capped by the checkpoint's
+    // declared `max_det`.
+    //
+    // This was `.max()`, deliberately: decoding the model's full 300 and
+    // trimming afterwards meant a small caller limit could not change WHICH
+    // detections the two-stage selection produced. Stable, and WRONG against
+    // the reference — because Ultralytics feeds `max_det` into BOTH stages:
+    //
+    //   idx = scores.amax(-1).topk(max_det)      <- stage 1 pool is max_det
+    //   scores, index = scores.flatten(1).topk(max_det)
+    //
+    // So at the bench's `--max-dets 100` the reference selects from a
+    // 100-anchor pool (8 000 candidates) while we selected from 300
+    // (24 000) and discarded two thirds. That is a different ALGORITHM, not
+    // just extra work, and "bit-for-bit parity with the reference" has to
+    // mean the selection too.
+    //
+    // The speed saving is small and honest about it: decode is 2.1 % of the
+    // pipeline and stage 1's per-anchor max over 8400x80 is k-INDEPENDENT,
+    // so this is worth ~0.5 % — under this box's resolution on its own.
+    // Taken anyway. Fifty such gains compound to 1.005^50 = 1.28x, and none
+    // of them are individually measurable; refusing every gain that cannot
+    // be seen in isolation is how a codebase stays 2x behind forever.
+    let k = if crate::smallgains::disabled() {
+        m.cfg.max_det.max(opts.max_detections) // the pre-parity behaviour
+    } else {
+        opts.max_detections.min(m.cfg.max_det).max(1)
+    };
     timed(|p| &p.decode, || m.head.decode(&boxes, &scores, &anchors, k).map_err(candle_err))
 }

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -32,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="corpora/cache/yolo26n.pt")
-    ap.add_argument("--clips", default="corpora/clips/diana-coco")
+    ap.add_argument("--clips", default=os.environ.get("FFAI_DIANA_CLIPS", "corpora/clips/diana-coco"))
     ap.add_argument("--images", type=int, default=12)
     ap.add_argument("--rect", default="on")
     args = ap.parse_args()

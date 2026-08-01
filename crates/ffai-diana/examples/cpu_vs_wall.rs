@@ -63,7 +63,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap()
         .to_path_buf();
 
-    let mut clips: Vec<_> = std::fs::read_dir(root.join("corpora/clips/diana-coco"))?
+    // Which corpus. Every tight probe so far read v2's 45 images while the
+    // bench that suggested per-tier parity read v3's 450 — so corpus (and
+    // therefore image-size distribution) is an axis the refutation had not
+    // varied. FFAI_DIANA_CLIPS varies it.
+    let clips_dir = std::env::var("FFAI_DIANA_CLIPS")
+        .unwrap_or_else(|_| "corpora/clips/diana-coco".to_string());
+    let mut clips: Vec<_> = std::fs::read_dir(root.join(&clips_dir))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "png"))
         .collect();
@@ -83,7 +89,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ffai_diana::image::Geometry::Rect,
         root.join("models"),
     );
-    let opts = DetectOptions { confidence: 0.25, ..Default::default() };
+    // MATCHED to the reference probe, not to our own defaults.
+    //
+    // D6 question 1 is "do both arms do identical work", and these two
+    // probes did not: ours ran conf 0.25 while the reference ran conf 0.001
+    // with max_det 100, and our head decodes the manifest's max_det of 300
+    // regardless. Three times the top-k rows on our side, in a comparison
+    // being published as a ~1.9x ratio. Overridable so the asymmetry can be
+    // priced rather than argued about.
+    let conf: f32 = std::env::var("FFAI_DIANA_CONF").ok().and_then(|v| v.parse().ok()).unwrap_or(0.001);
+    let maxd: usize =
+        std::env::var("FFAI_DIANA_MAXDET").ok().and_then(|v| v.parse().ok()).unwrap_or(100);
+    let opts = DetectOptions { confidence: conf, max_detections: maxd, ..Default::default() };
     // Three warm calls, matching tools/diana_d6_cpu.py. Symmetry is the
     // point: the reference needed three because torch selects kernels
     // lazily, and giving one arm more warmup than the other is a listed way
@@ -92,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine.detect(&images[0], &opts)?;
     }
 
-    println!("tier {tier} · {} images · rayon threads {}", images.len(), rayon::current_num_threads());
+    println!("tier {tier} · {} images from {clips_dir} · rayon threads {}", images.len(), rayon::current_num_threads());
     println!("{:>4}  {:>10} {:>10} {:>10}  {}", "img", "wall ms", "cpu ms", "occupancy", "dets");
 
     let (mut tw, mut tc) = (0f64, 0f64);
