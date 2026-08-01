@@ -334,15 +334,11 @@ including the ones above.
   The harness's own per-row `speed: pass` at m rests on a 9 % margin against
   a 27 % resolution. It is a coin flip wearing a gate.
 
-- **★ WHAT SURVIVES: the TREND, because it spans more than the noise.**
-  The ratio goes 2.24 -> 1.67 -> 1.17 -> 1.06 -> 0.94 across five
-  independent tiers — a **2.4x span** against a 27 % per-point resolution,
-  and monotone. A trend across five points whose range exceeds the
-  resolution by ~9x is a real finding even when no single point is.
-
-  So the defensible statement is *"the gap narrows monotonically with model
-  size, from clearly behind at n to indistinguishable at m/l/x"* — NOT
-  "we win at x".
+- **I THEN CLAIMED THE TREND SURVIVED. IT DOES NOT — see D6h.** The ratio
+  goes 2.24 -> 1.67 -> 1.17 -> 1.06 -> 0.94 across five tiers, a 2.4x span
+  against a 27 % per-point resolution, and it looked like a real finding
+  because its range exceeded the noise by ~9x. It is an artifact of the
+  sweep's ORDER.
 
 - **CONSEQUENCE:** per-tier verdicts need a load-robust instrument. CPU time
   is the one this campaign already trusts (`tools/diana_cpu_ratio.py`), and
@@ -354,7 +350,45 @@ including the ones above.
   after two sessions of quoting ratios from single runs. Cheapest instrument
   in the box, and the last one reached for.
 
-## D5b — WHY the trend exists, on a load-robust instrument
+## ★★★ D6h — THERE IS NO TIER TREND. Order and tier were confounded
+
+- **ASKED:** the bench sweep runs tiers in the order n, s, m, l, x, and takes
+  hours. So tier index and wall-clock time are perfectly correlated. Any
+  monotone drift in this box's load over the sweep manufactures a monotone
+  "tier trend". Is the trend a property of the models or of the clock?
+- **MEASURED:** `tools/diana_cpu_ratio.py`, both arms in-process minutes
+  apart rather than hours, median of 9, three warm calls each side — and run
+  BOTH WAYS. A real effect survives reversal; drift flips sign.
+
+  | tier | forward (n->x) | reverse (x->n) | mean |
+  |---|---:|---:|---:|
+  | n | 1.67x | 1.86x | **1.77x** |
+  | s | 1.79x | 1.90x | **1.85x** |
+  | m | 1.33x | 2.12x | **1.73x** |
+  | l | 1.65x | 1.70x | **1.68x** |
+  | x | 1.57x | 1.62x | **1.60x** |
+
+- **ANSWER: the gap is FLAT at ~1.6-1.9x across every tier.** The sweep's
+  2.24 -> 0.94 was the ordering confound. The m cell alone swung 1.33 -> 2.12
+  (59 %) purely on running order, which is the whole story in one number.
+
+- **★ SO BOTH CLAIMS WERE WRONG, AND THE FIRST ONE'S VERDICT WAS RIGHT BY
+  ACCIDENT.** "Speed FAILS, ~2.5x behind" overstated the magnitude (~1.75x)
+  but reached the right verdict. The correction — "the gate PASSES at m and
+  we are at parity at x" — reversed the verdict on an artifact. **A wrong
+  claim corrected into a differently-wrong claim is the failure mode this
+  whole descent exists to prevent**, and it took the null arm plus an
+  order-reversal to catch, neither of which costs more than ten minutes.
+
+- **What is now defensible:** Diana is **~1.75x behind Ultralytics on
+  per-image latency, consistently, at every tier** — and does ~1.7x more CPU
+  work to get there. The speed gate fails at every tier. No tier is at
+  parity.
+
+- **CONFIDENCE:** high. Two orders, two metrics (CPU and wall) agreeing per
+  tier, tight pairing, medians, matched warmup.
+
+## D5b — the amortization mechanism is real, and it does NOT reach the gap
 
 The trend needs a mechanism or it is a coincidence with five points. The
 claim is that Diana pays ~120 fork-joins per image whose cost is set by
@@ -383,13 +417,23 @@ Overhead grows nearly 4x, and it should: m/l/x have more layers (224 and
 mean more chunks to schedule at each one. The honest mechanism is *a cost
 that grows sub-linearly in the work*, not a fixed one.
 
-**The corroboration is the number that matters.** The parallel tax falls
-4.81x -> 1.83x of total cost from n to x, a **2.6x efficiency gain**. The
-wall gap against Ultralytics improves **2.4x** over the same span. Two
-independent instruments — one a cross-implementation wall ratio, one our own
-CPU time against our own serial baseline — agree on the magnitude of the
-trend to within 10 %. That is what promotes "the gap narrows" from an
-observation to an explanation.
+**★ AND THE CORROBORATION I DREW FROM IT WAS FALSE.** I wrote that the tax
+falling 4.81x -> 1.83x "agrees to within 10 %" with the wall gap improving
+2.4x over the same span, and called that two instruments confirming each
+other. D6h then showed the wall trend does not exist. Two numbers agreeing
+is not corroboration when one of them is an artifact — it is a coincidence
+that made an artifact look explained, which is worse than leaving it
+unexplained.
+
+**What the amortization measurement still supports, on its own:** our
+parallel efficiency genuinely improves with model size, from a 3.81x tax at
+n to 0.83x at x. That is real, load-robust, and our own numbers on both
+sides. It simply does not show up as a narrowing gap against Ultralytics —
+which means the reference's efficiency improves with size too, roughly in
+step. Both implementations amortize; neither pulls ahead.
+
+That is the honest reading, and it is a smaller claim than the one it
+replaces.
 
 **Sanity check that fell out of it:** n's serial work reads 232 ms here
 against 363 ms measured before the SiLU fix — 1.56x, in the range that fix

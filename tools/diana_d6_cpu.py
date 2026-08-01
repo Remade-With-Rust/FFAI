@@ -52,13 +52,22 @@ def main() -> None:
     model = YOLO(args.model)
     kw = dict(imgsz=640, conf=0.001, max_det=100, rect=args.rect == "on",
               device="cpu", verbose=False)
-    model.predict(arrays[0], **kw)  # warm
+    # THREE warm calls, and the median below rather than the mean.
+    #
+    # One warm call was not enough: torch does lazy kernel selection on the
+    # first few inferences, and a single ~4 s first call inside a 6-image
+    # mean produced 708 ms/image at the n tier against 148 ms at s — a
+    # smaller model reading 5x SLOWER, which is the instrument asking for
+    # help rather than a result. (4000 + 5*55)/6 = 712 reproduces it exactly.
+    for _ in range(3):
+        model.predict(arrays[0], **kw)
 
     print(f"torch intra-op threads: {torch.get_num_threads()} · "
           f"interop {torch.get_num_interop_threads()} · {len(arrays)} images")
     print(f"{'img':>4}  {'wall ms':>10} {'cpu ms':>10} {'occupancy':>10}  dets")
 
     tw = tc = 0.0
+    walls, cpus = [], []
     for i, a in enumerate(arrays):
         c0 = time.process_time()
         w0 = time.perf_counter()
@@ -67,6 +76,8 @@ def main() -> None:
         cpu = time.process_time() - c0
         tw += wall
         tc += cpu
+        walls.append(wall)
+        cpus.append(cpu)
         n = 0 if r.boxes is None else len(r.boxes)
         print(f"{i:>4}  {wall * 1e3:>10.1f} {cpu * 1e3:>10.1f} {cpu / wall:>9.2f}x  {n}")
 
@@ -76,10 +87,16 @@ def main() -> None:
     print(f"mean per image: wall {tw * 1e3 / len(arrays):.1f} ms · "
           f"cpu {tc * 1e3 / len(arrays):.1f} ms")
     print(f"OCCUPANCY {occ:.2f}x")
+    import statistics
+    print(f"MEDIAN per image: wall {statistics.median(walls) * 1e3:.1f} ms · "
+          f"cpu {statistics.median(cpus) * 1e3:.1f} ms")
     print(json.dumps({
         "images": len(arrays),
-        "wall_ms_per_image": tw * 1e3 / len(arrays),
-        "cpu_ms_per_image": tc * 1e3 / len(arrays),
+        # MEDIAN, not mean: one slow straggler in a short run moves a mean
+        # by more than the effect being measured.
+        "wall_ms_per_image": statistics.median(walls) * 1e3,
+        "cpu_ms_per_image": statistics.median(cpus) * 1e3,
+        "mean_wall_ms_per_image": tw * 1e3 / len(arrays),
         "occupancy": occ,
         "torch_threads": torch.get_num_threads(),
     }))

@@ -40,7 +40,7 @@ def ours_cpu_ms(tier: str, images: int) -> tuple[float, float]:
     out = subprocess.run(
         [str(OURS), tier, str(images)], capture_output=True, text=True, cwd=ROOT
     ).stdout
-    m = re.search(r"mean per image: wall ([\d.]+) ms .+ cpu ([\d.]+) ms", out)
+    m = re.search(r"median per image: wall ([\d.]+) ms .+ cpu ([\d.]+) ms", out)
     if not m:
         raise SystemExit(f"could not parse cpu_vs_wall output for {tier}:\n{out[-400:]}")
     return float(m.group(2)), float(m.group(1))
@@ -71,12 +71,20 @@ def ref_cpu_ms(tier: str, images: int) -> tuple[float, float]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", type=int, default=8)
+    # ORDER IS A CONFOUND. The bench sweep runs tiers n->x, so tier and
+    # wall-clock time are perfectly correlated: any monotone drift in box
+    # load over a multi-hour sweep manufactures a monotone "tier trend".
+    # Running the same tiers in reverse is the cheapest test that separates
+    # them — a real effect survives reversal, drift flips sign.
+    ap.add_argument("--reverse", action="store_true")
     args = ap.parse_args()
 
-    print(f"CPU work per image, rectangular geometry, {args.images} images/tier")
+    tiers = list(reversed(TIERS)) if args.reverse else TIERS
+    print(f"CPU work per image, rectangular geometry, {args.images} images/tier, "
+          f"order {'->'.join(tiers)}")
     print(f"{'tier':<5} {'Diana cpu':>10} {'ref cpu':>10} {'cpu x':>7}   {'Diana wall':>11} {'ref wall':>10} {'wall x':>7}")
     rows = []
-    for i, tier in enumerate(TIERS):
+    for i, tier in enumerate(tiers):
         try:
             # Alternate which arm goes first so neither systematically lands
             # on the busier half of a minute.

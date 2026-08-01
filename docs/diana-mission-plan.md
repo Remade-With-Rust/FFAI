@@ -1705,7 +1705,32 @@ So:
 | Quality — mAP within 0.08 pp of PyTorch across all 10 tier/geometry configs on 450 images | **YES**, gated, per tier, per geometry |
 | Footprint — 1.7-6.8x leaner steady memory | **YES**, gated |
 | Correctness — five-tier oracle, byte-determinism | **YES**, gated |
-| Speed — per-image latency | **NO — published as FAIL with its number** |
+| Speed — per-image latency, ~1.75x behind at EVERY tier | **NO — published as FAIL with its number** |
+
+**★ That number took three statements to get right, and the two wrong ones
+are the more useful record.**
+
+1. *"~2.5x behind"* — generalised from the n tier and stated for all five.
+2. *"the gate PASSES at m and we are at parity at x"* — the corpus sweep
+   showed the gap narrowing monotonically, 2.24x at n to 0.94x at x. A
+   better story, and false.
+3. *"~1.75x behind, flat across tiers, failing everywhere"* — what survives.
+
+Two cheap instruments killed (2), and neither had been run despite two
+sessions of quoting ratios. A **null arm** — same engine, same corpus, same
+configuration, run twice — moved the headline ratio 27 % with nothing
+changed, while the reference's own throughput moved 37 %; against that
+resolution, m (1.17x), l (1.06x) and x (0.94x) were all indistinguishable
+from parity AND from each other. Then **reversing the tier order** flattened
+the trend entirely (per-tier means 1.77 / 1.85 / 1.73 / 1.68 / 1.60), because
+**the sweep runs n->x over several hours, so tier index and wall-clock time
+are perfectly confounded** and this box's load drifts. The m cell swung 59 %
+on running order alone.
+
+The lesson to carry: *a wrong claim corrected into a differently-wrong claim*
+is the failure this whole descent exists to prevent, and the correction was
+more seductive than the original because it flattered us. A result in your
+own favour deserves the confound check first, not last.
 
 Diana therefore launches as *"YOLO26 detection inference in pure Rust,
 bit-for-bit parity with PyTorch, ahead on memory / load / determinism /
@@ -1726,12 +1751,14 @@ descent; the three findings are:
    left `round` behind. Rounding by float addition instead is **4.71x on
    the kernel, bit-identical**, and **1.079x on the pipeline (17/21,
    z = +2.84)** measured on the serial path the gate times. Shipped.
-2. **Single-image fan-out costs 2.32x the CPU of the work it performs** —
-   363 ms of real work, 844 ms spent, across ~120 fork-joins per image on
-   a 16-physical/24-logical hybrid CPU. Cutting threads does NOT help wall
-   (9/24, z = -1.22): for one image the alternative is 15 idle cores. This
-   is a **structural** cost — too many small parallel regions — and it is
-   the largest single thing standing between us and the reference.
+2. **Single-image fan-out costs 2.3-3.8x the CPU of the work it performs**,
+   across ~120 fork-joins per image on a 16-physical/24-logical hybrid CPU.
+   Cutting threads does NOT help wall (9/24, z = -1.22): for one image the
+   alternative is 15 idle cores. The tax does fall with model size —
+   3.81x at n to 0.83x at x, our own serial baseline on both sides — so our
+   parallel efficiency genuinely improves as tensors grow. It does not open
+   a gap against Ultralytics, because theirs improves in step. This is the
+   largest single structural thing between us and the reference.
 3. **`target-cpu` is unset, and it does not matter.** Every hand-written
    kernel compiles for the x86-64 baseline. That is worth 1.39x on the OLD
    SiLU kernel and **1.017x on the pipeline (12/21, z = +0.65 — inside the

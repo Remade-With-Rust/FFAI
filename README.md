@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.7–6.8× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. Per-image latency still behind ORT; the M-D2 campaign is open ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.7–6.8× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. **Per-image latency is ~1.75× behind at every tier — the one gate that fails, published with its number** ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -515,10 +515,35 @@ into `C3k` — a branch n and s never reach, on a board that was green at
 tested happen to agree is found by configuration N+1, never by testing
 configuration 1 harder.
 
-**Speed is the open gate, and it is reported as FAIL rather than framed
-away.** The repo's rule is that `verdict: claimable` needs all four gates;
-Diana does not get it. Quality, footprint and correctness are each claimed
-individually because each is gated. The losing row goes in the table.
+**Speed is the open gate: ~1.75× behind Ultralytics on per-image latency,
+consistently at every tier.** The repo's rule is that `verdict: claimable`
+needs all four gates; Diana does not get it. Quality, footprint and
+correctness are each claimed individually because each is gated. The losing
+row goes in the table.
+
+That number took three tries to state correctly, and the two wrong versions
+are worth more than the right one. It was first published as "~2.5× behind",
+generalised from the n tier alone. The corpus sweep then appeared to show
+the gap narrowing monotonically with model size — 2.24× at n down to 0.94×
+at x, apparently *ahead* at the largest tier — which would have been a much
+better story. It was an artifact: **the sweep runs tiers in order n→x over
+several hours, so tier index and wall-clock time are perfectly confounded**,
+and this box's load drifts. Two checks killed it. A *null arm* — the same
+engine, same corpus, same config, run twice — moved the headline ratio 27%
+with nothing changed, while the reference's own throughput moved 37%. And
+re-running the tiers in **reverse order** flattened the trend to nothing:
+
+| tier | n→x order | x→n order | mean |
+|---|---:|---:|---:|
+| n | 1.67× | 1.86× | 1.77× |
+| s | 1.79× | 1.90× | 1.85× |
+| m | 1.33× | 2.12× | 1.73× |
+| l | 1.65× | 1.70× | 1.68× |
+| x | 1.57× | 1.62× | 1.60× |
+
+The m cell alone swung 59% on running order. No tier is at parity; the gate
+fails everywhere. Underneath, Diana does ~1.7× more CPU work than PyTorch to
+produce the identical answer.
 
 What is *behind* the row is now diagnosed rather than admitted. A six-whys
 descent ([docs/whys/diana-latency.md](docs/whys/diana-latency.md)) found the
@@ -540,9 +565,13 @@ landed** (z = +0.65, inside the noise), because AVX2 was mostly rescuing
 `round()`. A confirmation expires when its baseline moves; runtime ISA
 dispatch would have been built on a number that no longer existed.
 
-What remains is structural: **~120 fork-joins per image cost 2.32× the CPU of
-the work they perform** (363 ms of real work, 844 ms spent). That is the
-largest named thing between Diana and the reference, and it is not a flag.
+What remains is structural: **~120 fork-joins per image cost 2.3–3.8× the CPU
+of the work they perform.** That tax does fall with model size — 3.81× at n
+to 0.83× at x, measured on our own serial baseline — so our parallel
+efficiency genuinely improves as tensors grow. It just doesn't open a gap
+against Ultralytics, because theirs improves in step. Both amortize; neither
+pulls ahead. That is the largest named thing between Diana and the
+reference, and it is not a flag.
 
 **One gate turned out to be measuring luck, and the way that was
 established is the point.** The oracle asserted that our 300-row top-k

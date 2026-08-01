@@ -84,12 +84,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         root.join("models"),
     );
     let opts = DetectOptions { confidence: 0.25, ..Default::default() };
-    engine.detect(&images[0], &opts)?; // warm
+    // Three warm calls, matching tools/diana_d6_cpu.py. Symmetry is the
+    // point: the reference needed three because torch selects kernels
+    // lazily, and giving one arm more warmup than the other is a listed way
+    // to manufacture a result.
+    for _ in 0..3 {
+        engine.detect(&images[0], &opts)?;
+    }
 
     println!("tier {tier} · {} images · rayon threads {}", images.len(), rayon::current_num_threads());
     println!("{:>4}  {:>10} {:>10} {:>10}  {}", "img", "wall ms", "cpu ms", "occupancy", "dets");
 
     let (mut tw, mut tc) = (0f64, 0f64);
+    let (mut walls, mut cpus) = (Vec::new(), Vec::new());
     for (i, image) in images.iter().enumerate() {
         let c0 = cpu::secs();
         let w0 = Instant::now();
@@ -98,6 +105,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cpu = cpu::secs() - c0;
         tw += wall;
         tc += cpu;
+        walls.push(wall);
+        cpus.push(cpu);
         println!(
             "{i:>4}  {:>10.1} {:>10.1} {:>9.2}x  {}",
             wall * 1e3,
@@ -112,6 +121,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("total wall {:.1} ms · total cpu {:.1} ms", tw * 1e3, tc * 1e3);
     println!("mean per image: wall {:.1} ms · cpu {:.1} ms", tw * 1e3 / images.len() as f64, tc * 1e3 / images.len() as f64);
+    // MEDIAN is what the ratio tool reads: one straggler in a short run
+    // moves a mean by more than the effect being measured, and the
+    // reference-side probe reports the median for the same reason.
+    let med = |v: &mut Vec<f64>| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        if v.is_empty() { f64::NAN } else if v.len() % 2 == 1 { v[v.len() / 2] } else { (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0 }
+    };
+    println!("median per image: wall {:.1} ms · cpu {:.1} ms", med(&mut walls) * 1e3, med(&mut cpus) * 1e3);
     println!("OCCUPANCY {occ:.2}x of {cores:.0} threads = {:.0}% busy", 100.0 * occ / cores);
     // State the ceiling explicitly, so the next step is chosen on arithmetic
     // rather than on appetite: perfect occupancy is worth exactly cores/occ,
