@@ -1366,3 +1366,30 @@ fn erf_as(x: f32) -> f32 {
         * t;
     s * (1.0 - poly * (-x * x).exp())
 }
+
+/// im2col for `conv1d(k=3, pad=1)` into a caller-owned buffer, channel-major
+/// `[C][T]` -> `[C*3][T]`.
+///
+/// Three `copy_from_slice` memcpys per channel. Candle's equivalent
+/// (`Im2Col1D`, cpu_backend) walks element by element with the padding test
+/// inside the innermost loop — that, plus a full extra output transpose it
+/// performs afterwards, is where its 1.71x wrapper tax lives. Measured NOT to
+/// be about GEMM orientation: candle's `[T,K]x[K,Co]` against our
+/// `[Co,K]x[K,T]` is 1.02x, i.e. nothing.
+///
+/// `col` must be at least `c * 3 * t` long; only that prefix is written.
+pub fn im2col_k3_into(x: &[f32], c: usize, t: usize, col: &mut [f32]) {
+    debug_assert!(col.len() >= c * 3 * t);
+    for ci in 0..c {
+        let src = &x[ci * t..(ci + 1) * t];
+        let base = ci * 3 * t;
+        // tap 0 reads x[i-1]: output 0 is padding
+        col[base] = 0.0;
+        col[base + 1..base + t].copy_from_slice(&src[..t - 1]);
+        // tap 1 reads x[i]
+        col[base + t..base + 2 * t].copy_from_slice(src);
+        // tap 2 reads x[i+1]: the last output is padding
+        col[base + 2 * t..base + 3 * t - 1].copy_from_slice(&src[1..]);
+        col[base + 3 * t - 1] = 0.0;
+    }
+}

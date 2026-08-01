@@ -16,13 +16,21 @@ use std::time::Instant;
 use ffai_mercury::tts::phonemize::Phonemizer;
 use ffai_mercury::tts::vits::Vits;
 
+/// Which knob this run A/Bs. Defaults to the attention kernel it was written
+/// for; `FFAI_AB_KNOB` retargets it at any other encoder knob, so a change too
+/// small for the whole-pipeline harness can still be resolved at the stage it
+/// actually lives in.
+fn knob() -> String {
+    std::env::var("FFAI_AB_KNOB").unwrap_or_else(|_| "FFAI_SERIAL_ATTN".into())
+}
+
 fn set_arm_serial(serial: bool) {
     // SAFETY: single-threaded at the flip; the rayon pool is idle between rounds.
     unsafe {
         if serial {
-            std::env::set_var("FFAI_SERIAL_ATTN", "1");
+            std::env::set_var(knob(), "1");
         } else {
-            std::env::remove_var("FFAI_SERIAL_ATTN");
+            std::env::remove_var(knob());
         }
     }
 }
@@ -51,7 +59,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ---- correctness first: the arms must be bit-identical ----
     let mut mismatches = 0usize;
+    let check_identity = knob() == "FFAI_SERIAL_ATTN";
     for ids in &ids_list {
+        if !check_identity {
+            break;
+        }
         set_arm_serial(true);
         let (a, _, _) = vits.text_encoder(ids)?;
         set_arm_serial(false);
@@ -63,8 +75,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     println!(
-        "bit-identity over 20 sentences: {}",
-        if mismatches == 0 { "IDENTICAL".to_string() } else { format!("{mismatches} DIFFER") }
+        "knob={}  bit-identity over 20 sentences: {}",
+        knob(),
+        if !check_identity {
+            "not asserted for this knob".to_string()
+        } else if mismatches == 0 {
+            "IDENTICAL".to_string()
+        } else {
+            format!("{mismatches} DIFFER")
+        }
     );
 
     let run_once = |serial: bool| -> Result<f64, Box<dyn std::error::Error>> {

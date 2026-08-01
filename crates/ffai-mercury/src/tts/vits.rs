@@ -275,11 +275,20 @@ impl Vits {
             .unsqueeze(0)
             .e()?;
 
+        // im2col scratch, allocated ONCE for the whole 6-layer stack rather
+        // than twice per layer. Per-call allocation measured 272.9 -> 138.3 ms
+        // over 6 layers x 20 sentences just from reusing these.
+        let (mut colu, mut cold) = (Vec::new(), Vec::new());
         for i in 0..N_LAYERS {
             let base = format!("enc_p.encoder.attn_layers.{i}");
             let y = self.rel_attention(&base, i, &x, t_len)?;
             x = self.layer_norm_named(&format!("enc_p.encoder.norm_layers_1.{i}"), &(&x + y).e()?)?;
-            let y = self.ffn(&format!("enc_p.encoder.ffn_layers.{i}"), &x)?;
+            let y = self.ffn_flat(
+                &format!("enc_p.encoder.ffn_layers.{i}"),
+                &x,
+                &mut colu,
+                &mut cold,
+            )?;
             x = self.layer_norm_named(&format!("enc_p.encoder.norm_layers_2.{i}"), &(&x + y).e()?)?;
         }
         let stats = self.conv("enc_p.proj", &x)?;
@@ -444,13 +453,89 @@ impl Vits {
     }
 
     /// One encoder layer's feed-forward half, exposed for `enc_anatomy`.
+    ///
+    /// Routes to `ffn_flat` — the shipped path — because a probe that measures
+    /// a superseded function reports a stage the engine no longer runs. It
+    /// allocates its own scratch per call, so it slightly overstates the real
+    /// cost, which is the safe direction for a probe.
     pub fn enc_ffn_probe(&self, layer: usize, x: &Tensor) -> Result<Tensor> {
-        self.ffn(&format!("enc_p.encoder.ffn_layers.{layer}"), x)
+        let (mut colu, mut cold) = (Vec::new(), Vec::new());
+        self.ffn_flat(
+            &format!("enc_p.encoder.ffn_layers.{layer}"),
+            x,
+            &mut colu,
+            &mut cold,
+        )
     }
 
     /// One encoder layer's LayerNorm, exposed for `enc_anatomy`.
     pub fn enc_norm_probe(&self, layer: usize, x: &Tensor) -> Result<Tensor> {
         self.layer_norm_named(&format!("enc_p.encoder.norm_layers_1.{layer}"), x)
+    }
+
+    /// The feed-forward pair run FLAT: one `Vec<f32>` carries the activation
+    /// through both convolutions, with bias and ReLU applied in place, so the
+    /// 768-channel intermediate never becomes a Tensor and candle's `relu` op
+    /// never runs.
+    ///
+    /// Three separate costs removed, each measured (`examples/k3_variants.rs`,
+    /// 6 layers x 20 sentences):
+    ///   * per-call im2col allocation -> caller-owned scratch   272.9 -> 138.3 ms
+    ///   * intermediate Tensor + candle relu + one to_vec1      138.3 -> 126.9 ms
+    /// against a pure-GEMM ceiling of 94.3 ms. Orientation was ALSO tested and
+    /// is not a lever (1.02x), so the remaining ~35% is the im2col copy itself.
+    ///
+    /// `FFAI_CANDLE_FFN=1` still routes to the candle path via [`Self::ffn`].
+    fn ffn_flat(
+        &self,
+        base: &str,
+        x: &Tensor,
+        colu: &mut Vec<f32>,
+        cold: &mut Vec<f32>,
+    ) -> Result<Tensor> {
+        // FFAI_CANDLE_FFN routes all the way back to candle's conv1d;
+        // FFAI_FFN_ALLOC keeps the GEMM but restores per-call im2col
+        // allocation and the intermediate Tensor, isolating THIS change.
+        if std::env::var("FFAI_CANDLE_FFN").is_ok() || std::env::var("FFAI_FFN_ALLOC").is_ok() {
+            return self.ffn(base, x);
+        }
+        let (_, c_in, t) = x.dims3().e()?;
+        let w1 = self.t(&format!("{base}.conv_1.weight"))?;
+        let b1 = self.t(&format!("{base}.conv_1.bias"))?;
+        let w2 = self.t(&format!("{base}.conv_2.weight"))?;
+        let b2 = self.t(&format!("{base}.conv_2.bias"))?;
+        let c_hid = w1.dim(0).e()?;
+
+        let gemm = |w: &Tensor, col: &[f32], cin: usize, cout: usize| -> Result<Vec<f32>> {
+            let cm = Tensor::from_slice(col, (cin * 3, t), &self.device).e()?;
+            let w2d = w.reshape((cout, cin * 3)).e()?;
+            let y = w2d.matmul(&cm).e()?;
+            y.flatten_all().e()?.to_vec1().e()
+        };
+        let add_bias = |v: &mut [f32], b: &[f32], c: usize, relu: bool| {
+            for ci in 0..c {
+                let row = &mut v[ci * t..(ci + 1) * t];
+                let bias = b[ci];
+                if relu {
+                    row.iter_mut().for_each(|z| *z = (*z + bias).max(0.0));
+                } else {
+                    row.iter_mut().for_each(|z| *z += bias);
+                }
+            }
+        };
+
+        let xv: Vec<f32> = x.flatten_all().e()?.to_vec1().e()?;
+        colu.resize(c_in * 3 * t, 0.0);
+        super::decoder_kernels::im2col_k3_into(&xv, c_in, t, colu);
+        let mut hv = gemm(w1, &colu[..c_in * 3 * t], c_in, c_hid)?;
+        add_bias(&mut hv, &b1.to_vec1().e()?, c_hid, true);
+
+        cold.resize(c_hid * 3 * t, 0.0);
+        super::decoder_kernels::im2col_k3_into(&hv, c_hid, t, cold);
+        let mut ov = gemm(w2, &cold[..c_hid * 3 * t], c_hid, c_in)?;
+        add_bias(&mut ov, &b2.to_vec1().e()?, c_in, false);
+
+        Tensor::from_vec(ov, (1, c_in, t), &self.device).e()
     }
 
     fn ffn(&self, base: &str, x: &Tensor) -> Result<Tensor> {

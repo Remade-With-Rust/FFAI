@@ -578,6 +578,67 @@ this descent began.
 
 ---
 
+# Round 4 — what candle's conv1d actually charges for, from its source
+
+Round 3 measured a **1.71x** wrapper tax without explaining it. Reading
+`candle-core-0.11.0/src/cpu_backend/mod.rs` names three candidate causes; one
+of the three turned out to be wrong, which is why they were measured
+separately rather than asserted together.
+
+| # | candidate | verdict |
+|---|---|---|
+| 1 | **scalar element-by-element im2col** (`Im2Col1D`, l.1023) with the padding test inside the innermost loop; ours is three `copy_from_slice` memcpys per channel | contributes |
+| 2 | **opposite GEMM orientation** — candle `col[T,K] x w[K,Co]`, ours `w[Co,K] x col[K,T]` | **REFUTED — 1.02x** |
+| 3 | **a full extra output transpose** — `contiguous((b,l_out,c_out)).transpose(1,2)` then `copy_strided_src` into a fresh buffer | contributes |
+
+Candle's own authors flag #1: *"TODO: provide specialized kernels for the common
+use cases. - l_k = 1, padding = 0, stride = 1, dilation = 1"*.
+
+**#2 deserves its own note.** The six-whys skill records a case where GEMM
+orientation alone was worth 10x, so it was the most plausible-looking of the
+three. Measured on the GEMM alone with both operands preallocated, it is
+**1.02x — nothing.** A hypothesis that looks strongest by analogy is still just
+a hypothesis; the analogy is not evidence.
+
+## Deployed, and measured against candle
+
+Stage-level paired ABBA A/B over the text encoder, 20 sentences:
+
+| arm | ratio | wins | z | verdict |
+|---|---|---|---|---|
+| null (identical arms) | 0.839 | 10/21 | -0.22 | no verdict |
+| flat FFN vs per-call alloc | 1.262 | 17/31 | +0.54 | inside noise |
+| **GEMM path vs candle `conv1d`** | **1.719** | **23/31** | **+2.69** | **REAL** |
+
+**1.719x against candle, confirmed** — and it reproduces the isolated probe's
+1.71x to within 0.5%, which is the cross-check that makes it trustworthy.
+
+Note the null arm's median ratio: **0.839**, i.e. 16% off unity, on a box the
+parallel Carmenta session was saturating. The win-rate z correctly returned "no
+verdict" anyway, which is precisely why the paired statistic is the one to
+report and the median ratio is not.
+
+## The flat FFN: kept, but NOT claimed
+
+Removing the intermediate 768-channel Tensor, candle's `relu` op and the
+per-call im2col allocation measured 272.9 -> 126.9 ms in isolation
+(`examples/k3_variants.rs`) and took `enc_anatomy`'s whole-encoder figure
+281.9 -> 239.7 ms with the residue collapsing 45.6 -> 22.1 ms — the direct
+signature of the intermediate Tensor disappearing.
+
+But **both paired A/Bs returned no verdict** (stage 17/31 z=+0.54; pipeline
+10/21 z=-0.22). The FFN is ~6.5% of the pipeline, so a ~9% gain on it is ~0.6%
+overall — under the floor of a harness whose null arm is currently 16% off.
+Kept on *strictly less work* (12 fewer allocations, 6 fewer Tensor
+materialisations and 6 fewer `relu` ops per sentence), reported with no speed
+claim, and left behind `FFAI_FFN_ALLOC=1` for re-test on a quiet box.
+
+Correctness: corpus gate unchanged — `w_ceil` IDENTICAL across 200 sentences
+and audio max |delta| still **3.193e-4**, the exact value from before this
+change, confirming it moved plumbing and not arithmetic.
+
+---
+
 ## Standing corrections to the ledger
 
 1. The headline gap is **1.19x at matched thread occupancy** (1.28x at each
