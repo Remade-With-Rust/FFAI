@@ -30,7 +30,7 @@ ffai models         # list model manifests, licenses, cache status
 
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, and **all four gates now PASS** — though the speed margin sits inside the reference's own 6.4× run-to-run spread, so it is reported as parity, not a win ([Status](#status)) |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.7–6.8× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. Per-image latency still behind ORT; the M-D2 campaign is open ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
@@ -347,62 +347,46 @@ stated rather than buried.
 noise, every stage matches: text encoder to 4e-6, per-phoneme durations
 integer-exact, end-to-end waveform to 3e-5. The pure-Rust phonemizer passed
 its substitution gate — our phonemes through piper's runtime score within
-the 5 % round-trip band of espeak's own. And the ONNX reader that replaced
-the Python converter is byte-identical to it: 350 tensors, 15.65 M floats,
-132 convolution geometries and the audio itself, all exact.
+the 5 % round-trip band of espeak's — and the ONNX reader that replaced the
+Python converter is byte-identical to it across 350 tensors and 132
+convolution geometries.
 
 **Quality: parity, measured the hard way.** Round-trip WER through a frozen
-whisper.cpp judge (never our own ASR — no self-grading): **Mercury 5.91 %,
-byte-stable on every run**. Piper's own audio scores 4.8–6.5 % across
-ledger runs — it samples noise in-graph and cannot repeat a number, so the
-harness scores it as the mean of independent draws with the range recorded.
-Read that as parity through this instrument, not superiority; the
-instrument cannot support more, and we say so.
+whisper.cpp judge (never our own ASR — no self-grading): **5.49 % against
+piper's 5.27 %** on the same holdout, same judge, same run.
+
+**Both engines are scored across draws, because one of them has to be.**
+Piper samples noise inside its ONNX graph and cannot repeat a run, so its
+WER is the mean of independent draws with the range recorded. Ours is
+seeded and byte-stable, so it would otherwise report one fixed draw
+forever — and our own seed-to-seed spread is **1.11 pp** (4.99–6.10 %),
+several times larger than any recent engine change. Scoring both the same
+way is the only comparison that means anything.
 
 **Deterministic by default** — same text, same seed, byte-identical WAV,
 verified at both the library and the file-hash level. Piper structurally
 cannot offer this. Long-form chunking, speed/noise/seed knobs, and
 sentence-silence control ship on `ffai tts`.
 
-**Footprint and load: ahead.** 172–208 MiB steady against piper's 217–240
-(0.71–0.87×, gate PASS), model load 0.26–0.35 s against ~1.8–2.6 s.
+**Speed: ahead, on a reference that will not hold still.** Recent ledger
+lines read **19.3–21.2× realtime warm against piper's 11.2–23.0×**, and
+**load 0.64 s against 6.69 s**. But piper's own throughput spans
+**4.5×–29× across the ledger's TTS lines** on this machine and its WER
+4.8–6.5 %, both wider than any difference between the two engines — so the
+gates flip run to run on *its* variance, and single-run ratios are not a
+claim. The number that survives is measured on both engines simultaneously:
+**1.58× faster wall-clock while using 5 % less total CPU.** Footprint is
+parity, 214 MiB steady against 217.
 
-**Speed: the gate passes — and that is precisely why it needs a caveat.** On
-the latest ledger line (`bench-tts-1785530770`) Mercury synthesizes at
-**13.8× realtime warm against piper's 11.1×**, all four gates green. We do not headline that as a win.
-Piper's own measured throughput spans **4.5× to 29× across twenty ledger
-lines on this machine** — a 6.4× spread, far wider than any improvement this
-campaign has made — and the speed gate has flipped pass/fail in lockstep with
-it. A ratio whose denominator drifts more than your improvement is not a
-claim. Read it as **parity, reached**; the durable numbers are the
-single-process, same-window ones below.
-
-**Where the gap actually is — an earlier answer here was wrong.** This README
-previously reported that our upsamplers and duration predictor were ~1.9×
-faster than piper's and the text encoder at parity. That came from
-onnxruntime's own profiler, which we have since measured to slow it
-**1.75–1.93×** with a tax that is not uniform per node — correcting for it
-drove one stage to a negative time, which is how we caught it. Re-measured by
-cutting the ONNX graph into cumulative prefixes and timing each *unprofiled*,
-the picture inverts: **our decoder (52 % of the pipeline) and our flow are at
-parity with onnxruntime, while the text encoder and duration predictor are
-each ~2.9× slower.** Five campaigns had been optimizing flow and the decoder —
-the two stages that were already competitive. Every per-stage "we lose N×"
-figure recorded before that correction is withdrawn.
-
-**What the current round actually bought.** Per-stage CPU time exposed the
-duration predictor running at **0.88 of one core** while flow and the decoder
-used 11+, traced to a routing rule sending its 192×192 convolutions down a
-serial path our own source comment had already recorded as losing — 1.58× on
-the stage, 31/31 paired rounds. The relative-attention row grid was serial
-between two threaded convolutions; parallelising it is **bit-identical** and
-worth 1.04× on 88-phoneme sentences but **9.6× at 1024**, since attention is
-O(T²) and only the parallel arm spreads it. Both changes were gated
-byte-for-byte across all 200 corpus sentences — durations integer-identical,
-audio bit-identical, with the nearest rounding boundary in the whole corpus
-sitting ~100× further away than the float perturbation. Three other levers
-(spline parallelism, decoder buffer reuse, P-core pinning) were measured and
-**rejected**, and are recorded with their numbers.
+**Per stage, we are within ~2.5 points of share on all four.** That took
+correcting the instrument twice: onnxruntime's own profiler slows it
+1.75–1.93× with a non-uniform per-node tax (correcting for it drove a stage
+to a *negative* time, which is how it was caught), so the reference is now
+timed by cutting its graph into cumulative prefixes and running each
+unprofiled. Every per-stage figure recorded before that correction is
+withdrawn. The full descent, including the levers that were measured and
+rejected, is in
+[docs/whys/tts-speed-gap.md](docs/whys/tts-speed-gap.md).
 
 Voice weights are converted, never vendored, and the voice's own license is
 surfaced per manifest (`models/piper-vits-lessac-medium.toml` — see its
