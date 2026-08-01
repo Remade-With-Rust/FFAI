@@ -1737,6 +1737,46 @@ cargo reported `Finished` while the example binary stayed **24 minutes older
 than its source** — the §8.12 failure again, and the same tell: a result that
 contradicts a change you just made indicts the artifact before the code.
 
+### 8.27 First read of carmenta-doc — the corpus attributes, and M-C3 has its number
+
+`mobiledet-crnn` on the 24-page holdout, split by the two design variables:
+
+| | upright | skewed |
+|---|---:|---:|
+| **1-column** | **0.34 %** | 39.59 % |
+| **2-column** | **71.20 %** | 73.06 % |
+
+Three things fall straight out, none of which the flat 37 % average could say.
+
+**1. The resolution decision is vindicated.** 0.34 % on upright single-column
+pages. The same engine reads DocLayNet at ~49 % because a 9-px line is not
+legible (§8.17). The CER gate now measures READING, which is what it was
+supposed to measure all along.
+
+**2. Multi-column reading order is the dominant failure, at ~71 points, and it
+is not skew.** A two-column page costs 71.20 % with *zero* skew. We emit
+regions in raster order, so a two-column page interleaves the columns line by
+line and the text comes out shuffled. That is precisely the defect M-C3 exists
+to fix, it now has a number, and the number is enormous. Everything Carmenta
+has measured until now was single-column by construction, so this failure has
+been invisible for the entire campaign.
+
+**3. Skew is a real, separate second cause — 39 points.** On single-column
+pages, 0.34 % becomes 39.59 % at 0.8-3.6 degrees. That re-opens §8.24's parked
+quad-crop lever on a corpus that can finally fail it: the 1.26 pp ceiling
+measured on near-upright CORD words was measuring the wrong population.
+
+Note the interaction, because it disciplines the order of work: skew adds only
+~2 points ON TOP of two columns (71.20 -> 73.06). Reading order dominates so
+completely that fixing skew first would be almost invisible. Layout first, then
+deskew.
+
+**The corpus earned its design in one run.** The first cut confounded columns
+with skew — both keyed off `doc % 2` — and produced a real separation
+(0.40 % vs 71.61 %) that could not be attributed to either variable. Crossing
+them properly turned one impressive number into three actionable ones. That is
+the difference between a corpus that measures and a corpus that only scores.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
