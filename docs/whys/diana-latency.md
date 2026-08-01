@@ -685,3 +685,45 @@ bandwidth floor that no amount of threading can touch, the fix for that is
 specified and priced, and the levers that cannot work (thread count, pool
 size, per-tap chunking, ISA flags) are refuted with numbers so nobody spends
 a week on them.
+
+## ★★ D6k — CORRECTION: the bandwidth floor was priced against the wrong roofline
+
+The im2col finding above is real in KIND and was overstated in SIZE, by
+about 2x, and the error is the same one this repo has now made three times:
+a roofline measured at one working-set size applied to another.
+
+216.9 MiB/image was priced at **17.6-24 GB/s** — a figure measured with a
+64 MiB memcpy, i.e. DRAM. But this machine is an i7-14650HX with **30 MB of
+L3**, and the n-tier col buffer is **11 MB per layer**. It fits. That traffic
+largely never reaches DRAM.
+
+Bandwidth by working set (`examples/bw_by_size.rs`, best of 9):
+
+| buffer | GB/s |
+|---:|---:|
+| 1 MB | 68.8 |
+| 4 MB | 48.1 |
+| 8 MB | 44.2 |
+| **11 MB — the layer-0 col buffer** | **41.7** |
+| 24 MB | 17.5 |
+| 64 MB | 22.8 |
+| 128 MB | 14.1 |
+
+**Corrected: 216.9 MiB at 41.7 GB/s is ~5.5 ms, not 9.5-12.9 ms.** Against a
+~66 ms reference total that is ~8 % of the budget, not "a fifth to a
+seventh".
+
+Two consequences:
+
+1. **The tiling result is now consistent rather than puzzling.** Tiling saves
+   a DRAM round trip that was mostly not happening; the prize was roughly
+   half what was computed, and the implementation's added copies were larger
+   than the halved prize. Measured -24 % CPU, and now explained.
+2. **im2col's 1.55x scaling is still unexplained.** The bandwidth story
+   covered it at the DRAM price and does not at the L3 price. That question
+   is reopened, not closed — the next descent should ask it fresh rather than
+   inherit this answer.
+
+The skill's own words, earned again: *"a roofline is only valid for the SHAPE
+it was measured at."* Recorded rather than quietly rewritten, because the
+overstated version was committed and would otherwise stand.
