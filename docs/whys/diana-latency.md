@@ -241,6 +241,14 @@ previous fix removed one libm call and left another.
   the log rather than quietly rewritten, because *isolation misleads in both
   directions* is a rule I was reciting at the time.
 
+- **"A concurrent batch path PyTorch's GIL cannot match" (22.73 vs 17.29
+  img/s): WITHDRAWN from the README, not refuted.** It was a wall-clock
+  throughput comparison on a loaded box, single run, measured before the
+  null arm established a 27 % resolution and before the ordering confound
+  was known. The batch API is real and is still described; the comparative
+  is not re-verified and no longer claimed. Re-measure it with the paired,
+  order-reversed instruments if it is wanted back.
+
 - **`f32::clamp` as the remaining blocker: REFUTED.** On the corrected
   harness `max`/`min` is 13.61 ms against clamp's 12.91 — the clamp is
   marginally FASTER, i.e. it was never blocking anything. Refuted on the
