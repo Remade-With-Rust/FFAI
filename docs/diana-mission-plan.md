@@ -1626,23 +1626,31 @@ Ten runs, each graded only against the reference declaring the same
 baseline. Memory has the harness's own pre-decoded cache subtracted from
 both sides (see the instrument note below).
 
-| tier | geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | ref MiB |
-|---|---|---:|---:|---:|---:|---:|
-| n | rect | 61.36 | 61.36 | **-0.01** | 58 | 396 |
-| n | square | 61.01 | 61.01 | **-0.00** | 62 | 320 |
-| s | rect | 68.07 | 68.16 | -0.08 | 108 | 435 |
-| s | square | 68.88 | 68.84 | +0.04 | 118 | 384 |
-| m | rect | 73.14 | 73.07 | +0.06 | 178 | 500 |
-| m | square | 73.30 | 73.23 | +0.07 | 200 | 437 |
-| l | rect | 74.07 | 74.02 | +0.06 | 196 | 546 |
-| l | square | 74.13 | 74.16 | -0.03 | 219 | 482 |
-| x | rect | 77.31 | 77.38 | -0.07 | 346 | 664 |
-| x | square | 77.69 | 77.67 | +0.03 | 380 | 628 |
+| tier | geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | ref MiB | leaner |
+|---|---|---:|---:|---:|---:|---:|---:|
+| n | rect | 61.36 | 61.36 | **-0.01** | 71 | 403 | 5.6x |
+| n | square | 61.01 | 61.01 | **-0.00** | 63 | 317 | 5.0x |
+| s | rect | 68.07 | 68.16 | -0.08 | 110 | 447 | 4.1x |
+| s | square | 68.88 | 68.84 | +0.04 | 120 | 382 | 3.2x |
+| m | rect | 73.14 | 73.07 | +0.06 | 178 | 544 | 3.1x |
+| m | square | 73.30 | 73.23 | +0.07 | 201 | 456 | 2.3x |
+| l | rect | 74.07 | 74.02 | +0.06 | 197 | 535 | 2.7x |
+| l | square | 74.13 | 74.16 | -0.03 | 220 | 490 | 2.2x |
+| x | rect | 77.31 | 77.38 | -0.07 | 346 | 678 | 2.0x |
+| x | square | 77.69 | 77.67 | +0.03 | 380 | 603 | 1.6x |
+
+**Memory here is what the LEDGER says**, not a hand-correction. The first
+v3 sweep predated the harness footprint fix, so its ten rows recorded the
+uncorrected figure and the published table was arithmetic done outside the
+ledger — which breaks "every claim traces to a ledger line" even when the
+arithmetic is right. Re-run with the corrected binary; footprint now PASSES
+on all ten. `tools/diana_gate_table.py` renders it, so the copy reads its
+numbers out of the ledger rather than out of a paragraph.
 
 **Worst deviation 0.08 pp over ten configurations spanning 2.4 M to 55.7 M
 parameters**, exact at n, and Diana reads HIGHER than the reference in five
 of the ten — which is the signature of f32 reassociation, not of a bias.
-Memory 1.7-6.8x leaner, the ratio narrowing as the model grows because the
+Memory 1.6-5.6x leaner, the ratio narrowing as the model grows because the
 weights come to dominate what is left.
 
 The 45-image claim was "identical". At 450 images the honest word is
@@ -1703,7 +1711,7 @@ So:
 |---|---|
 | `verdict: claimable` (the aggregate) | **NO.** Withheld until speed passes. |
 | Quality — mAP within 0.08 pp of PyTorch across all 10 tier/geometry configs on 450 images | **YES**, gated, per tier, per geometry |
-| Footprint — 1.7-6.8x leaner steady memory | **YES**, gated |
+| Footprint — 1.6-5.6x leaner steady memory, PASS on all ten | **YES**, gated |
 | Correctness — five-tier oracle, byte-determinism | **YES**, gated |
 | Speed — per-image latency, ~1.75x behind at EVERY tier | **NO — published as FAIL with its number** |
 

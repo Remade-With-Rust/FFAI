@@ -72,8 +72,16 @@ def main() -> None:
     print(f"corpus {rows[0]['corpus']} @ {want[:12]}  ({len(rows)} engine rows)\n")
     if args.after:
         rows = [r for r in rows if r["id"] > args.after]
-    rows = rows[-args.last :]
-    rows.sort(key=lambda r: tier_of(r["engine"]["name"]))
+    # Keep the LAST row per engine. The ledger is append-only and losses stay
+    # in it — a reference that crashed mid-sweep left a row with mAP 0.00 —
+    # but a status table should show the current state, not every attempt.
+    # The count of superseded rows is printed so they are not silently hidden.
+    latest, superseded = {}, 0
+    for r in rows:
+        if r["engine"]["name"] in latest:
+            superseded += 1
+        latest[r["engine"]["name"]] = r
+    rows = sorted(latest.values(), key=lambda r: tier_of(r["engine"]["name"]))[-args.last :]
 
     hdr = ("engine", "mAP50", "ref", "d pp", "MiB", "ref", "x", "p50 ms", "ref", "x", "gates")
     print("%-16s %7s %7s %6s  %6s %6s %5s  %7s %7s %5s  %s" % hdr)
@@ -109,6 +117,8 @@ def main() -> None:
         )
     print()
     print("gate flags: UPPERCASE = pass, lowercase = fail, order C/Q/S/F")
+    if superseded:
+        print(f"({superseded} earlier attempt(s) superseded and still in the ledger)")
     if corrected:
         print(
             f"WARNING: {corrected} row(s) predate the harness footprint fix and were "

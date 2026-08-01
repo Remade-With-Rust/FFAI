@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.7–6.8× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. **Per-image latency is ~1.75× behind at every tier — the one gate that fails, published with its number** ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. **Per-image latency is ~1.75× behind at every tier — the one gate that fails, published with its number** ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -460,23 +460,32 @@ configuration. mAP at conf 0.001 / 100 dets like the reference. Memory is
 steady working set with the harness's own pre-decoded image cache subtracted
 from both sides (ledger `bench-detect-1785550365` and the ten rows after it):
 
-| Tier | Geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | Ultralytics MiB |
-|---|---|---:|---:|---:|---:|---:|
-| n | rect | 61.36 | 61.36 | **−0.01** | **58** | 396 |
-| n | square | 61.01 | 61.01 | **−0.00** | **62** | 320 |
-| s | rect | 68.07 | 68.16 | −0.08 | **108** | 435 |
-| s | square | 68.88 | 68.84 | +0.04 | **118** | 384 |
-| m | rect | 73.14 | 73.07 | +0.06 | **178** | 500 |
-| m | square | 73.30 | 73.23 | +0.07 | **200** | 437 |
-| l | rect | 74.07 | 74.02 | +0.06 | **196** | 546 |
-| l | square | 74.13 | 74.16 | −0.03 | **219** | 482 |
-| x | rect | 77.31 | 77.38 | −0.07 | **346** | 664 |
-| x | square | 77.69 | 77.67 | +0.03 | **380** | 628 |
+| Tier | Geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | Ultralytics MiB | leaner |
+|---|---|---:|---:|---:|---:|---:|---:|
+| n | rect | 61.36 | 61.36 | **−0.01** | **71** | 403 | 5.6× |
+| n | square | 61.01 | 61.01 | **−0.00** | **63** | 317 | 5.0× |
+| s | rect | 68.07 | 68.16 | −0.08 | **110** | 447 | 4.1× |
+| s | square | 68.88 | 68.84 | +0.04 | **120** | 382 | 3.2× |
+| m | rect | 73.14 | 73.07 | +0.06 | **178** | 544 | 3.1× |
+| m | square | 73.30 | 73.23 | +0.07 | **201** | 456 | 2.3× |
+| l | rect | 74.07 | 74.02 | +0.06 | **197** | 535 | 2.7× |
+| l | square | 74.13 | 74.16 | −0.03 | **220** | 490 | 2.2× |
+| x | rect | 77.31 | 77.38 | −0.07 | **346** | 678 | 2.0× |
+| x | square | 77.69 | 77.67 | +0.03 | **380** | 603 | 1.6× |
 
 **Worst deviation across all ten: 0.08 pp**, exact at n, and Diana reads
-*higher* than the reference in five of the ten. Memory is 1.7–6.8× leaner,
-with the ratio narrowing as the model grows because the weights come to
-dominate what is left.
+*higher* than the reference in five of the ten. Memory is 1.6–5.6× leaner,
+the ratio narrowing as the model grows because the weights come to dominate
+what is left. The footprint gate passes on all ten.
+
+Those memory figures are what the ledger says, which was not true a day ago.
+The harness pre-decodes every clip so the *speed* measurement excludes image
+decoding — then holds 355 MiB of buffers that the reference, running as a
+subprocess, never pays. At 45 images that cache was 37 MiB and invisible; at
+450 it inverted the gate, reading Diana as a **regression** at 413 MiB
+against 396 while it actually used 58. The harness now charges its own cache
+to itself, and the table above is a re-run rather than a hand-correction. A
+measurement that only works at one input size has an unstated precondition.
 
 The stronger statement sits
 under it: at n the *detections themselves* are identical — same count, same
