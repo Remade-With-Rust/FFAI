@@ -438,6 +438,7 @@ impl Vits {
     }
 
     /// One encoder layer's attention half, exposed for `enc_anatomy`.
+    #[doc(hidden)]
     pub fn enc_attn_probe(&self, layer: usize, x: &Tensor, t_len: usize) -> Result<Tensor> {
         let base = format!("enc_p.encoder.attn_layers.{layer}");
         self.rel_attention(&base, layer, x, t_len)
@@ -445,11 +446,13 @@ impl Vits {
 
     /// One encoder layer's feed-forward half, exposed for `enc_anatomy`.
     ///
+    #[doc(hidden)]
     pub fn enc_ffn_probe(&self, layer: usize, x: &Tensor) -> Result<Tensor> {
         self.ffn(&format!("enc_p.encoder.ffn_layers.{layer}"), x)
     }
 
     /// One encoder layer's LayerNorm, exposed for `enc_anatomy`.
+    #[doc(hidden)]
     pub fn enc_norm_probe(&self, layer: usize, x: &Tensor) -> Result<Tensor> {
         self.layer_norm_named(&format!("enc_p.encoder.norm_layers_1.{layer}"), x)
     }
@@ -500,6 +503,7 @@ impl Vits {
     /// exposed so `dp_anatomy` can separate it from the flow half. Nearly all
     /// of this stage's multiply-accumulate lives here: 192 channels against the
     /// flow half's 2.
+    #[doc(hidden)]
     pub fn dp_conditioning_probe(&self, hidden: &Tensor) -> Result<Tensor> {
         let g = self.conv("dp.pre", hidden)?;
         let g = self.dds_conv("dp.convs", &g, None)?;
@@ -568,6 +572,7 @@ impl Vits {
     /// routing change that reorders float accumulation is only safe by the
     /// margin between the raw duration and the boundary it would round across,
     /// and "it passed" means little without that margin.
+    #[doc(hidden)]
     pub fn durations_raw_probe(
         &self,
         hidden: &Tensor,

@@ -1,7 +1,12 @@
 [package]
 name = "ffai-mercury"
 description = "Mercury — FFai's voice component: pure-Rust ASR (Whisper/WhisperX-class) and TTS (VITS/piper-class, deterministic)"
-version.workspace = true
+# Decoupled from the workspace version so Mercury can ship ahead of the rest.
+# 0.7.0 rather than 0.6.2 because synthesis output is no longer bit-identical
+# to 0.6.1 -- the API is purely additive, but this crate advertises byte-stable
+# determinism, so a changed waveform is a compatibility break for anyone who
+# pinned bytes. Its dependencies stay at the published 0.6.1.
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
