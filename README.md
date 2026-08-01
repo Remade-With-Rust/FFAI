@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, and **all four gates now PASS** — though the speed margin sits inside the reference's own 6.4× run-to-run spread, so it is reported as parity, not a win ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **n and s tiers from one tier-agnostic graph**. **mAP identical to PyTorch at every matched configuration** (n 70.14 rect / 68.65 square, s 76.26 rect) and **every detection identical** — same count, classes and order across 1161 detections — at **2.3–4.0× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. Per-image latency still behind ORT; the M-D2 campaign is open ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.7–6.8× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. Per-image latency still behind ORT; the M-D2 campaign is open ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -470,38 +470,51 @@ NMS-free end-to-end head — built from official Ultralytics checkpoints by an
 audited offline conversion. No Python at inference. No weights in this
 repo:** they are AGPL-3.0 and stay the user's to fetch, convert and license.
 
-Measured on a hash-pinned 45-image COCO holdout, CPU only, mAP at conf 0.001
-/ 100 dets like the reference. Each pair is one run, so the memory column is
-comparable within a row-pair (ledger `bench-detect-1785530596`, `-1785520547`,
-`-1785540868`, `-1785542187`):
+Measured on a hash-pinned **450-image** COCO holdout, CPU only, every tier in
+both geometries, each graded only against the reference declaring the same
+configuration. mAP at conf 0.001 / 100 dets like the reference. Memory is
+steady working set with the harness's own pre-decoded image cache subtracted
+from both sides (ledger `bench-detect-1785550365` and the ten rows after it):
 
-| Tier / geometry | Implementation | mAP50 | mAP50-95 | steady MiB |
-|---|---|---:|---:|---:|
-| n, rect | **Diana** (Rust) | **70.14** | **53.77** | **87** |
-| n, rect | Ultralytics (PyTorch) | 70.14 | 53.77 | 347 |
-| n, square | **Diana** (Rust) | **68.65** | **52.59** | **95** |
-| n, square | Ultralytics (PyTorch) | 68.65 | 52.59 | 310 |
-| s, rect | **Diana** (Rust) | **76.26** | **61.71** | **134** |
-| s, rect | Ultralytics (PyTorch) | 76.26 | 61.71 | 374 |
-| s, square | **Diana** (Rust) | **78.06** | **63.11** | **152** |
-| s, square | Ultralytics (PyTorch) | 78.06 | 63.12 | 356 |
+| Tier | Geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | Ultralytics MiB |
+|---|---|---:|---:|---:|---:|---:|
+| n | rect | 61.36 | 61.36 | **−0.01** | **58** | 396 |
+| n | square | 61.01 | 61.01 | **−0.00** | **62** | 320 |
+| s | rect | 68.07 | 68.16 | −0.08 | **108** | 435 |
+| s | square | 68.88 | 68.84 | +0.04 | **118** | 384 |
+| m | rect | 73.14 | 73.07 | +0.06 | **178** | 500 |
+| m | square | 73.30 | 73.23 | +0.07 | **200** | 437 |
+| l | rect | 74.07 | 74.02 | +0.06 | **196** | 546 |
+| l | square | 74.13 | 74.16 | −0.03 | **219** | 482 |
+| x | rect | 77.31 | 77.38 | −0.07 | **346** | 664 |
+| x | square | 77.69 | 77.67 | +0.03 | **380** | 628 |
 
-**mAP is not close to PyTorch's — it is PyTorch's, at every matched
-configuration.** mAP50 is identical in all four; mAP50-95 is identical in
-three and reads 63.11 vs 63.12 in the fourth. The stronger statement sits
-under it: at n the
-*detections themselves* are identical — same count, same classes, same order,
-across all 1161 boxes on the corpus. And Diana is byte-identical to itself
-across runs and across thread counts, which PyTorch does not promise.
+**Worst deviation across all ten: 0.08 pp**, exact at n, and Diana reads
+*higher* than the reference in five of the ten. Memory is 1.7–6.8× leaner,
+with the ratio narrowing as the model grows because the weights come to
+dominate what is left.
+
+The stronger statement sits
+under it: at n the *detections themselves* are identical — same count, same
+classes, same order, across all 1161 boxes (measured on the 45-image
+corpus; the 450-image run reproduces the mAP exactly but the box-by-box
+comparison has not been re-run at that size). And Diana is byte-identical to
+itself across runs and across thread counts, which PyTorch does not promise.
 
 Two disciplines produced that. Every layer was checked against a tracked
-oracle digest dumped from the reference before any Rust ran (worst error
-3.869e-06 over the full graph), and **geometry is a required argument, not a
-default.** M-D0 lost 1.5–1.8 pp in *opposite directions per tier* to an
-unpinned one: `predict()` silently letterboxes rectangularly, so "YOLO's mAP"
-is two different numbers. Diana names which one it is reporting; the sign
-flips by tier (rect wins at n, square at s), so it is a dispatch input rather
-than a default.
+oracle digest dumped from the reference before any Rust ran, and **geometry
+is a required argument, not a default.** `predict()` silently letterboxes
+rectangularly, so "YOLO's mAP" is two different numbers and M-D0 lost
+1.5–1.8 pp to an unpinned one. Diana names which one it is reporting.
+
+**That 1.5–1.8 pp was mostly the corpus.** It came from 45 images. Re-measured
+on 450, the geometry effect collapses to **0.14–0.68 pp** — at or under the
+band the quality gate itself uses to decide whether two numbers differ. The
+*sign* still flips by tier (n prefers rectangular, every larger tier prefers
+square) and that was tempting to wire as a per-tier default; the magnitude
+says don't. Naming the geometry matters because comparing a rectangular
+engine against a square baseline is a 1.5 pp error of pure bookkeeping.
+Choosing between them barely matters at all.
 
 **All five tiers — n/s/m/l/x — come from one tier-agnostic graph**, 2.4 M
 parameters to 55.7 M, and each is oracled independently against its own
@@ -518,14 +531,34 @@ into `C3k` — a branch n and s never reach, on a board that was green at
 tested happen to agree is found by configuration N+1, never by testing
 configuration 1 harder.
 
-**Speed is the open gate.** Nine M-D2 bricks — hand-written depthwise, 3×3
-and SiLU kernels, pointwise convs routed to GEMM, zero-copy tensor
-marshalling, a hoisted anchor grid, rectangular inference — bought ~1.5×
-and then ~1.43× more, and the concurrent batch path already beats PyTorch's
-GIL-bound throughput ceiling (22.73 vs 17.29 img/s). Per-image latency still
-trails ONNX Runtime by ~3–5×; im2col (12.5 %) and attention (5.6 %) are the
-named remainders. The campaign is open in the mission plan, not rounded off
-here.
+**Speed is the open gate, and it is reported as FAIL rather than framed
+away.** The repo's rule is that `verdict: claimable` needs all four gates;
+Diana does not get it. Quality, footprint and correctness are each claimed
+individually because each is gated. The losing row goes in the table.
+
+What is *behind* the row is now diagnosed rather than admitted. A six-whys
+descent ([docs/whys/diana-latency.md](docs/whys/diana-latency.md)) found the
+**activation at 30.9 % of a detection** — larger than any convolution shape,
+and the third time this repo has found an activation at the top of a profile.
+The cause was one function: `f32::round` is ties-away-from-zero, which no x86
+instruction implements, so it blocked vectorisation of the whole loop. The
+module had already removed `exp` for precisely that reason and left `round`
+behind. Rounding by float addition instead is **4.71× on the kernel and
+bit-identical**, worth **1.079× on the pipeline** (17/21 paired rounds,
+z = +2.84).
+
+Two levers were priced and **pruned**, which is worth as much as the fix.
+Cutting rayon's thread count saves 1.66× of CPU work but is *not* faster on
+wall (9/24, z = −1.22) — for a single image the alternative is 15 idle cores.
+And the crate compiles for the x86-64 baseline with no `target-cpu`, worth
+1.39× on the *old* SiLU kernel and **1.017× on the pipeline once the SiLU fix
+landed** (z = +0.65, inside the noise), because AVX2 was mostly rescuing
+`round()`. A confirmation expires when its baseline moves; runtime ISA
+dispatch would have been built on a number that no longer existed.
+
+What remains is structural: **~120 fork-joins per image cost 2.32× the CPU of
+the work they perform** (363 ms of real work, 844 ms spent). That is the
+largest named thing between Diana and the reference, and it is not a flag.
 
 **One gate turned out to be measuring luck, and the way that was
 established is the point.** The oracle asserted that our 300-row top-k

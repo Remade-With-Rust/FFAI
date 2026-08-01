@@ -1619,6 +1619,36 @@ filter, crowd exclusion, deterministic stride, PNG storage), under its own
 manifest and its own clips directory so v2 and every ledger row naming its
 hash stay reproducible.
 
+#### All five tiers, both geometries, 450 images — the launch evidence
+
+Ten runs, each graded only against the reference declaring the same
+`config` string, so no rectangular engine is ever scored against a square
+baseline. Memory has the harness's own pre-decoded cache subtracted from
+both sides (see the instrument note below).
+
+| tier | geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | ref MiB |
+|---|---|---:|---:|---:|---:|---:|
+| n | rect | 61.36 | 61.36 | **-0.01** | 58 | 396 |
+| n | square | 61.01 | 61.01 | **-0.00** | 62 | 320 |
+| s | rect | 68.07 | 68.16 | -0.08 | 108 | 435 |
+| s | square | 68.88 | 68.84 | +0.04 | 118 | 384 |
+| m | rect | 73.14 | 73.07 | +0.06 | 178 | 500 |
+| m | square | 73.30 | 73.23 | +0.07 | 200 | 437 |
+| l | rect | 74.07 | 74.02 | +0.06 | 196 | 546 |
+| l | square | 74.13 | 74.16 | -0.03 | 219 | 482 |
+| x | rect | 77.31 | 77.38 | -0.07 | 346 | 664 |
+| x | square | 77.69 | 77.67 | +0.03 | 380 | 628 |
+
+**Worst deviation 0.08 pp over ten configurations spanning 2.4 M to 55.7 M
+parameters**, exact at n, and Diana reads HIGHER than the reference in five
+of the ten — which is the signature of f32 reassociation, not of a bias.
+Memory 1.7-6.8x leaner, the ratio narrowing as the model grows because the
+weights come to dominate what is left.
+
+The 45-image claim was "identical". At 450 images the honest word is
+"within 0.08 pp", and the difference between those two sentences is the
+entire reason the corpus was rebuilt.
+
 #### ★ The footprint gate was measuring the harness, and only a big corpus showed it
 
 The bench pre-decodes every clip before the timed loop, deliberately, so the
@@ -1672,8 +1702,8 @@ So:
 | claim | status |
 |---|---|
 | `verdict: claimable` (the aggregate) | **NO.** Withheld until speed passes. |
-| Quality — mAP identical to PyTorch at matched configuration | **YES**, gated, per tier, per geometry |
-| Footprint — 0.38-0.43x the reference's steady memory | **YES**, gated |
+| Quality — mAP within 0.08 pp of PyTorch across all 10 tier/geometry configs on 450 images | **YES**, gated, per tier, per geometry |
+| Footprint — 1.7-6.8x leaner steady memory | **YES**, gated |
 | Correctness — five-tier oracle, byte-determinism | **YES**, gated |
 | Speed — per-image latency | **NO — published as FAIL with its number** |
 
