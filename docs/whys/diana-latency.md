@@ -438,10 +438,53 @@ itself informative: at the floor the reference benefits more from clean
 conditions than we do, consistent with our having parallel overhead that
 does not vanish when the machine frees up.
 
-**Weak residual signal, stated as weak:** x is the lowest ratio in both wall
-instruments (1.54x, 1.60x) and s the highest (2.20x, 1.85x). That hints the
-largest tier is mildly less bad. It is not parity, it is not monotone, and
-it is inside the spread — recorded so nobody re-derives it as a trend.
+**Weak residual signal, stated as weak:** x is the lowest ratio in some wall
+instruments and s the highest. It is not parity, it is not monotone, and it
+is inside the spread — recorded so nobody re-derives it as a trend.
+
+## D6j — the corpus axis, and the refutation's final tally
+
+Every tight probe above read **9 images from v2** while the bench that
+suggested per-tier parity read **450 from v3**. Corpus — and therefore the
+image-size distribution the letterbox produces — was the last axis the
+refutation had not varied, and it is the axis the published claim rests on.
+
+Pinned floor, min-of-N, arms alternated, **v3 images**:
+
+| tier | Diana min | ref min | ratio |
+|---|---:|---:|---:|
+| n | 127.6 ms | 78.7 ms | 1.62x |
+| s | 287.1 | 103.1 | **2.78x** |
+| m | 507.4 | 237.5 | 2.14x |
+| l | 593.9 | 256.3 | 2.32x |
+| x | 920.5 | 496.9 | 1.85x |
+
+Mean **2.14x**, range 1.62-2.78x, still non-monotone, still nowhere near
+parity. x is not the best tier here — n is.
+
+### Tally: seven axes, one answer
+
+| axis varied | outcome |
+|---|---|
+| order (n->x vs x->n) | no trend |
+| metric (wall vs CPU work) | no trend |
+| load regime (unpinned vs pinned floor) | no trend |
+| statistic (mean / median / min-of-N) | no trend |
+| warmup (1 vs 3 calls) | no trend, and fixed a 5x artifact |
+| work parity (conf, max_det, detection COUNTS) | comparison valid; found a real parity bug |
+| corpus (v2 9-image vs v3 12-image) | no trend |
+
+**"We pass at m and are at parity at x" is refuted, overdetermined.** Across
+seven independent axes the gap sits between 1.5x and 2.8x with no tier at
+parity and no monotone dependence on model size; the tier that reads worst
+changes with the instrument, which is the signature of noise rather than of
+an effect.
+
+The refutation standard this repo sets is three varied probes with one at
+the level above. This has seven, including the level above (whole-corpus
+bench) and a deterministic COUNT (detection counts identical per image).
+Nothing further would change it, and the honest headline is **~1.9x behind
+at every tier, gate FAILS everywhere.**
 
 ## D5b — the amortization mechanism is real, and it does NOT reach the gap
 
