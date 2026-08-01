@@ -379,18 +379,39 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                 } else if i == 0 {
                     out.push('ɐ');
                 } else if is_suffix_vowel(word, phones, i, "es")
-                    || (is_suffix_vowel(word, phones, i, "ed") && next_sym == Some("D"))
+                    || (is_suffix_vowel(word, phones, i, "ed")
+                        && next_sym == Some("D")
+                        && matches!(
+                            phones.get(i.wrapping_sub(1)).map(|q| q.symbol()),
+                            Some("T") | Some("D")
+                        ))
                 {
                     // `-es` after sibilants and `-ed` after t/d: espeak ᵻ
                     // (`busses` → bˈʌsᵻz, `needed` → nˈiːdᵻd).
+                    //
+                    // The t/d test is on the PRECEDING phone, not the suffix's
+                    // own d. Testing `next_sym == D` alone also matched every
+                    // other `-ed` word — `crooked` (after K) came out kɹˈʊkᵻd
+                    // where espeak says kɹˈʊkɪd. Measured against the pinned
+                    // espeak fixture, not reasoned.
                     out.push('ᵻ');
                 } else if is_suffix_vowel(word, phones, i, "est") && next_sym == Some("S") {
                     // superlative -est: espeak says ɪst (`simplest`).
                     out.push('ɪ');
                 } else if phones[i + 1..].iter().all(|q| !q.is_vowel())
-                    && ["et", "ets", "it", "its"].iter().any(|s| word.ends_with(s))
+                    // `-en` was TRIED here and REVERTED: it took exact-sentence
+                    // agreement with espeak DOWN, 179/200 -> 175/200. Only
+                    // `chicken` wanted ɪ; espeak gives most -en words ə or a
+                    // syllabic n, so the class is not a rule. Recorded so the
+                    // idea is not re-tried.
+                    && ["et", "ets", "it", "its", "id", "ids", "ed"]
+                        .iter()
+                        .any(|s| word.ends_with(s))
                 {
-                    // `-et` nouns: espeak says ɪt (`carpet` → kˈɑːɹpɪt).
+                    // Final unstressed closed syllable spelled -et/-it/-id/-ed:
+                    // espeak says ɪ (`carpet` → kˈɑːɹpɪt, `acid` → ˈæsɪd,
+                    // `stupid` → stˈuːpɪd, `crooked` → kɹˈʊkɪd). The -ed case
+                    // only reaches here when the t/d test above declined it.
                     out.push('ɪ');
                 } else if phones[i + 1..].iter().all(|q| !q.is_vowel())
                     && ["uct", "ucts", "um", "ums", "umn"].iter().any(|s| word.ends_with(s))
