@@ -639,6 +639,37 @@ change, confirming it moved plumbing and not arithmetic.
 
 ---
 
+## Footprint: a regression I claimed, then refuted on my own evidence
+
+Reporting the round-4 side-by-side I wrote that the footprint gate's failure was
+"ours, it's recent, and I can name the likely cause" — the im2col buffers, which
+materialise 3x the input. Three checks, in increasing directness, took that
+apart:
+
+1. **Ledger history.** Our steady memory across eight runs: 208, 222, 201, 202,
+   209, 206, 217, 220 MiB. The two latest sit at the HIGH END of a range that
+   already reached 222 before any of this work. High-normal, not a regression.
+2. **The reference's own spread.** piper's steady over the same runs: 239, 216,
+   240, -, 222, 219, 242, **202**. It drew its lowest value ever in the failing
+   run, against 242 in the passing one. The gate flipped on ITS variance.
+3. **A direct A/B.** `pin_probe` now samples working set via
+   `K32GetProcessMemoryInfo`, so a memory question costs seconds instead of two
+   20-minute bench runs. GEMM path vs candle conv1d vs GEMM again:
+   **160 MiB steady / 200 MiB peak in all three arms.** Identical. The im2col
+   buffers are transient and never enter the working set.
+
+**The claim is withdrawn in full.** The lesson is the one this campaign keeps
+re-learning from the other side: I reached for a mechanism I could explain
+(im2col allocates 3x) and let it stand in for a measurement. A plausible cause
+for a real-looking number is still a hypothesis — and here the number itself was
+the reference's noise.
+
+What DOES survive from that run: our WER reads 0.0591 for six consecutive runs
+then 0.0599 twice. Deterministic engine, consistent shift — the A&S GELU's
++0.09 pp is real, and unlike the footprint it is ours.
+
+---
+
 ## Standing corrections to the ledger
 
 1. The headline gap is **1.19x at matched thread occupancy** (1.28x at each

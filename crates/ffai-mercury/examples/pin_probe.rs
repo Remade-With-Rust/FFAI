@@ -45,6 +45,38 @@ mod win {
         ) -> i32;
     }
 
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct MemCounters {
+        pub cb: u32,
+        pub page_fault_count: u32,
+        pub peak_working_set: usize,
+        pub working_set: usize,
+        pub quota_peak_paged: usize,
+        pub quota_paged: usize,
+        pub quota_peak_nonpaged: usize,
+        pub quota_nonpaged: usize,
+        pub pagefile: usize,
+        pub peak_pagefile: usize,
+    }
+
+    unsafe extern "system" {
+        fn K32GetProcessMemoryInfo(h: isize, c: *mut MemCounters, cb: u32) -> i32;
+    }
+
+    /// (working set, peak working set) in bytes — the same quantity the bench's
+    /// footprint gate samples, but available in-process so a memory question can
+    /// be A/B'd against a knob in seconds instead of two 20-minute bench runs.
+    pub fn mem_bytes() -> (usize, usize) {
+        unsafe {
+            let mut c = MemCounters { cb: std::mem::size_of::<MemCounters>() as u32, ..Default::default() };
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) == 0 {
+                return (0, 0);
+            }
+            (c.working_set, c.peak_working_set)
+        }
+    }
+
     /// HIGH_PRIORITY_CLASS — keeps the foreground scheduler from preempting us
     /// with unrelated desktop work mid-measurement.
     const HIGH_PRIORITY_CLASS: u32 = 0x0000_0080;
@@ -86,6 +118,9 @@ mod win {
     pub fn raise_priority() {}
     pub fn cpu_secs() -> f64 {
         0.0
+    }
+    pub fn mem_bytes() -> (usize, usize) {
+        (0, 0)
     }
 }
 
@@ -213,6 +248,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         println!("    {name:<14} {:>9.1} {:>9.1} {:>7.2}", t * 1000.0, c * 1000.0, c / t);
     }
+    let (ws, peak) = win::mem_bytes();
+    println!(
+        "    {:<14} {:>8.0} MiB steady  {:>8.0} MiB peak",
+        "MEMORY",
+        ws as f64 / 1048576.0,
+        peak as f64 / 1048576.0
+    );
     println!(
         "    {:<14} {:>8.1} ms wall  {:>8.1} ms cpu  -> {:.2}x realtime  (cpu/wall {:.2})",
         "TOTAL",
