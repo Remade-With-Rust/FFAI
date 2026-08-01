@@ -201,6 +201,14 @@ pub fn conv3x3_strided(
     bias: Option<&Tensor>,
     stride: usize,
 ) -> Result<Tensor> {
+    // Direct convolution first: it never builds the 9x-expanded operand,
+    // which is the only thing that moves the GEMM's arithmetic intensity.
+    // Falls through to im2col for shapes it declines (stride 2, w < 2).
+    if stride == 1 && crate::direct3x3::enabled() {
+        if let Some(y) = crate::direct3x3::conv3x3_direct(x, weight, bias)? {
+            return Ok(y);
+        }
+    }
     if !tiling_disabled() {
         return conv3x3_tiled(x, weight, bias, stride);
     }
