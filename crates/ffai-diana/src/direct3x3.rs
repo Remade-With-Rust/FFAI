@@ -49,33 +49,38 @@ use rayon::prelude::*;
 /// leaves room for the broadcast weight and the loaded row.
 const OX: usize = 32;
 
-/// **OFF by default: measured 1.73x SLOWER, and the loop order is why.**
+/// **OFF by default: 1.22x slower serial, ~1.10x slower at 24 threads.**
 ///
-/// Serial CPU over 24 images, best of 3:
+/// Two versions, and the difference between them is the whole lesson.
 ///
-/// | path | total CPU | per image |
+/// **v1 blocked over OUTPUT CHANNELS** — `chunks_mut(oh * ow)` handed each
+/// task one channel, so every task walked the entire activation and the
+/// activation was read `c_out` times: `c_out * c_in * 9` row reads against
+/// im2col's `c_in * 9`. WORSE intensity than the thing it was written to
+/// beat. Measured **1.73x slower**.
+///
+/// **v2 blocks over output ROWS** and keeps every output channel live at
+/// once, so the activation row is read ONCE and consumed by all of them
+/// while it sits in L1. Accumulators are sized to stay L2-resident
+/// (`c_out * rows * ow * 4 <= 512 KB`).
+///
+/// | | serial CPU / image | 24-thread wall (24 imgs) |
 /// |---|---:|---:|
-/// | im2col + candle GEMM | 6234 ms | 260 ms |
-/// | this direct kernel | 10766 ms | **448 ms** |
+/// | im2col + candle GEMM | **260 ms** | **3616 ms** |
+/// | direct v1 (channel-blocked) | 448 ms | — |
+/// | direct v2 (row-blocked) | 313 ms | 3971 ms |
 ///
-/// The premise stands — im2col collapses arithmetic intensity and a direct
-/// convolution is the only lever that restores it. **This implementation
-/// gets the blocking backwards.** It parallelises over OUTPUT CHANNELS
-/// (`chunks_mut(oh * ow)` hands each task one channel), so every task walks
-/// the entire activation, and the activation is therefore read `c_out`
-/// times: `c_out * c_in * 9` row reads against im2col's `c_in * 9`. That is
-/// *worse* intensity than the thing it was written to beat, which is why it
-/// loses by more than the GEMM's tuning advantage alone would explain.
+/// **1.73x -> 1.22x. The re-blocking recovered exactly what the intensity
+/// argument predicted, and it is still not enough.** What remains is not
+/// structure but the microkernel: candle's GEMM does explicit register
+/// blocking over several output rows and columns at once, while this leans
+/// on LLVM auto-vectorising a single broadcast-AXPY. Closing that needs
+/// `#[target_feature(enable = "avx2")]` intrinsics with an 8x8 register tile
+/// and a scalar twin as oracle — `codec-vectorize-kernel`, a real brick.
 ///
-/// The correct structure is the mirror image: block over output ROWS, hold
-/// accumulators for ALL output channels across one row (`c_out * ow` floats
-/// — 328 KB at the widest n-tier layer, so L2-resident), and stream the
-/// activation ONCE, issuing `c_out` broadcast-AXPYs per `(ic, ky, kx)` from
-/// a row that is already in L1.
-///
-/// Kept behind `FFAI_DIANA_DIRECT=1` rather than deleted: the correctness
-/// gate below already passes against candle's own `Conv2d`, so the next
-/// attempt inherits a proven-correct kernel and only has to re-block it.
+/// Kept behind `FFAI_DIANA_DIRECT=1`. The correctness gate below passes
+/// against candle's own `Conv2d` to <1e-6, so the next attempt inherits a
+/// proven kernel and changes only the inner loop.
 pub fn enabled() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
     static C: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -111,59 +116,79 @@ pub fn conv3x3_direct(
         None => vec![0.0; c_out],
     };
 
-    let out = crate::cpuop::SliceOp::new("ffai-direct3x3", move |xs, _| {
-        let mut out = vec![0f32; c_out * oh * ow];
-        let plane = |c: usize, y: usize| &xs[c * h * w + y * w..c * h * w + (y + 1) * w];
+    // Rows per task. One task owns `c_out * rows * ow` accumulators, which
+    // must stay L2-resident: at the widest n-tier layer that is
+    // 256 * 320 * 4 = 328 KB per row.
+    let rows = (1..=8).rev().find(|r| c_out * r * ow * 4 <= (1 << 19)).unwrap_or(1);
 
-        let row_kernel = |(oc, orow): (usize, &mut [f32])| {
-            let b = bs[oc];
-            for oy in 0..oh {
-                let dst = &mut orow[oy * ow..(oy + 1) * ow];
-                dst.fill(b);
+    let out = crate::cpuop::SliceOp::new("ffai-direct3x3", move |xs, _| {
+        let nblocks = oh.div_ceil(rows);
+        let block = |bi: usize| -> Vec<f32> {
+            let (r0, r1) = (bi * rows, ((bi + 1) * rows).min(oh));
+            let nr = r1 - r0;
+            // [c_out][nr][ow] for THIS block. Every output channel is live
+            // at once, which is the whole point: the activation row below is
+            // read once and consumed by all of them.
+            let mut acc = vec![0f32; c_out * nr * ow];
+            for oc in 0..c_out {
+                for r in 0..nr {
+                    acc[(oc * nr + r) * ow..(oc * nr + r + 1) * ow].fill(bs[oc]);
+                }
+            }
+            for r in 0..nr {
+                let oy = r0 + r;
                 for ic in 0..c_in {
-                    let wbase = (oc * c_in + ic) * 9;
                     for ky in 0..3usize {
-                        // Source row for this vertical tap; outside the
-                        // image the contribution is zero (the padding).
                         let sy = oy + ky;
                         if sy == 0 || sy > h {
                             continue;
                         }
-                        let src = plane(ic, sy - 1);
+                        // ONE read of this activation row. It stays in L1
+                        // across the three taps and EVERY output channel;
+                        // the previous version re-read it per channel and
+                        // lost 1.73x for exactly that reason.
+                        let src = &xs[ic * h * w + (sy - 1) * w..ic * h * w + sy * w];
                         for kx in 0..3usize {
-                            let wv = ws[wbase + ky * 3 + kx];
-                            if wv == 0.0 {
-                                continue;
-                            }
-                            // sx = ox + kx - 1, so the interior is where
-                            // both ends stay inside [0, w).
                             let lo = 1usize.saturating_sub(kx);
                             let hi = ow.min(w + 1 - kx);
-                            let s0 = lo + kx - 1;
-                            // Contiguous, offset, no bounds test: this is
-                            // the loop that has to vectorise.
-                            let d = &mut dst[lo..hi];
-                            let s = &src[s0..s0 + (hi - lo)];
-                            let mut j = 0;
-                            while j + OX <= d.len() {
-                                for t in 0..OX {
-                                    d[j + t] += wv * s[j + t];
-                                }
-                                j += OX;
+                            if hi <= lo {
+                                continue;
                             }
-                            for t in j..d.len() {
-                                d[t] += wv * s[t];
+                            let s0 = lo + kx - 1;
+                            let sl = &src[s0..s0 + (hi - lo)];
+                            for oc in 0..c_out {
+                                let wv = ws[(oc * c_in + ic) * 9 + ky * 3 + kx];
+                                let d = &mut acc[(oc * nr + r) * ow + lo
+                                    ..(oc * nr + r) * ow + hi];
+                                // Broadcast-and-AXPY over a contiguous run:
+                                // one FMA per load, which is what vectorises.
+                                for (dv, sv) in d.iter_mut().zip(sl) {
+                                    *dv += wv * sv;
+                                }
                             }
                         }
                     }
                 }
             }
+            acc
         };
 
-        if crate::parallel::serial_kernels() {
-            out.chunks_mut(oh * ow).enumerate().for_each(row_kernel);
+        let blocks: Vec<Vec<f32>> = if crate::parallel::serial_kernels() {
+            (0..nblocks).map(block).collect()
         } else {
-            out.par_chunks_mut(oh * ow).enumerate().for_each(row_kernel);
+            (0..nblocks).into_par_iter().map(block).collect()
+        };
+
+        // Assemble [c_out][oh][ow] from per-block [c_out][nr][ow]. One
+        // output-sized copy, against the 9x operand it avoids building.
+        let mut out = vec![0f32; c_out * oh * ow];
+        for (bi, blk) in blocks.iter().enumerate() {
+            let (r0, r1) = (bi * rows, ((bi + 1) * rows).min(oh));
+            let nr = r1 - r0;
+            for oc in 0..c_out {
+                out[oc * oh * ow + r0 * ow..oc * oh * ow + r1 * ow]
+                    .copy_from_slice(&blk[(oc * nr) * ow..(oc * nr + nr) * ow]);
+            }
         }
         Ok((out, (1, c_out, oh, ow).into()))
     })
