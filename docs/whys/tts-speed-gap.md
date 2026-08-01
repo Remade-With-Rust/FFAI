@@ -552,8 +552,29 @@ this descent began.
   **`w_ceil` IDENTICAL, audio lengths identical**, audio max |delta| 3.19e-4
   (~-70 dBFS) — expected, since GEMM and A&S GELU reorder arithmetic, and
   inside tolerances the campaign already accepts (`dec_in` gates at 1.27e-3).
-- Because those bytes DID move (unlike rounds 1-2), WER is **owed as a
-  measurement, not inferred**. Ledger run to follow.
+- Because those bytes DID move (unlike rounds 1-2), WER was **measured, not
+  inferred**. Ledger run (134 holdout utterances, frozen whisper.cpp judge):
+
+  | gate | outcome | round 3 | round 2 |
+  |---|---|---|---|
+  | correctness | pass | 134/134 | 134/134 |
+  | quality | pass | ours **6.00%** vs piper 5.96% | ours 5.91% vs 5.76% |
+  | speed | pass | ours **21.0x** vs piper 15.2x | 13.8x vs 11.1x |
+  | footprint | pass | 217 MiB vs 242 (0.90x) | 206 vs 219 (0.94x) |
+
+  **Our WER moved 5.91% -> 6.00%, +0.09 pp — the first time in this campaign it
+  has moved at all**, because rounds 1-2 were bit-identical and this round is
+  not. Synthesis is seeded and deterministic, so that is a real effect of the
+  numerical change, not run-to-run variance. It remains inside the gate band
+  (+0.04 pp against piper's own 5.96%) and far inside piper's 4.8-6.5% spread.
+
+  The two causes are not equivalent and should not be lumped: the GEMM routings
+  are EXACT arithmetic in a different summation order (rounding only), while the
+  A&S GELU is a genuine APPROXIMATION (1.5e-7 by construction) compounding
+  through four DDS stacks. The GELU is therefore the suspect and the cheapest to
+  give back: `FFAI_CANDLE_GELU=1` costs dp 128.3 -> 170.1 ms and should restore
+  5.91%. Trading +0.09 pp for 13.8x -> 21.0x realtime is recorded as a CHOICE,
+  with the knob left in place rather than presented as free.
 
 ---
 
