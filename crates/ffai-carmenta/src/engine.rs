@@ -319,7 +319,10 @@ impl OcrEngine for CraftCrnn {
                         let region: Vec<f32> = flat.iter().step_by(2).copied().collect();
                         let affinity: Vec<f32> = flat.iter().skip(1).step_by(2).copied().collect();
                         let word_boxes = boxes::extract_boxes(&region, &affinity, mw, mh);
-                        Ok((boxes::group_lines(word_boxes), region, affinity, mw, scale))
+                        Ok((
+                            boxes::order_reading(boxes::group_lines(word_boxes), mw),
+                            region, affinity, mw, scale,
+                        ))
                     },
                 )?
             }
@@ -361,7 +364,9 @@ impl OcrEngine for CraftCrnn {
                                 );
                             }
                         }
-                        Ok((b.into_iter().map(|r| vec![r]).collect(), Vec::new(), Vec::new(), 0, 2.0))
+                        let lines: Vec<Vec<boxes::DetBox>> =
+                            b.into_iter().map(|r| vec![r]).collect();
+                        Ok((boxes::order_reading(lines, w), Vec::new(), Vec::new(), 0, 2.0))
                     },
                 )?
             }

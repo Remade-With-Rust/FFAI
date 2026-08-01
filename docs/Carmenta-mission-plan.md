@@ -1777,6 +1777,59 @@ with skew — both keyed off `doc % 2` — and produced a real separation
 them properly turned one impressive number into three actionable ones. That is
 the difference between a corpus that measures and a corpus that only scores.
 
+### 8.28 Column-aware reading order — 71 points for a histogram
+
+§8.27 measured a 71-point CER penalty on two-column pages. The token-order
+probe attributed **55.75 pp of it to ordering alone**: we read the words
+correctly and emitted them interleaved, alternating columns line by line.
+
+LIVE's `calibrate_bands` already finds horizontal text bands by projecting
+detected line boxes onto the y-axis. A column gutter is the same operation on
+the other axis — a vertical strip no line box crosses — and the boxes are
+already computed, so it costs a histogram over them.
+
+| CER % | upright | skewed |
+|---|---:|---:|
+| 1-column | 0.34 -> **0.34** | 39.59 -> **39.59** |
+| 2-column | 71.20 -> **0.32** | 73.06 -> **15.20** |
+
+**Two-column upright goes 71.20 % -> 0.32 %**, indistinguishable from
+single-column, and single-column does not move at all. Against Baidu's
+Unlimited-OCR at ~103 s per page on a GPU, this is a projection over boxes we
+already had.
+
+Three defects on the way, each caught by a measurement rather than by reading
+the code, and each worth more than the fix:
+
+1. **The gutter did not exist.** The first implementation found no interior gap
+   at all — free runs were `(0,125)` and `(1566,1700)`, the margins. DBNet's
+   boxes arrive unclipped by 1.5x (§8.19), which widens every line by ~0.7x its
+   own height per side and closes a 60 px gutter completely. The projection now
+   runs on ERODED boxes, proportional to height because that is what the unclip
+   scales with.
+2. **One centred element vetoed the whole column break.** Eroding opened gaps at
+   `(800,826)` and `(873,894)` with 47 px occupied between them — the centred
+   page-number footer, sitting exactly in the gutter. Binary occupancy lets a
+   single stray element deny a column split, so the projection COUNTS crossings
+   and tolerates a few.
+3. **The gutter was found and the output stayed interleaved.** `spans()` tested
+   the RAW box against a gutter computed from ERODED boxes, so every unclipped
+   column line read as spanning, every line flushed the stripe, and the
+   column-major sort never ran. Both now use one criterion — width against the
+   same threshold that excludes a box from the projection — so they cannot
+   disagree by construction.
+
+And the unit test earned its place: gating the outlier tolerance on `n_lines`
+came from `spanning_title_separates_stripes` failing, because with three lines
+a tolerance of 1 erases an entire single-line column and the gutter merges into
+the right margin. A rule that is right on a page can be wrong on a fixture, and
+only the fixture says so.
+
+**What remains is skew**, now cleanly separated: 39.59 % on skewed
+single-column pages and 15.20 % on skewed two-column. That is §8.24's parked
+quad-crop lever, which was measured at a 1.26 pp ceiling on near-upright CORD
+words and pruned for want of a corpus with real skew. It has one now.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

@@ -217,3 +217,196 @@ pub fn split_words(region: &[f32], affinity: &[f32], w: usize, line: &DetBox) ->
     }
     if words.is_empty() { vec![*line] } else { words }
 }
+
+// ---------------------------------------------------------------------------
+// Column-aware reading order
+// ---------------------------------------------------------------------------
+//
+// §8.27 measured a 71-point CER penalty on two-column pages, and the
+// token-order probe attributed **55.75 of it to ordering alone** — we read the
+// words correctly and emit them interleaved, alternating between columns line
+// by line. The fix does not need a document model.
+//
+// LIVE's `calibrate_bands` already finds horizontal text bands by projecting
+// detected line boxes onto the y-axis. A column gutter is the same operation on
+// the OTHER axis: a vertical strip that no line box crosses. The boxes are
+// already computed, so this costs a histogram over them — against a 3B
+// document VLM at ~103 s per page.
+
+/// A line box wider than this fraction of the page is treated as SPANNING —
+/// a title, rule, or full-width footer — rather than as column content. Without
+/// it a single full-width heading fills the gutter and hides the columns.
+const SPAN_FRAC: f32 = 0.60;
+/// A gutter narrower than this fraction of the page is inter-word whitespace.
+const GUTTER_MIN_FRAC: f32 = 0.025;
+/// Gutters touching either margin are margins, not gutters.
+const MARGIN_FRAC: f32 = 0.08;
+
+/// Interior vertical gaps that NO column-content box crosses.
+fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
+    if page_w == 0 {
+        return Vec::new();
+    }
+    let span_w = (page_w as f32 * SPAN_FRAC) as usize;
+    // COUNT crossings, do not just mark occupancy. A single centred element —
+    // a page number sitting in the gutter — must not veto a column break, and
+    // on this corpus exactly that happened: eroding opened gaps at (800,826)
+    // and (873,894) with the footer occupying the 47 px between them.
+    let mut crossings = vec![0u32; page_w];
+    let mut n_lines = 0u32;
+    for line in lines {
+        let b = line_bbox(line);
+        if b.x1.saturating_sub(b.x0) >= span_w {
+            continue; // spanning element: it legitimately crosses any gutter
+        }
+        // ERODE before projecting. DBNet's boxes arrive unclipped by ~1.5x
+        // (see `mobiledet::UNCLIP_LINE`), which widens each line by roughly
+        // 0.7x its own height on every side — enough to close a 60 px gutter
+        // completely. Measured: before eroding, the free-run scan over a
+        // two-column page returned only the two margins, no interior gap at
+        // all. The erosion is proportional to box HEIGHT because that is what
+        // the unclip distance scales with, and capped as a fraction of width
+        // so a short line cannot erode to nothing.
+        let h = b.y1.saturating_sub(b.y0) as f32;
+        let w = b.x1.saturating_sub(b.x0) as f32;
+        let erode = (h * 0.6).min(w * 0.25) as usize;
+        let (ex0, ex1) = (b.x0 + erode, b.x1.saturating_sub(erode));
+        n_lines += 1;
+        for x in ex0.min(page_w)..ex1.min(page_w) {
+            crossings[x] += 1;
+        }
+    }
+    // A column of body text is crossed by every one of its lines; a stray
+    // centred caption crosses by one. Tolerate the stray.
+    // ...but only once there are enough lines for "outlier" to mean anything.
+    // A unit test caught this: with three lines, a tolerance of 1 erased an
+    // entire single-line column and the gutter merged into the right margin.
+    let tol = if n_lines >= 12 { (n_lines / 20).max(1) } else { 0 };
+    let occupied: Vec<bool> = crossings.iter().map(|&c| c > tol).collect();
+    if std::env::var("FFAI_COL_DEBUG").is_ok() {
+        let mut runs = Vec::new();
+        let (mut r, mut i) = (None::<usize>, 0usize);
+        while i <= page_w {
+            let free = i < page_w && !occupied[i];
+            match (free, r) {
+                (true, None) => r = Some(i),
+                (false, Some(s0)) => { runs.push((s0, i)); r = None; }
+                _ => {}
+            }
+            i += 1;
+        }
+        eprintln!("cols: page_w={page_w} span_w={span_w} free-runs={runs:?}");
+    }
+    let (min_w, margin) =
+        ((page_w as f32 * GUTTER_MIN_FRAC) as usize, (page_w as f32 * MARGIN_FRAC) as usize);
+    let mut out = Vec::new();
+    let (mut run, mut x) = (None::<usize>, 0usize);
+    while x <= page_w {
+        let free = x < page_w && !occupied[x];
+        match (free, run) {
+            (true, None) => run = Some(x),
+            (false, Some(s)) => {
+                // Interior only: a run reaching either margin is the margin.
+                if x - s >= min_w && s > margin && x < page_w - margin {
+                    out.push((s, x));
+                }
+                run = None;
+            }
+            _ => {}
+        }
+        x += 1;
+    }
+    out
+}
+
+/// Reading order for a page that may be laid out in columns.
+///
+/// One level of XY-cut, which is all a column layout needs: spanning elements
+/// (title, running header, footer) cut the page into horizontal stripes, and
+/// each stripe is read column by column. Returns the lines reordered.
+///
+/// With no gutter this is exactly the previous behaviour — top-to-bottom — so
+/// single-column pages cannot regress.
+pub fn order_reading(mut lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
+    lines.sort_by_key(|l| line_bbox(l).y0);
+    let gutters = find_gutters(&lines, page_w);
+    if gutters.is_empty() {
+        return lines;
+    }
+
+    // Column band edges, from the gutters' midpoints.
+    let mut edges: Vec<usize> = gutters.iter().map(|g| g.0.midpoint(g.1)).collect();
+    edges.push(page_w);
+    let column_of = |b: &DetBox| edges.iter().position(|&e| b.x0.midpoint(b.x1) < e).unwrap_or(0);
+    // Spanning is decided by WIDTH, using the same threshold that excluded the
+    // box from the projection. Testing "crosses a gutter" on the RAW box is
+    // inconsistent with a gutter computed from ERODED boxes — every unclipped
+    // column line then reads as spanning, every line flushes the stripe, and
+    // the output stays interleaved while the gutter looks correctly found.
+    let span_w = (page_w as f32 * SPAN_FRAC) as usize;
+    let spans = |b: &DetBox| b.x1.saturating_sub(b.x0) >= span_w;
+
+    let mut out: Vec<Vec<DetBox>> = Vec::with_capacity(lines.len());
+    let mut stripe: Vec<Vec<DetBox>> = Vec::new();
+    // A stripe is flushed column-major whenever a spanning element closes it.
+    let mut flush = |stripe: &mut Vec<Vec<DetBox>>, out: &mut Vec<Vec<DetBox>>| {
+        stripe.sort_by_key(|l| {
+            let b = line_bbox(l);
+            (column_of(&b), b.y0)
+        });
+        out.append(stripe);
+    };
+    for line in lines {
+        if spans(&line_bbox(&line)) {
+            flush(&mut stripe, &mut out);
+            out.push(line);
+        } else {
+            stripe.push(line);
+        }
+    }
+    flush(&mut stripe, &mut out);
+    out
+}
+
+#[cfg(test)]
+mod column_tests {
+    use super::*;
+
+    fn bx(x0: usize, y0: usize, x1: usize, y1: usize) -> Vec<DetBox> {
+        vec![DetBox { x0, y0, x1, y1, score: 1.0 }]
+    }
+
+    #[test]
+    fn single_column_order_is_unchanged() {
+        let lines = vec![bx(100, 10, 900, 40), bx(100, 60, 900, 90), bx(100, 110, 900, 140)];
+        let got = order_reading(lines, 1000);
+        assert_eq!(got.iter().map(|l| l[0].y0).collect::<Vec<_>>(), vec![10, 60, 110]);
+    }
+
+    #[test]
+    fn two_columns_read_left_then_right() {
+        // Interleaved by y, as the detector emits them.
+        let lines = vec![
+            bx(100, 10, 450, 40),   // L1
+            bx(550, 12, 900, 42),   // R1
+            bx(100, 60, 450, 90),   // L2
+            bx(550, 62, 900, 92),   // R2
+        ];
+        let got = order_reading(lines, 1000);
+        let xs: Vec<usize> = got.iter().map(|l| l[0].x0).collect();
+        assert_eq!(xs, vec![100, 100, 550, 550], "left column must precede right");
+    }
+
+    #[test]
+    fn spanning_title_separates_stripes() {
+        let lines = vec![
+            bx(100, 10, 900, 40),   // full-width title
+            bx(100, 60, 450, 90),   // L1
+            bx(550, 62, 900, 92),   // R1
+            bx(100, 110, 450, 140), // L2
+        ];
+        let got = order_reading(lines, 1000);
+        let ys: Vec<usize> = got.iter().map(|l| l[0].y0).collect();
+        assert_eq!(ys, vec![10, 60, 110, 62], "title first, then left column, then right");
+    }
+}
