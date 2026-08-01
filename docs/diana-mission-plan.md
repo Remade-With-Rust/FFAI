@@ -1619,6 +1619,38 @@ filter, crowd exclusion, deterministic stride, PNG storage), under its own
 manifest and its own clips directory so v2 and every ledger row naming its
 hash stay reproducible.
 
+#### ★ The footprint gate was measuring the harness, and only a big corpus showed it
+
+The bench pre-decodes every clip before the timed loop, deliberately, so the
+SPEED measurement excludes image decoding while the reference decodes inside
+its own timed region. Those buffers then live in **our** process for the
+whole run; the reference, being a subprocess, never holds them. The harness
+noted this and did nothing about it.
+
+That was survivable at 45 clips — 37 MiB of cache against ~100 MiB of engine
+— and it **inverted the gate at 450**:
+
+| | raw | harness cache | corrected |
+|---|---:|---:|---:|
+| Diana yolo26n | 413 MiB | 355 MiB | **58 MiB** |
+| ultralytics-yolo26n-rect | 396 MiB | — | 396 MiB |
+
+Uncorrected, Diana reads as a **footprint regression** while actually using
+**a seventh** of the reference's memory. A gate whose verdict depends on the
+corpus SIZE is not measuring the engine.
+
+Fixed in `crates/ffai-bench/src/runner.rs`: the harness's own pre-decoded
+bytes are subtracted from both steady and peak, and the raw figure stays in
+the note so the correction is auditable. The same asymmetry exists in the
+ASR path and is corrected there too — it never mattered because audio
+buffers are small, which is exactly why it survived.
+
+**The lesson is the one the corpus expansion was for.** Growing the corpus
+was justified as a way to make the mAP claim trustworthy. It also broke a
+gate that had been quietly wrong the whole time, in the direction that
+flattered nobody. A measurement that only works at one input size is a
+measurement with an unstated precondition.
+
 #### ★ DECISION — what Diana may claim while the speed gate fails
 
 The question was raised as a launch blocker and it deserves an answer in the

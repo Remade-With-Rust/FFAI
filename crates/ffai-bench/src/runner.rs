@@ -591,11 +591,36 @@ fn run_detect_engine(
     });
     summary.peak_bytes = crate::footprint::peak_self().map(|p| p.0);
     let decoded_bytes: u64 = decoded.iter().map(|(_, i)| i.data.len() as u64).sum();
-    if summary.peak_bytes.is_some() && decoded_bytes > 0 {
-        summary.notes.push(format!(
-            "peak includes {:.1} MiB of pre-decoded images held by the harness",
-            decoded_bytes as f64 / (1024.0 * 1024.0)
-        ));
+    // Charge the harness's own image cache to the harness, not to the engine.
+    //
+    // We pre-decode every clip up front so the SPEED measurement excludes
+    // image decoding; the reference reads each file inside its own timed
+    // region. That is a deliberate choice and it is defensible — but the
+    // buffers then sit in OUR process for the whole run, and the reference,
+    // running as a subprocess, never holds them. Left uncorrected, the
+    // harness's decision about one gate silently decides another.
+    //
+    // It was invisible while the corpus was small: 45 images is 37 MiB of
+    // cache against ~100 MiB of engine. At 450 images it is 355 MiB against
+    // ~58 MiB, and the footprint gate INVERTED — Diana read 413 MiB against
+    // the reference's 396 and would have been recorded as a regression while
+    // actually using a seventh of the memory. A gate whose verdict depends
+    // on the corpus SIZE is measuring the harness.
+    //
+    // Saturating, and the raw figure stays in the note, so the correction is
+    // auditable rather than a number that appeared.
+    if decoded_bytes > 0 {
+        let raw_peak = summary.peak_bytes;
+        summary.peak_bytes = summary.peak_bytes.map(|p| p.saturating_sub(decoded_bytes));
+        summary.steady_bytes = summary.steady_bytes.map(|s| s.saturating_sub(decoded_bytes));
+        if let Some(raw) = raw_peak {
+            summary.notes.push(format!(
+                "footprint EXCLUDES {:.1} MiB of pre-decoded images held by the harness, \
+                 which the reference does not hold (raw peak {:.1} MiB)",
+                decoded_bytes as f64 / (1024.0 * 1024.0),
+                raw as f64 / (1024.0 * 1024.0)
+            ));
+        }
     }
 
     match stats {
@@ -748,14 +773,22 @@ fn run_ocr_engine(
     });
     summary.peak_bytes = crate::footprint::peak_self().map(|p| p.0);
     // The pre-decoded image buffers are the harness's choice, not the
-    // engine's — same asymmetry note as ASR, recorded so the number reads
-    // honestly.
+    // engine's, so they are SUBTRACTED rather than merely noted — see the
+    // long comment on the same correction in the single-image path above for
+    // what it cost to find that a note is not enough.
     let decoded_bytes: u64 = decoded.iter().map(|(_, i)| i.data.len() as u64).sum();
-    if summary.peak_bytes.is_some() && decoded_bytes > 0 {
-        summary.notes.push(format!(
-            "peak includes {:.1} MiB of pre-decoded images held by the harness",
-            decoded_bytes as f64 / (1024.0 * 1024.0)
-        ));
+    if decoded_bytes > 0 {
+        let raw_peak = summary.peak_bytes;
+        summary.peak_bytes = summary.peak_bytes.map(|p| p.saturating_sub(decoded_bytes));
+        summary.steady_bytes = summary.steady_bytes.map(|s| s.saturating_sub(decoded_bytes));
+        if let Some(raw) = raw_peak {
+            summary.notes.push(format!(
+                "footprint EXCLUDES {:.1} MiB of pre-decoded images held by the harness, \
+                 which the reference does not hold (raw peak {:.1} MiB)",
+                decoded_bytes as f64 / (1024.0 * 1024.0),
+                raw as f64 / (1024.0 * 1024.0)
+            ));
+        }
     }
 
     match stats {

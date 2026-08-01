@@ -60,3 +60,6 @@ corpora/refs/fixtures/mobiledet_stages.npz
 # time the thing it protects against gets a second instance.
 corpora/refs/fixtures/yolo26*_oracle_*.npz
 tools/__pycache__/
+# Scratch target dir for -C target-cpu=native experiments (docs/whys/diana-latency.md
+# D6f). Kept separate so the normal build is not invalidated by the flag.
+/target-native
