@@ -101,7 +101,16 @@ plugin is just an engine registered at runtime.
    Until then it is honestly labeled `experimental` — or `stub`.
 7. **Codecs come from home.** Container/codec work routes through
    [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)
-   (`rff-*`), our own pure-Rust ffmpeg.
+   (`rff-*`), our own pure-Rust ffmpeg. Still images decode through the
+   standalone crates from that same workspace —
+   [`rusty_png`](https://crates.io/crates/rusty_png) (a performance fork of
+   image-rs/image-png) and
+   [`rusty_jpeg`](https://crates.io/crates/rusty_jpeg) (baseline +
+   progressive DCT, AVX2 FDCT/quantize, two-block AVX2 IDCT) — both from
+   crates.io, so owning the stack no longer costs publishability. Each is
+   gated against the implementation it replaces: `rusty_png` byte-identical
+   to upstream `png` across every corpus image, `rusty_jpeg` within 3/255 of
+   libjpeg.
 
 ## Status
 

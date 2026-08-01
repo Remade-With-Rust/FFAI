@@ -53,14 +53,26 @@ regex = "1"
 rayon = "1"
 png = "0.17"
 
-# ---- remade_ffmpeg_rs: our own pure-Rust ffmpeg (Principle 7) ----
-# Codec work comes from home. These are git dependencies because rff is not
-# on crates.io yet, and that has ONE consequence worth knowing rather than
-# rediscovering: `cargo publish` refuses a git dependency outright —
+# ---- our own codecs (Principle 7), from crates.io ----
+# Still-image decoding comes from home AND publishes. `rusty_png` is our
+# performance fork of image-rs/image-png; `rusty_jpeg` is baseline +
+# progressive DCT with AVX2 FDCT/quantize and a two-block AVX2 IDCT. Both
+# are consumed by version, so nothing downstream inherits a git dependency.
+rusty_png = "0.1"
+rusty_jpeg = "0.1"
+
+# ---- remade_ffmpeg_rs: the rest of our ffmpeg (Principle 7) ----
+# STILL git, and the consequence is worth keeping written down rather than
+# rediscovered: `cargo publish` refuses a git dependency outright —
 #   "all dependencies must have a version requirement specified when publishing"
-# — so any FFai crate in this dependency chain cannot be published until rff
-# publishes. That is a deliberate trade: owning the stack over crates.io
-# distribution, for a deployment that is Rust end to end.
+# — so any FFai crate that depends on these cannot publish until rff does.
+#
+# That used to bind `ffai-media`, and through it everything downstream. It
+# no longer does: the still-image decoders moved to the standalone crates
+# above and `cargo publish --dry-run -p ffai-media` passes. The constraint
+# returns when VIDEO lands, because demuxers and H.264/VP9 are things rff
+# provides that nothing else does — at which point the answer is to publish
+# rff or vendor it, not to give up the stack.
 rff-core = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
 rff-codec = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
 rff-codec-jpeg = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
