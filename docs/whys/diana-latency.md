@@ -631,3 +631,57 @@ kept assuming the cause was scheduling. It is not, for the largest of them.
 
 - **CONFIDENCE:** high, and it needs no quiet box — this is arithmetic on a
   deterministic counter, cross-checked against a memcpy-measured roofline.
+
+## D5c — tiling the im2col: priced BEFORE building, and the price is a curve
+
+The bandwidth floor says the lever is fewer bytes: tile the im2col so each
+block is GEMM'd while it is still in cache instead of materialising 108 MiB
+and reading it straight back. That replaces one big GEMM per convolution
+with several small ones, and small GEMMs have a per-call cost — so the
+arithmetic comes first.
+
+Measured (`examples/matmul_overhead.rs`), layer-0 shapes `w[16,27] x
+col[27,N]`, best of 9:
+
+| tile N | ms/call | tiles to cover ohw=102400 | total |
+|---:|---:|---:|---:|
+| 102400 (today) | 1.309 | 1 | 1.309 ms |
+| **10240** | 0.097 | 10 | **0.967 ms** |
+| 4855 | 0.215 | 22 | 4.721 ms |
+| 1024 | 0.056 | 100 | 5.560 ms |
+
+**A sweet spot exists and it is not where intuition put it.** Ten tiles beat
+the single call by 1.35x — the block fits cache and the GEMM gets faster
+despite ten times the call overhead. Twenty-two tiles is 3.6x WORSE than
+ten, and a hundred is worse still. The curve is sharp on the small side.
+
+So the tile size has to target a BYTE BUDGET, not a tile count:
+`N = budget / (c_in * 9 * 4)` with budget ~1 MiB. That behaves across the
+network because depth trades one for the other — the stem has c_in=3 and
+ohw=102400 (N~9700, ten tiles), while a deep layer has c_in=256 and
+ohw=400, which is a handful of tiles either way.
+
+**STATUS: specified, priced, NOT BUILT.** What remains is real work — the
+convolution has to assemble its output from block results without paying
+back the traffic it saved, and the output assembly is the part most likely
+to eat the win. It is the correct next brick and it is not a small one.
+
+## Where parity actually stands
+
+Honest arithmetic against the 1.0x target, n tier:
+
+| quantity | value |
+|---|---:|
+| our serial work | 232-304 ms |
+| our wall at 24 threads | ~114-128 ms (pinned floor) |
+| reference wall | ~47-79 ms (pinned floor) |
+| **im2col bandwidth floor (thread-invariant)** | **9.5-12.9 ms** |
+| our parallel efficiency | 1.72x from 24 threads |
+| efficiency needed for parity | ~4x |
+
+Parity is **not reached and was not reached in this campaign.** What changed
+is that the gap is no longer a mystery: a measurable part of it is a shared
+bandwidth floor that no amount of threading can touch, the fix for that is
+specified and priced, and the levers that cannot work (thread count, pool
+size, per-tap chunking, ISA flags) are refuted with numbers so nobody spends
+a week on them.
