@@ -1,0 +1,22 @@
+# YOLO26x, converted for Diana's candle port.
+#
+# The widest tier: `width = 1.50` on top of the 512 channel cap, and
+# `depth = 1.00` like l — so x has l's 332-tensor SHAPE with every channel
+# count 1.5x wider. 55.7 M parameters against n's 2.4 M, from the same
+# graph code and the same conversion.
+#
+# LICENSE: the WEIGHTS are AGPL-3.0 (Ultralytics). FFai never fetches, hosts
+# or redistributes them — convert your own:
+#
+#   .venv-diana/Scripts/python.exe tools/diana_convert.py --model yolo26x
+name = "yolo26x-diana"
+task = "detect"
+description = "YOLO26x (Ultralytics) converted to safetensors — fused, one2one head only"
+license = "AGPL-3.0 (Ultralytics YOLO26 weights — NOT redistributed; user-converted)"
+
+[[files]]
+name = "yolo26x-diana.safetensors"
+sha256 = "69a6a9b5c77fd14c27573e10647662947727b6868e3901eb7743ec1ecfe43d29"
+
+[[files]]
+name = "yolo26x-diana.json"

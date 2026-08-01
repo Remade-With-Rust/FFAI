@@ -1,0 +1,28 @@
+# YOLO26n, converted for Diana's candle port.
+#
+# LICENSE: the WEIGHTS are AGPL-3.0 (Ultralytics), which is more restrictive
+# than FFai's MIT/Apache code license. That is why this manifest declares no
+# `hf_repo`: FFai will not fetch, host, or redistribute them. The user
+# fetches the official checkpoint themselves and runs the audited offline
+# conversion, which places the artifacts where this manifest resolves them:
+#
+#   .venv-diana/Scripts/python.exe tools/diana_convert.py --model yolo26n
+#
+# What that produces is NOT the checkpoint: the training-only one2many head
+# is dropped (120 of 240 head tensors — inference runs the one2one branch,
+# see docs/diana-mission-plan.md §8.2) and every conv+bn pair is folded, so
+# 708 tensors become 204. The manifest JSON beside the weights records the
+# conversion-map version, both sha256s, and the fused/unfused decision;
+# `ffai-diana`'s loader refuses a file whose manifest disagrees with what it
+# implements rather than loading whatever fits.
+name = "yolo26n-diana"
+task = "detect"
+description = "YOLO26n (Ultralytics) converted to safetensors — fused, one2one head only"
+license = "AGPL-3.0 (Ultralytics YOLO26 weights — NOT redistributed; user-converted)"
+
+[[files]]
+name = "yolo26n-diana.safetensors"
+sha256 = "6f4a0d8664374372dc1a9a6c89b932dbc180a9db095864baba5ad40879000ca5"
+
+[[files]]
+name = "yolo26n-diana.json"

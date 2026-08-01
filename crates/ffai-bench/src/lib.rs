@@ -30,6 +30,7 @@
 
 pub mod corpus;
 pub mod der;
+pub mod detect;
 pub mod footprint;
 pub mod gate;
 pub mod ledger;

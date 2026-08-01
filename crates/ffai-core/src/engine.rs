@@ -8,7 +8,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::error::Result;
-use crate::types::{AudioBuffer, ImageBuffer, OcrOutput, TimedSegment, Transcript, VideoFrame};
+use crate::types::{
+    AudioBuffer, DetectOutput, ImageBuffer, OcrOutput, TimedSegment, Transcript, VideoFrame,
+};
 
 /// The tasks FFai knows about (the "stream types" of the toolkit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -17,6 +19,11 @@ pub enum Task {
     Tts,
     Ocr,
     Vlm,
+    /// Object detection (Diana). The task exists ahead of its first engine so
+    /// `ffai bench detect` can baseline the world references (M-D0); the
+    /// `DetectEngine` trait and `DetectOutput` type land with the first
+    /// engine at M-D1.
+    Detect,
 }
 
 impl fmt::Display for Task {
@@ -26,6 +33,7 @@ impl fmt::Display for Task {
             Task::Tts => "tts",
             Task::Ocr => "ocr",
             Task::Vlm => "vlm",
+            Task::Detect => "detect",
         })
     }
 }
@@ -39,7 +47,10 @@ impl FromStr for Task {
             "tts" => Ok(Task::Tts),
             "ocr" => Ok(Task::Ocr),
             "vlm" => Ok(Task::Vlm),
-            other => Err(format!("unknown task `{other}` (expected asr, tts, ocr, or vlm)")),
+            "detect" => Ok(Task::Detect),
+            other => {
+                Err(format!("unknown task `{other}` (expected asr, tts, ocr, vlm, or detect)"))
+            }
         }
     }
 }
@@ -229,6 +240,36 @@ pub struct OcrOptions {
     pub single_line: bool,
 }
 
+/// Detection options (Diana).
+///
+/// `confidence` defaults to 0.25 — the threshold a person looking at boxes
+/// wants. Benchmarks that need the low-confidence tail for mAP set it to
+/// ~0.001 explicitly, the way `corpora/refs/*_ref.py` do; the default is
+/// not tuned for the scorer, and the scorer does not inherit it silently.
+#[derive(Debug, Clone)]
+pub struct DetectOptions {
+    /// Minimum confidence to report.
+    pub confidence: f32,
+    /// Maximum detections returned, highest confidence first.
+    pub max_detections: usize,
+    /// Class-wise NMS IoU. `None` for the NMS-free one-to-one path, which
+    /// is YOLO26's default and needs no suppression.
+    pub iou: Option<f32>,
+    /// Restrict to these class ids; empty = every class.
+    pub classes: Vec<u32>,
+}
+
+impl Default for DetectOptions {
+    fn default() -> Self {
+        DetectOptions {
+            confidence: 0.25,
+            max_detections: 300,
+            iou: None,
+            classes: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct VlmOptions {
     /// Instruction for the model; `None` = plain captioning.
@@ -252,6 +293,42 @@ pub trait TtsEngine: Send + Sync {
 pub trait OcrEngine: Send + Sync {
     fn info(&self) -> EngineInfo;
     fn recognize(&self, image: &ImageBuffer, opts: &OcrOptions) -> Result<OcrOutput>;
+}
+
+/// Image → objects (Diana).
+pub trait DetectEngine: Send + Sync {
+    fn info(&self) -> EngineInfo;
+    fn detect(&self, image: &ImageBuffer, opts: &DetectOptions) -> Result<DetectOutput>;
+
+    /// Detect over many images, using the whole machine.
+    ///
+    /// **This is a first-class path, not a convenience wrapper**, because it
+    /// is where a detector's throughput actually lives. Measured on Diana:
+    /// running images concurrently is worth **3.6-5.3x** over calling
+    /// [`Self::detect`] in a loop, with byte-identical output and no change
+    /// whatever to the per-image path — because intra-image parallelism is
+    /// nearly exhausted (24 cores buy one image only 1.42x) while the images
+    /// themselves are independent.
+    ///
+    /// The trait is `Send + Sync`, so one loaded model serves every thread.
+    /// That is the structural advantage over the Python reference: measured
+    /// on the same machine, PyTorch gets *slower* under threading (0.68-0.72x)
+    /// because of the GIL, and its escape hatch — multiprocessing — pays a
+    /// full model copy per worker.
+    ///
+    /// The default implementation is sequential so existing engines keep
+    /// working; an engine that can do better should override it.
+    fn detect_batch(
+        &self,
+        images: &[ImageBuffer],
+        opts: &DetectOptions,
+    ) -> Result<Vec<DetectOutput>> {
+        images.iter().map(|i| self.detect(i, opts)).collect()
+    }
+    /// Class names for the ids in [`DetectOutput`], in id order. They come
+    /// from the weight manifest, so they belong to the engine rather than
+    /// to every output it produces.
+    fn class_names(&self) -> &[String];
 }
 
 /// Image/video → description (Argus).

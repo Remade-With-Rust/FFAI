@@ -348,9 +348,195 @@ impl OcrOutput {
     }
 }
 
+/// How a detector letterboxed an image, kept so boxes can be mapped back.
+///
+/// The inverse transform **travels with the output** rather than living in
+/// the caller's head: a detection in letterboxed coordinates is not wrong,
+/// it is unusable, and every consumer would otherwise re-derive the same
+/// arithmetic. `scale` is the factor the original was multiplied by;
+/// `pad_x`/`pad_y` are the pixels added on the left/top.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Letterbox {
+    pub scale: f32,
+    pub pad_x: f32,
+    pub pad_y: f32,
+    /// Original image size, so mapping back can clamp to it.
+    pub orig_width: u32,
+    pub orig_height: u32,
+}
+
+impl Letterbox {
+    /// Map a point from letterboxed input coordinates back to the original,
+    /// clamped to the original image bounds.
+    pub fn invert(&self, x: f32, y: f32) -> (f32, f32) {
+        let ox = ((x - self.pad_x) / self.scale).clamp(0.0, self.orig_width as f32);
+        let oy = ((y - self.pad_y) / self.scale).clamp(0.0, self.orig_height as f32);
+        (ox, oy)
+    }
+}
+
+/// One detected object.
+///
+/// Geometry is **xyxy in original-image pixels** — the form every consumer
+/// and every scorer wants. `class_id` indexes the model's own class list
+/// (surfaced by the engine's manifest); `track_id` is populated only by a
+/// streaming loop that associates across frames.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Detection {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub class_id: u32,
+    pub confidence: f32,
+    pub track_id: Option<u64>,
+}
+
+impl Detection {
+    pub fn width(&self) -> f32 {
+        (self.x1 - self.x0).max(0.0)
+    }
+
+    pub fn height(&self) -> f32 {
+        (self.y1 - self.y0).max(0.0)
+    }
+
+    pub fn area(&self) -> f32 {
+        self.width() * self.height()
+    }
+
+    /// Intersection over union with another detection, ignoring class.
+    pub fn iou(&self, other: &Detection) -> f32 {
+        let ix = (self.x1.min(other.x1) - self.x0.max(other.x0)).max(0.0);
+        let iy = (self.y1.min(other.y1) - self.y0.max(other.y0)).max(0.0);
+        let inter = ix * iy;
+        let union = self.area() + other.area() - inter;
+        if union <= 0.0 {
+            0.0
+        } else {
+            inter / union
+        }
+    }
+
+    pub fn as_bbox(&self) -> BoundingBox {
+        BoundingBox { x: self.x0, y: self.y0, width: self.width(), height: self.height() }
+    }
+}
+
+/// What a detection engine returns for one image.
+///
+/// Detections are in **confidence-descending order** — the order the
+/// end-to-end heads already produce, and the order every consumer that
+/// takes a top-N expects. Class *names* live on the engine (they come from
+/// the weight manifest), not on every output.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DetectOutput {
+    pub detections: Vec<Detection>,
+    /// The letterbox that produced these coordinates, when one was applied.
+    /// `None` means the engine consumed the image at native resolution.
+    pub letterbox: Option<Letterbox>,
+}
+
+impl DetectOutput {
+    /// Keep only detections at or above `min_confidence`.
+    pub fn filter_confidence(&mut self, min_confidence: f32) {
+        self.detections.retain(|d| d.confidence >= min_confidence);
+    }
+
+    /// Greedy class-wise non-maximum suppression.
+    ///
+    /// Not used by the NMS-free one-to-one path — it exists for engines
+    /// whose head emits overlapping candidates, and so a LIVE loop can
+    /// merge across sources. Assumes the confidence-descending order the
+    /// type documents.
+    pub fn suppress_overlaps(&mut self, iou_threshold: f32) {
+        let mut kept: Vec<Detection> = Vec::with_capacity(self.detections.len());
+        for det in self.detections.drain(..) {
+            if !kept
+                .iter()
+                .any(|k| k.class_id == det.class_id && k.iou(&det) > iou_threshold)
+            {
+                kept.push(det);
+            }
+        }
+        self.detections = kept;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn det(x0: f32, y0: f32, x1: f32, y1: f32, class_id: u32, confidence: f32) -> Detection {
+        Detection { x0, y0, x1, y1, class_id, confidence, track_id: None }
+    }
+
+    #[test]
+    fn letterbox_inverts_to_original_pixels() {
+        // A 586x640 image letterboxed into 640x640: scale 1.0, pad_x 27.
+        let lb = Letterbox {
+            scale: 1.0,
+            pad_x: 27.0,
+            pad_y: 0.0,
+            orig_width: 586,
+            orig_height: 640,
+        };
+        assert_eq!(lb.invert(27.0, 0.0), (0.0, 0.0));
+        assert_eq!(lb.invert(127.0, 50.0), (100.0, 50.0));
+        // Clamped, never negative or past the original bounds.
+        assert_eq!(lb.invert(0.0, 0.0), (0.0, 0.0));
+        assert_eq!(lb.invert(9999.0, 9999.0), (586.0, 640.0));
+    }
+
+    #[test]
+    fn letterbox_inverts_a_scaled_box() {
+        let lb = Letterbox {
+            scale: 0.5,
+            pad_x: 10.0,
+            pad_y: 20.0,
+            orig_width: 1000,
+            orig_height: 800,
+        };
+        let (x, y) = lb.invert(110.0, 120.0);
+        assert!((x - 200.0).abs() < 1e-5, "got {x}");
+        assert!((y - 200.0).abs() < 1e-5, "got {y}");
+    }
+
+    #[test]
+    fn iou_matches_hand_computed() {
+        let a = det(0.0, 0.0, 10.0, 10.0, 0, 0.9);
+        let b = det(0.0, 0.0, 10.0, 5.0, 0, 0.8);
+        // inter 50, union 100
+        assert!((a.iou(&b) - 0.5).abs() < 1e-6);
+        let far = det(100.0, 100.0, 110.0, 110.0, 0, 0.7);
+        assert_eq!(a.iou(&far), 0.0);
+    }
+
+    #[test]
+    fn suppression_is_class_wise() {
+        let mut out = DetectOutput {
+            detections: vec![
+                det(0.0, 0.0, 10.0, 10.0, 0, 0.9),
+                det(0.5, 0.5, 10.0, 10.0, 0, 0.8), // same class, heavy overlap -> dropped
+                det(0.5, 0.5, 10.0, 10.0, 1, 0.7), // different class -> kept
+            ],
+            letterbox: None,
+        };
+        out.suppress_overlaps(0.5);
+        assert_eq!(out.detections.len(), 2);
+        assert_eq!(out.detections[0].class_id, 0);
+        assert_eq!(out.detections[1].class_id, 1);
+    }
+
+    #[test]
+    fn confidence_filter_keeps_the_threshold_itself() {
+        let mut out = DetectOutput {
+            detections: vec![det(0.0, 0.0, 1.0, 1.0, 0, 0.25), det(0.0, 0.0, 1.0, 1.0, 0, 0.24)],
+            letterbox: None,
+        };
+        out.filter_confidence(0.25);
+        assert_eq!(out.detections.len(), 1);
+    }
 
     #[test]
     fn mono_downmix_averages_channels() {

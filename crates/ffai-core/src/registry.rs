@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::engine::{AsrEngine, EngineInfo, OcrEngine, Task, TtsEngine, VlmEngine};
+use crate::engine::{
+    AsrEngine, DetectEngine, EngineInfo, OcrEngine, Task, TtsEngine, VlmEngine,
+};
 use crate::error::{Error, Result};
 
 /// Holds every registered engine, keyed by task and name.
@@ -18,12 +20,14 @@ pub struct EngineRegistry {
     tts: BTreeMap<String, Arc<dyn TtsEngine>>,
     ocr: BTreeMap<String, Arc<dyn OcrEngine>>,
     vlm: BTreeMap<String, Arc<dyn VlmEngine>>,
+    detect: BTreeMap<String, Arc<dyn DetectEngine>>,
     // The default per task is the FIRST engine registered (the reference
     // engine), not the alphabetically first.
     asr_default: Option<String>,
     tts_default: Option<String>,
     ocr_default: Option<String>,
     vlm_default: Option<String>,
+    detect_default: Option<String>,
 }
 
 impl EngineRegistry {
@@ -55,6 +59,12 @@ impl EngineRegistry {
         self.vlm.insert(name, engine);
     }
 
+    pub fn register_detect(&mut self, engine: Arc<dyn DetectEngine>) {
+        let name = engine.info().name;
+        self.detect_default.get_or_insert_with(|| name.clone());
+        self.detect.insert(name, engine);
+    }
+
     /// Resolve an ASR engine; `None` selects the default (first registered).
     pub fn asr(&self, name: Option<&str>) -> Result<Arc<dyn AsrEngine>> {
         resolve(&self.asr, name, self.asr_default.as_deref(), Task::Asr)
@@ -72,6 +82,10 @@ impl EngineRegistry {
         resolve(&self.vlm, name, self.vlm_default.as_deref(), Task::Vlm)
     }
 
+    pub fn detect(&self, name: Option<&str>) -> Result<Arc<dyn DetectEngine>> {
+        resolve(&self.detect, name, self.detect_default.as_deref(), Task::Detect)
+    }
+
     /// All engine metadata, ordered by task then name (for `ffai engines`).
     pub fn list(&self) -> Vec<EngineInfo> {
         let mut out: Vec<EngineInfo> = Vec::new();
@@ -79,6 +93,7 @@ impl EngineRegistry {
         out.extend(self.tts.values().map(|e| e.info()));
         out.extend(self.ocr.values().map(|e| e.info()));
         out.extend(self.vlm.values().map(|e| e.info()));
+        out.extend(self.detect.values().map(|e| e.info()));
         out.sort_by(|a, b| a.task.cmp(&b.task).then_with(|| a.name.cmp(&b.name)));
         out
     }

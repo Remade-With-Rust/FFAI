@@ -16,15 +16,37 @@ ffai-core = { workspace = true }
 hound = { workspace = true }
 png = { workspace = true }
 
+# CODECS COME FROM HOME (Principle 7). JPEG decodes through our own pure-Rust
+# ffmpeg rather than a third-party crate, so improvements to rff land here.
+rff-core = { workspace = true }
+rff-codec = { workspace = true }
+rff-codec-jpeg = { workspace = true }
+
 # DEFAULT CODEC BACKEND (Phase 1): remade_ffmpeg_rs — our own pure-Rust ffmpeg
 # (https://github.com/Remade-With-Rust/remade_ffmpeg_rs, the `rff-*` workspace).
-# All demux/decode beyond WAV routes through rff crates when it lands, e.g.:
-#   rff-format = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
-#   rff-codec  = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
-# Kept out of Phase 0 so the skeleton builds fast and independently.
+#
+# WHY IT IS STILL NOT A DEPENDENCY HERE, measured rather than assumed
+# (2026-07-31): the rff crates are not on crates.io, and FFai is. A git
+# dependency — even an OPTIONAL one — makes `cargo publish` fail outright:
+#
+#   error: failed to verify manifest ...
+#     all dependencies must have a version requirement specified when publishing.
+#
+# Adding `version = "0.0.1"` alongside the git source publishes, but then
+# downstream users resolve a version that does not exist in the registry, so
+# the crate is unbuildable for everyone who is not us. That is worse than
+# waiting: a broken published crate rather than a missing feature.
+#
+# So the rule for now: where rff wraps a published pure-Rust decoder, depend
+# on that decoder directly and get byte-identical pixels (PNG -> `png`,
+# JPEG -> `jpeg-decoder`, which is exactly what `rff-codec-jpeg` calls).
+# Where rff provides something NOTHING else does — demuxers, H.264/VP9,
+# video ingest for LIVE — the dependency has real content and the publishing
+# question has to be answered first (publish rff, or vendor it).
 
 [features]
-# Will enable the rff-* backend once wired (Phase 1).
+# Reserved for the rff-* backend. Blocked on rff publishing to crates.io —
+# see the note above; this is a distribution problem, not a technical one.
 remade-ffmpeg = []
 
 [lints]

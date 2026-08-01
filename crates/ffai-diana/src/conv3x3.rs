@@ -1,0 +1,197 @@
+//! A 3x3 convolution as one explicit im2col + matmul.
+//!
+//! # Why
+//!
+//! candle already im2col's convolutions (`TiledIm2Col`), yet measured
+//! **19-21x slower than `Tensor::matmul` on identical arithmetic** at our
+//! shapes, at both 1 and 24 threads (`examples/conv_scaling.rs`):
+//!
+//! | shape | conv GF/s @24t | matmul GF/s @24t |
+//! |---|---:|---:|
+//! | l4 bneck 32->16 @80 | 25.4 | 522.9 |
+//! | head box 64->16 @80 | 29.0 | 553.8 |
+//!
+//! After the pointwise brick, dense 3x3 is **41% of detect** across 39 calls
+//! per image at ~2.0 ms each. This routes it through the tuned GEMM candle
+//! already ships — the "hot loops that are secretly matmuls" law.
+//!
+//! # The layout choice, which is the whole performance argument
+//!
+//! im2col is written **channel-major**: `(Cin*9, H*W)`, so the matmul is
+//! `W (Cout, Cin*9) @ col (Cin*9, H*W) -> (Cout, H*W)` — the output is
+//! already NCHW, no transpose.
+//!
+//! In that orientation each im2col row is *one source row copied with a
+//! horizontal offset*, so the inner operation is a contiguous
+//! `copy_from_slice`, not a strided gather. (The same observation that made
+//! a 3 ms "gather" into a 0.75 ms copy elsewhere.) Rows that fall outside
+//! the image are left zero, which is exactly the zero padding.
+//!
+//! Stride 1, padding 1 only — the seven stride-2 downsampling convolutions
+//! stay on candle's path, which is why the dispatch in `blocks.rs` checks
+//! the stride.
+
+use candle_core::{Result, Tensor};
+use rayon::prelude::*;
+
+/// Dense 3x3, padding 1, groups 1, stride 1 or 2.
+///
+/// `x` is `(1, Cin, H, W)`, `weight` is `(Cout, Cin, 3, 3)`.
+///
+/// **Stride 1 and stride 2 are genuinely different kernels inside**, and the
+/// difference is the reason each got its own measurement. At stride 1 the
+/// horizontal tap is a contiguous `copy_from_slice`; at stride 2 it is a
+/// constant-stride gather, which moves half the bytes but cannot use the
+/// block copy. Whether that trade pays is an empirical question, not a
+/// deduction — see the A/B in the mission plan.
+pub fn conv3x3(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
+    conv3x3_strided(x, weight, bias, 1)
+}
+
+pub fn conv3x3_strided(
+    x: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    stride: usize,
+) -> Result<Tensor> {
+    let (n, c_in, h, w) = x.dims4()?;
+    let c_out = weight.dim(0)?;
+    debug_assert_eq!(n, 1, "batch 1 is the only shape this engine runs");
+    debug_assert!(stride == 1 || stride == 2, "only stride 1 and 2 are implemented");
+    let hw = h * w;
+    // padding 1, kernel 3: out = (in + 2 - 3)/stride + 1
+    let oh = (h + 2 - 3) / stride + 1;
+    let ow = (w + 2 - 3) / stride + 1;
+    let ohw = oh * ow;
+
+    // im2col reads the activation IN PLACE via SliceOp and hands its output
+    // Vec straight to the tensor's storage. Two copies of a multi-megabyte
+    // buffer removed per convolution, with no arithmetic changed.
+    let col = crate::profile::timed(|p| &p.im2col, || {
+        crate::cpuop::SliceOp::new("ffai-im2col3x3", move |xs, _| {
+    let mut col = vec![0f32; c_in * 9 * ohw];
+    {
+    // One row per (channel, ky, kx). Parallel over channels: each channel
+    // owns a contiguous 9*ohw block, so the writes never overlap.
+    col.par_chunks_mut(9 * ohw).enumerate().for_each(|(c, block)| {
+        let plane = &xs[c * hw..(c + 1) * hw];
+        for ky in 0..3usize {
+            for kx in 0..3usize {
+                let row = &mut block[(ky * 3 + kx) * ohw..(ky * 3 + kx + 1) * ohw];
+                for oy in 0..oh {
+                    // Source row for this vertical tap; outside the image
+                    // the destination stays zero (the padding).
+                    let sy = oy * stride + ky;
+                    if sy == 0 || sy > h {
+                        continue;
+                    }
+                    let src = &plane[(sy - 1) * w..sy * w];
+                    let dst = &mut row[oy * ow..(oy + 1) * ow];
+                    if stride == 1 {
+                        // Contiguous copy with a horizontal offset.
+                        match kx {
+                            0 => dst[1..].copy_from_slice(&src[..w - 1]),
+                            1 => dst.copy_from_slice(src),
+                            _ => dst[..w - 1].copy_from_slice(&src[1..]),
+                        }
+                    } else {
+                        // sx = 2*ox + kx - 1. Solve the in-bounds range once
+                        // so the inner loop is branch-free.
+                        //   sx >= 0    <=> 2*ox >= 1 - kx
+                        //   sx <= w-1  <=> ox <= (w - kx)/2
+                        let lo = if kx == 0 { 1 } else { 0 };
+                        let hi =
+                            if w >= kx { ((w - kx) / 2 + 1).min(ow) } else { 0 };
+                        for ox in lo..hi {
+                            dst[ox] = src[ox * 2 + kx - 1];
+                        }
+                    }
+                }
+            }
+        }
+    });
+    }
+            Ok((col, (c_in * 9, ohw).into()))
+        })
+        .run(x)
+    })?;
+
+    let w_mat = weight.reshape((c_out, c_in * 9))?;
+    let mut y = crate::profile::timed(|p| &p.gemm, || w_mat.matmul(&col))?; // (Cout, OH*OW)
+    if let Some(b) = bias {
+        y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
+    }
+    y.reshape((n, c_out, oh, ow))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+    use candle_nn::{Conv2d, Conv2dConfig, Module};
+
+    fn oracle(x: &Tensor, w: &Tensor, b: &Tensor, stride: usize) -> Tensor {
+        let cfg = Conv2dConfig { padding: 1, stride, ..Default::default() };
+        Conv2d::new(w.clone(), Some(b.clone()), cfg).forward(x).unwrap()
+    }
+
+    fn max_rel(a: &Tensor, b: &Tensor) -> f32 {
+        let a = a.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let b = b.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let scale = b.iter().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-6);
+        a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs() / scale).fold(0.0f32, f32::max)
+    }
+
+    #[test]
+    fn matches_candles_conv2d() {
+        let dev = Device::Cpu;
+        // Real shapes plus degenerate ones where the padding is most of it.
+        for &(ci, co, h, w) in &[
+            (32, 16, 80, 80),
+            (64, 16, 80, 80),
+            (16, 8, 160, 160),
+            (64, 64, 20, 20),
+            (3, 4, 5, 7),
+            (1, 1, 1, 1),
+            (2, 3, 1, 6),
+            (2, 3, 6, 1),
+        ] {
+            let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
+            let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
+            let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
+            let got = conv3x3(&x, &wt, Some(&b)).unwrap();
+            let want = oracle(&x, &wt, &b, 1);
+            assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w}");
+            let d = max_rel(&got, &want);
+            assert!(d < 1e-5, "{ci}->{co} {h}x{w}: max rel {d:.3e}");
+        }
+    }
+
+    #[test]
+    fn matches_candles_conv2d_at_stride_2() {
+        let dev = Device::Cpu;
+        // The model's seven downsampling shapes, plus ODD spatial sizes —
+        // the in-bounds range arithmetic differs there and an off-by-one in
+        // it would be invisible on the even shapes the model actually runs.
+        for &(ci, co, h, w) in &[
+            (3, 16, 640, 640),
+            (16, 32, 320, 320),
+            (64, 64, 160, 160),
+            (128, 256, 40, 40),
+            (2, 3, 7, 9),
+            (2, 3, 5, 5),
+            (1, 1, 1, 1),
+            (2, 2, 1, 8),
+            (2, 2, 8, 1),
+        ] {
+            let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
+            let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
+            let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
+            let got = conv3x3_strided(&x, &wt, Some(&b), 2).unwrap();
+            let want = oracle(&x, &wt, &b, 2);
+            assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w} s2");
+            let d = max_rel(&got, &want);
+            assert!(d < 1e-5, "{ci}->{co} {h}x{w} s2: max rel {d:.3e}");
+        }
+    }
+}

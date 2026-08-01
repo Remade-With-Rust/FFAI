@@ -23,6 +23,14 @@
 /.whispercpp/
 /.tools-bench/
 /corpora/fonts/
+/.venv-diana/
+# Detection bench cache: the YOLO26 checkpoints and the COCO annotation zip.
+# The checkpoints are AGPL-3.0 and this repo is permissive — Diana never
+# vendors or redistributes them (docs/diana-mission-plan.md §7), and `*.bin`
+# above does not cover `.pt`, so without this line a `git add -A` would
+# commit them. Everything here is fetched by tools/diana_coco_corpus.py and
+# tools/diana_export_onnx.py.
+/corpora/cache/
 # TTS bench artifacts: generated audio is reproducible from the ledger line
 # (voice hash + argv + corpus); the piper voice cache is fetched, never committed
 /bench/tts-out/
@@ -35,4 +43,20 @@
 # and the measured-constant JSONs — ARE tracked.
 corpora/refs/fixtures/mobiledet_probmap.npz
 corpora/refs/fixtures/mobiledet_stages.npz
+
+# Diana oracle activations: float tensors, regenerable by
+# tools/diana_oracle_dump.py from the checkpoint plus a formula. The TRACKED
+# artifacts are yolo26*_arch.json (the architecture read off the checkpoint)
+# and yolo26*_oracle_digest.json (per-tensor shape/stats + 256 exact values
+# at fixed indices) — together they let the Rust oracle run a real gate on a
+# fresh clone, which is the standard the Carmenta fixture incident set,
+# while the full-tensor max-abs comparison upgrades automatically when the
+# npz files are present.
+#
+# GLOB, not two file names. This was two literal `yolo26n_...` lines while
+# the port was n-only; the moment m/l/x were oracled it silently stopped
+# covering anything, and `git add -A` would have staged 700 MB of dumps.
+# An ignore rule enumerated per instance is a rule that expires the first
+# time the thing it protects against gets a second instance.
+corpora/refs/fixtures/yolo26*_oracle_*.npz
 tools/__pycache__/

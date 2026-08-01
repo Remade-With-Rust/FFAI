@@ -1,0 +1,23 @@
+# YOLO26l, converted for Diana's candle port.
+#
+# l is the first tier with `depth = 1.00`, so every `rep(2)` resolves to 2
+# rather than 1: each C3k2 carries TWO inner blocks where n/s/m carry one.
+# Combined with the C3k promotion m introduced (see yolo26m-diana.toml),
+# that takes the tensor count to 332 against n's 204 — the same graph code,
+# a different scale row, and nothing tier-specific in `ffai-diana`.
+#
+# LICENSE: the WEIGHTS are AGPL-3.0 (Ultralytics). FFai never fetches, hosts
+# or redistributes them — convert your own:
+#
+#   .venv-diana/Scripts/python.exe tools/diana_convert.py --model yolo26l
+name = "yolo26l-diana"
+task = "detect"
+description = "YOLO26l (Ultralytics) converted to safetensors — fused, one2one head only"
+license = "AGPL-3.0 (Ultralytics YOLO26 weights — NOT redistributed; user-converted)"
+
+[[files]]
+name = "yolo26l-diana.safetensors"
+sha256 = "4b6d2ad2105ee1e77ae6ed1e47709e2fcaade0ec7488353f26c373c329971800"
+
+[[files]]
+name = "yolo26l-diana.json"

@@ -227,6 +227,107 @@ license friction, regenerable from a fixed seed. They cannot support public
 claims about real-world documents — audited public ground-truth corpora are
 the claims tier and land per the Carmenta mission plan (§6.2).
 
+## The detection vertical (Diana M-D0)
+
+Same spine, four task-scoped differences:
+
+1. **The media unit is the image.** `xRT` becomes images/second (warm and
+   end-to-end, same two-number rule); `media_secs` carries the image count
+   and the task field scopes its meaning, exactly as pages do for OCR.
+2. **Scoring is mAP, not edit distance.** `crates/ffai-bench/src/detect.rs`
+   implements the COCO matching rule — confidence-ranked greedy assignment
+   per class at IoU 0.50:0.05:0.95, maxDets 100, 101-point interpolated AP
+   averaged over classes with ground truth. The ledger gains two fields
+   (`map50`, `map5095`); both are recorded so neither is quoted alone. The
+   quality gate verdicts on **`1 − mAP@0.5`** — the gate machinery is
+   written lower-is-better, so the mAP is folded into a miss-rate rather
+   than growing a second comparison direction.
+3. **The scorer is cross-validated before it is trusted.**
+   `tools/diana_validate_scorer.py` scores the same detections through
+   pycocotools and through the Rust scorer and fails if they differ by more
+   than 0.005 absolute. On the M-D0 dump they agree to four decimals
+   (0.7014 / 0.5377 both ways). This is the Carmenta instrument-defect
+   lesson applied in advance: a new scorer on a new corpus is cross-checked
+   against a known-good implementation *before* any number it produces goes
+   on the board, not after a contradiction appears.
+4. **The wire format is JSON boxes, not text.** Adapters return
+   `[[x0,y0,x1,y1,cls,conf], ...]` in original-image pixels in the `text`
+   field of the standard batch JSONL, and ground truth is one
+   `{"width","height","objects"}` JSON per image. The batch/timing/memory
+   contract is otherwise reused unchanged.
+
+### Reproducing the detection baseline
+
+Prerequisites: Rust and Python 3.11+. The detection stack gets its **own**
+venv — `ultralytics` pulls a torch version that would disturb `.venv-bench`.
+
+```sh
+# 1. Reference implementations (CPU)
+python -m venv .venv-diana
+.venv-diana/Scripts/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.venv-diana/Scripts/pip install ultralytics onnxruntime pycocotools
+
+# 2. Weights — AGPL-3.0, fetched ungated, NEVER vendored (see
+#    docs/diana-mission-plan.md §7.1). Ultralytics downloads on first use.
+cd corpora/cache && ../../.venv-diana/Scripts/python -c \
+    "from ultralytics import YOLO; YOLO('yolo26n.pt'); YOLO('yolo26s.pt')" && cd ../..
+.venv-diana/Scripts/python tools/diana_export_onnx.py   # the ORT deployment bar
+
+# 3. Corpus — COCO val2017 subset, license-filtered and crowd-free.
+#    Images are re-encoded losslessly to PNG so every implementation reads
+#    IDENTICAL pixels rather than each running its own JPEG decoder.
+curl -o corpora/cache/annotations_trainval2017.zip \
+    http://images.cocodataset.org/annotations/annotations_trainval2017.zip
+python tools/diana_coco_corpus.py
+
+# 4. Validate the scorer against pycocotools BEFORE measuring anything
+.venv-diana/Scripts/python corpora/refs/ultralytics_ref.py --batch holdout.txt \
+    --model corpora/cache/yolo26n.pt --imgsz 640 --conf 0.001 --max-dets 100 \
+    --rect off > dets.jsonl
+.venv-diana/Scripts/python tools/diana_validate_scorer.py \
+    --corpus corpora/diana-coco-v2.toml --dets dets.jsonl
+
+# 5. Measure — RELEASE BUILD ONLY (use tools/rebuild.sh: it kills stale
+#    processes and fails if any .rs is newer than the binary)
+bash tools/rebuild.sh
+./target/release/ffai bench detect --corpus corpora/diana-coco-v2.toml --baseline-only
+
+# ...or, linking only the two crates the measurement needs (useful when
+# another component crate is mid-edit — the CLI links all of them):
+cargo run --release -p ffai-diana --example bench_detect -- \
+    corpora/diana-coco-v2.toml --runs 3
+```
+
+Configuration pinning carries over unchanged, and this vertical found its
+own instance of the defect the rule exists for. The decode triple
+`--imgsz 640 --conf 0.001 --max-dets 100` is straightforward — mAP needs
+the low-confidence tail and maxDets must match the scorer's truncation —
+but the knob that actually bit is **`--rect`, this vertical's `beam_size`**.
+Ultralytics' `predict()` defaults `rect=True`, letterboxing each image to
+the smallest multiple-of-32 *rectangle* (a 586×640 image is fed as
+640×608), while the ONNX export is fixed 640×640 square. Left unpinned, the
+`.pt` and ORT rows of the same tier ran different input geometry and their
+mAP disagreed by 1.5–1.8 pp in inconsistent directions. `references.toml`
+now pins `--rect off` on both sides for the matched comparison and carries
+the official rectangular default as its own declared variant with its own
+config key — the same shape as the ASR references' explicit greedy/beam
+variants.
+
+YOLO26 is natively end-to-end, so there is no NMS knob to pin — the ONNX
+export emits final detections `[1, 300, 6]` and
+`corpora/refs/yolo_ort_ref.py` **refuses** a raw-head export rather than
+supplying NMS glue, which would put work belonging to the engine under test
+inside a reference adapter.
+
+The corpus is license-filtered at build time: COCO *annotations* are
+CC-BY-4.0, but the images carry individual Flickr licenses, so
+`tools/diana_coco_corpus.py` admits only the Attribution / Attribution-
+ShareAlike / no-known-copyright / US-Government classes and records the
+license per clip. It also excludes every image containing an `iscrowd=1`
+annotation, because pycocotools treats crowd regions as ignore-zones and the
+proxy scorer deliberately implements no ignore logic — the corpus excludes
+the cases where that would matter instead of silently mis-scoring them.
+
 ## TTS: the round-trip bench
 
 ```sh

@@ -194,6 +194,53 @@ config = "yolo26s/e2e-640rect"
 batch_command = [".venv-diana/Scripts/python.exe", "corpora/refs/ultralytics_ref.py", "--batch", "{filelist}", "--model", "corpora/cache/yolo26s.pt", "--imgsz", "640", "--conf", "0.001", "--max-dets", "100", "--rect", "on"]
 version_command = [".venv-diana/Scripts/python.exe", "-c", "import ultralytics; print('ultralytics', ultralytics.__version__)"]
 
+# ---- m / l / x, both geometries ----
+# Added when the tier derivation was generalised. The pairing matters more
+# than the count: each of these is the ONLY row a Diana engine of the same
+# tier and geometry will be graded against, so a missing rect entry silently
+# grades a rectangular engine against a square reference — the M-D0 defect.
+[[reference]]
+name = "ultralytics-yolo26m"
+task = "detect"
+config = "yolo26m/e2e-640sq"
+batch_command = [".venv-diana/Scripts/python.exe", "corpora/refs/ultralytics_ref.py", "--batch", "{filelist}", "--model", "corpora/cache/yolo26m.pt", "--imgsz", "640", "--conf", "0.001", "--max-dets", "100", "--rect", "off"]
+version_command = [".venv-diana/Scripts/python.exe", "-c", "import ultralytics; print('ultralytics', ultralytics.__version__)"]
+
+[[reference]]
+name = "ultralytics-yolo26m-rect"
+task = "detect"
+config = "yolo26m/e2e-640rect"
+batch_command = [".venv-diana/Scripts/python.exe", "corpora/refs/ultralytics_ref.py", "--batch", "{filelist}", "--model", "corpora/cache/yolo26m.pt", "--imgsz", "640", "--conf", "0.001", "--max-dets", "100", "--rect", "on"]
+version_command = [".venv-diana/Scripts/python.exe", "-c", "import ultralytics; print('ultralytics', ultralytics.__version__)"]
+
+[[reference]]
+name = "ultralytics-yolo26l"
+task = "detect"
+config = "yolo26l/e2e-640sq"
+batch_command = [".venv-diana/Scripts/python.exe", "corpora/refs/ultralytics_ref.py", "--batch", "{filelist}", "--model", "corpora/cache/yolo26l.pt", "--imgsz", "640", "--conf", "0.001", "--max-dets", "100", "--rect", "off"]
+version_command = [".venv-diana/Scripts/python.exe", "-c", "import ultralytics; print('ultralytics', ultralytics.__version__)"]
+
+[[reference]]
+name = "ultralytics-yolo26l-rect"
+task = "detect"
+config = "yolo26l/e2e-640rect"
+batch_command = [".venv-diana/Scripts/python.exe", "corpora/refs/ultralytics_ref.py", "--batch", "{filelist}", "--model", "corpora/cache/yolo26l.pt", "--imgsz", "640", "--conf", "0.001", "--max-dets", "100", "--rect", "on"]
+version_command = [".venv-diana/Scripts/python.exe", "-c", "import ultralytics; print('ultralytics', ultralytics.__version__)"]
+
+[[reference]]
+name = "ultralytics-yolo26x"
+task = "detect"
+config = "yolo26x/e2e-640sq"
+batch_command = [".venv-diana/Scripts/python.exe", "corpora/refs/ultralytics_ref.py", "--batch", "{filelist}", "--model", "corpora/cache/yolo26x.pt", "--imgsz", "640", "--conf", "0.001", "--max-dets", "100", "--rect", "off"]
+version_command = [".venv-diana/Scripts/python.exe", "-c", "import ultralytics; print('ultralytics', ultralytics.__version__)"]
+
+[[reference]]
+name = "ultralytics-yolo26x-rect"
+task = "detect"
+config = "yolo26x/e2e-640rect"
+batch_command = [".venv-diana/Scripts/python.exe", "corpora/refs/ultralytics_ref.py", "--batch", "{filelist}", "--model", "corpora/cache/yolo26x.pt", "--imgsz", "640", "--conf", "0.001", "--max-dets", "100", "--rect", "on"]
+version_command = [".venv-diana/Scripts/python.exe", "-c", "import ultralytics; print('ultralytics', ultralytics.__version__)"]
+
 [[reference]]
 name = "ort-yolo26n"
 task = "detect"

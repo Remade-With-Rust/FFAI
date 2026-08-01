@@ -53,6 +53,15 @@ pub struct RunSummary {
     pub wer: Option<f64>,
     /// Mean character error rate, if computed.
     pub cer: Option<f64>,
+    /// Detection mAP@0.5 (proxy scorer, maxDets=100 — see
+    /// `crate::detect`), if computed. Detect-task runs only; serde-defaulted
+    /// and omitted when absent so non-detect lines are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map50: Option<f64>,
+    /// Detection mAP@0.5:0.95 (same proxy scorer), recorded beside `map50`
+    /// so neither can be quoted alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map5095: Option<f64>,
     /// **Warm** real-time factor: media seconds per second of processing-only
     /// time, model already loaded. The steady-state number implementations
     /// publish. Higher is faster.
@@ -197,6 +206,8 @@ mod tests {
                 config: Default::default(),
                 wer: Some(0.042),
                 cer: None,
+                map50: None,
+                map5095: None,
                 rtf_warm: Some(31.0),
                 rtf_e2e: Some(18.0),
                 load_secs: Some(1.9),

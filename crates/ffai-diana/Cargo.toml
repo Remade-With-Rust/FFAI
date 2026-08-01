@@ -1,0 +1,27 @@
+[package]
+name = "ffai-diana"
+description = "Diana — FFai's detection component (YOLO26 on candle, pure Rust)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords = ["object-detection", "yolo", "computer-vision", "candle", "edge"]
+categories = ["computer-vision", "multimedia::images", "science"]
+
+[dependencies]
+ffai-core = { workspace = true }
+ffai-models = { workspace = true }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+ffai-media = { workspace = true }
+ffai-bench = { workspace = true }
+
+[lints]
+workspace = true

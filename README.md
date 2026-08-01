@@ -19,7 +19,7 @@ ffai tts -o long.wav "Long form works. Sentences split; silence is a knob."
 ffai ocr -i page.png                                  # CRAFT + CRNN, pure Rust
 ffai ocr -i photo.png --engine craft-parseq           # word-level AR rec for photos
 ffai ocr --live --watch 5 -i captures/ -o screen.srt  # LIVE: point it at a screen
-ffai detect -i street.png --engine yolo26n                # YOLO26, pure Rust
+ffai detect -i street.jpg --engine yolo26n                # YOLO26, pure Rust
 ffai detect -i street.png -o boxes.jsonl --conf 0.4       # structured out
 ffai caption -i frame.png --prompt "what is happening here?"
 ffai engines        # list every engine + status, like `ffmpeg -codecs`
@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, quality parity through a frozen judge, smaller and faster-loading, and **all four gates now PASS** — though the speed margin sits inside the reference's own 6.4× run-to-run spread, so it is reported as parity, not a win ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion. **mAP identical to PyTorch at matched geometry** (70.14 mAP50 rectangular, 68.65 square) and **every detection identical** — same count, classes and order across 1161 detections — at **3.3× less memory, 10× faster load**, byte-identical to itself at any thread count, and a concurrent batch path PyTorch's GIL cannot match. Per-image latency still behind ORT; the M-D2 campaign is open ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **n and s tiers from one tier-agnostic graph**. **mAP identical to PyTorch at every matched configuration** (n 70.14 rect / 68.65 square, s 76.26 rect) and **every detection identical** — same count, classes and order across 1161 detections — at **2.3–4.0× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in, and a concurrent batch path PyTorch's GIL cannot match. Per-image latency still behind ORT; the M-D2 campaign is open ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -462,6 +462,95 @@ ones in the mission plan's campaign log.
 Full campaign history:
 [docs/Carmenta-mission-plan.md](docs/Carmenta-mission-plan.md) §8; every
 number traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
+
+### Diana: YOLO26 detection, from the official `.pt`, in pure Rust
+
+**Diana runs the real YOLO26 graph on candle — C3k2, SPPF, C2PSA, the
+NMS-free end-to-end head — built from official Ultralytics checkpoints by an
+audited offline conversion. No Python at inference. No weights in this
+repo:** they are AGPL-3.0 and stay the user's to fetch, convert and license.
+
+Measured on a hash-pinned 45-image COCO holdout, CPU only, mAP at conf 0.001
+/ 100 dets like the reference. Each pair is one run, so the memory column is
+comparable within a row-pair (ledger `bench-detect-1785530596`, `-1785520547`,
+`-1785540868`, `-1785542187`):
+
+| Tier / geometry | Implementation | mAP50 | mAP50-95 | steady MiB |
+|---|---|---:|---:|---:|
+| n, rect | **Diana** (Rust) | **70.14** | **53.77** | **87** |
+| n, rect | Ultralytics (PyTorch) | 70.14 | 53.77 | 347 |
+| n, square | **Diana** (Rust) | **68.65** | **52.59** | **95** |
+| n, square | Ultralytics (PyTorch) | 68.65 | 52.59 | 310 |
+| s, rect | **Diana** (Rust) | **76.26** | **61.71** | **134** |
+| s, rect | Ultralytics (PyTorch) | 76.26 | 61.71 | 374 |
+| s, square | **Diana** (Rust) | **78.06** | **63.11** | **152** |
+| s, square | Ultralytics (PyTorch) | 78.06 | 63.12 | 356 |
+
+**mAP is not close to PyTorch's — it is PyTorch's, at every matched
+configuration.** mAP50 is identical in all four; mAP50-95 is identical in
+three and reads 63.11 vs 63.12 in the fourth. The stronger statement sits
+under it: at n the
+*detections themselves* are identical — same count, same classes, same order,
+across all 1161 boxes on the corpus. And Diana is byte-identical to itself
+across runs and across thread counts, which PyTorch does not promise.
+
+Two disciplines produced that. Every layer was checked against a tracked
+oracle digest dumped from the reference before any Rust ran (worst error
+3.869e-06 over the full graph), and **geometry is a required argument, not a
+default.** M-D0 lost 1.5–1.8 pp in *opposite directions per tier* to an
+unpinned one: `predict()` silently letterboxes rectangularly, so "YOLO's mAP"
+is two different numbers. Diana names which one it is reporting; the sign
+flips by tier (rect wins at n, square at s), so it is a dispatch input rather
+than a default.
+
+**All five tiers — n/s/m/l/x — come from one tier-agnostic graph**, 2.4 M
+parameters to 55.7 M, and each is oracled independently against its own
+reference dump (worst relative delta 3.8e-6 to 8.7e-6). Widths, repeat
+counts and block kinds are derived from the checkpoint's own scale row, and
+the strict loader fails closed on any mismatch.
+
+**Every new tier found a bug the previous ones hid, which is the argument
+for having them.** s found a head width that was right at n only because
+`max(64, 80)` and `nc` both equal 80. m found that `parse_model` *overrides*
+the YAML's `c3k` flag for scales in `mlx`, turning two `Bottleneck` layers
+into `C3k` — a branch n and s never reach, on a board that was green at
+3.869e-6. A constant that is right only because the configurations you have
+tested happen to agree is found by configuration N+1, never by testing
+configuration 1 harder.
+
+**Speed is the open gate.** Nine M-D2 bricks — hand-written depthwise, 3×3
+and SiLU kernels, pointwise convs routed to GEMM, zero-copy tensor
+marshalling, a hoisted anchor grid, rectangular inference — bought ~1.5×
+and then ~1.43× more, and the concurrent batch path already beats PyTorch's
+GIL-bound throughput ceiling (22.73 vs 17.29 img/s). Per-image latency still
+trails ONNX Runtime by ~3–5×; im2col (12.5 %) and attention (5.6 %) are the
+named remainders. The campaign is open in the mission plan, not rounded off
+here.
+
+**One gate turned out to be measuring luck, and the way that was
+established is the point.** The oracle asserted that our 300-row top-k
+matched the reference's row for row. On the l tier it failed while every
+layer above it matched at 4.3e-6. Rather than hunt a decode bug, we
+perturbed the *reference's own* tensors by exactly the f32 divergence we
+measure against it and re-ran *its own* selection: it could not reproduce
+its own ordering either — 581 px and 6 class flips on the **n** case that
+was passing. The two-stage top-k ranks 8400x80 candidates to 300, and where
+there are no real detections the rows near the cut sit 1e-8 apart, so their
+order is undefined and asserting on it tests the weather. The gate now
+checks the tie-robust confidence sequence for all 300 rows and positional
+box/class identity only above a measured confidence floor — and when no row
+clears it, it says so rather than reporting a pass.
+
+One methodology note worth repeating, because it inverted a result: A/B on
+**CPU time**, not wall time, when the box is loaded — but CPU time sums
+across threads, so it *dilutes* a change that removes serial work by the
+thread count. Zero-copy read 22/22 wins on wall, 8/22 (z = −1.28) on
+24-thread CPU time, and 19/22 (z = +3.41) at one thread. The A/B harness
+encodes the rule.
+
+Full campaign history:
+[docs/diana-mission-plan.md](docs/diana-mission-plan.md) §8; every number
+traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
 VLM (Argus) remains an honest `stub` — visible as such in `ffai engines`.
 See [ROADMAP.md](ROADMAP.md) for the build-out order.

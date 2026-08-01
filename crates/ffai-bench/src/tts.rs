@@ -487,5 +487,7 @@ fn empty_summary(
         notes,
         peak_bytes: None,
         steady_bytes: None,
+        map50: None,
+        map5095: None,
     }
 }

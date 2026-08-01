@@ -1093,14 +1093,14 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "ffai-core",
 ]
 
 [[package]]
 name = "ffai-bench"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "ffai-core",
  "ffai-media",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-core"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "candle-core",
  "thiserror 2.0.19",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-demo"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "ffai-bench",
  "ffai-carmenta",
@@ -1167,17 +1167,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ffai-diana"
+version = "0.6.1"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "ffai-bench",
+ "ffai-core",
+ "ffai-media",
+ "ffai-models",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ffai-media"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "ffai-core",
  "hound",
  "png",
+ "rff-codec",
+ "rff-codec-jpeg",
+ "rff-core",
 ]
 
 [[package]]
 name = "ffai-mercury"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "candle-nn",
  "candle-transformers",
@@ -1194,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-models"
-version = "0.5.1"
+version = "0.6.1"
 dependencies = [
  "dirs",
  "ffai-core",
@@ -2222,6 +2240,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
+
+[[package]]
 name = "js-sys"
 version = "0.3.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3184,6 +3217,33 @@ dependencies = [
  "reqwest",
  "thiserror 2.0.19",
  "tower-service",
+]
+
+[[package]]
+name = "rff-codec"
+version = "0.0.1"
+source = "git+https://github.com/Remade-With-Rust/remade_ffmpeg_rs#54df3fe0abfc6bda8589010d27102ecf81b1d106"
+dependencies = [
+ "rff-core",
+]
+
+[[package]]
+name = "rff-codec-jpeg"
+version = "0.0.1"
+source = "git+https://github.com/Remade-With-Rust/remade_ffmpeg_rs#54df3fe0abfc6bda8589010d27102ecf81b1d106"
+dependencies = [
+ "jpeg-decoder",
+ "jpeg-encoder",
+ "rff-codec",
+ "rff-core",
+]
+
+[[package]]
+name = "rff-core"
+version = "0.0.1"
+source = "git+https://github.com/Remade-With-Rust/remade_ffmpeg_rs#54df3fe0abfc6bda8589010d27102ecf81b1d106"
+dependencies = [
+ "thiserror 2.0.19",
 ]
 
 [[package]]

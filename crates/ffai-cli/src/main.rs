@@ -144,6 +144,30 @@ enum Cmd {
         #[arg(long)]
         watch: Option<f64>,
     },
+    /// Detect objects in an image (Diana)
+    Detect {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(long)]
+        engine: Option<String>,
+        /// Minimum confidence to report
+        #[arg(long, default_value_t = 0.25)]
+        conf: f32,
+        /// Class-wise NMS IoU. Omitted by default: the one2one head is
+        /// NMS-free by construction, so suppression would only ever drop
+        /// legitimately overlapping objects.
+        #[arg(long)]
+        iou: Option<f32>,
+        /// Maximum detections reported
+        #[arg(long, default_value_t = 300)]
+        max_det: usize,
+        /// Restrict to these class ids, repeatable; empty = every class
+        #[arg(long)]
+        classes: Vec<u32>,
+        /// Write to a file; a `.jsonl` extension selects JSON lines
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Caption / describe an image (Argus)
     Caption {
         #[arg(short, long)]
@@ -187,6 +211,7 @@ fn build_registry() -> EngineRegistry {
     let mut reg = EngineRegistry::new();
     ffai_mercury::register(&mut reg);
     ffai_carmenta::register(&mut reg);
+    ffai_diana::register(&mut reg);
     ffai_argus::register(&mut reg);
     reg
 }
@@ -442,6 +467,64 @@ fn main() -> Result<()> {
                 eprint!("{}", ffai_carmenta::profile::profile().report());
             }
         }
+        Cmd::Detect { input, engine, conf, iou, max_det, classes, output } => {
+            let image = ffai_media::load_image(&input)?;
+            let eng = reg.detect(engine.as_deref())?;
+            let opts = DetectOptions {
+                confidence: conf,
+                max_detections: max_det,
+                iou,
+                classes,
+            };
+            let out = eng.detect(&image, &opts)?;
+            let names = eng.class_names();
+            let label = |id: u32| -> &str {
+                names.get(id as usize).map(String::as_str).unwrap_or("?")
+            };
+            let body = match output.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                Some("jsonl") => out
+                    .detections
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "{{\"x0\":{:.2},\"y0\":{:.2},\"x1\":{:.2},\"y1\":{:.2},\
+                             \"class\":{},\"name\":\"{}\",\"confidence\":{:.5}}}",
+                            d.x0,
+                            d.y0,
+                            d.x1,
+                            d.y1,
+                            d.class_id,
+                            label(d.class_id),
+                            d.confidence
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => out
+                    .detections
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "{:<16} {:.3}  [{:.1}, {:.1}, {:.1}, {:.1}]",
+                            label(d.class_id),
+                            d.confidence,
+                            d.x0,
+                            d.y0,
+                            d.x1,
+                            d.y1
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, format!("{body}\n"))?;
+                    println!("wrote {} ({} detections)", path.display(), out.detections.len());
+                }
+                None => println!("{body}"),
+            }
+        }
         Cmd::Caption { input, prompt, engine } => {
             let image = ffai_media::load_image(&input)?;
             let opts = VlmOptions { prompt, max_new_tokens: None };
@@ -450,10 +533,10 @@ fn main() -> Result<()> {
         }
         Cmd::Bench { task, corpus, refs, engine, only, baseline_only, runs, ledger } => {
             let task = Task::from_str(&task).map_err(anyhow::Error::msg)?;
-            if !matches!(task, Task::Asr | Task::Ocr | Task::Tts) {
+            if !matches!(task, Task::Asr | Task::Ocr | Task::Tts | Task::Detect) {
                 anyhow::bail!(
-                    "`ffai bench {task}` is not wired yet — asr, ocr and tts are the live bench \
-                     verticals; vlm follows its engine (see ROADMAP.md)"
+                    "`ffai bench {task}` is not wired yet — asr, ocr, tts and detect are the \
+                     live bench verticals; vlm follows its engine (see ROADMAP.md)"
                 );
             }
             let task_name = task.to_string();
@@ -494,6 +577,7 @@ fn main() -> Result<()> {
                 Task::Asr => ffai_bench::runner::run_asr(&reg, &cfg)?,
                 Task::Ocr => ffai_bench::runner::run_ocr(&reg, &cfg)?,
                 Task::Tts => ffai_bench::tts::run_tts(&reg, &cfg)?,
+                Task::Detect => ffai_bench::runner::run_detect(&reg, &cfg)?,
                 _ => unreachable!("guarded above"),
             };
             print!("{}", ffai_bench::runner::render(&record));

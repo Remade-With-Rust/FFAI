@@ -79,23 +79,106 @@ pub fn save_wav(path: &Path, audio: &AudioBuffer) -> Result<()> {
     Ok(())
 }
 
-/// Decode a still image. PNG today (Carmenta M-C1); JPEG/WebP follow.
+/// Decode a still image — PNG and JPEG today; WebP/AVIF/GIF follow.
 ///
-/// Backend note, honestly: this uses the pure-Rust `png` crate as an
-/// interim. Principle 7 routes codec work through remade_ffmpeg_rs, but
-/// rff's PNG decoder (`rff-codec-png`) is not yet published and is coupled
-/// to rff's codec registry; when it publishes, the backend swaps behind this
-/// unchanged signature. Pure-Rust either way — the promise that cannot wait
-/// is Principle 1, and it doesn't.
+/// **JPEG comes from home** (Principle 7): it decodes through
+/// `rff-codec-jpeg` in our own pure-Rust ffmpeg, on rff's `CodecRegistry`
+/// seam, so improvements to rff land here without a change on this side.
+///
+/// **PNG has not moved yet, and the reason is measured rather than
+/// cautious.** `rff-codec-png` expands grayscale to packed `Rgb24`, while
+/// this path returns `Gray8` — and Carmenta's OCR consumes `load_image`, so
+/// the swap changes which preprocessing branch every grayscale page takes.
+/// That is a behavioural change and it needs Carmenta's corpus gates green,
+/// not an assumption that it is equivalent. JPEG was safe to move first
+/// because nothing decoded JPEG before, so there was no behaviour to break.
+///
+/// One consequence of depending on rff, recorded so it is not rediscovered:
+/// rff is not on crates.io, and `cargo publish` refuses a git dependency
+/// ("all dependencies must have a version requirement specified when
+/// publishing"). Any FFai crate downstream of this one therefore cannot be
+/// published until rff publishes — a deliberate trade of distribution for
+/// owning the stack.
 pub fn load_image(path: &Path) -> Result<ImageBuffer> {
-    use ffai_core::types::PixelFormat;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-    if ext != "png" {
-        return Err(Error::Media(format!(
-            "`.{ext}` decode is not wired yet — PNG is the Carmenta M-C1 format; JPEG/WebP \
-             arrive with the rff image decoders. Convert with `ffmpeg -i in.{ext} out.png`"
-        )));
+    match ext.as_str() {
+        "png" => load_png(path),
+        "jpg" | "jpeg" => load_jpeg(path),
+        other => Err(Error::Media(format!(
+            "`.{other}` decode is not wired yet — PNG and JPEG are supported; WebP/AVIF \
+             arrive with the rff image decoders. Convert with `ffmpeg -i in.{other} out.png`"
+        ))),
     }
+}
+
+/// JPEG, decoded by **our own ffmpeg** — `rff-codec-jpeg` through rff's
+/// codec registry, the same path `rff` itself takes.
+///
+/// Going through `CodecRegistry` rather than calling the decoder directly is
+/// deliberate: it is the seam every other rff codec arrives on, so adding
+/// WebP/AVIF/GIF later is a `register()` line rather than another bespoke
+/// function. rff always hands back packed `Rgb24` for JPEG (it expands
+/// grayscale itself), so callers see one layout regardless of how the file
+/// was encoded.
+fn load_jpeg(path: &Path) -> Result<ImageBuffer> {
+    use ffai_core::types::PixelFormat;
+    use rff_codec::CodecRegistry;
+    use rff_core::{CodecId, Frame, Packet};
+
+    let data = std::fs::read(path).map_err(|e| Error::Media(format!("open failed: {e}")))?;
+
+    let mut registry = CodecRegistry::new();
+    rff_codec_jpeg::register(&mut registry);
+    let mut decoder = registry
+        .find_decoder(CodecId::Jpeg)
+        .map_err(|e| Error::Media(format!("rff jpeg decoder: {e}")))?;
+
+    // A still image is one packet: JPEG is self-describing, so the file IS
+    // the packet (rff's own framing for still-image codecs).
+    let packet = Packet { data, ..Default::default() };
+    decoder.send_packet(&packet).map_err(|e| Error::Media(format!("JPEG decode: {e}")))?;
+    decoder.flush();
+    let frame = decoder.receive_frame().map_err(|e| Error::Media(format!("JPEG decode: {e}")))?;
+
+    let Frame::Video(v) = frame else {
+        return Err(Error::Media("rff returned an audio frame for a JPEG".into()));
+    };
+    let format = match v.format {
+        rff_core::PixelFormat::Rgb24 => PixelFormat::Rgb8,
+        rff_core::PixelFormat::Rgba => PixelFormat::Rgba8,
+        other => {
+            return Err(Error::Media(format!(
+                "rff decoded this JPEG as {other:?}; ffai-media handles packed RGB/RGBA"
+            )))
+        }
+    };
+    let bpp = if format == PixelFormat::Rgba8 { 4 } else { 3 };
+    let (w, h) = (v.width as usize, v.height as usize);
+    let plane = v
+        .planes
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Media("rff video frame has no planes".into()))?;
+    let stride = v.strides.first().copied().unwrap_or(w * bpp);
+
+    // Honour the stride rather than assuming it equals the row: rff states
+    // it "may exceed width for alignment", and a packed codec today can
+    // become an aligned one tomorrow without changing this signature.
+    let data = if stride == w * bpp {
+        plane
+    } else {
+        let mut packed = Vec::with_capacity(w * h * bpp);
+        for row in 0..h {
+            let start = row * stride;
+            packed.extend_from_slice(&plane[start..start + w * bpp]);
+        }
+        packed
+    };
+    Ok(ImageBuffer { width: v.width, height: v.height, format, data })
+}
+
+fn load_png(path: &Path) -> Result<ImageBuffer> {
+    use ffai_core::types::PixelFormat;
     let file = std::fs::File::open(path).map_err(|e| Error::Media(format!("open failed: {e}")))?;
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder.read_info().map_err(|e| Error::Media(format!("PNG header: {e}")))?;

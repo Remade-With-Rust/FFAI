@@ -1,0 +1,31 @@
+# YOLO26m, converted for Diana's candle port.
+#
+# The m tier is where the scale row stops being a width multiplier. Three
+# things change that n and s never exercised, and only one of them is
+# obvious:
+#
+#   1. `max_channels` drops to 512 and is applied BEFORE the width scale,
+#      so the deep layers are not simply wider than s.
+#   2. `depth` is still 0.50, so repeat counts match n/s — l/x are where
+#      that changes.
+#   3. **Every `C3k2` becomes a C3k**, regardless of the YAML flag.
+#      `parse_model` sets `args[3] = True` for scales in "mlx", and layers
+#      2 and 4 are the only two carrying `False`. That is 20 extra tensors
+#      against n's 204, and no amount of testing n and s could have found
+#      it — see `config::Dims::c3k`.
+#
+# LICENSE: the WEIGHTS are AGPL-3.0 (Ultralytics). FFai never fetches, hosts
+# or redistributes them — convert your own:
+#
+#   .venv-diana/Scripts/python.exe tools/diana_convert.py --model yolo26m
+name = "yolo26m-diana"
+task = "detect"
+description = "YOLO26m (Ultralytics) converted to safetensors — fused, one2one head only"
+license = "AGPL-3.0 (Ultralytics YOLO26 weights — NOT redistributed; user-converted)"
+
+[[files]]
+name = "yolo26m-diana.safetensors"
+sha256 = "8f9f2f9f2699d0b541eb3e5487640447a6bc016c52f1a7715577797fd1afcc41"
+
+[[files]]
+name = "yolo26m-diana.json"

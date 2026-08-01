@@ -27,11 +27,15 @@ use crate::speed::{best_of_n, real_time_factor};
 /// Which metric the quality gate verdicts on. Both are always recorded; this
 /// only chooses the headline. ASR gates on WER (the field's standard); OCR
 /// gates on CER — character accuracy is what OCR benchmarks rank by, and word
-/// boundaries in OCR output are partly a segmentation artifact.
+/// boundaries in OCR output are partly a segmentation artifact. Detection
+/// gates on `1 − mAP@0.5` — the gate machinery is written lower-is-better, so
+/// the mAP is folded into an error-style "miss" metric rather than growing a
+/// second comparison direction; both raw mAP fields ride in the ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QualityMetric {
     Wer,
     Cer,
+    Map50,
 }
 
 /// Parity band for the quality gate: engine WER may exceed the best
@@ -116,6 +120,8 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
                     notes: vec![e.to_string()],
                     peak_bytes: None,
                     steady_bytes: None,
+                    map50: None,
+                    map5095: None,
                 });
             }
         }
@@ -208,6 +214,8 @@ pub fn run_ocr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
                     notes: vec![e.to_string()],
                     peak_bytes: None,
                     steady_bytes: None,
+                    map50: None,
+                    map5095: None,
                 });
             }
         }
@@ -238,6 +246,392 @@ pub fn run_ocr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     };
     append(&cfg.ledger, &record)?;
     Ok(record)
+}
+
+/// Run a detection bench end-to-end and append the record to the ledger.
+///
+/// Differences from OCR, all deliberate:
+/// - **The media unit is the image.** `media_secs` carries the image count,
+///   so the RTF fields read as images/second. Same schema, task-scoped
+///   meaning, labeled per task by [`render`].
+/// - **Scoring is the mAP proxy in [`crate::detect`]** — ground truth is a
+///   JSON boxes file per image, the hypothesis is the adapter's `text` field
+///   carrying a JSON detections payload, and the whole batch/timing/memory
+///   contract of [`run_reference`] is reused unchanged around it.
+/// - **The quality gate verdicts on `1 − mAP@0.5`** (see [`QualityMetric`]);
+///   `mAP@0.5:0.95` is recorded beside it so neither is quoted alone.
+/// - **There is no in-process engine path yet.** Diana's first engine lands
+///   at M-D1; until then `--baseline-only` is the only honest invocation and
+///   an engine request fails loudly rather than pretending.
+pub fn run_detect(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
+    let manifest = Manifest::load(&cfg.corpus)?;
+    if manifest.task != "detect" {
+        return Err(Error::Other(format!(
+            "corpus `{}` is a {} corpus, not detect",
+            manifest.name, manifest.task
+        )));
+    }
+    let bad = manifest.verify()?;
+    if !bad.is_empty() {
+        return Err(Error::Other(format!(
+            "corpus verification failed for clips {bad:?} — bytes on disk don't match the \
+             manifest's pinned SHA-256; results on drifted data are not valid claims"
+        )));
+    }
+    let holdout: Vec<&ClipEntry> = manifest.holdout().collect();
+    if holdout.is_empty() {
+        return Err(Error::Other("corpus has no holdout clips — nothing to measure".into()));
+    }
+    let paths: Vec<PathBuf> = holdout.iter().map(|c| manifest.clip_path(c)).collect();
+    let images = holdout.len() as f64;
+
+    let mut references = Vec::new();
+    for spec in &cfg.references {
+        eprintln!("running reference `{}` over {} images ...", spec.name, holdout.len());
+        match run_detect_reference(spec, &manifest, &holdout, &paths, images, cfg.runs) {
+            Ok(summary) => references.push(summary),
+            Err(e) => {
+                eprintln!("  reference `{}` failed: {e}", spec.name);
+                references.push(RunSummary {
+                    name: spec.name.clone(),
+                    version: spec.version(),
+                    command: Some(spec.command_line()),
+                    config: decode_config(spec.config.as_deref()),
+                    wer: None,
+                    cer: None,
+                    map50: None,
+                    map5095: None,
+                    rtf_warm: None,
+                    rtf_e2e: None,
+                    load_secs: None,
+                    wall_secs: None,
+                    media_secs: Some(images),
+                    clips_ok: 0,
+                    clips_total: holdout.len(),
+                    notes: vec![e.to_string()],
+                    peak_bytes: None,
+                    steady_bytes: None,
+                });
+            }
+        }
+    }
+
+    let engine_summary = if cfg.skip_engine {
+        None
+    } else {
+        Some(run_detect_engine(reg, cfg.engine.as_deref(), &manifest, &holdout, images, cfg.runs)?)
+    };
+
+    let mut gates = GateReport::new();
+    fill_gates(&mut gates, engine_summary.as_ref(), &references, QualityMetric::Map50);
+
+    let (id, appended_at) = BenchRecord::now_id("detect");
+    let record = BenchRecord {
+        schema: LEDGER_SCHEMA,
+        id,
+        task: "detect".into(),
+        corpus: manifest.name.clone(),
+        corpus_manifest_hash: manifest.manifest_hash(),
+        engine: engine_summary,
+        references,
+        gates,
+        environment: Environment::capture(),
+        notes: String::new(),
+        appended_at,
+    };
+    append(&cfg.ledger, &record)?;
+    Ok(record)
+}
+
+/// [`run_reference`] with detection scoring in place of text scoring: same
+/// batch contract, same fastest-run-keeps-its-own-timings rule, same memory
+/// sampling — the adapter's `text` field carries a JSON detections payload
+/// scored by [`crate::detect`] instead of by edit distance.
+fn run_detect_reference(
+    spec: &ReferenceSpec,
+    manifest: &Manifest,
+    holdout: &[&ClipEntry],
+    paths: &[PathBuf],
+    images: f64,
+    runs: usize,
+) -> Result<RunSummary> {
+    let mut summary = RunSummary {
+        name: spec.name.clone(),
+        version: spec.version(),
+        command: Some(spec.command_line()),
+        config: decode_config(spec.config.as_deref()),
+        wer: None,
+        cer: None,
+        map50: None,
+        map5095: None,
+        rtf_warm: None,
+        rtf_e2e: None,
+        load_secs: None,
+        wall_secs: None,
+        media_secs: Some(images),
+        clips_ok: 0,
+        clips_total: holdout.len(),
+        notes: Vec::new(),
+        peak_bytes: None,
+        steady_bytes: None,
+    };
+
+    if !spec.supports_batch() {
+        return Err(Error::Other(format!(
+            "reference `{}` declares no batch_command — per-clip invocation would put \
+             interpreter startup and model load inside every timed run, which is not a \
+             comparable measurement (see crates/ffai-bench/src/reference.rs)",
+            spec.name
+        )));
+    }
+
+    let mut best: Option<(f64, crate::reference::BatchResult)> = None;
+    for _ in 0..runs.max(1) {
+        let started = std::time::Instant::now();
+        let batch = spec.run_batch(paths)?;
+        let wall = started.elapsed().as_secs_f64();
+        if best.as_ref().is_none_or(|(prev, _)| wall < *prev) {
+            best = Some((wall, batch));
+        }
+    }
+    let (wall_secs, batch) = best.expect("at least one run");
+
+    let mut acc = crate::detect::MapAccumulator::new();
+    for (clip, path) in holdout.iter().zip(paths) {
+        let Some(truth_text) = manifest.ground_truth(clip)? else {
+            return Err(Error::Other(format!(
+                "clip `{}` has no ground_truth file — a detect corpus without boxes cannot \
+                 be scored",
+                clip.id
+            )));
+        };
+        let truths = crate::detect::parse_ground_truth(&truth_text)
+            .map_err(|e| Error::Other(format!("ground truth for `{}`: {e}", clip.id)))?;
+        match batch.text_for(path) {
+            Some(payload) => match crate::detect::parse_detections(payload) {
+                Ok(dets) => {
+                    summary.clips_ok += 1;
+                    acc.add_image(&truths, &dets);
+                }
+                Err(e) => summary.notes.push(format!("{}: bad payload: {e}", clip.id)),
+            },
+            None => summary.notes.push(format!("{}: no result returned", clip.id)),
+        }
+    }
+    summary.map50 = acc.map50();
+    summary.map5095 = acc.map5095();
+
+    let mut times: Vec<f64> = batch.clips.iter().filter_map(|c| c.transcribe_secs).collect();
+    if !times.is_empty() {
+        times.sort_by(|a, b| a.total_cmp(b));
+        let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
+        summary.notes.push(format!(
+            "per-image latency p50 {:.0} ms / p95 {:.0} ms over {} images (adapter-timed, warm)",
+            pct(0.50) * 1000.0,
+            pct(0.95) * 1000.0,
+            times.len()
+        ));
+    }
+    summary.load_secs = batch.load_secs;
+    summary.wall_secs = Some(wall_secs);
+    summary.rtf_e2e = Some(real_time_factor(images, wall_secs));
+    summary.rtf_warm = batch
+        .transcribe_secs()
+        .map(|t| real_time_factor(images, t))
+        .or(summary.rtf_e2e);
+    summary.peak_bytes = batch.peak_bytes;
+    summary.steady_bytes = batch.steady_bytes;
+    Ok(summary)
+}
+
+/// The in-process detection engine's run.
+///
+/// Same contract as [`run_ocr_engine`]: images decoded once outside the
+/// timed region, one untimed warm-up whose cost becomes `load_secs`, memory
+/// sampled on the same 20 ms cadence as the reference tree, best-of-N over
+/// the whole corpus.
+///
+/// **The confidence threshold is pinned to the references', not the
+/// engine's default.** `DetectOptions::default()` uses 0.25 — the value a
+/// person looking at boxes wants — but mAP needs the low-confidence tail,
+/// and the reference adapters run at `--conf 0.001 --max-dets 100`. Scoring
+/// our engine at 0.25 against references at 0.001 would report a recall
+/// collapse that is purely a configuration difference, which is the M0
+/// unpinned-decode defect in its detection costume.
+fn run_detect_engine(
+    reg: &EngineRegistry,
+    engine: Option<&str>,
+    manifest: &Manifest,
+    holdout: &[&ClipEntry],
+    images: f64,
+    runs: usize,
+) -> Result<RunSummary> {
+    use ffai_core::engine::DetectOptions;
+
+    let det = reg.detect(engine)?;
+    let opts = DetectOptions {
+        confidence: 0.001,
+        max_detections: crate::detect::MAX_DETS,
+        iou: None,
+        classes: Vec::new(),
+    };
+    let mut summary = RunSummary {
+        name: det.info().name,
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        command: None,
+        config: {
+            let mut c = std::collections::BTreeMap::new();
+            // BOTH the tier and the geometry are part of the comparison key,
+            // so both are DERIVED from the engine's own name rather than
+            // hardcoded. `yolo26s` must be judged against the s references,
+            // not the n ones, and a rectangular engine against rectangular
+            // references — hardcoding either while the engine ran something
+            // else is precisely the M-D0 defect: two rows that look matched
+            // and are not.
+            let name = det.info().name;
+            let geometry = if name.ends_with("-square") { "sq" } else { "rect" };
+            let tier = name.trim_end_matches("-square").to_string();
+            c.insert(DECODE_KEY.to_string(), format!("{tier}/e2e-640{geometry}"));
+            c
+        },
+        wer: None,
+        cer: None,
+        map50: None,
+        map5095: None,
+        rtf_warm: None,
+        rtf_e2e: None,
+        load_secs: None,
+        wall_secs: None,
+        media_secs: Some(images),
+        clips_ok: 0,
+        clips_total: holdout.len(),
+        notes: Vec::new(),
+        peak_bytes: None,
+        steady_bytes: None,
+    };
+
+    let mut decoded = Vec::new();
+    for clip in holdout {
+        match ffai_media::load_image(&manifest.clip_path(clip)) {
+            Ok(image) => decoded.push((*clip, image)),
+            Err(e) => summary.notes.push(format!("{}: {e}", clip.id)),
+        }
+    }
+    if decoded.is_empty() {
+        summary
+            .notes
+            .push("no holdout image could be decoded — engine run not attempted".to_string());
+        return Ok(summary);
+    }
+
+    if let Some((_, image)) = decoded.first() {
+        let t0 = std::time::Instant::now();
+        if let Err(e) = det.detect(image, &opts) {
+            summary.notes.push(format!("warm-up failed: {e}"));
+        }
+        summary.load_secs = Some(t0.elapsed().as_secs_f64());
+    }
+
+    let sampling = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let our_samples = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let sampler = {
+        let (sampling, out) = (sampling.clone(), our_samples.clone());
+        std::thread::spawn(move || {
+            while sampling.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(b) = crate::footprint::current_self()
+                    && let Ok(mut v) = out.lock()
+                {
+                    v.push(b.0);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        })
+    };
+
+    let mut results: Vec<(String, Vec<crate::detect::Detection>)> = Vec::new();
+    let mut per_image_secs: Vec<f64> = Vec::new();
+    let mut first_error = None;
+    let stats = best_of_n(runs, || {
+        results.clear();
+        per_image_secs.clear();
+        for (clip, image) in &decoded {
+            let t = std::time::Instant::now();
+            match det.detect(image, &opts) {
+                Ok(out) => {
+                    per_image_secs.push(t.elapsed().as_secs_f64());
+                    results.push((
+                        clip.id.clone(),
+                        out.detections
+                            .iter()
+                            .map(|d| crate::detect::Detection {
+                                bbox: [d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64],
+                                class: d.class_id as i64,
+                                confidence: d.confidence as f64,
+                            })
+                            .collect(),
+                    ));
+                }
+                Err(e) => {
+                    first_error.get_or_insert(format!("{}: {e}", clip.id));
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    });
+
+    sampling.store(false, std::sync::atomic::Ordering::Relaxed);
+    sampler.join().ok();
+    summary.steady_bytes = our_samples.lock().ok().and_then(|mut v| {
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_unstable();
+        Some(v[v.len() / 2])
+    });
+    summary.peak_bytes = crate::footprint::peak_self().map(|p| p.0);
+    let decoded_bytes: u64 = decoded.iter().map(|(_, i)| i.data.len() as u64).sum();
+    if summary.peak_bytes.is_some() && decoded_bytes > 0 {
+        summary.notes.push(format!(
+            "peak includes {:.1} MiB of pre-decoded images held by the harness",
+            decoded_bytes as f64 / (1024.0 * 1024.0)
+        ));
+    }
+
+    match stats {
+        Ok(stats) => {
+            summary.clips_ok = results.len();
+            summary.wall_secs = Some(stats.best_secs);
+            summary.rtf_warm = Some(real_time_factor(images, stats.best_secs));
+            summary.rtf_e2e = Some(real_time_factor(
+                images,
+                stats.best_secs + summary.load_secs.unwrap_or(0.0),
+            ));
+            let mut acc = crate::detect::MapAccumulator::new();
+            for (id, dets) in &results {
+                if let Some(clip) = holdout.iter().find(|c| &c.id == id)
+                    && let Some(truth) = manifest.ground_truth(clip)?
+                {
+                    acc.add_image(&crate::detect::parse_ground_truth(&truth)?, dets);
+                }
+            }
+            summary.map50 = acc.map50();
+            summary.map5095 = acc.map5095();
+            if !per_image_secs.is_empty() {
+                let mut t = per_image_secs.clone();
+                t.sort_by(|a, b| a.total_cmp(b));
+                let pct = |p: f64| t[((t.len() - 1) as f64 * p).round() as usize];
+                summary.notes.push(format!(
+                    "per-image latency p50 {:.0} ms / p95 {:.0} ms over {} images (warm)",
+                    pct(0.50) * 1000.0,
+                    pct(0.95) * 1000.0,
+                    t.len()
+                ));
+            }
+        }
+        Err(e) => summary.notes.push(first_error.unwrap_or_else(|| e.to_string())),
+    }
+    Ok(summary)
 }
 
 /// The in-process OCR engine's run. Compact by design: the memory sampler and
@@ -280,6 +674,8 @@ fn run_ocr_engine(
         notes: Vec::new(),
         peak_bytes: None,
         steady_bytes: None,
+        map50: None,
+        map5095: None,
     };
 
     // Decode images ONCE, outside the timed region — same rationale as ASR:
@@ -315,10 +711,10 @@ fn run_ocr_engine(
         let (sampling, out) = (sampling.clone(), our_samples.clone());
         std::thread::spawn(move || {
             while sampling.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(b) = crate::footprint::current_self() {
-                    if let Ok(mut v) = out.lock() {
-                        v.push(b.0);
-                    }
+                if let Some(b) = crate::footprint::current_self()
+                    && let Ok(mut v) = out.lock()
+                {
+                    v.push(b.0);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -373,11 +769,11 @@ fn run_ocr_engine(
             ));
             let (mut wers, mut cers) = (Vec::new(), Vec::new());
             for (id, text) in &texts {
-                if let Some(clip) = holdout.iter().find(|c| &c.id == id) {
-                    if let Some(truth) = manifest.ground_truth(clip)? {
-                        wers.push(wer_with(&truth, text, Mode::Ocr));
-                        cers.push(cer_with(&truth, text, Mode::Ocr));
-                    }
+                if let Some(clip) = holdout.iter().find(|c| &c.id == id)
+                    && let Some(truth) = manifest.ground_truth(clip)?
+                {
+                    wers.push(wer_with(&truth, text, Mode::Ocr));
+                    cers.push(cer_with(&truth, text, Mode::Ocr));
                 }
             }
             summary.wer = mean(&wers);
@@ -420,6 +816,8 @@ fn run_reference(
         notes: Vec::new(),
         peak_bytes: None,
         steady_bytes: None,
+        map50: None,
+        map5095: None,
     };
 
     if !spec.supports_batch() {
@@ -533,6 +931,8 @@ fn run_engine(
         notes: Vec::new(),
         peak_bytes: None,
         steady_bytes: None,
+        map50: None,
+        map5095: None,
     };
 
     // Decode audio ONCE, outside the timed region: every implementation gets
@@ -572,10 +972,10 @@ fn run_engine(
         let (sampling, out) = (sampling.clone(), our_samples.clone());
         std::thread::spawn(move || {
             while sampling.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(b) = crate::footprint::current_self() {
-                    if let Ok(mut v) = out.lock() {
-                        v.push(b.0);
-                    }
+                if let Some(b) = crate::footprint::current_self()
+                    && let Ok(mut v) = out.lock()
+                {
+                    v.push(b.0);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -668,10 +1068,12 @@ pub(crate) fn fill_gates(
     let metric_of = |r: &RunSummary| match quality {
         QualityMetric::Wer => r.wer,
         QualityMetric::Cer => r.cer,
+        QualityMetric::Map50 => r.map50.map(|m| 1.0 - m),
     };
     let metric_label = match quality {
         QualityMetric::Wer => "WER",
         QualityMetric::Cer => "CER",
+        QualityMetric::Map50 => "1-mAP50",
     };
     let Some(eng) = engine else {
         for kind in GateKind::ALL {
@@ -870,8 +1272,12 @@ fn mean(xs: &[f64]) -> Option<f64> {
 pub fn render(record: &BenchRecord) -> String {
     // The media unit and rate labels are task-scoped: ASR media is seconds of
     // audio and the rate is ×realtime; OCR media is pages and the rate is
-    // pages/second. Same ledger fields either way (see `run_ocr`).
+    // pages/second; detect media is images and the rate is images/second, with
+    // the two quality columns carrying mAP instead of error rates (higher is
+    // better — the column heads say which). Same ledger fields either way
+    // (see `run_ocr` / `run_detect`).
     let ocr = record.task == "ocr";
+    let detect = record.task == "detect";
     let media = record
         .engine
         .as_ref()
@@ -884,26 +1290,45 @@ pub fn render(record: &BenchRecord) -> String {
         record.id,
         record.corpus,
         &record.corpus_manifest_hash[..12.min(record.corpus_manifest_hash.len())],
-        if ocr { format!("{media:.0} pages") } else { format!("{media:.1}s audio") },
+        if ocr {
+            format!("{media:.0} pages")
+        } else if detect {
+            format!("{media:.0} images")
+        } else {
+            format!("{media:.1}s audio")
+        },
     ));
     out.push_str(&format!(
         "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
         "IMPLEMENTATION",
-        "WER%",
-        "CER%",
-        if ocr { "PG/S_WARM" } else { "xRT_WARM" },
-        if ocr { "PG/S_E2E" } else { "xRT_E2E" },
+        if detect { "mAP50" } else { "WER%" },
+        if detect { "mAP5095" } else { "CER%" },
+        if ocr {
+            "PG/S_WARM"
+        } else if detect {
+            "IMG/S_WARM"
+        } else {
+            "xRT_WARM"
+        },
+        if ocr {
+            "PG/S_E2E"
+        } else if detect {
+            "IMG/S_E2E"
+        } else {
+            "xRT_E2E"
+        },
         "LOAD_S",
         "PEAK_MiB",
         "CLIPS"
     ));
-    let rate = |r: f64| if ocr { format!("{r:.2}") } else { format!("{r:.1}x") };
+    let rate = |r: f64| if ocr || detect { format!("{r:.2}") } else { format!("{r:.1}x") };
     let mut row = |s: &RunSummary, marker: &str| {
+        let (q1, q2) = if detect { (s.map50, s.map5095) } else { (s.wer, s.cer) };
         out.push_str(&format!(
             "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
             format!("{marker}{}", s.name),
-            s.wer.map(|w| format!("{:.2}", w * 100.0)).unwrap_or_else(|| "-".into()),
-            s.cer.map(|c| format!("{:.2}", c * 100.0)).unwrap_or_else(|| "-".into()),
+            q1.map(|w| format!("{:.2}", w * 100.0)).unwrap_or_else(|| "-".into()),
+            q2.map(|c| format!("{:.2}", c * 100.0)).unwrap_or_else(|| "-".into()),
             s.rtf_warm.map(&rate).unwrap_or_else(|| "-".into()),
             s.rtf_e2e.map(&rate).unwrap_or_else(|| "-".into()),
             s.load_secs.map(|l| format!("{l:.2}")).unwrap_or_else(|| "-".into()),
@@ -1083,6 +1508,8 @@ mod gate_split_tests {
             notes: Vec::new(),
             peak_bytes: None,
             steady_bytes: None,
+            map50: None,
+            map5095: None,
         }
     }
 

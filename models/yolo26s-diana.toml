@@ -1,0 +1,24 @@
+# YOLO26s, converted for Diana's candle port.
+#
+# Same conversion, same graph code, one different scale row — `s` doubles
+# every channel width against `n` at the same depth. Nothing in
+# `ffai-diana` is tier-specific: widths and repeat counts are derived from
+# the checkpoint's own scale (see `config::Dims`), which is verified against
+# what `yolo26n.pt` and `yolo26s.pt` actually contain rather than against a
+# formula read out of the reference.
+#
+# LICENSE: the WEIGHTS are AGPL-3.0 (Ultralytics). FFai never fetches, hosts
+# or redistributes them — convert your own:
+#
+#   .venv-diana/Scripts/python.exe tools/diana_convert.py --model yolo26s
+name = "yolo26s-diana"
+task = "detect"
+description = "YOLO26s (Ultralytics) converted to safetensors — fused, one2one head only"
+license = "AGPL-3.0 (Ultralytics YOLO26 weights — NOT redistributed; user-converted)"
+
+[[files]]
+name = "yolo26s-diana.safetensors"
+sha256 = "c9aa23f38f1fbdb9684a608b4eb8751f45a1826dfc1853e9f52cb1a642019478"
+
+[[files]]
+name = "yolo26s-diana.json"
