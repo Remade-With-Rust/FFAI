@@ -21,6 +21,7 @@ png = { workspace = true }
 rff-core = { workspace = true }
 rff-codec = { workspace = true }
 rff-codec-jpeg = { workspace = true }
+rff-codec-png = { workspace = true }
 
 # DEFAULT CODEC BACKEND (Phase 1): remade_ffmpeg_rs — our own pure-Rust ffmpeg
 # (https://github.com/Remade-With-Rust/remade_ffmpeg_rs, the `rff-*` workspace).

@@ -64,6 +64,7 @@ png = "0.17"
 rff-core = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
 rff-codec = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
 rff-codec-jpeg = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
+rff-codec-png = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

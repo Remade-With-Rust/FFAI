@@ -1190,12 +1190,13 @@ dependencies = [
  "png",
  "rff-codec",
  "rff-codec-jpeg",
+ "rff-codec-png",
  "rff-core",
 ]
 
 [[package]]
 name = "ffai-mercury"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "candle-nn",
  "candle-transformers",
@@ -3234,6 +3235,16 @@ source = "git+https://github.com/Remade-With-Rust/remade_ffmpeg_rs#54df3fe0abfc6
 dependencies = [
  "jpeg-decoder",
  "jpeg-encoder",
+ "rff-codec",
+ "rff-core",
+]
+
+[[package]]
+name = "rff-codec-png"
+version = "0.0.1"
+source = "git+https://github.com/Remade-With-Rust/remade_ffmpeg_rs#54df3fe0abfc6bda8589010d27102ecf81b1d106"
+dependencies = [
+ "png",
  "rff-codec",
  "rff-core",
 ]
