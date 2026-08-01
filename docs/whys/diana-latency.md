@@ -727,3 +727,64 @@ Two consequences:
 The skill's own words, earned again: *"a roofline is only valid for the SHAPE
 it was measured at."* Recorded rather than quietly rewritten, because the
 overstated version was committed and would otherwise stand.
+
+## ★★★ D3c — THE GAP IS KERNEL WORK, NOT PARALLELISM. The campaign was aimed wrong
+
+Every lever in this descent targeted how work is spread across cores. That
+was the wrong axis, and one measurement never taken settles it: **the
+reference's SERIAL cost.** Our own serial figure had been in hand for days;
+theirs had not.
+
+Torch forced to one thread — verified by occupancy 0.97x, not by the thread
+count it reports, because ultralytics resets `set_num_threads` and both the
+env vars and process affinity failed to stick:
+
+| | serial wall | serial CPU |
+|---|---:|---:|
+| Ultralytics, 1 thread | 129.5 ms | **125.0 ms** |
+| Diana, 1 thread | 278.8 ms | **281.2 ms** |
+
+**We do 2.25x more WORK.** Not spread worse — more of it.
+
+And the parallel picture inverts with it:
+
+| | serial | threads | wall | efficiency |
+|---|---:|---:|---:|---:|
+| Ultralytics | 125 ms | 8 | 47-93 ms | **1.3-2.7x** |
+| Diana | 281 ms | 24 | 114-128 ms | **2.2-2.5x** |
+
+**Our parallel efficiency is as good as theirs or better.** The 1.9x wall gap
+is 2.25x more work, partly clawed back by using three times the threads.
+
+### What this retires
+
+- The whole thread-count / pool-size / batch-dispatch line of enquiry. Those
+  were measured individually and each came back neutral or negative; now
+  there is a reason rather than a coincidence.
+- The earlier inference that "their parallel CPU is ~484-562 ms, so their
+  serial work must be ~340-400 ms." That divided parallel CPU by an assumed
+  efficiency. Their parallel CPU is mostly OVERHEAD: 125 ms of work costing
+  484-562 ms of CPU across 8 threads. **Never infer a serial cost from a
+  parallel one.**
+
+### Re-tested, since a refutation expires when its baseline moves
+
+`target-cpu=native` was pruned earlier on a noisy WALL measurement. Re-tested
+on SERIAL CPU, which isolates kernel quality: baseline 265-281 ms, native
+250-281 ms — roughly **8 %**. Real, small, and nowhere near 2.25x. The prune
+stands, now for a better-founded reason.
+
+### Instrument note
+
+`GetProcessTimes` has a **15.625 ms quantum**: every CPU figure above is a
+multiple of it (281.2 = 18 ticks, 250.0 = 16, 265.6 = 17). At ~280 ms that is
++/-5 %, which is fine for a 2.25x gap and useless for an 8 % one. Any future
+kernel A/B at this scale needs many more images per sample, or a different
+clock.
+
+### Where parity is
+
+Parity needs our serial work at ~125 ms, from 281. That is a **kernel**
+project — fused, vectorised convolution of roughly oneDNN quality — not a
+scheduling one. It is a real target with a known technique, and it is the
+first time in this campaign the target has been the right one.
