@@ -321,8 +321,35 @@ Two candidates were rejected on audit, and the reasons are worth keeping:
 
 | corpus | verdict |
 |---|---|
-| **OmniDocBench** | Purpose-built for document parsing and the better fit on paper — reading order, formulas, tables. **Rejected: no licence stated** in either the HF card data or the README. Same rule that disqualified CRAFT's click-gated weights in §7.1 — an unstated licence is not a permissive one, and a corpus whose terms we cannot name cannot back a public claim. |
+| **OmniDocBench** | Purpose-built for document parsing and the better fit on paper — reading order, formulas, tables. **Rejected 2026-07-30, and the rejection was WRONG — see the correction below.** |
 | **PubLayNet** | Layout only, no text ground truth, and the HF mirrors return 401. |
+
+#### Correction (2026-07-31): the OmniDocBench rejection was wrong, twice
+
+The audit above rejected OmniDocBench for having no stated licence, and gave
+"we redistribute clips in-repo" as why that mattered. Both halves are false.
+
+1. **The licence is stated: Apache-2.0**, in the project's own repository. The
+   check only read the HuggingFace card metadata and the mirror's README, and
+   neither surfaces it. *Check the project, not the mirror.*
+2. **We do not redistribute clips at all.** `/corpora/clips/` is gitignored;
+   manifests and prepare scripts travel, pixels are refetched and hash-verified.
+   The rationale given for why an unstated licence disqualified it therefore
+   did not apply to this repo in the first place — and I had already corrected
+   exactly that sentence for DocLayNet in the same section while leaving this
+   rejection standing on it.
+
+The cost of the error is not small. OmniDocBench is 1,651 pages with layout,
+reading order, text, table (LaTeX and HTML) and formula annotations — it is a
+better fit for M-C3 than anything else audited, it carries M-C5's formula
+ground truth too, and it is **the board on which Baidu's Unlimited-OCR states
+its headline result** (93.23 % v1.5, 93.92 % v1.6). Rejecting it kept every
+Carmenta document number self-referential, which is fine for engineering and
+worthless for a comparable claim.
+
+Recorded rather than quietly reversed: a corpus rejected on a bad audit is
+indistinguishable from a corpus that was never considered, and the next person
+reading the table would have inherited the conclusion without the defect.
 
 A first attempt at this pinned 39 pages covering four of six categories, with
 every financial report in train and every government tender in holdout —
