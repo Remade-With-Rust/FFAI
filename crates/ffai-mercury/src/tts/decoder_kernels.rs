@@ -1305,25 +1305,42 @@ pub fn layer_norm_flat(
     // Each column is independent; write through a raw pointer so the columns
     // can be filled in parallel without slicing a strided view.
     let ptr = out.as_mut_ptr() as usize;
+    // Accumulate in f64 and DIVIDE rather than reciprocal-multiply.
+    //
+    // The first version summed 192 channels in f32 and precomputed
+    // `inv = 1/sqrt(var+eps)` to turn the per-element divide into a multiply.
+    // Both are the obvious micro-optimisations and both change the result:
+    // `x * (1/s)` carries an extra rounding that `x / s` does not. Measured
+    // against the candle path (`examples/quality_attrib.rs`), that kernel was
+    // the SOLE source of the campaign's waveform deviation — 1.368e-4 max,
+    // 2.307e-6 RMS — while the GEMM convs and the A&S GELU were bit-identical.
+    // The +0.09 pp WER shift had been attributed to the GELU on the reasoning
+    // that it was "the only real approximation"; it was this.
+    //
+    // f64 accumulation costs 192 adds per column on a stage that is bandwidth-
+    // bound, and the divide is one per element. Both are gated on the paired
+    // CPU-time A/B rather than assumed free.
+    let eps = eps as f64;
     (0..t).into_par_iter().for_each(|i| {
-        let mut mean = 0f32;
+        let mut mean = 0f64;
         for ci in 0..c {
-            mean += xv[ci * t + i];
+            mean += xv[ci * t + i] as f64;
         }
-        mean /= c as f32;
-        let mut var = 0f32;
+        mean /= c as f64;
+        let mut var = 0f64;
         for ci in 0..c {
-            let d = xv[ci * t + i] - mean;
+            let d = xv[ci * t + i] as f64 - mean;
             var += d * d;
         }
-        var /= c as f32;
-        let inv = 1.0 / (var + eps).sqrt();
+        var /= c as f64;
+        let denom = (var + eps).sqrt();
         // SAFETY: column `i` owns exactly the elements {ci*t + i}, disjoint
         // across i, so no two tasks touch the same address.
         let o = ptr as *mut f32;
         for ci in 0..c {
             unsafe {
-                *o.add(ci * t + i) = (xv[ci * t + i] - mean) * inv * gamma[ci] + beta[ci];
+                *o.add(ci * t + i) =
+                    (((xv[ci * t + i] as f64 - mean) / denom) as f32) * gamma[ci] + beta[ci];
             }
         }
     });
