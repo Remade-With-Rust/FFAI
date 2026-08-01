@@ -48,12 +48,162 @@ pub fn conv3x3(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>) -> Result<Ten
     conv3x3_strided(x, weight, bias, 1)
 }
 
+/// Tile the im2col so each block is consumed by the GEMM while it is still
+/// in cache, instead of materialising the whole `[c_in*9, ohw]` buffer.
+///
+/// **Why**: the untiled buffer is NINE TIMES the convolution's input and is
+/// written to memory and read straight back. Counted, not guessed:
+/// 108.4 MiB per image at the n tier, 216.9 MiB of traffic with the
+/// read-back, 1.94 GiB at the x tier. Memory bandwidth is shared across
+/// cores, so that time does not divide by thread count — which is exactly
+/// why im2col scaled 1.55x on 24 threads while the GEMM scaled 3.33x.
+///
+/// **Tile size targets a BYTE BUDGET, not a tile count**, because the cost
+/// curve is sharp on the small side. Measured on layer-0 shapes
+/// (`w[16,27] x col[27,N]`, best of 9):
+///
+/// | tile N | ms/call | tiles for ohw=102400 | total |
+/// |---:|---:|---:|---:|
+/// | 102400 (untiled) | 1.309 | 1 | 1.309 |
+/// | 10240 | 0.097 | 10 | **0.967** |
+/// | 4855 | 0.215 | 22 | 4.721 |
+/// | 1024 | 0.056 | 100 | 5.560 |
+///
+/// Ten tiles beat one call by 1.35x; twenty-two are 3.6x worse than ten. A
+/// fixed tile COUNT would land on the wrong side of that edge at some layer,
+/// so the budget is in bytes and the count falls out of it.
+///
+/// Tiles are whole output ROWS, which keeps every `ohw` run contiguous and
+/// lets the inner loops stay exactly what the untiled kernel runs.
+fn conv3x3_tiled(
+    x: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    stride: usize,
+) -> Result<Tensor> {
+    let (n, c_in, h, w) = x.dims4()?;
+    let c_out = weight.dim(0)?;
+    let oh = (h + 2 - 3) / stride + 1;
+    let ow = (w + 2 - 3) / stride + 1;
+    let (ohw, k) = (oh * ow, c_in * 9);
+
+    // ~1 MiB of f32 per col tile. Whole rows, at least one, never more than
+    // the whole output.
+    const TILE_BYTES: usize = 1 << 20;
+    let rows = ((TILE_BYTES / 4) / (k * ow)).clamp(1, oh);
+    let dev = x.device().clone();
+    let w_mat = weight.reshape((c_out, k))?;
+    let xs = x.flatten_all()?.to_vec1::<f32>()?;
+    let hw = h * w;
+
+    let mut out = vec![0f32; c_out * ohw];
+    let mut oy0 = 0usize;
+    while oy0 < oh {
+        let oy1 = (oy0 + rows).min(oh);
+        let brows = oy1 - oy0;
+        let b = brows * ow;
+        let mut col = vec![0f32; k * b];
+        crate::conv3x3::count_im2col(k * b);
+
+        let fill = |(i, row): (usize, &mut [f32])| {
+            let (c, tap) = (i / 9, i % 9);
+            let (ky, kx) = (tap / 3, tap % 3);
+            let plane = &xs[c * hw..(c + 1) * hw];
+            for oy in oy0..oy1 {
+                let sy = oy * stride + ky;
+                if sy == 0 || sy > h {
+                    continue;
+                }
+                let src = &plane[(sy - 1) * w..sy * w];
+                let dst = &mut row[(oy - oy0) * ow..(oy - oy0 + 1) * ow];
+                if stride == 1 {
+                    match kx {
+                        0 => dst[1..].copy_from_slice(&src[..w - 1]),
+                        1 => dst.copy_from_slice(src),
+                        _ => dst[..w - 1].copy_from_slice(&src[1..]),
+                    }
+                } else {
+                    let lo = if kx == 0 { 1 } else { 0 };
+                    let hi = if w >= kx { ((w - kx) / 2 + 1).min(ow) } else { 0 };
+                    for ox in lo..hi {
+                        dst[ox] = src[ox * 2 + kx - 1];
+                    }
+                }
+            }
+        };
+        // One task per (channel, tap) is right HERE and wrong untiled: the
+        // whole tile is cache-resident, so the plane re-read the untiled
+        // version paid for nine times costs nothing now.
+        if crate::parallel::serial_kernels() {
+            col.chunks_mut(b).enumerate().for_each(fill);
+        } else {
+            col.par_chunks_mut(b).enumerate().for_each(fill);
+        }
+
+        let col_t = Tensor::from_vec(col, (k, b), &dev)?;
+        let y_t = crate::profile::timed(|p| &p.gemm, || w_mat.matmul(&col_t))?;
+        let y_v = y_t.flatten_all()?.to_vec1::<f32>()?;
+        // Scatter [c_out, b] into columns [oy0*ow, oy1*ow) of [c_out, ohw].
+        for o in 0..c_out {
+            out[o * ohw + oy0 * ow..o * ohw + oy1 * ow]
+                .copy_from_slice(&y_v[o * b..(o + 1) * b]);
+        }
+        oy0 = oy1;
+    }
+
+    let mut y = Tensor::from_vec(out, (c_out, ohw), &dev)?;
+    if let Some(bs) = bias {
+        y = y.broadcast_add(&bs.reshape((c_out, 1))?)?;
+    }
+    y.reshape((n, c_out, oh, ow))
+}
+
+/// Tiling is **OFF by default: measured worse, and the reason is in this
+/// implementation rather than in the idea.**
+///
+/// Paired ABBA, 21 rounds, serial path (the one the speed gate times),
+/// untiled as arm A:
+///
+/// | metric | result |
+/// |---|---|
+/// | CPU | tiled cheaper in **3/21, z = -3.27**, median A/B 0.807 — REAL, and against |
+/// | wall | 8/21, z = -1.09, median 0.731 — also against, inside the noise |
+///
+/// The tiled version is ~24 % more CPU. The bandwidth argument that motivated
+/// it is still correct — 216.9 MiB of im2col traffic per image, counted —
+/// but this code pays for the saving twice over: it does
+/// `x.flatten_all()?.to_vec1()?`, copying the WHOLE input tensor on every
+/// convolution, plus a `from_vec`/`to_vec1` round trip per tile. The untiled
+/// path reads the activation in place through `SliceOp` and hands its output
+/// Vec straight to the tensor's storage — zero copies, which was one of the
+/// nine M-D2 speed bricks. Tiling as written gives that back.
+///
+/// **Kept, off, behind `FFAI_DIANA_TILE=1`**, because the next attempt is
+/// not a redesign: it is this loop with the input read through `SliceOp` and
+/// the tile results written into one preallocated output buffer. Deleting it
+/// would mean rediscovering both the byte count and this trap.
+fn tiling_disabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static C: AtomicU8 = AtomicU8::new(u8::MAX);
+    match C.load(Ordering::Relaxed) {
+        u8::MAX => {
+            let on = std::env::var("FFAI_DIANA_TILE").is_ok_and(|v| v == "1");
+            C.store(!on as u8, Ordering::Relaxed);
+            !on
+        }
+        v => v == 1,
+    }
+}
+
 pub fn conv3x3_strided(
     x: &Tensor,
     weight: &Tensor,
     bias: Option<&Tensor>,
     stride: usize,
 ) -> Result<Tensor> {
+    if !tiling_disabled() {
+        return conv3x3_tiled(x, weight, bias, stride);
+    }
     let (n, c_in, h, w) = x.dims4()?;
     let c_out = weight.dim(0)?;
     debug_assert_eq!(n, 1, "batch 1 is the only shape this engine runs");
