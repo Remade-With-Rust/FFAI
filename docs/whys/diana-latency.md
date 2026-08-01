@@ -788,3 +788,47 @@ Parity needs our serial work at ~125 ms, from 281. That is a **kernel**
 project — fused, vectorised convolution of roughly oneDNN quality — not a
 scheduling one. It is a real target with a known technique, and it is the
 first time in this campaign the target has been the right one.
+
+## D4b — the 2x located: GEMM efficiency collapses at small M
+
+With the target corrected to kernel work, the question is where 281 (now
+251) ms goes against their 125. candle's matmul is 18.4 % of serial detect
+and it is the framework's code, so it gets measured before anything is
+written. Single thread, real shapes, `examples/gemm_efficiency.rs`:
+
+| M x K x N | GFLOP/s | % of ~128 peak | layer |
+|---|---:|---:|---|
+| 16 x 27 x 102400 | 27.3 | **21 %** | stem 3x3 |
+| 32 x 144 x 25600 | 40.5 | 32 % | l1 |
+| 64 x 288 x 25600 | 48.1 | 38 % | l2 |
+| 128 x 576 x 6400 | 63.2 | 49 % | deep |
+| 256 x 1152 x 1600 | **88.9** | **69 %** | deepest |
+| 64 x 64 x 25600 | 43.3 | 34 % | 1x1 |
+| 256 x 256 x 1600 | 75.3 | 59 % | 1x1 deep |
+
+**Efficiency tracks M, and M is `c_out`.** The deepest layers already reach
+69 % of peak — candle's GEMM is not the problem there. The stem runs at
+21 %, and the stem is where the spatial work is largest, so the badly-served
+shapes carry the most work.
+
+Cross-check against the whole network: YOLO26n is ~8.7 GFLOP at 640x640, so
+our 251 ms is **~35 GFLOP/s average** and their 125 ms is **~70**. The 2x is
+exactly this table.
+
+### What that implies, priced
+
+* Lifting average GEMM efficiency from ~40 to ~80 GFLOP/s saves ~23 ms of
+  the 46 ms gemm bucket -> 251 -> 228 ms (1.10x).
+* Removing im2col entirely (13.4 %, ~34 ms of pure data movement a direct
+  convolution never does) -> ~194 ms (1.29x combined).
+* **Both together reach ~194 ms, not 125.** The remainder is in the
+  convolution wrappers — bias add, reshape, the `SliceOp` round trip — which
+  the profile currently hides inside the conv parents.
+
+So parity is a convolution-path rewrite: direct/implicit-GEMM convolution
+with spatial blocking, which is what removes im2col AND fixes small-M at the
+same time, because a direct kernel blocks over output pixels rather than
+over a matrix dimension the architecture pins at 16.
+
+**That is the next campaign, and it now has a target, a ceiling, and a
+per-shape table to gate against.**
