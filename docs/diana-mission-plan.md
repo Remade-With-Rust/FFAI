@@ -1434,14 +1434,49 @@ directions.**
 | s | 76.26 | **78.06** | square, by 1.80 pp |
 
 M-D0 saw this in the *references* and used it to justify pinning geometry;
-Diana now reproduces both signs itself, which upgrades it from an artifact of
+Diana reproduces both signs itself, which upgrades it from an artifact of
 their harness to a property of the models. This is the codec
 `content-adaptive-dispatch` shape — **the sign-flip IS the dispatch
-trigger** — and it says the default geometry is a per-tier decision, not a
-global one. It is deliberately *not* wired yet: two tiers is two data points,
-and a rule fitted to two points that happen to disagree is a rule fitted to
-noise until m/l/x are converted and measured. The finding is recorded; the
-dispatch waits for the third and fourth points.
+trigger** — and it looked like the default geometry should be a per-tier
+decision.
+
+**It was deliberately not wired, and 450 images say that was right.**
+
+#### ★ The sign-flip survives and the EFFECT does not — settled on v3
+
+Two tiers is two data points, and a 1.5-1.8 pp effect measured on **45
+images** is not distinguishable from sampling noise. The whole reason
+`diana-coco-v3` exists is that the proposed follow-up — convert m/l/x to get
+more tiers — would have produced four noisy points instead of two and
+answered nothing. Re-measured on **450 holdout images**, all five tiers,
+both geometries (ledger `bench-detect-1785550365`):
+
+| tier | rect mAP50 | square mAP50 | delta | the same delta on 45 images |
+|---|---:|---:|---:|---:|
+| n | **61.36** | 61.01 | **+0.35** rect | +1.49 rect |
+| s | 68.16 | **68.84** | -0.68 square | -1.80 square |
+| m | 73.07 | **73.23** | -0.16 square | not measured |
+| l | 74.02 | **74.16** | -0.14 square | not measured |
+| x | 77.38 | **77.67** | -0.29 square | not measured |
+
+The **sign** flip is real and holds — n prefers rectangular, every larger
+tier prefers square. The **magnitude** collapses by roughly 4x, to
+0.14-0.68 pp, which is at or under the harness's own quality band (+0.25 pp
+absolute or +5 % relative). n's preference, the one that motivated making
+rectangular the default, is **0.35 pp**.
+
+**DECISION: no tier-dependent geometry dispatch.** A dispatch that moves
+0.14-0.68 pp is machinery whose benefit sits inside the band its own gate
+uses to decide whether two numbers differ. Geometry stays a **required,
+named argument** — that part was never about the size of the effect, it is
+about not comparing a rectangular engine against a square baseline, which
+is the M-D0 defect and costs 1.5 pp of pure confusion regardless of which
+letterbox is better.
+
+The four-fold shrinkage is the finding worth keeping: it is a measured
+instance of the thing that makes small corpora dangerous, in a repo whose
+own rule is "no claim without a number". The number was there at 45 images.
+It was the wrong number.
 
 #### All five tiers — and the third branch neither n nor s could reach
 
@@ -1583,6 +1618,60 @@ v3 is 600 clips / 450 holdout, built by the same audited rules (license
 filter, crowd exclusion, deterministic stride, PNG storage), under its own
 manifest and its own clips directory so v2 and every ledger row naming its
 hash stay reproducible.
+
+#### ★ DECISION — what Diana may claim while the speed gate fails
+
+The question was raised as a launch blocker and it deserves an answer in the
+tree rather than in a conversation: Mercury did not claim parity until all
+four gates passed. Diana's speed gate fails. Does Diana launch, and under
+what standard?
+
+**The standard does not change. It gets applied.**
+`docs/benchmarking.md` §4 says exactly two things, and they are not the same
+thing: *"a skipped gate is never a pass"*, and *"`verdict: claimable`
+requires all four to pass"*. Neither says a component may not ship with a
+measured loss — §5 says the opposite, that losses are recorded and stay in
+the file. **Carmenta is the standing precedent**: it ships today with
+"photo accuracy still trails PaddleOCR, causes diagnosed" in the README's
+component line, having passed speed and footprint.
+
+So:
+
+| claim | status |
+|---|---|
+| `verdict: claimable` (the aggregate) | **NO.** Withheld until speed passes. |
+| Quality — mAP identical to PyTorch at matched configuration | **YES**, gated, per tier, per geometry |
+| Footprint — 0.38-0.43x the reference's steady memory | **YES**, gated |
+| Correctness — five-tier oracle, byte-determinism | **YES**, gated |
+| Speed — per-image latency | **NO — published as FAIL with its number** |
+
+Diana therefore launches as *"YOLO26 detection inference in pure Rust,
+bit-for-bit parity with PyTorch, ahead on memory / load / determinism /
+batch throughput, behind on single-image latency"* — never as "parity" or
+"a YOLO replacement" unqualified. The losing row goes in the headline
+table, not a footnote, because a project that hides a losing row gets found
+out and deserves to be.
+
+**What makes this defensible rather than an excuse is that the loss is now
+DIAGNOSED, not merely admitted.** `docs/whys/diana-latency.md` carries the
+descent; the three findings are:
+
+1. **The crate has no `target-cpu`.** Every hand-written kernel here — 34 %
+   of the profile — compiles for the x86-64 baseline: SSE2, no AVX2, no
+   FMA. A build flag alone moves the SiLU kernel 1.39x. It is not simply
+   *set*, because baking the build machine's ISA into a published crate is
+   a portability bug; the fix is runtime feature dispatch, and that is
+   scoped work, not a config line.
+2. **The activation was 30.9 % of a detection** — larger than any
+   convolution shape. Fixed this session (magic-number rounding, 1.94x,
+   bit-identical), and the fix's own ceiling says another 1.45x remains in
+   it.
+3. **Single-image fan-out costs 2.32x the CPU of the work it performs**, on
+   this hybrid CPU, across ~120 barriers per image.
+
+None of the three is a claim that YOLO is beatable on latency tomorrow.
+They are the reason the gate reads FAIL, stated so the next session starts
+from a diagnosis instead of a symptom.
 
 ### 8.5 Design principles carried from Mercury and Carmenta
 

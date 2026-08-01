@@ -56,7 +56,10 @@ pub fn depthwise3x3(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>) -> Resul
 
     crate::cpuop::SliceOp::new("ffai-dwconv3x3", move |xs, _| {
     let mut out = vec![0f32; c * h * w];
-    out.par_chunks_mut(h * w).enumerate().for_each(|(ch, o)| {
+    // One closure, two schedulers. `crate::parallel` explains why the
+    // choice is per-call: the fan-out wins for latency and loses for
+    // throughput, and the caller is the only one who knows which it wants.
+    let plane_kernel = |(ch, o): (usize, &mut [f32])| {
         let k = &ws[ch * 9..ch * 9 + 9];
         let (k0, k1, k2) = (k[0], k[1], k[2]);
         let (k3, k4, k5) = (k[3], k[4], k[5]);
@@ -102,7 +105,12 @@ pub fn depthwise3x3(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>) -> Resul
                 o[row_o + x] = s + bias;
             }
         }
-    });
+    };
+    if crate::parallel::serial_kernels() {
+        out.chunks_mut(h * w).enumerate().for_each(plane_kernel);
+    } else {
+        out.par_chunks_mut(h * w).enumerate().for_each(plane_kernel);
+    }
         Ok((out, (1, c, h, w).into()))
     })
     .run(x)

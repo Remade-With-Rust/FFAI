@@ -73,7 +73,9 @@ pub fn conv3x3_strided(
     {
     // One row per (channel, ky, kx). Parallel over channels: each channel
     // owns a contiguous 9*ohw block, so the writes never overlap.
-    col.par_chunks_mut(9 * ohw).enumerate().for_each(|(c, block)| {
+    // See `crate::parallel`: the fan-out is worth its barrier cost for a
+    // single image and is pure overhead inside a parallel batch.
+    let im2col_channel = |(c, block): (usize, &mut [f32])| {
         let plane = &xs[c * hw..(c + 1) * hw];
         for ky in 0..3usize {
             for kx in 0..3usize {
@@ -109,7 +111,12 @@ pub fn conv3x3_strided(
                 }
             }
         }
-    });
+    };
+    if crate::parallel::serial_kernels() {
+        col.chunks_mut(9 * ohw).enumerate().for_each(im2col_channel);
+    } else {
+        col.par_chunks_mut(9 * ohw).enumerate().for_each(im2col_channel);
+    }
     }
             Ok((col, (c_in * 9, ohw).into()))
         })

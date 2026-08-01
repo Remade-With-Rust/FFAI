@@ -48,6 +48,7 @@ pub mod engine;
 pub mod head;
 pub mod image;
 pub mod neck;
+pub mod parallel;
 pub mod profile;
 pub mod silu;
 

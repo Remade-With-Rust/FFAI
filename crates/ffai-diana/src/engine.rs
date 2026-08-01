@@ -239,7 +239,14 @@ impl DetectEngine for Yolo26 {
         self.model()?;
         images
             .par_iter()
-            .map(|image| self.detect(image, opts))
+            // Parallelism goes HERE and nowhere below it. Nesting the
+            // per-layer fan-out inside a batch that already fills every core
+            // buys nothing and costs a barrier per layer: measured 844 ms of
+            // CPU per image at 24 threads against 363 ms serial, a 2.32x
+            // tax on work that is identical either way. `crate::parallel`
+            // carries the measurements and the sign-flip that makes this a
+            // per-call decision rather than a constant.
+            .map(|image| crate::parallel::serial_scope(|| self.detect(image, opts)))
             .collect()
     }
 
