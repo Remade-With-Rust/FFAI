@@ -1683,6 +1683,60 @@ distinguish a plateau from a slow leak, and the gate's shape means a longer run
 is the only thing that can. Recorded as a pass with a thin margin, which is
 what it is, and a longer soak is named work rather than an assumed formality.
 
+### 8.26 carmenta-doc-v1 — the corpus M-C3 was actually blocked on
+
+Two prunes in a row pointed at the same thing. §8.24 measured a 1.26 pp prize
+for perspective-warped crops and had to park it because no corpus had any skew
+to fail on. §8.17 pinned DocLayNet and then measured that it cannot gate what
+it was pinned for — 1025x1025 full pages put a body line at 9-12 px, every
+engine lands near 50 % (PaddleOCR at 53.94 %), and upscaling was refuted across
+a 3.5x sweep. The blocker was never the code.
+
+So the generator that already renders `carmenta-render` and `carmenta-frames`
+now renders documents too: **32 pages across 8 documents at 1700x2200** (letter
+at ~200 dpi, body text ~28 px). Verified: 0 hash mismatches, 8 train / 24
+holdout, 3775 ground-truth chars per page, 550 regions across six classes.
+
+Rendering rather than collecting buys four things no public set gave us:
+
+| | why it matters |
+|---|---|
+| **exact reading order** | two-column pages lay out the left column fully, then the right — the order a raster-order reader gets wrong, which is the measurement M-C3 exists to make |
+| **exact region boxes**, per class, as quads | the layout gate has ground truth instead of a proxy |
+| **arbitrary resolution** | the CER gate measures reading, not legibility — DocLayNet's defect, fixed by construction |
+| **controlled skew** | half the pages rotate 0.8-3.6 deg, and BOTH splits carry both kinds, so §8.24's parked lever finally has something that can fail it |
+
+Documents split **whole** — none straddles — because M-C4 will group pages by
+`doc_id` and a split document leaks the moment it does. Running headers and
+page numbers are rendered deliberately: suppressing them across pages is LONG's
+job, so the corpus that will test it should contain them.
+
+The text is synthesised from the same fixed lexicon as the other two corpora
+rather than drawn from Gutenberg. Deliberate: a downloaded book adds a fetch
+gate to a corpus whose whole point is regeneration from a formula, and a
+controlled vocabulary keeps out-of-vocabulary surprises from confounding a
+measurement about LAYOUT. Regenerating leaves the other three corpora
+byte-identical — checked, not assumed.
+
+**And a document-tier reference to compete against.** Every reference so far is
+line-level: they answer "did you read the characters". `ppstructure-v3` answers
+whether the characters came out IN READING ORDER, having first decided the page
+has two columns, a running header and a footer that is not prose — which is the
+question M-C3's gate actually asks, and which the plan has named since it was
+written. It is matched to `paddleocr-mobile` tier-for-tier and
+handicap-for-handicap, its text is taken from PP-Structure's own ordered
+`parsing_res_list` rather than re-sorted by us, and a fallback to unordered
+text is logged loudly because it would silently demote the comparison back to
+line-level. It costs ~170 s per page on this box, which is a fact about the
+reference and is recorded rather than hidden.
+
+Two defects of my own on the way, both worth the entry. The manifest shipped
+with `class = "document_1col"` against a closed enum, so the harness rejected
+the corpus I had just committed. And the first fix appeared not to work because
+cargo reported `Finished` while the example binary stayed **24 minutes older
+than its source** — the §8.12 failure again, and the same tell: a result that
+contradicts a change you just made indicts the artifact before the code.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
