@@ -267,10 +267,33 @@ previous fix removed one libm call and left another.
 - **NOT simply fixed by setting the flag.** `target-cpu=native` bakes the
   build machine's ISA into the binary; for a crate published to crates.io
   that is a portability bug, not an optimisation. The correct shape is
-  runtime dispatch (`is_x86_feature_detected!` + `#[target_feature]`), which
-  is a real piece of work and belongs in M-D2 rather than in a config file.
-- **STATUS:** open, sized, and the honest reason the speed gate is still
-  failing is now known rather than assumed.
+  runtime dispatch (`is_x86_feature_detected!` + `#[target_feature]`) —
+  which is a real piece of work, so it was priced before being started.
+
+- **★★ PRICED AT THE PIPELINE LEVEL: WORTH NOTHING. Do not build it.**
+  `tools/diana_native_ab.sh` alternates two BINARIES of identical source —
+  baseline x86-64 against `-C target-cpu=native` — ABBA over a whole detect
+  pass on the serial path the gate times.
+
+  **12/21, z = +0.65, median 1.0171x. Inside the noise.**
+
+  The 1.39x was real and it was measured **on the old SiLU kernel**, where
+  AVX2's contribution was mostly making `f32::round` less catastrophic.
+  Once the magic-number rounding shipped, the polynomial vectorises 4-wide
+  under plain SSE2 and the flag has almost nothing left to buy: what remains
+  is GEMM (the `gemm` crate dispatches on CPU features at RUNTIME and was
+  never affected) and im2col (memory-bound).
+
+  **A confirmation expires when its baseline moves.** The skill states this
+  for refutations — "int8 was refuted against f32; once f16 shipped, the
+  same idea's prize halved" — and the symmetric case is what happened here:
+  a confirmed lever, measured honestly, was made worthless by a change
+  landed twenty minutes later in the same session. Had the two been done in
+  the other order, runtime ISA dispatch would have been built on a 1.39x
+  that no longer existed.
+
+- **STATUS: CLOSED, negative.** Recorded as a measured prune, not as a
+  backlog item.
 
 ---
 

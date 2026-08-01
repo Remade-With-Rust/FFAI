@@ -1688,22 +1688,31 @@ out and deserves to be.
 DIAGNOSED, not merely admitted.** `docs/whys/diana-latency.md` carries the
 descent; the three findings are:
 
-1. **The crate has no `target-cpu`.** Every hand-written kernel here — 34 %
-   of the profile — compiles for the x86-64 baseline: SSE2, no AVX2, no
-   FMA. A build flag alone moves the SiLU kernel 1.39x. It is not simply
-   *set*, because baking the build machine's ISA into a published crate is
-   a portability bug; the fix is runtime feature dispatch, and that is
-   scoped work, not a config line.
-2. **The activation was 30.9 % of a detection** — larger than any
-   convolution shape. Fixed this session (magic-number rounding, 1.94x,
-   bit-identical), and the fix's own ceiling says another 1.45x remains in
-   it.
-3. **Single-image fan-out costs 2.32x the CPU of the work it performs**, on
-   this hybrid CPU, across ~120 barriers per image.
+1. **The activation was 30.9 % of a detection** — larger than any
+   convolution shape, and the third time this repo has found an activation
+   at the top of a profile. `f32::round` is ties-away-from-zero, which no
+   x86 instruction implements, so it was blocking vectorisation of the
+   whole loop; the module had removed `exp` for exactly that reason and
+   left `round` behind. Rounding by float addition instead is **4.71x on
+   the kernel, bit-identical**, and **1.079x on the pipeline (17/21,
+   z = +2.84)** measured on the serial path the gate times. Shipped.
+2. **Single-image fan-out costs 2.32x the CPU of the work it performs** —
+   363 ms of real work, 844 ms spent, across ~120 fork-joins per image on
+   a 16-physical/24-logical hybrid CPU. Cutting threads does NOT help wall
+   (9/24, z = -1.22): for one image the alternative is 15 idle cores. This
+   is a **structural** cost — too many small parallel regions — and it is
+   the largest single thing standing between us and the reference.
+3. **`target-cpu` is unset, and it does not matter.** Every hand-written
+   kernel compiles for the x86-64 baseline. That is worth 1.39x on the OLD
+   SiLU kernel and **1.017x on the pipeline (12/21, z = +0.65 — inside the
+   noise)** once the SiLU fix landed, because AVX2 was mostly rescuing
+   `round()` and candle's GEMM dispatches on CPU features at runtime
+   anyway. **Priced before building; runtime ISA dispatch is pruned.**
 
 None of the three is a claim that YOLO is beatable on latency tomorrow.
 They are the reason the gate reads FAIL, stated so the next session starts
-from a diagnosis instead of a symptom.
+from a diagnosis instead of a symptom — and one of them is a prune, which
+is worth as much as the fix.
 
 ### 8.5 Design principles carried from Mercury and Carmenta
 
