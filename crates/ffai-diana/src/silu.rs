@@ -128,14 +128,43 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
         // batch even a large activation should stay serial, because the
         // machine is already full. See `crate::parallel`.
         if xs.len() >= PAR_THRESHOLD && !crate::parallel::serial_kernels() {
-            v.resize(xs.len(), 0.0);
-            v.par_chunks_mut(1 << 14)
-                .zip(xs.par_chunks(1 << 14))
-                .for_each(|(o, i)| {
+            // `collect`, not `resize` + `par_chunks_mut`.
+            //
+            // Handing out `&mut` slices in safe Rust requires the buffer to
+            // be initialised first, so `resize(n, 0.0)` zero-filled every
+            // byte and the kernel then overwrote every byte: the output was
+            // WRITTEN TWICE. Measured with `examples/op_overhead.rs` at 1 M
+            // elements — kernel 807 us, everything else 1758 us, i.e. 2.2x
+            // the arithmetic — and silu is 30.3 % of serial detect, a share
+            // that refused to fall when the kernel itself got 4.71x faster.
+            // A share that will not move when the kernel moves is not being
+            // spent in the kernel.
+            //
+            // rayon's `collect` allocates once and writes once, stays safe,
+            // and preserves order so the output is unchanged.
+            // Which parallel form, by SIZE — the two lose to each other in
+            // opposite regimes and a single choice is wrong half the time.
+            // Measured per call (`examples/op_overhead.rs`):
+            //
+            //   65 536 elems : chunks_mut 184 us   collect 346 us  -> chunks
+            //   1 048 576    : chunks_mut 2564     collect 1702    -> collect
+            //
+            // `collect` allocates once and writes once, which wins when the
+            // write dominates; `par_chunks_mut` carries less bookkeeping,
+            // which wins while the buffer is small. The crossover sits
+            // between, so take it at 256 k rather than pretending one form
+            // is simply better.
+            const COLLECT_ABOVE: usize = 1 << 18;
+            if xs.len() >= COLLECT_ABOVE {
+                v = xs.par_iter().map(|&x| silu_scalar(x)).collect();
+            } else {
+                v.resize(xs.len(), 0.0);
+                v.par_chunks_mut(1 << 14).zip(xs.par_chunks(1 << 14)).for_each(|(o, i)| {
                     for (o, i) in o.iter_mut().zip(i) {
                         *o = silu_scalar(*i);
                     }
                 });
+            }
         } else {
             v.extend(xs.iter().map(|v| silu_scalar(*v)));
         }
