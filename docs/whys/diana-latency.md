@@ -396,6 +396,53 @@ including the ones above.
 - **CONFIDENCE:** high. Two orders, two metrics (CPU and wall) agreeing per
   tier, tight pairing, medians, matched warmup.
 
+## D6i — the quiet-box requirement, discharged by pinning instead of waiting
+
+The plan said "re-measure on a quiet box". This box was never quiet — 98 %
+with another session's benchmark on it at the time of writing — and waiting
+for quiet is unfalsifiable. Every measurement above was therefore taken
+under foreign load, which is a shared weakness the three probes do NOT
+control for: they vary order and metric, not LOAD.
+
+`tools/diana_pinned_floor.ps1` varies it. Each arm pinned to the same cores
+at High priority (removes scheduler migration, the thing that turns a 1.06x
+spread into 2.02x), **minimum** per-image wall over repetitions rather than
+mean or median (foreign load only ever ADDS time, so the minimum is the
+floor of the code's own cost — and the skill's own data shows unpinned and
+pinned MINIMA agreeing at 1047 vs 1038 ms even when the spreads do not),
+arms alternated on both tier index and rep so ordering cannot align with
+tier.
+
+| tier | Diana min | ref min | ratio |
+|---|---:|---:|---:|
+| n | 118.9 ms | 60.2 ms | 1.98x |
+| s | 196.1 | 89.0 | **2.20x** |
+| m | 370.4 | 204.0 | 1.82x |
+| l | 483.2 | 264.1 | 1.83x |
+| x | 837.1 | 542.8 | **1.54x** |
+
+**Mean 1.87x, range 1.54-2.20x, and NOT monotone in tier size — s is the
+worst tier, not n.** So the ordering-confound verdict survives a change of
+load regime, which is the axis it had not been tested on.
+
+Three instruments now agree on the shape and roughly on the size:
+
+| instrument | mean gap | trend? |
+|---|---:|---|
+| unpinned median, forward+reverse order | 1.75x | none |
+| unpinned CPU work ratio | ~1.7x | none |
+| **pinned floor, min-of-N** | **1.87x** | none (s worst, x best, non-monotone) |
+
+The pinned floor reads slightly WORSE for us than the median probe, which is
+itself informative: at the floor the reference benefits more from clean
+conditions than we do, consistent with our having parallel overhead that
+does not vanish when the machine frees up.
+
+**Weak residual signal, stated as weak:** x is the lowest ratio in both wall
+instruments (1.54x, 1.60x) and s the highest (2.20x, 1.85x). That hints the
+largest tier is mildly less bad. It is not parity, it is not monotone, and
+it is inside the spread — recorded so nobody re-derives it as a trend.
+
 ## D5b — the amortization mechanism is real, and it does NOT reach the gap
 
 The trend needs a mechanism or it is a coincidence with five points. The

@@ -1713,7 +1713,7 @@ So:
 | Quality — mAP within 0.08 pp of PyTorch across all 10 tier/geometry configs on 450 images | **YES**, gated, per tier, per geometry |
 | Footprint — 1.6-5.6x leaner steady memory, PASS on all ten | **YES**, gated |
 | Correctness — five-tier oracle, byte-determinism | **YES**, gated |
-| Speed — per-image latency, ~1.75x behind at EVERY tier | **NO — published as FAIL with its number** |
+| Speed — per-image latency, ~1.9x behind at EVERY tier | **NO — published as FAIL with its number** |
 
 **★ That number took three statements to get right, and the two wrong ones
 are the more useful record.**
@@ -1722,7 +1722,9 @@ are the more useful record.**
 2. *"the gate PASSES at m and we are at parity at x"* — the corpus sweep
    showed the gap narrowing monotonically, 2.24x at n to 0.94x at x. A
    better story, and false.
-3. *"~1.75x behind, flat across tiers, failing everywhere"* — what survives.
+3. *"~1.9x behind, flat across tiers, failing everywhere"* — what survives,
+   confirmed on a third instrument (pinned floor, min-of-N) that varies the
+   LOAD axis the other two shared.
 
 Two cheap instruments killed (2), and neither had been run despite two
 sessions of quoting ratios. A **null arm** — same engine, same corpus, same
