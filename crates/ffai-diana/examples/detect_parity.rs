@@ -46,6 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // reference's own ordering of near-tied junk is arbitrary, so a
     // mismatch there measures tie-breaking, not correctness.
     let conf: f32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(0.25);
+    // Which tier. This was hardcoded to n, so the strongest claim this repo
+    // makes about Diana — that every DETECTION matches, not merely the mAP —
+    // had only ever been checked on the smallest of five models. mAP and the
+    // per-layer oracles gate the others; box-for-box did not.
+    let tier = args.next().unwrap_or_else(|| "n".into());
 
     let manifest = Manifest::load(std::path::Path::new(&manifest_path))?;
 
@@ -79,7 +84,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let engine = ffai_diana::engine::Yolo26::new();
+    let engine = ffai_diana::engine::Yolo26::build(
+        &tier,
+        ffai_diana::image::Geometry::Rect,
+        "models",
+    );
+    println!("tier {tier}, conf {conf}");
     let opts = DetectOptions { confidence: 0.001, max_detections: 100, ..Default::default() };
 
     let (mut images, mut total, mut count_mismatch, mut class_mismatch) = (0, 0usize, 0, 0);
