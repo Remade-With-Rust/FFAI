@@ -881,3 +881,47 @@ intensity is set by the output tile rather than by a 9x-redundant matrix.
 **Recorded as a correction rather than an edit**, because "efficiency tracks
 M" is already committed and would otherwise send the next campaign after a
 microkernel that is not the problem.
+
+## ★★★ D4b — the GEMM's ORIENTATION, an axis never tested here
+
+I closed this thread with "what's left is candle's GEMM at our shapes, which
+is someone else's kernel." That was wrong, and the skill names the axis that
+shows why: **orientation**. Its learnings carry a case where identical
+arithmetic ran 54 vs 539 GFLOP/s purely on which operand was M.
+
+Our convolution computes `w[c_out, K] x col[K, ohw]`, so **M = c_out is the
+SMALL dimension** — 16 at the stem — and N = ohw is large. Measured on the
+real yolo26n shapes (`examples/gemm_orient.rs`, best of 7):
+
+| c_out | K | ohw | as-is | transposed | speedup |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 27 | 102400 | 1.278 ms | 0.632 | **2.02x** |
+| 32 | 144 | 25600 | 1.044 | 0.670 | 1.56x |
+| 64 | 288 | 25600 | 2.719 | 2.059 | 1.32x |
+| 128 | 576 | 6400 | 2.088 | 1.723 | 1.21x |
+| 256 | 1152 | 1600 | 1.838 | 1.701 | 1.08x |
+| 256 | 2304 | 400 | 1.253 | 1.097 | 1.14x |
+
+**Faster in every shape. 1.30x aggregate, 2.02x at the stem**, where the
+tensors are biggest. The GEMM is not someone else's kernel — it is ours to
+FEED, and we have been feeding it the slow way round.
+
+**NOT YET EXPLOITABLE, and the tax is the open question.** Taking it needs:
+
+* weights as `[K, c_out]` — free, transposed once at load;
+* im2col writing `[ohw, K]` instead of `[K, ohw]` — a different access
+  pattern in the kernel, which could go either way and must be measured, not
+  assumed (the per-tap chunking already proved a "more parallel" im2col can
+  be 2.2x SLOWER);
+* the output arriving as `[ohw, c_out]` and needing a transpose back to
+  NCHW — **this is the tax, it is unpriced, and it could eat the whole win.**
+
+Prize arithmetic before anyone builds it: GEMM is 17.2 % of serial detect, so
+1.30x on it is ~3.9 % of the pipeline — the same scale as the AVX2 silu win,
+minus a transpose. Worth doing only if the transpose is cheap, and the honest
+next step is to price THAT before writing the im2col variant.
+
+**The lesson is about the prune, not the number.** "Someone else's kernel"
+was a category, not a measurement, and it very nearly closed a door with a
+measured 2x behind it. A prune constrains the approach it tested; it does not
+license a conclusion about the whole component.
