@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. On **OmniDocBench** documents: **25.9 % CER on CPU against Baidu Unlimited-OCR's 15.5 % on a GPU — at 17x the throughput and 4.7 MB of detector weights against 6.4 GB**, with reading order computed by projection rather than learned. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is ~1.6× ahead at every tier, both from one structural cause** ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is 1.5–2.4× ahead at every tier, both from one structural cause** ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -621,15 +621,20 @@ the reference on latency, and it is not a flag.
 
 Latency is one question. A server asks a different one: given N images and a
 whole machine, how many per second? There the answer inverts, at every tier —
-**Diana is ~1.6× ahead:**
+**Diana is 1.5–2.4× ahead:**
 
-| tier | Diana img/s | Ultralytics img/s | ratio |
-|---|---:|---:|---:|
-| n | **30.35** | 18.81 | **1.61×** |
-| s | **14.15** | 8.24 | **1.72×** |
-| m | **5.90** | 3.55 | **1.66×** |
-| l | **4.50** | 2.77 | **1.62×** |
-| x | **2.15** | 1.42 | **1.52×** |
+| tier | run 1 | run 2 |
+|---|---:|---:|
+| n | 1.61× | 1.66× |
+| s | 1.72× | 2.09× |
+| m | 1.66× | 2.13× |
+| l | 1.62× | 2.35× |
+| x | 1.52× | 2.32× |
+
+Two independent runs, because one was not enough to know which part of the
+result was real. **The direction is: ahead at every tier in both runs.** The
+magnitude is not — it moves by up to 50% between runs on this box, so the
+honest claim is a range, not the 1.6× a single session would have supported.
 
 **One structural fact explains both directions.** Diana puts parallelism
 *across images* — `detect_batch` gives each core a whole image and runs the
