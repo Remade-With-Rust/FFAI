@@ -3032,6 +3032,59 @@ Option 2 is the one that preserves the position and is unpriced; option 3 is
 smaller but cheap and orthogonal. Both are better next moves than a sixth cut
 rule, which §8.44-§8.49 have now closed off with measurements at every level.
 
+### 8.50 The 6.7 pp over-generation prize is benchmark-fitting, not a fix
+
+§8.49 recommended banking §8.33's 6.7 pp over-generation prize as the cheap
+parallel win. **That recommendation was wrong and is withdrawn.** Before
+building the suppressor, the question worth asking is what the suppressed text
+actually IS — and the answer is that it is real, correctly-read page content.
+
+1807 out-of-region holdout lines of six characters or more, median confidence
+**0.981**, random sample:
+
+```
+JIGME DORJE/XINHUAAP                                 photo credit
+PA Tate, J.G. Dorsey / J Chromatogr. A 1103 (2006)   running header
+02018 KPMG International Cooperative ("KPMG Int…")   copyright footer
+622   Chapter 10   Conics                            running head
+(242) 635-9988                                       contact detail
+Attribution - NonCommercial License, where it is …   licence footer
+Siemens 1996-2007                                    footer
+```
+
+Running heads, footers, page numbers, photo credits, copyright lines. This is
+precisely OmniDocBench's `abandon` class, which the corpus builder drops "as the
+benchmark intends" (`tools/carmenta_omnidoc_corpus.py`). **We are charged for
+reading text that is genuinely on the page and that the benchmark chose not to
+score.**
+
+So suppressing it improves the CER without improving the extraction. §8.35
+already showed PP-StructureV3 reads the same furniture, so the points are
+available — which is exactly what makes this tempting and exactly why it should
+be named. **Taking 6.7 pp by matching an annotation policy is fitting the
+benchmark, and this campaign's ledger is supposed to mean something outside it.**
+
+**What is legitimate here, stated separately.** Furniture suppression IS a real
+product behaviour — prose extraction for RAG usually does not want a running
+header repeated on every page. The honest form is a FLAG with its own
+justification, measured on whether users want furniture-free output, and its CER
+effect reported as a consequence of that choice rather than as a quality
+improvement. What is not legitimate is turning it on by default because it
+happens to score better on OmniDocBench.
+
+**This leaves §8.49's option 2 as the only clean lever:** a small reading-order
+head over already-detected boxes. The 11.95 pp ordering prize is not
+benchmark-fitting — reading a two-column paper in the wrong sequence is wrong by
+any measure, for any consumer, and `omni-0038`'s left-right-left-right interleave
+would be wrong if no benchmark existed. That distinction is the one that matters
+when choosing what to build.
+
+**A note on how close this came to being built.** §8.49 recommended it in a
+sentence, on the strength of a number (6.7 pp) that was correctly measured and
+whose MEANING had never been examined. The measurement was right; the inference
+from it was not. Checking what a number is made of costs one sample and is the
+last thing that gets done.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
