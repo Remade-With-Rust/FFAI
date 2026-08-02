@@ -2068,10 +2068,55 @@ JPEGs would each individually have killed the run before `b4dc952`:
 `correctness FAIL` and correctly so: 35 pages are unreadable, and the gate says
 so instead of the run silently pricing them at 100 %.
 
-**Next, and now clearly the highest-value repair available:** progressive JPEG
-support returns 35 holdout pages — 15 % of the corpus and most of one cell —
-for zero model work. `rusty_jpeg` is ours, which makes this a fix at the source
-rather than a workaround.
+### 8.32 The progressive-JPEG panic, root-caused and fixed — one guard
+
+Returning those 35 pages is 15 % of the corpus for zero model work, and
+`rusty_jpeg` is ours, so this is a fix at the source rather than a workaround.
+The crate already *implements* progressive decoding; it was a hoisted `unwrap`,
+not a missing feature.
+
+`decode_block_progressive`, `src/decode/decoder.rs:1449`:
+
+```rust
+    let mut index = cmp::max(spectral_selection.start, 1);
+    ...
+    let ac_table = ac_table.unwrap();          // <-- panics
+    while index < spectral_selection.end {
+```
+
+A progressive image's **first scan is DC-only**: `spectral_selection` is `0..1`,
+so `index` starts at 1, `1 < 1` is false, and the loop never executes — and a
+DC-only scan legitimately declares **no AC table**, so `ac_table` is `None`. The
+unwrap was hoisted above the loop guard as a speed optimisation (its comment
+cites ~362k calls per 1080p frame), which is correct for baseline JPEG, where
+every scan carries an AC table. That is also why every baseline fixture passed.
+
+The fix takes the guard first, keeping the hoist for the hot path and costing a
+comparison the loop was about to make anyway:
+
+```rust
+    if index >= spectral_selection.end {
+        return Ok(());
+    }
+    let ac_table = ac_table.unwrap();
+```
+
+Verified four ways, because "stopped panicking" is not "decodes correctly":
+
+| check | result |
+|---|---|
+| reproduces unpatched | panic at `decoder.rs:1449` on 3/3 files |
+| decodes patched | 4/4, e.g. `1653x2339 RGB24` |
+| **pixel-correct vs Pillow** | **max abs diff 1**, mean 0.009, zero pixels off by >2 — IDCT rounding |
+| no baseline regression | crate's own suite, **58 passed / 0 failed** |
+
+Pending upstream publication, so FFai still carries the `catch_unwind` from
+`b4dc952` — which stays regardless. Surviving a dependency's panic is a
+property the harness should have on its own, not one borrowed from a fixed
+dependency.
+
+**Prize on release:** 35 holdout pages return (201/236 → 236/236), and
+`academic_literature` becomes scoreable on 43 pages instead of 16.
 
 ## 9. Pure-Rust boundary and watchlist
 
