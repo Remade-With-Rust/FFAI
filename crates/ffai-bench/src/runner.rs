@@ -10,7 +10,7 @@
 //! (steady-state, model loaded) and end-to-end (including one amortized model
 //! load) are both measured and both recorded.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ffai_core::engine::{AsrOptions, OcrOptions};
 use ffai_core::error::{Error, Result};
@@ -446,6 +446,30 @@ fn run_detect_reference(
 
 /// The in-process detection engine's run.
 ///
+/// `load_image`, but a panicking decoder costs ONE clip instead of the corpus.
+///
+/// This is not defensive programming for its own sake. rusty_jpeg 0.1.5
+/// unwraps a `None` on progressive JPEGs, and 49 of OmniDocBench's 316 pages
+/// are progressive — so one upstream defect turns a whole benchmark run into
+/// no data at all, and the process dies before the harness can say which clip
+/// did it. Catching it converts "the run produced nothing" into "267 pages
+/// scored, 49 clips failed, here is the first one", which is the difference
+/// between a mystery and a bug report.
+///
+/// Deliberately NOT applied around the engine itself: a panic in Carmenta is
+/// our defect and must abort loudly. This only shields the harness from its
+/// decode dependencies.
+fn load_image_resilient(path: &Path) -> std::result::Result<ffai_core::types::ImageBuffer, String> {
+    let taken = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ffai_media::load_image(path)
+    }));
+    match taken {
+        Ok(Ok(image)) => Ok(image),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("decoder PANICKED — upstream defect, clip skipped".to_string()),
+    }
+}
+
 /// Same contract as [`run_ocr_engine`]: images decoded once outside the
 /// timed region, one untimed warm-up whose cost becomes `load_secs`, memory
 /// sampled on the same 20 ms cadence as the reference tree, best-of-N over
@@ -512,7 +536,7 @@ fn run_detect_engine(
 
     let mut decoded = Vec::new();
     for clip in holdout {
-        match ffai_media::load_image(&manifest.clip_path(clip)) {
+        match load_image_resilient(&manifest.clip_path(clip)) {
             Ok(image) => decoded.push((*clip, image)),
             Err(e) => summary.notes.push(format!("{}: {e}", clip.id)),
         }
@@ -572,8 +596,16 @@ fn run_detect_engine(
                     ));
                 }
                 Err(e) => {
+                    // Record and CONTINUE. Aborting here threw away every other
+                    // clip: a 43-page run reported 0/43 because page 23 failed,
+                    // which made a real crash — PARSeq overflowing on a long
+                    // word — look like a harness quirk and hid it for a whole
+                    // benchmark cycle. The correctness gate already expresses
+                    // partial success as `clips_ok < clips_total`, so aborting
+                    // discards exactly the information the gate exists to
+                    // report, and costs 42 good measurements to learn one bad
+                    // one.
                     first_error.get_or_insert(format!("{}: {e}", clip.id));
-                    return Err(e);
                 }
             }
         }
@@ -714,7 +746,7 @@ fn run_ocr_engine(
     // the comparison measures inference, not our PNG reader.
     let mut decoded = Vec::new();
     for clip in holdout {
-        match ffai_media::load_image(&manifest.clip_path(clip)) {
+        match load_image_resilient(&manifest.clip_path(clip)) {
             Ok(image) => decoded.push((*clip, image)),
             Err(e) => summary.notes.push(format!("{}: {e}", clip.id)),
         }
@@ -826,7 +858,17 @@ fn run_ocr_engine(
         // cause, which read as a harness quirk rather than a real error and
         // left two engines wrongly described as "unmeasured rather than
         // broken". The error goes where the gate actually looks.
-        Err(e) => summary.notes.insert(0, first_error.unwrap_or_else(|| e.to_string())),
+        Err(e) => summary
+            .notes
+            .insert(0, first_error.clone().unwrap_or_else(|| e.to_string())),
+    }
+    // A run that completed with failures still has to say so: the loop no
+    // longer aborts, so the error would otherwise never reach `notes`.
+    if summary.clips_ok < summary.clips_total
+        && let Some(e) = first_error
+        && summary.notes.first() != Some(&e)
+    {
+        summary.notes.insert(0, e);
     }
     Ok(summary)
 }
