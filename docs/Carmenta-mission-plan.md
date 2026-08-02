@@ -2510,7 +2510,7 @@ that halves raster's inversions but leaves half of all pages imperfect, on
 *perfect input*, should have prompted "what does it think a line height is?"
 before it prompted a fix.
 
-### 8.40 Reading order, measured properly — XY-cut is worth 3.4x, academic is the worst cell
+### 8.40 Reading order, measured properly — XY-cut is worth 3.4x (cell ranking corrected in §8.41)
 
 The instrument §8.39 called for: lines from `FFAI_OCR_CONF` dumps — real
 detections in the order the engine emitted them, so `order_reading` sees the
@@ -2569,6 +2569,66 @@ corroboration, which is precisely why a plausible number survived two sections.
 Corpus-weighted, PPT2PDF is 8 % of pages and its regression is ~0.5 pp of the
 5.96 %; academic_literature is 18 % and carries ~2.2 pp. The ranking of work is
 unambiguous.
+
+### 8.41 The column-first cut wins on train and LOSES on holdout — refuted
+
+§8.40 made `academic_literature` the top target and `line_diag.py` found a
+clean mechanism. `omni-0038` emits region sequence
+`[0, 5, 1, 5, 1, 5, 1, 5, ...]` — strict left-right alternation between a
+left column (regions 0-4) and a right column (region 5). `xy_cut` takes
+whichever valley is wider, and a two-column paper with figures between its
+captions has horizontal gaps of ~19 line-heights against a ~2 line-height
+gutter, so it cuts horizontally into thin bands. Each band then orders its own
+left and right lines correctly, and the page comes out interleaved.
+
+The argument for the fix is that those two valleys are not the same kind of
+evidence. A vertical gap `best_gap` returns is a band **no box crosses** — a
+gutter running the full height of the node, i.e. structure. A horizontal gap is
+whitespace, and whitespace is wider on pages containing figures. `xy_cut_vfirst`
+therefore prefers the column cut, except when something spans the node, which is
+what §8.29 built horizontal-first to protect (a vertical cut assigns a headline
+to whichever side its centre lands on, slicing it in half).
+
+**On train it worked, and on holdout it does not.**
+
+| cell | holdout base | holdout vfirst | delta | train delta |
+|---|---:|---:|---:|---:|
+| colorful_textbook | 8.06 % | 10.24 % | **+2.18** | +2.11 |
+| PPT2PDF | 3.37 % | 5.50 % | **+2.13** | **−1.21** |
+| magazine | 4.10 % | 5.22 % | +1.12 | +0.27 |
+| newspaper | 5.05 % | 4.13 % | −0.92 | −0.75 |
+| academic_literature | 4.39 % | 3.75 % | −0.64 | **−3.76** |
+| book | 3.54 % | 2.30 % | −1.24 | −1.05 |
+| exam_paper | 0.52 % | 0.77 % | +0.25 | −0.79 |
+| **ALL** | **4.44 %** | **4.65 %** | **+0.21 WORSE** | −0.80 better |
+
+**Refuted. The default stays `xy_cut`;** `vfirst` remains a named `FFAI_ORDER`
+mode so the next attempt starts from a measured position rather than this
+paragraph.
+
+**And the premise it was built on does not generalise.** §8.40 called
+`academic_literature` the worst ordering cell at 12.01 %. That was 15 TRAIN
+pages. On holdout's 43 it reads **4.39 %** — mid-table — and the worst cell is
+`colorful_textbook` at 8.06 %, which §8.40 listed as second-best. The whole
+diagnostic chain (worst cell -> diagnose its pages -> find the interleave ->
+build the fix) was chasing a cell that is not unusually bad.
+
+The mechanism is still real: the interleave in `omni-0038` is not an artifact,
+and `vfirst` does fix it (academic improves on BOTH splits, and `book` and
+`newspaper` improve on both). What fails is the trade. Preferring columns costs
+more on pages whose "gutter" is a figure margin than it gains on genuine
+two-column text, and `PPT2PDF` flipping from −1.21 to +2.13 across splits says
+the effect there is noise on 5 train pages.
+
+**What survives from §8.40:** the 3.4x figure for the cut against raster, which
+was a like-for-like comparison on identical pages. What is corrected: the cell
+ranking, which was train-only and is superseded by the holdout column above.
+
+**The discipline is the finding.** A −0.80 pp train win with a coherent
+mechanism, a signature visible in the raw sequence, and improvements in the
+predicted cells — everything a result is supposed to have — is +0.21 pp on the
+split that decides. Had `line_order.py` defaulted to holdout (it did until
+§8.38 caught it), this would have shipped.
 
 ## 9. Pure-Rust boundary and watchlist
 

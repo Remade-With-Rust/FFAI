@@ -338,6 +338,7 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("raster") => sorted_by_y(lines),
         Ok("onelevel") => order_one_level(lines, page_w),
         Ok("adaptive") => adaptive_cut(lines, page_w),
+        Ok("vfirst") => xy_cut_vfirst(lines, page_w, 0),
         _ => xy_cut(lines, page_w, 0),
     }
 }
@@ -355,6 +356,70 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
 /// already computes: no vertical valley at the top level means no columns.
 /// Note this tests the WHOLE page once — it does not disable the recursion's
 /// own per-node choices, which are what handle a headline above two columns.
+/// Prefer the COLUMN cut over the larger valley, unless something spans.
+///
+/// §8.40 made `academic_literature` the worst ordering cell (12.01 %, double
+/// newspaper) and §8.41 found the mechanism: `xy_cut` takes whichever valley is
+/// wider, and a two-column paper with figures between its captions has
+/// horizontal gaps of ~19 line-heights against a ~2 line-height gutter. So it
+/// cuts horizontally first, into thin bands; each band then orders its own left
+/// and right lines correctly, and the page comes out interleaved
+/// left-right-left-right. That is `omni-0038`'s emitted sequence exactly.
+///
+/// A vertical valley is not the same KIND of evidence as a horizontal one. Any
+/// gap `best_gap` returns on the vertical axis is a band no box crosses, i.e. a
+/// gutter running the full height of this node — structure. A horizontal gap is
+/// just whitespace, and whitespace is wider on pages with figures in them.
+/// Comparing their widths compares incomparable things.
+///
+/// The exception is what §8.29 built horizontal-first for: when a headline
+/// spans the node, cutting vertically first slices it in half, because the
+/// partition assigns it to whichever side its centre lands on. So a spanning
+/// box still forces the horizontal cut, and only then do the bands below find
+/// their columns.
+fn xy_cut_vfirst(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
+        return sorted_by_y(lines);
+    }
+    let mut hs: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1) as f32;
+
+    let spans_something = lines.iter().any(|l| is_spanning(&line_bbox(l), page_w));
+    let h = best_gap(&lines, lh, page_w, Axis::Horizontal);
+    let v = best_gap(&lines, lh, page_w, Axis::Vertical);
+    let cut = match (h, v) {
+        (Some(a), Some(b)) => {
+            if spans_something {
+                Some((Axis::Horizontal, a.0))
+            } else {
+                Some((Axis::Vertical, b.0))
+            }
+        }
+        (Some(a), None) => Some((Axis::Horizontal, a.0)),
+        (None, Some(b)) => Some((Axis::Vertical, b.0)),
+        (None, None) => None,
+    };
+    let Some((axis, at)) = cut else { return sorted_by_y(lines) };
+
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    for l in lines {
+        let b = line_bbox(&l);
+        let key = match axis {
+            Axis::Horizontal => b.y0.midpoint(b.y1),
+            Axis::Vertical => b.x0.midpoint(b.x1),
+        };
+        if key < at { near.push(l) } else { far.push(l) }
+    }
+    if near.is_empty() || far.is_empty() {
+        return sorted_by_y(if near.is_empty() { far } else { near });
+    }
+    let mut out = xy_cut_vfirst(near, page_w, depth + 1);
+    out.extend(xy_cut_vfirst(far, page_w, depth + 1));
+    out
+}
+
 fn adaptive_cut(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
     if lines.len() < 2 {
         return sorted_by_y(lines);
