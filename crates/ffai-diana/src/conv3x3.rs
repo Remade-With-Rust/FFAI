@@ -113,6 +113,7 @@ fn conv3x3_tiled(
         let b = brows * ow;
         let mut col = vec![0f32; k * b];
         crate::conv3x3::count_im2col(k * b);
+        crate::conv3x3::count_macs((k as u64) * (b as u64) * (c_out as u64));
 
         // One task per CHANNEL, all nine taps inside — not per (channel, tap).
         //
@@ -261,6 +262,7 @@ pub fn conv3x3_strided(
     // answers "is this bandwidth-bound?" arithmetically, which is the
     // question that decides whether more threads can ever help.
     crate::conv3x3::count_im2col(c_in * 9 * ohw);
+    crate::conv3x3::count_macs((c_in as u64) * 9 * (ohw as u64) * (c_out as u64));
     let col = crate::profile::timed(|p| &p.im2col, || {
         crate::cpuop::SliceOp::new("ffai-im2col3x3", move |xs, _| {
     let mut col = vec![0f32; c_in * 9 * ohw];
@@ -410,6 +412,22 @@ mod tests {
 /// near the machine's bandwidth decides whether the fix is more threads or
 /// fewer bytes.
 static IM2COL_ELEMS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Multiply-accumulates issued by a convolution. Counted, never timed —
+/// the point is to compare our ARITHMETIC against the reference's implied
+/// throughput, and a counter cannot drift.
+static MACS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn count_macs(n: u64) {
+    if counting() {
+        MACS.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// MACs since the last call, and reset.
+pub fn take_macs() -> u64 {
+    MACS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
 
 pub(crate) fn count_im2col(n: usize) {
     if counting() {

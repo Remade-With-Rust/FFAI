@@ -1093,3 +1093,74 @@ already breached by 2 %.
 double-write removal 1.12x serial, AVX2 1.23-1.40x kernel), the divide
 refuted twice on two baselines, and the remaining gap is a precision trade
 rather than an engineering one.
+
+
+---
+
+## The roofline, which should have been the first measurement
+
+Every experiment above assumed the same thing without ever testing it: that
+the reference does **our arithmetic, faster**. Tiled im2col, three scalar
+direct convolutions, the transposed GEMM, the AVX2 microkernel, the blocking
+inversion — all of them search the space of "execute these multiplies
+better". If that assumption is false, the whole search was in the wrong
+space.
+
+Testing it needs no timer. Count the multiply-accumulates with a
+deterministic counter, divide by the reference's published latency, and
+compare the implied throughput against what the machine can physically
+retire (`examples/roofline.rs`):
+
+| | per image |
+|---|---:|
+| 3x3 convolution arithmetic, yolo26n @ 640 rect | **2.050 GFLOP** |
+| ultralytics p50 | 59 ms -> **35 GFLOP/s** |
+| ours p50 | 142 ms -> **14 GFLOP/s** |
+| this box, AVX2 FMA x 24 cores | **1920-2688 GFLOP/s** |
+
+**The reference runs at about 1.8 % of arithmetic peak. We run at about
+0.8 %.** Neither implementation is remotely arithmetic-bound.
+
+### What that costs every conclusion above
+
+The convolution microkernel went from ~1.3x behind to **1.111x** behind over
+this campaign — real work, correctly measured. It is also **tuning something
+that occupies under two percent of the machine.** Driving the convolution to
+100 % of peak, which nobody has ever done in a real framework, would move a
+142 ms image by roughly the 20 ms the arithmetic actually costs. The 2.4x
+gap at n survives it.
+
+This retroactively explains the shape of every result in this document: a
+long series of carefully-measured single-digit outcomes, several refutations,
+and no movement in the gate. That is the signature of optimising the wrong
+term. The measurement discipline was sound throughout — each individual
+number here is defensible — and it was aimed at a term that cannot produce
+the answer.
+
+### Where the time actually is
+
+With arithmetic at ~20 ms of a 142 ms image, ~120 ms is elsewhere, and the
+other counters in this document already bound the candidates:
+
+* im2col traffic, **216.9 MiB/image**, ~9.5 ms at this box's 24 GB/s;
+* `silu`, measured at **30.7 % of serial detect**;
+* the remainder is framework: per-op allocation, tensor copies, and the sheer
+  op count of a graph executed one node at a time.
+
+None of those are convolution. The reference is at 1.8 % of peak rather than
+0.8 % not because its GEMM is twice as good — its GEMM is also nowhere near
+the roofline — but because it carries **less of everything else per image**.
+
+### The honest status of the parity bet
+
+Parity was never one kernel away, and no amount of the work catalogued above
+was going to reach it. The gap is structural: an eager, allocate-per-op
+execution model against one that has had years of memory-traffic and
+operator-fusion work poured into it. Closing it is a **fusion and allocation**
+project — keeping activations in cache across ops instead of round-tripping
+them through DRAM — and that is a different piece of work from anything
+attempted here, with a different risk profile and no guarantee at the end.
+
+Recorded at the point where it was found rather than folded quietly into a
+plan, because the counter that produced it costs nothing and could have been
+run on day one.
