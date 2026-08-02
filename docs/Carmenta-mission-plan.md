@@ -1917,6 +1917,47 @@ and exam_paper (-3.12). Those are recognition, and the three-way against
 PP-StructureV3 and Unlimited-OCR is what will say whether 73 % on academic text
 is our recognizer or the corpus being genuinely hard.
 
+### 8.30 The three-way on real documents — measured, and the gap is 10.4 points
+
+Carmenta against both document-tier references on 43 OmniDocBench pages,
+identical pixels, one binary, ledger-recorded:
+
+| | CER | WER | pages/s | peak MiB | steady MiB |
+|---|---:|---:|---:|---:|---:|
+| **Unlimited-OCR** (Baidu, 3B MoE, GPU) | **15.51 %** | 23.02 | 0.01 | 8745 | — |
+| PP-StructureV3 | 19.14 % | 30.65 | 0.02 | 4972 | 1481 |
+| **mobiledet-crnn** (ours, CPU) | 25.91 % | 41.58 | **0.17** | 2369 | **425** |
+| craft-crnn (ours, CPU) | 55.06 % | — | 0.10 | 1821 | — |
+
+**correctness PASS · quality FAIL · speed PASS · footprint PASS.**
+
+The honest shape of it: **10.4 points behind the model that holds the
+OmniDocBench record, 6.8 behind PP-Structure, at 17x its throughput on a CPU
+and 0.29x PP-Structure's steady memory.** Not parity. The same order of
+magnitude, from 4.7 MB of detector weights against 6.4 GB, on a machine with no
+GPU.
+
+Three things any use of these numbers has to carry:
+
+1. **Name the engine.** craft-crnn reads 55.06 % where mobiledet-crnn reads
+   25.91 %. "Carmenta scores X" is meaningless; the detector choice is worth 29
+   points on documents.
+2. **43 pages, not 316** — a stratified subset so two reference models could run
+   in hours rather than a day, with every source represented.
+3. **One page excluded**, and it is a defect not a choice: `rusty_jpeg` 0.1.5
+   panics on progressive JPEG (SOF2, `decode/decoder.rs:1449`, unwrap on None).
+   49 of the parent corpus's 316 pages are progressive. A panic costs the whole
+   batch rather than one page, which is why four benchmark arms died silently
+   before this was found.
+
+**Open, and not a recognition result:** both parseq arms report
+`correctness FAIL 0/43`, and the message is a footprint-accounting note
+("EXCLUDES 855.1 MiB of pre-decoded images held by the harness"). An
+informational note is being promoted to a per-clip failure, so those two
+engines are UNMEASURED here rather than broken — and a gate that fails for a
+non-quality reason is exactly the kind of thing that gets read as a quality
+result later.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

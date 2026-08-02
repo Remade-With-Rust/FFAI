@@ -18,21 +18,30 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let corpus = PathBuf::from(args.next().expect("usage: bench_ocr <corpus> <engine> [refs...]"));
     let engine = args.next().expect("usage: bench_ocr <corpus> <engine> [refs...]");
+    // `none` means NO references. Omitting the list means ALL of them, which is
+    // the harness's contract and a trap in a script: four "engine only" arms
+    // silently pulled tesseract, easyocr, paddle, PP-Structure AND Unlimited-OCR
+    // — hours of reference time per arm for numbers already measured.
     let only: Vec<String> = args.collect();
+    let no_refs = only.len() == 1 && only[0] == "none";
 
     let mut reg = EngineRegistry::new();
     ffai_carmenta::register(&mut reg);
 
     let refs_path = Path::new("corpora/references.toml");
-    let references = match ReferenceFile::load(refs_path) {
-        Ok(f) => f
-            .for_task("ocr")
-            .filter(|r| only.is_empty() || only.iter().any(|n| *n == r.name))
-            .cloned()
-            .collect(),
-        Err(e) => {
-            eprintln!("note: no references at {}: {e}", refs_path.display());
-            Vec::new()
+    let references = if no_refs {
+        Vec::new()
+    } else {
+        match ReferenceFile::load(refs_path) {
+            Ok(f) => f
+                .for_task("ocr")
+                .filter(|r| only.is_empty() || only.iter().any(|n| *n == r.name))
+                .cloned()
+                .collect(),
+            Err(e) => {
+                eprintln!("note: no references at {}: {e}", refs_path.display());
+                Vec::new()
+            }
         }
     };
 

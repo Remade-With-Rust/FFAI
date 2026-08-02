@@ -1,0 +1,398 @@
+# Stratified three-way subset of carmenta-omnidoc-v1.
+#
+# PROGRESSIVE JPEGs ARE EXCLUDED, and that is a scope limit, not a fix:
+# rusty_jpeg 0.1.5 PANICS on SOF2 (decode/decoder.rs:1449, unwrap on None),
+# and a panic takes the whole batch down rather than costing one page. 49 of
+# the 316 pages in the parent corpus are progressive; 1 of these 44 were.
+# Excluded here so all engines see identical pixels: omni-0001
+#
+name = "carmenta-omnidoc-mini"
+version = 1
+task = "ocr"
+
+[[clips]]
+id = "omni-0085"
+path = "clips/carmenta-omnidoc/omni-0085.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0085.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "6e95b18c68c2a0451b0e90a82e34939481f35685895cf83812b133e4530f30d5"
+
+[[clips]]
+id = "omni-0121"
+path = "clips/carmenta-omnidoc/omni-0121.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0121.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "7e1d6871fab6eacec8f1ff36e16720fbd44487d9237be38deb1148ea63083b14"
+
+[[clips]]
+id = "omni-0193"
+path = "clips/carmenta-omnidoc/omni-0193.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0193.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "5643016f758e7a8d8b81aa29f50b4066c37a58dd8a56bb9818164b60fe5d2dd3"
+
+[[clips]]
+id = "omni-0203"
+path = "clips/carmenta-omnidoc/omni-0203.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0203.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "660a25910840a721a7a44d85793b39f2e1bc7cf97273a181be1cc891fcce45d9"
+
+[[clips]]
+id = "omni-0002"
+path = "clips/carmenta-omnidoc/omni-0002.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0002.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "88f671e04f05046f37d0a5515385b151d644cde846f39159e7dbf19137324644"
+
+[[clips]]
+id = "omni-0017"
+path = "clips/carmenta-omnidoc/omni-0017.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0017.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "0c1b7f4779e1885475942cdca1ac4493f0d4fd1ce964d8c4af138efc8818092d"
+
+[[clips]]
+id = "omni-0018"
+path = "clips/carmenta-omnidoc/omni-0018.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0018.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "bdae93b4c14f4e21ed79641369f992139ab5c5e97aa9cc768a12350113a68284"
+
+[[clips]]
+id = "omni-0019"
+path = "clips/carmenta-omnidoc/omni-0019.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0019.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "cf063d3b167d4c206e6a3c7010d2f61919c6ee1c1beaf1fe5094d0781882417e"
+
+[[clips]]
+id = "omni-0021"
+path = "clips/carmenta-omnidoc/omni-0021.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0021.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "f5eee990f4582095d34c989c0a80efcf1f348d0f0dfa7d3f29f130694f707469"
+
+[[clips]]
+id = "omni-0022"
+path = "clips/carmenta-omnidoc/omni-0022.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0022.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "b329c324d9aaf94106ff3c629c934f8553e34855a983dc91452ce9f12c708420"
+
+[[clips]]
+id = "omni-0023"
+path = "clips/carmenta-omnidoc/omni-0023.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0023.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "a8bfe01e2f8ff78c4235fd3c9b5461cb885f2ea3d9ad0e4fe9da5e13e3cb3a79"
+
+[[clips]]
+id = "omni-0003"
+path = "clips/carmenta-omnidoc/omni-0003.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0003.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "0dad0a9f04182717a22e3de894b8e228fa980383a0837285fafea9a5bd0445e5"
+
+[[clips]]
+id = "omni-0005"
+path = "clips/carmenta-omnidoc/omni-0005.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0005.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "130ad02f08af3a647c6d47a64ad7b9a6134976bf32c6e7418c3bc8a817190b1d"
+
+[[clips]]
+id = "omni-0006"
+path = "clips/carmenta-omnidoc/omni-0006.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0006.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "d01a203a75a5f208d66163d5c46ea70bcdd0ced08f4212c31a0c5fa2c19882c2"
+
+[[clips]]
+id = "omni-0007"
+path = "clips/carmenta-omnidoc/omni-0007.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0007.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "c007239bf4ebfcdcbd43b75136563f4df5d2868d904ba4612de746080732d492"
+
+[[clips]]
+id = "omni-0009"
+path = "clips/carmenta-omnidoc/omni-0009.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0009.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "68a5bd5c543f7d91537c899b9c31b816ce21747bf0a72b109851a2988a73c3ff"
+
+[[clips]]
+id = "omni-0010"
+path = "clips/carmenta-omnidoc/omni-0010.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0010.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "25cb9e6cdd71def494cda97ecee92483bbd7c413e2cae11fb637ed463a7180fc"
+
+[[clips]]
+id = "omni-0073"
+path = "clips/carmenta-omnidoc/omni-0073.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0073.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "10d1210684104b201224ef6430f995f19fd1bf8a8ed96420ac40e87b64da0488"
+
+[[clips]]
+id = "omni-0079"
+path = "clips/carmenta-omnidoc/omni-0079.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0079.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "c3c359458792507d1118ee16c0ceef7cd504dd902111506446ad72173808e591"
+
+[[clips]]
+id = "omni-0080"
+path = "clips/carmenta-omnidoc/omni-0080.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0080.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "d4a40c302062790dc348c70625ba54539834b33bbe5218672c7cbfcffd857d2b"
+
+[[clips]]
+id = "omni-0107"
+path = "clips/carmenta-omnidoc/omni-0107.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0107.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "2a2adef19017957ab4d20155b6ece294e71aec2b6484732a37fe2f8d9f31c744"
+
+[[clips]]
+id = "omni-0109"
+path = "clips/carmenta-omnidoc/omni-0109.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0109.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "b1fbce9804e130975aa5a9c26c133e3dc141c0fd99926cc1d37bddd2fad94d2e"
+
+[[clips]]
+id = "omni-0197"
+path = "clips/carmenta-omnidoc/omni-0197.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0197.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "4b529de276c249381605c5c9156ae1e9595f92fbf3a2c1ab0d5e0f92e9d3441e"
+
+[[clips]]
+id = "omni-0201"
+path = "clips/carmenta-omnidoc/omni-0201.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0201.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "fbb752c4667a423fbdb4f61cb379a1b171315936d3277d614b1a04b661640082"
+
+[[clips]]
+id = "omni-0015"
+path = "clips/carmenta-omnidoc/omni-0015.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0015.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "e5075e9524c1e959c5b3ad81df753cb46fd3b99f94d0b5853b0d2e99ad542924"
+
+[[clips]]
+id = "omni-0029"
+path = "clips/carmenta-omnidoc/omni-0029.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0029.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "2687dadaf67639462fad81d6d6a311dd249508bc3833d5c8df834abe3c769e28"
+
+[[clips]]
+id = "omni-0030"
+path = "clips/carmenta-omnidoc/omni-0030.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0030.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "09d92dbc7e1335085ed9858b86ee3eb5d53a3a37c22ce12da28e0d5b0d09a4fc"
+
+[[clips]]
+id = "omni-0031"
+path = "clips/carmenta-omnidoc/omni-0031.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0031.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "d8e1ba61d922eae4fd6dc50b377dc2f5556c542552df6f2815bad5df101fcc9b"
+
+[[clips]]
+id = "omni-0033"
+path = "clips/carmenta-omnidoc/omni-0033.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0033.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "e15ecb523faa95dacdc0ead1585d9f7c462ce36fb6541f4a1f385e9f907cebf2"
+
+[[clips]]
+id = "omni-0035"
+path = "clips/carmenta-omnidoc/omni-0035.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0035.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "ebc4fea86ccb73deec25b59af00677da45032db3fc7d4c59fe8910890954b1c6"
+
+[[clips]]
+id = "omni-0037"
+path = "clips/carmenta-omnidoc/omni-0037.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0037.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "74daf96f3aba6c9e55cb33d9b9c68aa61ae702d45eb12180f791bd897f54cbca"
+
+[[clips]]
+id = "omni-0069"
+path = "clips/carmenta-omnidoc/omni-0069.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0069.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "362878d7910186ab3a7570b8ef06709b0ba7a29a718d19821b13a3bd2c0dcf84"
+
+[[clips]]
+id = "omni-0071"
+path = "clips/carmenta-omnidoc/omni-0071.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0071.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "7ea6288730664d3e4db98ed9347179c861c76dcfb69bbf88b9118750a48e7d11"
+
+[[clips]]
+id = "omni-0075"
+path = "clips/carmenta-omnidoc/omni-0075.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0075.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "c459bb2a736bee58b858c7f7c82fe401e9b08e5c5d4300e75cdc7350f52e9d4d"
+
+[[clips]]
+id = "omni-0077"
+path = "clips/carmenta-omnidoc/omni-0077.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0077.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "14ef66b5fdc897bdd38addaa8590899e0dfefe1612a518bc44d38e5148af0b12"
+
+[[clips]]
+id = "omni-0123"
+path = "clips/carmenta-omnidoc/omni-0123.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0123.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "ff0db5922c385b194f978a3fd0644d7a02d369ce8ad2f2bd961df349071c0317"
+
+[[clips]]
+id = "omni-0124"
+path = "clips/carmenta-omnidoc/omni-0124.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0124.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "854a9981be969d8373367d40d21f7c64778148c2fe1b6558e581cb962e29a5b2"
+
+[[clips]]
+id = "omni-0125"
+path = "clips/carmenta-omnidoc/omni-0125.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0125.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "c2f3736dd34334028373ba72229d339b81ebd7e56bd762fa87d07ddf461210dc"
+
+[[clips]]
+id = "omni-0127"
+path = "clips/carmenta-omnidoc/omni-0127.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0127.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "f8088152f7ee7931eb783933e72baf006de885806dff182af98b1f13afb373a4"
+
+[[clips]]
+id = "omni-0128"
+path = "clips/carmenta-omnidoc/omni-0128.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0128.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "3d5c40de4f222c0c9f01c3298956c3855c163215979468c711394171fc3950a3"
+
+[[clips]]
+id = "omni-0129"
+path = "clips/carmenta-omnidoc/omni-0129.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0129.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "bce4e102948824826f61dde270bb92fdb9fd5e32bdf8250b38702d7b28e12da8"
+
+[[clips]]
+id = "omni-0131"
+path = "clips/carmenta-omnidoc/omni-0131.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0131.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "107a07b3c0a47b2a68831f087d4c4adb00bed46d39f5ed63932c5aa841c4f4b4"
+
+[[clips]]
+id = "omni-0132"
+path = "clips/carmenta-omnidoc/omni-0132.png"
+ground_truth = "clips/carmenta-omnidoc/omni-0132.txt"
+class = "document_scan"
+split = "holdout"
+license = "Apache-2.0 (OmniDocBench, opendatalab)"
+sha256 = "d524e3eb1f7f6f5c6c6789ac21551f72a90d4540b27df11cb97734f7e7522c22"
