@@ -146,6 +146,45 @@ fn silu_nodiv(x: f32) -> f32 {
     x * (1.0 + poly(f) * scale)   // <- multiply, not divide
 }
 
+/// ABLATION on the AVX2 kernel: `vdivps` replaced by `vmulps`.
+///
+/// Computes the WRONG answer; only the time is the measurement. The divide
+/// was priced once already and pruned — but that ablation ran on the SCALAR
+/// kernel, where other overheads masked it. In an 8-wide kernel `vdivps` has
+/// roughly a tenth of `vmulps`'s throughput, so the baseline has moved and a
+/// refutation expires when its baseline moves.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn silu_avx2_nodiv(src: &[f32], dst: &mut [f32]) {
+    use std::arch::x86_64::*;
+    const MAGIC: f32 = 12582912.0;
+    let (log2e, magic) = (_mm256_set1_ps(LOG2_E), _mm256_set1_ps(MAGIC));
+    let (lo, hi) = (_mm256_set1_ps(-125.0), _mm256_set1_ps(125.0));
+    let one = _mm256_set1_ps(1.0);
+    let (c1, c2, c3) = (_mm256_set1_ps(L1), _mm256_set1_ps(L2), _mm256_set1_ps(L3));
+    let (c4, c5) = (_mm256_set1_ps(L4), _mm256_set1_ps(L5));
+    let bias = _mm256_set1_epi32(0x3f80_0000u32 as i32);
+    let n = src.len();
+    let mut i = 0usize;
+    while i + 8 <= n {
+        let x = _mm256_loadu_ps(src.as_ptr().add(i));
+        let t = _mm256_min_ps(_mm256_max_ps(_mm256_mul_ps(_mm256_sub_ps(_mm256_setzero_ps(), x), log2e), lo), hi);
+        let z = _mm256_add_ps(t, magic);
+        let nn = _mm256_sub_ps(z, magic);
+        let f = _mm256_sub_ps(t, nn);
+        let mut p = _mm256_add_ps(_mm256_mul_ps(f, c5), c4);
+        p = _mm256_add_ps(_mm256_mul_ps(f, p), c3);
+        p = _mm256_add_ps(_mm256_mul_ps(f, p), c2);
+        p = _mm256_add_ps(_mm256_mul_ps(f, p), c1);
+        p = _mm256_add_ps(_mm256_mul_ps(f, p), one);
+        let scale = _mm256_castsi256_ps(_mm256_add_epi32(_mm256_slli_epi32(_mm256_castps_si256(z), 23), bias));
+        // vmulps where the real kernel has vdivps.
+        let y = _mm256_mul_ps(x, _mm256_add_ps(_mm256_mul_ps(p, scale), one));
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i), y);
+        i += 8;
+    }
+}
+
 fn main() {
     let n = 1 << 24; // 16 M elements, 64 MiB in + 64 MiB out — well past L3
     let iters = 7;
@@ -179,6 +218,29 @@ fn main() {
     let t3 = bench("v3 magic + max/min clamp", n, iters, &src, &mut dst, silu_v3);
     let tnd = bench("ABLATION: no divide (wrong)", n, iters, &src, &mut dst, silu_nodiv);
 
+    // The SHIPPED AVX2 kernel, on the same buffers and the same harness, so
+    // "2.3x remains in silu" can be checked rather than repeated.
+    let tavx = if ffai_diana::silu_avx2::available() {
+        for _ in 0..1 {
+            // SAFETY: availability checked; lengths equal.
+            unsafe { ffai_diana::silu_avx2::silu_into(&src, &mut dst) };
+        }
+        let mut best = f64::INFINITY;
+        for _ in 0..iters {
+            let t = Instant::now();
+            // SAFETY: as above.
+            unsafe { ffai_diana::silu_avx2::silu_into(&src, &mut dst) };
+            std::hint::black_box(&*dst);
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        println!("{:<28} {:>8.2} ms  {:>7.2} GB/s  {:>8.2} Gelem/s   <- SHIPPED",
+                 "AVX2 (explicit)", best * 1e3,
+                 (n as f64 * 8.0) / best / 1e9, n as f64 / best / 1e9);
+        best
+    } else {
+        f64::NAN
+    };
+
     // Agreement first: a faster kernel that computes something else is not a
     // faster kernel. Checked over the same distribution, not a happy sample.
     let (mut d1, mut d2, mut d3) = (0f32, 0f32, 0f32);
@@ -193,6 +255,27 @@ fn main() {
     println!("max relative disagreement vs v0:  v1 {d1:.3e}   v2 {d2:.3e}   v3 {d3:.3e}");
     println!();
     println!("v0 is {:.2}x off the copy ceiling", t0 / roof);
+    #[cfg(target_arch = "x86_64")]
+    if tavx.is_finite() {
+        let mut best = f64::INFINITY;
+        for _ in 0..iters {
+            let t = Instant::now();
+            // SAFETY: availability checked above; ablation only.
+            unsafe { silu_avx2_nodiv(&src, &mut dst) };
+            std::hint::black_box(&*dst);
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        println!("{:<28} {:>8.2} ms  {:>7.2} GB/s   <- ABLATION, wrong answer",
+                 "AVX2 no-divide", best * 1e3, (n as f64 * 8.0) / best / 1e9);
+        let share = 100.0 * (tavx - best) / tavx;
+        println!("DIVIDE is {share:.1}% of the AVX2 kernel  ({})",
+                 if share > 10.0 { "rcp+Newton is REOPENED" } else { "rcp stays pruned" });
+    }
+    if tavx.is_finite() {
+        println!("AVX2 vs the scalar it replaces: {:.2}x", t2 / tavx);
+        println!("AVX2 vs the memcpy ceiling:     {:.2}x off  (scalar was {:.2}x off)",
+                 tavx / roof, t2 / roof);
+    }
     // A NEGATIVE ablation is the instrument telling you the effect is not
     // there: removing work cannot genuinely cost time, so a result below
     // zero means the difference is inside the noise, not that the divide is

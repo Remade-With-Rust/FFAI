@@ -1056,3 +1056,40 @@ are closed with numbers attached, the one remaining path is named and priced,
 and the instruments that would have hidden all of it — a null arm, an order
 reversal, a cycle counter, a self-checking A/B harness — now exist in the
 tree.
+
+## D5d — silu, closed: it is COMPUTE-bound, and the ceiling was wrong
+
+"2.3x remains in silu" came from comparing the kernel to a **memcpy**
+roofline. That was the wrong ceiling, and the AVX2 kernel is what made it
+obvious.
+
+| | GB/s | Gelem/s | vs memcpy |
+|---|---:|---:|---:|
+| memcpy (zero arithmetic) | 20.6-22.5 | 2.58-2.82 | — |
+| scalar (before) | 9.20 | 1.15 | 2.45-2.81x off |
+| **AVX2 (shipped)** | **9.0-12.9** | **1.12-1.61** | **1.75-2.29x off** |
+
+The kernel gained **1.23-1.40x**, taking roughly 40 % of what was measured
+as available. Then two things closed the rest of the question:
+
+**The divide is 3.3 % of the AVX2 kernel.** It was pruned once on a SCALAR
+ablation, which is weak evidence because other overheads masked it there —
+and in an 8-wide kernel `vdivps` has about a tenth of `vmulps`'s throughput,
+so the baseline had moved and the refutation deserved re-testing. Re-tested:
+still 3.3 %. `vrcpps` + Newton stays pruned, now on the right baseline.
+
+**A transcendental cannot reach memcpy speed, and that is arithmetic not
+opinion.** silu does ~16 vector ops per 8 lanes — a degree-5 Horner (10), a
+clamp (2), the exponent-field write (3), the divide (1). At 2.4 GHz and ~2
+vector ops/cycle that is a **compute** ceiling near 2.4 Gelem/s, against
+memcpy's 2.58-2.82 which does no arithmetic at all. Measured 1.12-1.61.
+
+So the honest remaining headroom is **~1.5x to the COMPUTE ceiling**, not
+2.3x to a memory one — and closing it means fewer ops, i.e. a shorter
+polynomial, i.e. trading accuracy against an oracle that a single FMA fusion
+already breached by 2 %.
+
+**silu is done.** Three fixes shipped (magic rounding 1.079x pipeline, the
+double-write removal 1.12x serial, AVX2 1.23-1.40x kernel), the divide
+refuted twice on two baselines, and the remaining gap is a precision trade
+rather than an engineering one.
