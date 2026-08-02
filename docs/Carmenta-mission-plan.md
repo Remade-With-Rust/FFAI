@@ -2915,6 +2915,57 @@ over-generation: 3382 holdout lines fall outside every annotated region and are
 kept at the end, so §8.33's separate 6.7 pp over-generation prize is still on the
 table and is largely independent of this one.
 
+### 8.48 The prize is 90 % ORDERING, 10 % grouping — the cheap build is refuted
+
+§8.47 priced a perfect layout model at 11.95 pp. Such a model supplies two
+things this campaign had been treating as one: **grouping** (which lines form a
+block) and **ordering** (what sequence the blocks go in). The distinction
+decides the build. Grouping is geometric clustering — cheap, no model. Ordering
+is what a learned layout model predicts, and is not cheap.
+
+It is also the obvious hypothesis after §8.44-§8.45: all five refuted variants
+reorder individual LINES while the oracle orders REGIONS, and §8.39 already
+established that on this problem the units matter more than the rule.
+
+Measured by inserting a grouping oracle and nothing else — our rule's actual
+line ordering, with blocks merely made contiguous, each block taking the
+position of its first-emitted line:
+
+| 236 holdout pages, micro CER | |
+|---|---:|
+| A — shipped (our lines, our rule) | 24.72 % |
+| B — oracle **grouping**, our ordering | **23.47 %** |
+| C — oracle grouping **and** ordering | 12.83 % |
+
+**Grouping alone is worth 1.24 pp (10 % of the prize). Ordering is 10.65 pp
+(90 %).**
+
+**The cheap build is refuted.** A geometric block detector — connected
+components, proximity clustering, whatever — buys about a point. Knowing which
+lines belong together barely helps; the difficulty is entirely the sequence.
+That kills the shortcut this probe was written to find, which is what it was
+for.
+
+It also explains the five refutations more precisely than §8.45 did. Those
+variants were not failing to group; they were competing for the 90 % and
+capturing ~6 % of it. The ceiling is not in how lines are bundled, it is in the
+evidence available to decide sequence — and a projection over box geometry
+simply does not contain "this column continues from that one".
+
+**A first attempt at B was thrown away, and the reason is now familiar.** It
+ordered one representative box per block and scored **51.88 %** — twice as bad
+as shipped — because `order_reading`'s projection is calibrated for dense line
+sets, and ~10 sparse representatives make every gap look like structure. That
+measures "our rule on a sparse sample", not "our rule on blocks". It is the same
+error as §8.39 (region-scale boxes into a line-scale rule) and would have
+reported grouping as catastrophically harmful. **Seventh instrument failure in
+this campaign, caught before it was recorded rather than after.**
+
+**Where this leaves the build.** The next investment is reading-order
+prediction, not region detection: the model has to output a SEQUENCE, and
+geometry cannot supply it. That is the same capability PP-StructureV3 ships and
+the reason §8.43 finds order owning 89 % of the gap to it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
