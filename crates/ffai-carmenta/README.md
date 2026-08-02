@@ -66,7 +66,12 @@ same metric:
 |---|---:|---:|---:|
 | Unlimited-OCR (Baidu, 3B MoE, **GPU**) | 15.51 % | 0.01 | 8745 MiB peak |
 | PP-StructureV3 | 19.14 % | 0.02 | 1481 MiB steady |
-| **`mobiledet-crnn` (ours, CPU)** | 25.91 % | **0.17** | **425 MiB steady** |
+| **`mobiledet-crnn` (ours, CPU)** | **23.76 %** | **0.15** | **425 MiB steady** |
+
+Carmenta's row was **25.91 %** before per-node reading-order routing landed; the
+same 43 pages, same harness, same metric now read **23.76 %**. The deficit
+against the 3B GPU reference fell from **10.40 pp to 8.25 pp** — a 21 %
+reduction, from ordering alone, with no new weights.
 
 Behind on quality, **17x the throughput on a machine with no GPU, from 4.7 MB of
 detector weights against 6.4 GB**. Where the remaining gap lives is measured:
