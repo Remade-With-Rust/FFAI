@@ -134,6 +134,8 @@ pub fn silu_scalar_pub(x: f32) -> f32 {
 /// `x * sigmoid(x)`, in one pass.
 #[inline(always)]
 fn silu_scalar(x: f32) -> f32 {
+    // Prometheus Stage 1. Compiles to nothing without the feature.
+    crate::telemetry::observe_silu_input(x);
     x / (1.0 + exp_fast(-x))
 }
 

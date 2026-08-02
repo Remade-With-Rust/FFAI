@@ -25,3 +25,10 @@ ffai-bench = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+# Emit per-decision telemetry for the Prometheus harvester (Stage 1).
+# OFF by default and zero-cost when off: the hooks compile to empty bodies
+# the optimizer deletes. Additive only — an instrumented engine must produce
+# byte-identical output, which the oracle and determinism tests enforce.
+prometheus-telemetry = []
