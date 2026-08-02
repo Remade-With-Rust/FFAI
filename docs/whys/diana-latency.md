@@ -1618,3 +1618,54 @@ Recorded and NOT guessed at. The lesson that generalises is the one about the
 counter: **a count only outranks a timing when it counts the right
 population.** This one disagreed with the scaling measurement for a full
 round, and the scaling measurement was right.
+
+
+---
+
+## The clean curve — measured on the first quiet box of the campaign
+
+Every scaling number above was taken while another project's `bench_ocr` held
+~12 cores. This one was not. min-of-60 per point, single process per point:
+
+| workers | 1 | 2 | 4 | 6 | 8 | 12 | 16 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| min-of-60 (ms) | 113.0 | 84.3 | 69.5 | **67.6** | 69.8 | 73.2 | 78.4 |
+
+**It corrects a claim made earlier in this file.** Under contention the sweep
+read "wall is flat, 78.9 to 86.6 ms across every pool width" and concluded
+thread tuning was exhausted because nothing moved. On a quiet box there is a
+real curve: 1.67x from one worker to six, a broad optimum at 4-6, and a slow
+decline past 8. The flatness was the contention, not the pipeline.
+
+The shipped default of 4 sits at 69.5 ms against the optimum's 67.6 ms at 6 —
+**2.7 % apart, which this instrument does not resolve**, so the default is
+left alone rather than re-tuned on a difference that small.
+
+### And it confirms the campaign's conclusion on clean data
+
+Speedup 1 -> 6 is 113.0 / 67.6 = **1.67x**, which by Amdahl at p=6 is a
+**~52 % serial fraction** and puts the serial floor at **~59 ms**.
+
+> **Parity is 52 ms. The serial floor is ~59 ms.**
+
+The floor sits BELOW nothing — it sits *above* the target. No pool width, no
+scheduler change and no additional core reaches 52 ms, because more than half
+the pipeline does not go faster with more workers. This was first derived
+under contention at ~57 ms and independently again from the stage profile;
+three estimates from three instruments now agree within 4 %.
+
+**Parity requires removing serial work, not adding parallelism.** That is the
+campaign's terminal finding, and it is the one statement here that has
+survived a quiet box.
+
+### What is left, in order
+
+From the stage profile, ranked by serial milliseconds per image: `silu` 9.7,
+`pre` 5.0, `1x1` 5.0, `im2col` 3.7, `attn` 3.5, `decode` 3.1.
+
+`silu` leads and is not what it appears: 91.3 % of its work is in calls that
+DO fan out, yet it scales 1.24x. It is not single-threaded, it is something
+that does not go faster with more cores, and that something has not been
+identified. It is the first thing to measure on the next quiet box, with the
+profiler tax priced first (`codec-measurement` §6) since the bucket carries
+87 scope entries per image.
