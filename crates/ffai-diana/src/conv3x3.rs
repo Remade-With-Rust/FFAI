@@ -93,7 +93,16 @@ fn conv3x3_tiled(
     let rows = ((TILE_BYTES / 4) / (k * ow)).clamp(1, oh);
     let dev = x.device().clone();
     let w_mat = weight.reshape((c_out, k))?;
-    let xs = x.flatten_all()?.to_vec1::<f32>()?;
+    // Read the activation IN PLACE.
+    //
+    // This was `x.flatten_all()?.to_vec1()?` — a full copy of the input
+    // tensor on EVERY convolution, which is exactly the cost one of the nine
+    // M-D2 speed bricks removed from the untiled path. Tiling as written
+    // handed it straight back, and the A/B duly measured tiling 24 % more
+    // CPU (3/21, z = -3.27) while the GEMM-shape microbench said tiling
+    // should WIN by 1.35x. That contradiction was the defect, not the idea.
+    let xs_t = x.flatten_all()?;
+    let xs = xs_t.to_vec1::<f32>()?;
     let hw = h * w;
 
     let mut out = vec![0f32; c_out * ohw];
@@ -105,10 +114,19 @@ fn conv3x3_tiled(
         let mut col = vec![0f32; k * b];
         crate::conv3x3::count_im2col(k * b);
 
-        let fill = |(i, row): (usize, &mut [f32])| {
-            let (c, tap) = (i / 9, i % 9);
-            let (ky, kx) = (tap / 3, tap % 3);
+        // One task per CHANNEL, all nine taps inside — not per (channel, tap).
+        //
+        // The comment this replaces argued the tile is cache-resident so the
+        // nine plane re-reads cost nothing. Measured elsewhere in this
+        // campaign, that same per-(channel, tap) split made the untiled
+        // im2col 2.2x SLOWER (0.611 -> 1.366 s serial) because the source
+        // plane is read nine times instead of once. A tile being smaller
+        // does not make nine reads as cheap as one.
+        let fill = |(c, block): (usize, &mut [f32])| {
             let plane = &xs[c * hw..(c + 1) * hw];
+            for tap in 0..9usize {
+            let (ky, kx) = (tap / 3, tap % 3);
+            let row = &mut block[tap * b..(tap + 1) * b];
             for oy in oy0..oy1 {
                 let sy = oy * stride + ky;
                 if sy == 0 || sy > h {
@@ -130,14 +148,12 @@ fn conv3x3_tiled(
                     }
                 }
             }
+            }
         };
-        // One task per (channel, tap) is right HERE and wrong untiled: the
-        // whole tile is cache-resident, so the plane re-read the untiled
-        // version paid for nine times costs nothing now.
         if crate::parallel::serial_kernels() {
-            col.chunks_mut(b).enumerate().for_each(fill);
+            col.chunks_mut(9 * b).enumerate().for_each(fill);
         } else {
-            col.par_chunks_mut(b).enumerate().for_each(fill);
+            col.par_chunks_mut(9 * b).enumerate().for_each(fill);
         }
 
         let col_t = Tensor::from_vec(col, (k, b), &dev)?;
@@ -158,30 +174,42 @@ fn conv3x3_tiled(
     y.reshape((n, c_out, oh, ow))
 }
 
-/// Tiling is **OFF by default: measured worse, and the reason is in this
-/// implementation rather than in the idea.**
+/// Tiling is **OFF by default: refuted, twice, the second time cleanly.**
 ///
-/// Paired ABBA, 21 rounds, serial path (the one the speed gate times),
-/// untiled as arm A:
+/// The bandwidth argument that motivated it is correct and still stands —
+/// im2col materialises 216.9 MiB per image at the n tier (deterministic
+/// counter, not a timing), read straight back by the GEMM, and bandwidth is
+/// shared so it does not divide by thread count. Tiling should fix that.
 ///
-/// | metric | result |
-/// |---|---|
-/// | CPU | tiled cheaper in **3/21, z = -3.27**, median A/B 0.807 — REAL, and against |
-/// | wall | 8/21, z = -1.09, median 0.731 — also against, inside the noise |
+/// **First refutation, with two defects of its own.** 3/21 on CPU
+/// (z = -3.27), ~24 % more CPU than untiled. The implementation copied the
+/// whole input tensor per convolution (`flatten_all().to_vec1()`) — the very
+/// cost an M-D2 brick had removed from the untiled path — and split the fill
+/// per (channel, tap), which reads each source plane nine times instead of
+/// once and measured 2.2x slower when tried on the untiled im2col.
 ///
-/// The tiled version is ~24 % more CPU. The bandwidth argument that motivated
-/// it is still correct — 216.9 MiB of im2col traffic per image, counted —
-/// but this code pays for the saving twice over: it does
-/// `x.flatten_all()?.to_vec1()?`, copying the WHOLE input tensor on every
-/// convolution, plus a `from_vec`/`to_vec1` round trip per tile. The untiled
-/// path reads the activation in place through `SliceOp` and hands its output
-/// Vec straight to the tensor's storage — zero copies, which was one of the
-/// nine M-D2 speed bricks. Tiling as written gives that back.
+/// **Both defects fixed, and it is still slower: 15/15, z = +3.87, median
+/// 1.355x, against a 2.0 % null spread** — so this time the magnitude is
+/// usable, not just the direction.
 ///
-/// **Kept, off, behind `FFAI_DIANA_TILE=1`**, because the next attempt is
-/// not a redesign: it is this loop with the input read through `SliceOp` and
-/// the tile results written into one preallocated output buffer. Deleting it
-/// would mean rediscovering both the byte count and this trap.
+/// What remains is the marshalling the GEMM-shape microbench never measured.
+/// That probe compared `w[16,27] x col[27,N]` at several N and found ten
+/// tiles beat one call by 1.35x — true, and irrelevant, because it priced
+/// only the multiply. Each tile here also pays a `Tensor::from_vec`, a
+/// `matmul`, and a `to_vec1` back: roughly ten per convolution and ~5850 per
+/// image. **Isolation measured the arithmetic and omitted the plumbing**,
+/// which is the third time this campaign that a microbench over-promised
+/// against the pipeline.
+///
+/// **The idea is not dead; this route to it is.** Tiling can only pay if the
+/// tile never becomes a `Tensor` — i.e. a fused im2col+GEMM micro-kernel
+/// owning its own accumulation. That was tried too (`crate::direct3x3`,
+/// three variants) and lost 9/9 to candle's GEMM, which runs at 69 % of peak
+/// where a hand-written one does not. Closing that gap means beating a tuned
+/// GEMM, not avoiding one.
+///
+/// Kept behind `FFAI_DIANA_TILE=1` so the next attempt starts from a
+/// working, gated implementation rather than a blank file.
 fn tiling_disabled() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
     static C: AtomicU8 = AtomicU8::new(u8::MAX);
