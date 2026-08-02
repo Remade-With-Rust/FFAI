@@ -31,7 +31,7 @@ ffai models         # list model manifests, licenses, cache status
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. On **OmniDocBench** documents: **25.9 % CER on CPU against Baidu Unlimited-OCR's 15.5 % on a GPU — at 17x the throughput and 4.7 MB of detector weights against 6.4 GB**, with reading order computed by projection rather than learned. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
+| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is 1.5–2.4× ahead at every tier, both from one structural cause** ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -448,6 +448,19 @@ number a ledger line:
 | Unlimited-OCR (Baidu, 3B MoE, **GPU**) | **15.51 %** | 0.01 | 8745 MiB peak |
 | PP-StructureV3 | 19.14 % | 0.02 | 1481 MiB steady |
 | **`mobiledet-crnn` (ours, CPU)** | 25.91 % | **0.17** | **425 MiB steady** |
+
+On the FULL 236-page holdout — obtainable only after a progressive-JPEG decoder
+fix, since 35 pages previously could not be read at all — `mobiledet-crnn` now
+reads **20.27 % CER (micro), 236/236 correctness**. Per-node routing of the
+reading-order cut is worth **4.5 points** of that, and the recursive cut is worth
+**3.4x** against raster order.
+
+**Where the gap actually is, measured:** 89 % of the deficit against
+PP-StructureV3 is *sequence*, not characters. Destroy ordering in both outputs
+and the gap collapses from 13.29 pp to **1.40 pp** (69 pages, sign test
+z = +2.29). A perfect layout model is worth a further **11.95 pp** — the ceiling
+every ordering idea competes for, and five variants that tried have been refuted
+on holdout.
 
 **10.4 points behind the model that holds the record, at 17× its throughput on
 a machine with no GPU**, from 4.7 MB of detector weights against 6.4 GB —
