@@ -196,7 +196,7 @@ impl DetectEngine for Yolo26 {
         // `serial_scope` has turned the per-layer fan-out off — installing a
         // second pool inside it would nest one fan-out in another, the exact
         // arrangement `crate::parallel` measured at a 2.32x CPU tax.
-        if crate::parallel::serial_kernels() {
+        if crate::parallel::serial_kernels() || crate::parallel::no_pool() {
             return self.detect_inner(image, opts);
         }
         crate::parallel::latency_pool().install(|| self.detect_inner(image, opts))

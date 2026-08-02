@@ -183,6 +183,41 @@ mod tests {
 ///
 /// Not used by `detect_batch`: a batch already fills every core across
 /// images, and [`serial_scope`] turns the per-layer fan-out off entirely.
+/// `FFAI_DIANA_THREADS=0` installs NO pool of our own, so kernels run on
+/// rayon's global pool.
+///
+/// This is the arm the 1.21x measurement never had. That A/B compared our
+/// pool at 4 against our pool at 24 — BOTH installing a pool — so it priced
+/// the pool's WIDTH and never the pool's EXISTENCE.
+///
+/// The hypothesis was that the pool's EXISTENCE costs something: candle 0.11
+/// keeps its own 24-thread pool, so every matmul called from one of our
+/// workers is a cross-pool handoff, ~1320 of them per image.
+///
+/// Measured on CPU TIME — which a contended box cannot inflate — 8 pairs,
+/// ABBA, arms fully separated:
+///
+/// | | CPU per image |
+/// |---|---:|
+/// | pool of 4 | **199-250 ms** |
+/// | no pool (global rayon) | **761-826 ms** |
+///
+/// **The pool cuts CPU work by 3.5x.** The handoff hypothesis is refuted and
+/// its opposite is true: without our pool, 24 global rayon workers AND
+/// candle's 24 contend for 24 cores, and three quarters of the machine goes
+/// to barriers. This is the strongest evidence for the pool by some margin —
+/// the earlier 1.21x compared widths (4 against 24) and could not see it,
+/// because both arms already had a pool.
+///
+/// It also reframes the utilisation figure. ~225 ms of CPU in ~100 ms of wall
+/// is ~2.2 cores busy, and that is not idle capacity going to waste: the
+/// useful work is simply SMALL, and spreading it wider costs more in barriers
+/// than it recovers. Reaching 53 ms would need either ~4.2 cores busy on this
+/// work — near-perfect scaling — or less work.
+pub fn no_pool() -> bool {
+    std::env::var("FFAI_DIANA_THREADS").is_ok_and(|v| v == "0")
+}
+
 pub fn latency_pool() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
@@ -193,6 +228,7 @@ pub fn latency_pool() -> &'static rayon::ThreadPool {
         let n = std::env::var("FFAI_DIANA_THREADS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
             .filter(|&n| n > 0)
             .unwrap_or_else(|| (cores / 6).clamp(3, 6));
         rayon::ThreadPoolBuilder::new()
