@@ -28,7 +28,7 @@ hound = { workspace = true }
 # DEMUXERS and video codecs, where rff provides something nothing else does.
 # For a still-image decoder it bought an indirection and cost publication.
 rusty_png = "0.1"
-rusty_jpeg = "0.1"
+rusty_jpeg = "0.2"
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.

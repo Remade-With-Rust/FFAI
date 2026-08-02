@@ -2791,6 +2791,86 @@ and a structure change, which is what a figure inside a two-column paper IS.
 The next attempt should route per NODE inside the recursion rather than once
 per page — the same discriminator, applied where the ambiguity actually lives.
 
+### 8.45 Per-node routing refuted — five variants, and the aggregate lies twice more
+
+§8.44 ended by naming the next attempt: route per NODE inside the recursion
+rather than once per page, because a single page routinely contains both a
+uniform grid and a structure change. `pernode` does that — at every node, a set
+with no page-wide element and real gutters is split into ALL its columns at once
+(column-major, recursing inside each), and anything else falls through to the
+ordinary larger-valley cut.
+
+**It produced the best aggregate of the session and is still refuted.**
+
+| | train | holdout |
+|---|---:|---:|
+| baseline `xy_cut` | 5.96 % | 4.44 % |
+| `hybrid` | 4.60 % | 4.25 % |
+| **`pernode`** | **4.16 %** | **3.74 %** |
+
+| paired, holdout | better | worse | tied | sign test | mean Δ, 95 % CI |
+|---|---:|---:|---:|---|---|
+| `hybrid` | 25 | **33** | 178 | z = −1.05 | +0.19 pp, [−0.93, +1.34] |
+| **`pernode`** | 20 | **24** | 192 | **z = −0.60** | +0.69 pp, **[−0.28, +1.73]** |
+
+A 3.74 % against a 4.44 % baseline is a 16 % relative improvement and it is not
+real: **more pages get worse than better.** Both routing variants help a handful
+of large pages substantially and hurt slightly more small ones slightly, and
+character-weighted averaging over a 722x page-length spread reports that as
+progress. This is the third distinct way that spread has produced a misleading
+number (§8.33 macro/micro, §8.43 an interval spanning zero, here an aggregate
+pointing opposite to the page count).
+
+**Five variants, three architectures, none transfers:**
+
+| variant | idea | holdout verdict |
+|---|---|---|
+| `vfirst` | prefer columns at every node | 4.65 %, worse |
+| `vtop` | prefer columns at depth 0 | 4.85 %, worse |
+| `onelevel` | explicit column grid, no recursion | falsifier fired on newspapers |
+| `hybrid` | route per page on spanning element | aggregate up, pages down |
+| `pernode` | route per node | aggregate up, pages down |
+
+**The conclusion is architectural, not another rule.** Every variant reorders
+the same geometric evidence — whitespace valleys and box extents. The two that
+improved the aggregate did so by trading many small regressions for a few large
+wins, which is what happens when the decision is right on the pages where
+structure is obvious and arbitrary everywhere else. **Projection-based ordering
+has a ceiling here**, and clearing it needs information the projection does not
+carry: which boxes belong to the same logical block, which PP-StructureV3 gets
+from a layout model and geometry cannot infer.
+
+That is a real deliverable — it says the next investment is a layout classifier,
+not a sixth cut rule — and §8.43's decomposition still stands behind it: order
+owns 89 % of the gap, so the prize remains the largest on the board.
+
+**A power note.** `pernode`'s train sign test (z = +1.15) was declared a stopping
+condition beforehand and then overridden, correctly: 61 of 80 pages were TIED,
+so at n = 19 changed pages the test needed ~15-4 to reach |z| > 2 and could not
+have confirmed anything. Refuting there would have been refuting on an
+instrument that could not confirm — and a wrong refutation is permanent. Holdout,
+with 44 changed pages, could decide, and did.
+
+### 8.46 rusty_jpeg 0.2.1 — progressive fixed upstream, 80/80 byte-identical
+
+§8.32's guard is upstream. `rusty_jpeg` 0.2.1 decodes progressive JPEGs with no
+local patch; the `"0.1"` -> `"0.2"` bump needed no code change in `ffai-media`.
+
+Verified against the locally-patched build across the whole train split:
+**80/80 byte-identical**, including all five progressive pages. Every measurement
+in §8.33-§8.45 therefore stands without re-baselining. (0.1.6 and 0.1.7 did NOT
+contain the fix — the unwrap was still hoisted above the loop guard in both, and
+both still panicked.)
+
+**One false diff, worth recording.** `omni-0130` initially differed — a single
+confidence, 0.9646 against 0.9647, on one line of 350. It is a real PNG and never
+touches the JPEG decoder. The dump had been written while a second `ocr_text`
+process was running; re-run in isolation it is identical, and the binary
+reproduces 3/3. **Our recognition confidences are not bit-reproducible under CPU
+contention** — non-deterministic parallel reduction order, ~1e-4, far too small
+to move text, boxes or ordering. Byte-identity checks must therefore run in
+isolation, or they report differences that are not there.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

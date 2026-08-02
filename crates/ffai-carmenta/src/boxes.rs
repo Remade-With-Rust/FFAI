@@ -341,6 +341,7 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("vfirst") => xy_cut_vfirst(lines, page_w, 0),
         Ok("vtop") => xy_cut_vtop(lines, page_w, 0),
         Ok("hybrid") => hybrid_order(lines, page_w),
+        Ok("pernode") => xy_cut_pernode(lines, page_w, 0),
         _ => xy_cut(lines, page_w, 0),
     }
 }
@@ -358,6 +359,66 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
 /// already computes: no vertical valley at the top level means no columns.
 /// Note this tests the WHOLE page once — it does not disable the recursion's
 /// own per-node choices, which are what handle a headline above two columns.
+/// Route between grid and recursion at every NODE, not once per page.
+///
+/// §8.44 measured four ordering variants and none transferred to holdout. The
+/// closest, `hybrid`, routed per PAGE on the presence of a spanning element and
+/// improved the aggregate (4.44 % -> 4.25 %) while making MORE pages worse than
+/// better (33 against 25, z = −1.05). The diagnosis there is the reason to try
+/// this: a single page routinely contains BOTH a uniform column grid and a
+/// structure change — a figure inside a two-column paper is exactly that — so a
+/// page-level decision is answering a question that has two different answers
+/// on the same page.
+///
+/// The recursion already isolates those parts. Below a horizontal cut, a band
+/// either has clean columns or it does not. So the same discriminator is asked
+/// at every node instead of once at the top: a node with no page-wide element
+/// and real gutters is a column grid, and gets split into ALL its columns at
+/// once (column-major, then recursively ordered within each). Anything else
+/// falls through to the ordinary larger-valley cut, which is what handles a
+/// masthead over columns and was never the problem there.
+///
+/// Splitting into all columns at once matters — a binary vertical cut on a
+/// three-column band leaves two columns fused, and the next cut has to find
+/// them again from a smaller sample.
+fn xy_cut_pernode(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
+        return sorted_by_y(lines);
+    }
+    let spans = lines.iter().any(|l| is_spanning(&line_bbox(l), page_w));
+    if !spans {
+        let gutters = find_gutters(&lines, page_w);
+        if !gutters.is_empty() {
+            let mut edges: Vec<usize> =
+                gutters.iter().map(|g| g.0.midpoint(g.1)).collect();
+            edges.push(page_w);
+            let mut cols: Vec<Vec<Vec<DetBox>>> = vec![Vec::new(); edges.len()];
+            for l in lines {
+                let b = line_bbox(&l);
+                let c = edges.iter().position(|&e| b.x0.midpoint(b.x1) < e).unwrap_or(0);
+                cols[c].push(l);
+            }
+            // A grid that puts everything in one column is not a grid; falling
+            // through would recurse forever on the same set.
+            if cols.iter().filter(|c| !c.is_empty()).count() > 1 {
+                let mut out = Vec::new();
+                for c in cols {
+                    if !c.is_empty() {
+                        out.extend(xy_cut_pernode(c, page_w, depth + 1));
+                    }
+                }
+                return out;
+            }
+            let mut flat: Vec<Vec<DetBox>> = Vec::new();
+            for c in cols {
+                flat.extend(c);
+            }
+            return sorted_by_y(flat);
+        }
+    }
+    xy_cut(lines, page_w, depth)
+}
+
 /// Dispatch between the two architectures on the property that separates them.
 ///
 /// Measured on TRAIN, inversions over real detected lines, both architectures
