@@ -1527,3 +1527,51 @@ Note the CPU figure in this table (165 ms) is lower than the ~225 ms recorded
 above; that earlier number was taken while another project's benchmark held
 ~12 cores. 165 ms is the quieter reading, and it makes the comparison with
 ultralytics starker still: **165 ms of our CPU against 312 ms of theirs.**
+
+
+### The spine, localized — and a contradiction with my own count
+
+Stage profile at 1 against 4 of OUR workers (candle's pool held at 24 in both
+arms, so the matmul buckets are equally parallel on both sides and the
+difference is attributable to our fan-out alone):
+
+| bucket | 1 worker | 4 workers | speedup | serial share (p=4) | serial ms/image |
+|---|---:|---:|---:|---:|---:|
+| gemm | 0.596 | 0.195 | **3.06x** | 10 % | 1.3 |
+| 3x3 s2 | 0.568 | 0.215 | 2.64x | 17 % | 2.4 |
+| depthwise | 0.046 | 0.019 | 2.42x | 22 % | 0.3 |
+| im2col | 0.430 | 0.197 | 2.18x | 28 % | 3.7 |
+| 1x1 | 0.577 | 0.266 | 2.17x | 28 % | 5.0 |
+| **silu** | 0.244 | 0.197 | **1.24x** | **74 %** | **9.7** |
+| **attn** | 0.087 | 0.070 | **1.24x** | **74 %** | **3.5** |
+| **pre** | 0.097 | 0.087 | **1.11x** | **87 %** | **5.0** |
+| **decode** | 0.045 | 0.047 | **0.96x** | ~100 % | **3.1** |
+
+Whole pipeline: 2.571 -> 1.434 s, **1.79x on four workers**, which is a 41 %
+serial fraction and puts the spine at roughly 57 ms — the same figure the
+thread sweep produced from a different direction.
+
+**Ranked, the spine is: `silu` 9.7 ms, `pre` 5.0 ms, `1x1` 5.0 ms, `im2col`
+3.7 ms, `attn` 3.5 ms, `decode` 3.1 ms per image.** That is the target list
+this campaign was looking for, and it is the first one ordered by how much
+SERIAL time each contributes rather than by total share.
+
+#### The contradiction worth chasing first
+
+`silu` is the largest single item at 9.7 ms of serial time — and earlier in
+this same campaign a counter reported it **100 % parallel**, with all 52 calls
+per image above the fan-out threshold. Both cannot be right.
+
+The count and the scaling disagree, and per `codec-six-whys-unknowns` an
+impossible reconciliation outranks a plausible timing: the model of the code
+is wrong somewhere. Two candidates, neither yet tested:
+
+* the counter is placed in the AVX2 branch only, and the profile's `act`
+  bucket reports **87 calls per image against the counter's 52** — so roughly
+  a third of activations take a path the counter never sees;
+* `rayon::current_num_threads()` inside the chunk-width calculation is read
+  from whichever pool is current, which is not necessarily ours.
+
+That discrepancy — 87 calls counted by the profiler, 52 by the instrument —
+is exactly the kind of impossible count this skill says to chase before
+interpreting any duration. It is the next thing to do, and it is cheap.
