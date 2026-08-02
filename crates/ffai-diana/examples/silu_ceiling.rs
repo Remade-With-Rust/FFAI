@@ -128,6 +128,24 @@ fn silu_v3(x: f32) -> f32 {
     x / (1.0 + poly(f) * scale)
 }
 
+/// ABLATION ONLY — computes the WRONG answer on purpose.
+///
+/// silu is `x / (1 + exp(-x))`. `vdivps` is one of the slowest AVX2 ops
+/// (~11-14 cycle latency, poor throughput), so before writing intrinsics to
+/// replace it with a reciprocal approximation it is worth knowing what the
+/// division actually costs. This is v2 with the divide replaced by a
+/// multiply: the result is meaningless, the TIME is the measurement.
+#[inline(always)]
+fn silu_nodiv(x: f32) -> f32 {
+    const MAGIC: f32 = 12582912.0;
+    let t = (-x * LOG2_E).clamp(-125.0, 125.0);
+    let z = t + MAGIC;
+    let n = z - MAGIC;
+    let f = t - n;
+    let scale = f32::from_bits((z.to_bits() << 23).wrapping_add(0x3f80_0000));
+    x * (1.0 + poly(f) * scale)   // <- multiply, not divide
+}
+
 fn main() {
     let n = 1 << 24; // 16 M elements, 64 MiB in + 64 MiB out — well past L3
     let iters = 7;
@@ -159,6 +177,7 @@ fn main() {
     let t1 = bench("v1 round_ties_even()", n, iters, &src, &mut dst, silu_v1);
     let t2 = bench("v2 magic-number rounding", n, iters, &src, &mut dst, silu_v2);
     let t3 = bench("v3 magic + max/min clamp", n, iters, &src, &mut dst, silu_v3);
+    let tnd = bench("ABLATION: no divide (wrong)", n, iters, &src, &mut dst, silu_nodiv);
 
     // Agreement first: a faster kernel that computes something else is not a
     // faster kernel. Checked over the same distribution, not a happy sample.
@@ -174,6 +193,25 @@ fn main() {
     println!("max relative disagreement vs v0:  v1 {d1:.3e}   v2 {d2:.3e}   v3 {d3:.3e}");
     println!();
     println!("v0 is {:.2}x off the copy ceiling", t0 / roof);
+    // A NEGATIVE ablation is the instrument telling you the effect is not
+    // there: removing work cannot genuinely cost time, so a result below
+    // zero means the difference is inside the noise, not that the divide is
+    // free-and-then-some.
+    let d = 100.0 * (t2 - tnd) / t2;
+    println!(
+        "DIVISION ablation: {:.2} ms with divide vs {:.2} ms without = {d:+.1}%",
+        t2 * 1e3,
+        tnd * 1e3
+    );
+    println!(
+        "{}",
+        if d <= 2.0 {
+            "  -> NO measurable cost. A reciprocal-approximation intrinsic (vrcpps + 
+                  Newton) would buy nothing; do not write it."
+        } else {
+            "  -> worth pricing an rcp+Newton replacement against this ceiling."
+        }
+    );
     println!("prize if SiLU hit the ceiling: it is 30.9% of detect, so");
     println!("  v1 would cut detect by {:.1}%  (pipeline {:.3}x)", 30.9 * (1.0 - t1 / t0), 1.0 / (1.0 - 0.309 * (1.0 - t1 / t0)));
     println!("  v2 would cut detect by {:.1}%  (pipeline {:.3}x)", 30.9 * (1.0 - t2 / t0), 1.0 / (1.0 - 0.309 * (1.0 - t2 / t0)));
