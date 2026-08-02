@@ -921,6 +921,33 @@ Prize arithmetic before anyone builds it: GEMM is 17.2 % of serial detect, so
 minus a transpose. Worth doing only if the transpose is cheap, and the honest
 next step is to price THAT before writing the im2col variant.
 
+### The tax, priced — and it eats the win six times over
+
+Measured in the same probe rather than left as an open question:
+
+| totals across the six shapes | ms |
+|---|---:|
+| as-is GEMM | 10.63 |
+| transposed GEMM | 7.97 (**1.33x faster**) |
+| transpose `[ohw, c_out]` back to NCHW | **+16.55** |
+| **net** | **24.52 = 0.43x — 2.3x WORSE** |
+
+The orientation win is real and worth 2.66 ms across these shapes. Undoing
+the layout costs **16.55 ms** — six times the saving. `t().contiguous()` on
+`[ohw, c_out]` is a strided gather over a large matrix and it dwarfs the GEMM
+it was meant to accelerate.
+
+**PRUNED, on arithmetic, before writing the im2col variant.** Fifteen minutes
+of probe against what would have been a rewrite of the im2col kernel, the
+weight layout and the output path — and it would have landed 2.3x slower.
+
+The prune has a SCOPE, stated so it does not close more than it tested: it
+kills *transpose the GEMM and transpose the result back*. It does not kill
+*consume `[ohw, c_out]` directly*, which would need every downstream
+consumer — bias add, SiLU, concat, the head — to accept channels-last. That
+is a whole-graph layout change, not a kernel swap, and it is the only form in
+which the measured 1.33x is reachable.
+
 **The lesson is about the prune, not the number.** "Someone else's kernel"
 was a category, not a measurement, and it very nearly closed a door with a
 measured 2x behind it. A prune constrains the approach it tested; it does not

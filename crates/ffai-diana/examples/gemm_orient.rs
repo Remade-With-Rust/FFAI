@@ -22,7 +22,9 @@ fn best(f: impl Fn() -> candle_core::Result<Tensor>, n: usize) -> f64 {
 
 fn main() -> candle_core::Result<()> {
     let dev = Device::Cpu;
-    println!("{:>6} {:>7} {:>8}   {:>11} {:>11} {:>8}", "c_out", "K", "ohw", "as-is ms", "transposed", "speedup");
+    println!("{:>6} {:>7} {:>8}   {:>11} {:>11} {:>8} {:>9} {:>9}",
+             "c_out", "K", "ohw", "as-is ms", "transposed", "speedup", "tax ms", "verdict");
+    let (mut tot_a, mut tot_b, mut tot_tax) = (0.0f64, 0.0f64, 0.0f64);
     // Real yolo26n 3x3 shapes: (c_out, c_in, ohw)
     for (c_out, c_in, ohw) in [
         (16usize, 3usize, 102400usize),   // stem 640->320
@@ -39,8 +41,23 @@ fn main() -> candle_core::Result<()> {
         let colt = Tensor::zeros((ohw, k), DType::F32, &dev)?;
         let a = best(|| w.matmul(&col), 7);
         let b = best(|| colt.matmul(&wt), 7);
-        println!("{c_out:>6} {k:>7} {ohw:>8}   {:>11.3} {:>11.3} {:>7.2}x",
-                 a * 1e3, b * 1e3, a / b);
+        // THE TAX: the transposed form produces [ohw, c_out] and the graph
+        // needs [c_out, ohw]. Price it, because a win that pays for its own
+        // undoing is not a win.
+        let out_t = Tensor::zeros((ohw, c_out), DType::F32, &dev)?;
+        let tax = best(|| out_t.t()?.contiguous(), 7);
+        println!("{c_out:>6} {k:>7} {ohw:>8}   {:>11.3} {:>11.3} {:>7.2}x {:>9.3} {:>9}",
+                 a * 1e3, b * 1e3, a / b, tax * 1e3,
+                 if b + tax < a { "NET WIN" } else { "tax eats it" });
+        tot_a += a; tot_b += b; tot_tax += tax;
     }
+    println!();
+    println!("TOTALS  as-is {:.3} ms   transposed {:.3} ms   + transpose tax {:.3} ms = {:.3}",
+             tot_a * 1e3, tot_b * 1e3, tot_tax * 1e3, (tot_b + tot_tax) * 1e3);
+    let net = tot_a / (tot_b + tot_tax);
+    println!("NET after paying the tax: {net:.3}x  ({})",
+             if net > 1.0 { "still a win" } else { "the tax eats the win" });
+    println!("GEMM is 17.2% of serial detect, so that is {:.1}% of the pipeline.",
+             17.2 * (1.0 - 1.0 / net.max(1e-9)));
     Ok(())
 }
