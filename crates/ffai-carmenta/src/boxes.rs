@@ -432,9 +432,14 @@ fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
     let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };
+    // The page TAG is emitted because matching nodes to pages by `page_w`
+    // does not work — many pages share a width, so the join silently attached
+    // the wrong regions and the labeller discarded 313 of 315 nodes as
+    // unlabellable. A join key that has to be guessed is not a join key.
+    let tag = std::env::var("FFAI_TRACE_TAG").unwrap_or_default();
     let _ = writeln!(
         f,
-        "{depth}	{}	{lh}	{}	{}	{}	{}	{spans}	{page_w}	{x0},{y0},{x1},{y1}	{}",
+        "{tag}	{depth}	{}	{lh}	{}	{}	{}	{}	{spans}	{page_w}	{x0},{y0},{x1},{y1}	{}",
         lines.len(),
         h.map(|g| g.1).unwrap_or(-1.0),
         v.map(|g| g.1).unwrap_or(-1.0),
@@ -470,7 +475,6 @@ fn xy_cut_pernode(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<V
     if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
         return sorted_by_y(lines);
     }
-    trace_node(&lines, page_w, depth);
     let spans = lines.iter().any(|l| is_spanning(&line_bbox(l), page_w));
     if !spans {
         let gutters = find_gutters(&lines, page_w);
@@ -753,8 +757,23 @@ fn xy_cut(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBo
     let v = best_gap(&lines, lh, page_w, Axis::Vertical);
     // Prefer the larger valley; ties go to horizontal, which keeps a headline
     // whole instead of splitting it down the middle.
+    // FFAI_ORDER=hfirst forces the horizontal cut whenever BOTH valleys exist.
+    //
+    // This is what the Prometheus harvest distilled to (§8.55). Of 1178 traced
+    // `xy_cut` nodes, only 25 have a live axis choice AND a signal in the true
+    // reading order — and ALL 25 prefer horizontal, while the shipped
+    // larger-valley rule picks horizontal on only 18. The discovered formula is
+    // therefore a constant, which is a real answer rather than a failed fit:
+    // once `pernode` routes column layouts to the grid path, the nodes still
+    // reaching `xy_cut` are the spanning ones, where §8.29's headline argument
+    // says horizontal-first is correct — and the data agrees, unanimously.
+    let force_h = std::env::var("FFAI_ORDER").as_deref() == Ok("hfirst");
     let cut = match (h, v) {
-        (Some(a), Some(b)) => Some(if a.1 >= b.1 { (Axis::Horizontal, a.0) } else { (Axis::Vertical, b.0) }),
+        (Some(a), Some(b)) => Some(if force_h || a.1 >= b.1 {
+            (Axis::Horizontal, a.0)
+        } else {
+            (Axis::Vertical, b.0)
+        }),
         (Some(a), None) => Some((Axis::Horizontal, a.0)),
         (None, Some(b)) => Some((Axis::Vertical, b.0)),
         (None, None) => None,

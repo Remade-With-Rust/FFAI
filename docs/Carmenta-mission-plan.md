@@ -3257,6 +3257,60 @@ real waste, but §8.53 measured no speed problem to solve: at a 17 % noise floor
 the ordering change is not detectable in wall-clock at all. Optimising them
 would be optimising something nothing is paying for.
 
+### 8.55 Prometheus on the cut-axis rule — valid, and worth nothing
+
+The full refinery loop, run on Carmenta's most obviously hand-guessed decision:
+`xy_cut`'s `if a.1 >= b.1 { Horizontal } else { Vertical }`, the comparison
+§8.41 identified as the ordering defect.
+
+| stage | result |
+|---|---|
+| **harvest** | 1178 nodes, traced from the SHIPPED `xy_cut`, page-tagged |
+| **label** | 25 usable; **979 dropped for having only ONE candidate gap** |
+| **distill** | unanimous — all 25 prefer horizontal; the shipped rule gets 18 |
+| **forge** | `FFAI_ORDER=hfirst`: take horizontal whenever both valleys exist |
+| **trial, train** | 21.67 % -> 21.11 %, 3 pages better, **0 worse** |
+| **trial, holdout** | 20.27 % -> **20.25 %**, −0.02 pp, CI [−0.56, +0.70], 12 better / 5 worse |
+
+**Directionally right on both splits and worth nothing.** Not refuted — no page
+count went negative, unlike §8.54 — simply too small to measure. It stays a
+named mode; the default is unchanged.
+
+**The distilled formula was a CONSTANT, and that is the interesting part.** Once
+`pernode` routes column layouts to the grid path, the nodes still reaching
+`xy_cut` are predominantly the spanning ones (56 % carry a spanning element) —
+exactly the case §8.29 built horizontal-first for. The data agreed without a
+single exception, so symbolic regression had nothing to discover beyond "always
+horizontal". **This session's own earlier win had already removed the contested
+population.**
+
+**The mistake was skipping §8.47's rule on a sub-decision.** Ceiling first, then
+cost — and the ceiling here was computable before any harvesting: 25 contested
+nodes across 80 pages, of which the rule gets 7 wrong, bounds the prize at a
+handful of pages. Minutes of counting would have priced it. Instead the loop ran
+end to end (two harvests, a labeller rewrite, train and holdout trials) to reach
+a number that was knowable up front. **A ceiling check is cheap at every scale,
+not just for campaign-sized levers.**
+
+**Two harvest defects worth recording**, both caught by drop-reason counting
+that the first version did not have:
+
+* the trace emitted no page identifier and the labeller joined on `page_w` —
+  many pages share a width, so it silently attached the wrong regions and left
+  **2 labellable rows out of 315**. A join key that has to be guessed is not a
+  join key.
+* `trace_node` fired in both `xy_cut_pernode` and `xy_cut`, duplicating 149 of
+  315 rows.
+
+Neither was visible in the output until the labeller printed WHY each row was
+dropped. "313 dropped" is not a diagnostic; "979 one_gap, 162 no_split, 12
+no_signal" is.
+
+**What Prometheus is genuinely suited to here**, on this evidence: decisions
+that fire on most inputs, where the current rule is a hand-set constant, and
+where a ceiling check says the prize is worth the loop. The cut-axis rule failed
+the third test, not the first two.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
