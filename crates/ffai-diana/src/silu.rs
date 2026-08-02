@@ -103,6 +103,34 @@ fn old_rounding() -> bool {
     }
 }
 
+/// Whether to use the explicit AVX2 kernel.
+///
+/// `FFAI_DIANA_NO_AVX2=1` forces the scalar path, so the vector kernel can
+/// be A/B'd rather than assumed — the whole point of the harness this
+/// campaign built. Runtime feature detection is cached; the crate is
+/// compiled for the x86-64 baseline so a published binary still runs on a
+/// machine without AVX2.
+fn avx2_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static C: AtomicU8 = AtomicU8::new(u8::MAX);
+    match C.load(Ordering::Relaxed) {
+        u8::MAX => {
+            let off = std::env::var("FFAI_DIANA_NO_AVX2").is_ok_and(|v| v == "1");
+            let on = !off && crate::silu_avx2::available();
+            C.store(on as u8, Ordering::Relaxed);
+            on
+        }
+        v => v == 1,
+    }
+}
+
+/// The scalar twin, exposed so the AVX2 kernel's test can gate against the
+/// exact function the whole graph is oracled on — not a copy of it.
+#[inline(always)]
+pub fn silu_scalar_pub(x: f32) -> f32 {
+    silu_scalar(x)
+}
+
 /// `x * sigmoid(x)`, in one pass.
 #[inline(always)]
 fn silu_scalar(x: f32) -> f32 {
@@ -155,7 +183,18 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
             // between, so take it at 256 k rather than pretending one form
             // is simply better.
             const COLLECT_ABOVE: usize = 1 << 18;
-            if xs.len() >= COLLECT_ABOVE {
+            if avx2_enabled() {
+                // Explicit AVX2: eight lanes of the polynomial at a time.
+                // Allocation still happens once (the double-write lesson),
+                // and the vector kernel writes into it.
+                v.resize(xs.len(), 0.0);
+                let chunk = (1 << 14).max(xs.len().div_ceil(rayon::current_num_threads().max(1)));
+                v.par_chunks_mut(chunk).zip(xs.par_chunks(chunk)).for_each(|(o, i)| {
+                    // SAFETY: `avx2_enabled()` verified avx2+fma at runtime,
+                    // and the chunk lengths are equal by construction.
+                    unsafe { crate::silu_avx2::silu_into(i, o) }
+                });
+            } else if xs.len() >= COLLECT_ABOVE {
                 v = xs.par_iter().map(|&x| silu_scalar(x)).collect();
             } else {
                 v.resize(xs.len(), 0.0);

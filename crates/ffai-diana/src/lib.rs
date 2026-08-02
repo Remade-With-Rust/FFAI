@@ -53,6 +53,7 @@ pub mod neck;
 pub mod parallel;
 pub mod profile;
 pub mod silu;
+pub mod silu_avx2;
 pub mod smallgains;
 
 pub use config::ModelConfig;
