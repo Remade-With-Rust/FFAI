@@ -1992,45 +1992,86 @@ correctness FAIL naming the culprit, CER still measured on the five.
 `catch_unwind` is deliberately **not** wrapped around the engine — a panic in
 Carmenta is our defect and must abort loudly.
 
-### 8.31 academic_literature at 73 % — one hypothesis refuted, one bounded
+### 8.31 academic_literature at 73 % was a decoder crash, not a recognizer
 
-The worst cell on the board, 29 points behind the next, and its order component
-is −0.49 pp: this is not reading order. Two hypotheses, both cheap to test
-against the annotations alone.
+**The cell does not exist. `academic_literature` reads 25.88 %, not 73.16 %,
+and the difference is a decoder crash scored as a wrong answer.**
 
-**REFUTED — small type.** Academic pages carry 40 % more text than average in
-the same pixel dimensions (3771 chars/page against 2646; 419 chars/region
-against 220), which predicts smaller glyphs and a recognizer starved of
-resolution. Measuring the character cell directly — `sqrt(region area /
-characters)` — gives **19.10 px for academic and 19.00 px for newspaper**.
-Identical. And newspaper scores 20.1 %. Same type size, 53 points apart, so
-density is not the mechanism. This is the controlled comparison the corpus
-happens to contain, and it costs nothing to run.
+| mobiledet-crnn | pages | CER | order-free |
+|---|---:|---:|---:|
+| academic, **decodable** | 16 | **25.88 %** | 27.24 % |
+| academic, decode failed — scored as empty | 27 | 100.00 % | 100.00 % |
+| academic, blended (the old figure) | 43 | 73.16 % | 73.66 % |
+| newspaper, zero decode failures | 47 | 20.07 % | 13.11 % |
 
-**BOUNDED — inline mathematics.** The corpus filter excluded pages carrying
-`equation_isolated` regions, but inline formulas live inside `text_block` and
-were never filtered. OmniDocBench annotates them as LaTeX *source*: the ground
-truth asks for `$ \mathrm{N i S O}_{4} $` where the page displays NiSO4. Marker
-density is **15.08 per 1k characters against newspaper's 0.91**, on 37 of 43
-pages — a 16× separation on the one axis that distinguishes the two cells.
+`omni_split.py` reads a subprocess's output as `out.stdout or ""`. When
+rusty_jpeg 0.1.5 panics on a progressive JPEG the process dies, stdout is
+empty, and an empty hypothesis scores ~100 % CER — silently, as though the
+recognizer had read the page and got every character wrong. 27 of this cell's
+43 pages are progressive. **Newspaper, the control I compared against, has
+zero.**
 
-But the same spans hold only **8.16 % of ground-truth characters**, and 8 %
-cannot by itself be 53 points. So formulas are *a* cause, not *the* cause, and
-the honest status is open. (The equivalent 8.42 % measured on newspapers is the
-`$...$` regex catching dollar *amounts*; the marker counts are the trustworthy
-figure, since `\mathrm` and `^{13}C` are unambiguous.)
+| source | pages | undecodable |
+|---|---:|---:|
+| academic_literature | 43 | **62.8 %** |
+| magazine | 60 | 8.3 % |
+| book | 33 | 6.1 % |
+| colorful_textbook | 23 | 4.3 % |
+| PPT2PDF / exam_paper / newspaper | 77 | 0.0 % |
 
-**Open, and the measurement that decides it:** six academic pages contain no
-`$...$` at all and 37 do — same journals, same type size. If the clean six read
-like newspapers, formulas own the cell and the fix is a formula path rather
-than a recognizer change. If they also read near 70 %, formulas are a side-show
-and the real cause is still unnamed. `.tools-bench/academic_partition.py`.
+The blend reproduces 73.16 % to two decimals, which is what confirms this is
+the same quantity the split scorer was reporting and not a second measurement
+that happens to disagree. At 25.88 % the cell sits *at* the corpus average
+(25.91 % on the three-way), 5.8 points off newspaper rather than 53. It was
+never the worst cell and never a recognition problem.
 
-Worth stating plainly either way: a formula gap is a **capability** gap, not a
-recognition one. PP-StructureV3 and Unlimited-OCR ship formula heads that emit
-LaTeX and can match this reference; we emit glyphs and structurally cannot. That
-is a real deficit and not a scoring artifact — but it is a different deficit
-from "our recognizer reads academic text badly", and the fixes do not overlap.
+**Both hypotheses in the original descent were chasing this artifact**, and
+they are recorded rather than deleted because the reasoning was sound and the
+target was not:
+
+- *Small type* — refuted on its own terms and the refutation still holds: the
+  character cell is **19.10 px academic against 19.00 px newspaper**, measured
+  as `sqrt(region area / characters)` from the annotations. Type size genuinely
+  is not a differentiator here. But the 53-point gap it was invoked to explain
+  was mostly manufactured.
+- *Inline mathematics* — the corpus filter excluded `equation_isolated` regions
+  while inline formulas live inside `text_block` and were never filtered, so
+  ground truth really does ask for `$ \mathrm{N i S O}_{4} $` where the page
+  shows NiSO4, at **15.08 markers per 1k characters against newspaper's 0.91**.
+  That remains a true fact about the corpus and a real capability gap —
+  PP-StructureV3 and Unlimited-OCR ship formula heads that emit LaTeX and can
+  match this reference; we emit glyphs and structurally cannot. It is worth
+  perhaps 8 % of characters. It is not worth 47 points, and it is now a
+  known-size tax rather than a mystery.
+
+**The lesson is the one this campaign keeps relearning, and the skill states
+first: run depth 6 before depths 3–5.** Two hypotheses were built, measured,
+and written up — one refuted, one bounded — while the actual cause was that
+62.8 % of the cell never reached the recognizer. The tell was available for
+free the whole time and nobody asked for it: *does every page in both arms
+produce output at all?* A cell that is 62.8 % one file format and a control
+that is 0 % is not a comparison. This is the fifth time in this campaign that
+the decisive number was one that had been filtered, swallowed, or never
+printed.
+
+**Every per-source figure taken before `b4dc952` carries an unknown decode tax,
+and the tax is not evenly distributed** — so the splits are not comparable to
+each other, which is exactly the thing splits exist to do. The three-way in
+§8.30 is unaffected: all 43 of its pages completed, which under the old
+abort-on-first-failure code they could not have done otherwise.
+
+**Full holdout re-baseline**, the first one obtainable at all — 35 progressive
+JPEGs would each individually have killed the run before `b4dc952`:
+
+    mobiledet-crnn   201/236 pages   CER 31.81 %   0.18 pg/s   456 MiB steady
+
+`correctness FAIL` and correctly so: 35 pages are unreadable, and the gate says
+so instead of the run silently pricing them at 100 %.
+
+**Next, and now clearly the highest-value repair available:** progressive JPEG
+support returns 35 holdout pages — 15 % of the corpus and most of one cell —
+for zero model work. `rusty_jpeg` is ours, which makes this a fix at the source
+rather than a workaround.
 
 ## 9. Pure-Rust boundary and watchlist
 
