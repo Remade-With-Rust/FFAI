@@ -2510,6 +2510,66 @@ that halves raster's inversions but leaves half of all pages imperfect, on
 *perfect input*, should have prompted "what does it think a line height is?"
 before it prompted a fix.
 
+### 8.40 Reading order, measured properly — XY-cut is worth 3.4x, academic is the worst cell
+
+The instrument §8.39 called for: lines from `FFAI_OCR_CONF` dumps — real
+detections in the order the engine emitted them, so `order_reading` sees the
+units its thresholds are calibrated for — with each line's true rank taken from
+the annotated region its centre falls inside (§8.34's geometric labelling, which
+has a validated control). Lines inside no region are dropped rather than
+defaulted; they are §8.33's over-generation and have no true rank, and mixing
+the two defects into one number is how §8.31 happened. Inversions count only
+between lines in DIFFERENT regions. TRAIN split.
+
+**It passes the check set before its output was seen:** the cell ranking
+reproduces §8.36's independently measured order cost — academic worst, exam and
+colorful_textbook best — on a different split, through a completely separate
+path (end-to-end CER against PP-StructureV3). The voided testbed never had that
+corroboration, which is precisely why a plausible number survived two sections.
+
+| cell | pages | raster | XY-cut | perfect (XY) |
+|---|---:|---:|---:|---:|
+| newspaper | 17 | 31.20 % | **5.25 %** | 47 % |
+| magazine | 21 | 26.67 % | **6.07 %** | 57 % |
+| **academic_literature** | 15 | 24.61 % | **12.01 %** | 60 % |
+| book | 11 | 11.85 % | 3.24 % | 73 % |
+| colorful_textbook | 9 | 5.62 % | 1.22 % | 78 % |
+| exam_paper | 2 | 0.09 % | 0.88 % | 50 % |
+| **PPT2PDF** | 5 | **0.00 %** | **6.27 %** | 60 % |
+| **ALL** | 80 | **20.51 %** | **5.96 %** | 60 % |
+
+**Three conclusions, all of which differ from what the void instrument said:**
+
+1. **The recursive cut is worth far more than previously credited** — 20.51 % to
+   5.96 %, a 3.4x reduction, against the 2x the region-fed testbed reported.
+   Newspapers improve 6x. §8.29 shipped it on a 6-point CER gain; on the units
+   it actually consumes it is doing much more than that number implied.
+
+2. **`academic_literature` is the worst ordering cell at 12.01 %**, double
+   magazine and newspaper, and the *weakest beneficiary* of the cut (2x where
+   newspapers get 6x). This is a genuine surprise: newspapers have been treated
+   as the ordering problem since §8.29. It also closes §8.31's loop — that cell
+   does have a real defect, it is ordering rather than recognition, and it is
+   the largest single one on the board.
+
+3. **The sign flip is real, and is reinstated.** §8.37 claimed it, §8.39
+   withdrew it as an artifact of region-scale input — correctly, on the evidence
+   then available — and the valid instrument shows it plainly: raster orders
+   **100 % of slides perfectly** and the cut breaks 40 % of them (0.00 % ->
+   6.27 %). `exam_paper` flips the same way at negligible size. Withdrawing it
+   was right; it was unmeasured, and "unmeasured" is not "false".
+
+   §8.38's adaptive gate remains untested — it was measured against a degenerate
+   rule — and its stated mechanism is now sharper: the gate must not be a
+   whole-page test, because newspapers find their columns only *below* the
+   masthead. What PPT2PDF needs is for the recursion to decline to cut when the
+   valley it found is not evidence of columns, which is a per-node question, not
+   a page-level one.
+
+Corpus-weighted, PPT2PDF is 8 % of pages and its regression is ~0.5 pp of the
+5.96 %; academic_literature is 18 % and carries ~2.2 pp. The ranking of work is
+unambiguous.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
