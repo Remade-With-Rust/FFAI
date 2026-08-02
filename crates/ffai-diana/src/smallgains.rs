@@ -39,9 +39,24 @@
 //! |---|---|---:|---:|---:|
 //! | 1 | top-k decodes `max_detections`, not always 300 | 2.1 % | ~1.3x | **~0.5 %** |
 //! | 2 | blocked transpose instead of candle's generic one | 0.3 % | ~1.4x | **~0.1 %** |
+//! | 3 | `silu` skips rayon when it has a single chunk | 15.2 % | ~1.08x | **~1.1 %** |
 //!
-//! Predicted stack total: **~0.6 %** — under this box's ~5 % resolution, so
+//! Predicted stack total: **~1.7 %** — under this box's ~5 % resolution, so
 //! nothing is claimed yet.
+//!
+//! Entry 3 came out of a thread-scaling sweep and is the clearest case yet
+//! for measuring the stack rather than the brick. `silu` is called ~1305
+//! times per image, and most of those tensors are smaller than one rayon
+//! chunk — so `par_chunks_mut` forked a job, handed the whole buffer to a
+//! single worker, and joined, ~1305 times, to arrive back on the calling
+//! thread. It is the one bucket in the profile that got **SLOWER with more
+//! cores**: 0.292 s at one thread against 0.315 s at twenty-four. A stage
+//! that costs more the more cores you give it is paying for parallelism it
+//! never receives, and the arithmetic for removing that is 0.023 s of a
+//! 2.065 s pipeline — about 1.1 %, which this box resolves at 108 %.
+//!
+//! It was taken anyway, for the same reason as entry 2: negative scaling is
+//! a defect at any magnitude, and the fix costs one branch.
 //!
 //! Entry 2 is the register's reason for existing, stated plainly. Candle's
 //! `t().contiguous()` measured **4.3x slower than a blocked loop** on large

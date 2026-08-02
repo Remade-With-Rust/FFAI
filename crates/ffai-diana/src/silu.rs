@@ -191,11 +191,30 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                 // and the vector kernel writes into it.
                 v.resize(xs.len(), 0.0);
                 let chunk = (1 << 14).max(xs.len().div_ceil(rayon::current_num_threads().max(1)));
-                v.par_chunks_mut(chunk).zip(xs.par_chunks(chunk)).for_each(|(o, i)| {
-                    // SAFETY: `avx2_enabled()` verified avx2+fma at runtime,
-                    // and the chunk lengths are equal by construction.
-                    unsafe { crate::silu_avx2::silu_into(i, o) }
-                });
+                if xs.len() <= chunk && !crate::smallgains::disabled() {
+                    // ONE chunk, so `par_chunks_mut` would fork a job, hand
+                    // the whole buffer to a single worker, and join — the
+                    // full rayon round trip to arrive back at this thread.
+                    //
+                    // That is not hypothetical overhead. `silu` is called
+                    // ~1305 times per image and MOST of those tensors are
+                    // under one chunk, which is why it is the one bucket in
+                    // the profile that gets SLOWER with more threads:
+                    // 0.292 s at 1 thread against 0.315 s at 24. A stage
+                    // that costs more the more cores you give it is paying
+                    // for parallelism it never receives.
+                    //
+                    // SAFETY: `avx2_enabled()` verified avx2+fma at runtime;
+                    // the slices are the same length by construction.
+                    unsafe { crate::silu_avx2::silu_into(xs, &mut v) }
+                } else {
+                    v.par_chunks_mut(chunk).zip(xs.par_chunks(chunk)).for_each(|(o, i)| {
+                        // SAFETY: `avx2_enabled()` verified avx2+fma at
+                        // runtime, and the chunk lengths are equal by
+                        // construction.
+                        unsafe { crate::silu_avx2::silu_into(i, o) }
+                    });
+                }
             } else if xs.len() >= COLLECT_ABOVE {
                 v = xs.par_iter().map(|&x| silu_scalar(x)).collect();
             } else {
