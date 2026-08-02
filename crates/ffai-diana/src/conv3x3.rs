@@ -450,8 +450,35 @@ pub fn take_acts() -> u64 {
     ACTS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Size histogram of the im2col buffer, in power-of-two byte buckets.
+///
+/// The MEAN buffer (380 KiB) sits inside L2, and the last two refutations in
+/// this campaign both came from pricing an L2-resident buffer at DRAM
+/// bandwidth. A mean cannot answer that question when the distribution is
+/// skewed — early layers are wide and shallow, late layers narrow and deep —
+/// so this bins the BYTES by the size of the buffer carrying them.
+static SIZE_HIST: [std::sync::atomic::AtomicU64; 24] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    [Z; 24]
+};
+
+/// Bytes, bucketed by `log2(buffer bytes)`. Index i holds buffers of
+/// `[2^i, 2^(i+1))` bytes.
+pub fn take_size_hist() -> Vec<(usize, u64)> {
+    SIZE_HIST
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (i, a.swap(0, std::sync::atomic::Ordering::Relaxed)))
+        .filter(|(_, v)| *v > 0)
+        .collect()
+}
+
 pub(crate) fn count_im2col(n: usize) {
     if counting() {
+        let bytes = (n * 4) as u64;
+        let bucket = (63 - bytes.max(1).leading_zeros() as usize).min(23);
+        SIZE_HIST[bucket].fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
         IM2COL_ELEMS.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
     }
 }

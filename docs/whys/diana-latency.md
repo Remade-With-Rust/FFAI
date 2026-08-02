@@ -1303,3 +1303,63 @@ is largely free — the OS hands back pages that are already zero.
 `examples/zerocost.rs` is kept, with this outcome noted in it, because the
 probe is correct about what it measures and only wrong about what that
 implies for the pipeline. That distinction is the whole finding.
+
+
+### Iteration 3 — the ceiling probe that closed the whole campaign
+
+Implicit GEMM was the last traffic lever standing: generate im2col columns
+into an L1-resident panel inside the GEMM's blocking, so the 108.4 MiB buffer
+is never materialised and never read back. It is a large build, and the two
+preceding refutations were both the SAME error — an L2-resident buffer priced
+at DRAM bandwidth — so the ceiling was measured first.
+
+`examples/im2col_sizes.rs` bins im2col BYTES by the size of the buffer
+carrying them, because the mean (380 KiB/call) is the wrong statistic when
+early layers are wide and shallow and late layers narrow and deep:
+
+| buffer size | bytes | share |
+|---|---:|---:|
+| under L2 (2 MiB) | 22.3 MiB | 20.6 % |
+| L2 .. L3 (32 MiB) | 86.1 MiB | 79.4 % |
+| **over L3** | **0.0 MiB** | **0.0 %** |
+
+**Not one byte of the im2col buffer reaches DRAM.** The largest buffer in the
+graph is under 16 MiB against a 32 MiB L3. At L3 bandwidth the write-plus-
+read-back is on the order of **1 ms**, not the 9 ms the DRAM figure implied.
+
+Pruned on arithmetic, before building. Cost: one probe.
+
+## The campaign's conclusion — Diana is not memory-bound anywhere
+
+Three levers, three prizes, all computed at DRAM bandwidth and all wrong for
+the same reason:
+
+| lever | DRAM-priced prize | actual residency | outcome |
+|---|---:|---|---|
+| bias + SiLU epilogue fusion | 8.9 ms | ~430 KiB/conv, **L2** | built, 18/21 against, z = +3.27 |
+| im2col zero-fill removal | 4.3 ms | fresh OS pages, free | built, 10/21, z = -0.22, **no effect** |
+| implicit GEMM | ~9 ms | 0 % over L3 | **pruned before building** |
+
+The unifying finding is worth more than any of the three:
+
+> **Nothing in this graph is memory-bandwidth-bound.** Every working set —
+> activations at ~430 KiB per convolution, im2col at up to 16 MiB against a
+> 32 MiB L3 — is cache-resident. A YOLO26n at 640 is simply not a large
+> enough model to leave cache on this machine.
+
+That closes "fuse the eager graph" as a route to parity, with arithmetic
+rather than with a series of disappointments. Every traffic-reduction lever
+is bounded by cache bandwidth, which is 3-15x DRAM, so every prize computed
+against 24 GB/s in this document was overstated by that factor.
+
+**What it redirects to.** If the time is not bandwidth, it is the work and how
+well it is spread. Two numbers already in this file point there and neither
+has been chased to the bottom:
+
+* the pipeline gets **1.53x from 24 cores** and degrades past 4 — measured,
+  and the reason ~65 % of it is serial is still unexplained;
+* `attn` scales at **0.93x** — it gets slower with more cores, and unlike
+  `silu` (fixed) nothing has been done about it.
+
+Both are parallel-efficiency questions, not memory questions, and this
+campaign has established that memory questions cannot produce the answer.
