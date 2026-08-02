@@ -2205,6 +2205,56 @@ Hypotheses for all 236 pages are cached under `.tools-bench/cache/`, so
 re-scoring under any metric is now instant. Every question in this section
 previously cost a 25-minute re-run, which is why so few of them had been asked.
 
+### 8.34 The 6.7 points are not cheap — size and confidence both refuted
+
+§8.33 priced over-generation at 6.7 points of micro CER and named the mechanism
+on two inspected pages. The obvious follow-up is whether the offending lines can
+be filtered by something the pipeline already computes. Two candidates, both
+free: recognition **confidence** (`FFAI_OCR_CONF` exists for exactly this) and
+line **height**.
+
+**First attempt, and why it was thrown away.** Labelling a line as in- or
+out-of-reference by matching its first 18 characters against ground truth looks
+obvious and does not work on output with ~20 % CER — one misread character
+moves a correct line into the wrong bucket. Measured on six pages that emit
+**no** excess text, that matcher still called **18-48 % of lines unmatched**.
+Both its groups are mixtures, so every statistic built on it was void, including
+a one-page result (`omni-0245`, height 32 px against 14 px, 2.29x) that looked
+like a finding and generalised to nothing.
+
+**The instrument that works is geometric.** Each sidecar carries a `poly` per
+annotated region; a detected line's centre is inside one or it is not, and OCR
+errors cannot change that. The control confirms it: pages that do not
+over-generate show **1-13 out-of-region lines against 29-90 inside**, where the
+string matcher claimed 18-48 %.
+
+**With a sound instrument, both levers are refuted:**
+
+| separator | pages where it separates |
+|---|---|
+| line height >1.3x either way | **2 / 16** |
+| confidence, +0.05 or better | **1 / 16** |
+
+Typical page: `omni-0055` has 48 in-region and 113 out-of-region lines, heights
+22 px against 21 px, confidence 0.986 against 0.976. `omni-0092`'s out-of-region
+text is *more* confident than its body text (1.000 against 0.989).
+
+**The mechanism explains the refutation.** Out-of-region text is not degraded
+text. It is real text, correctly read, sitting where the benchmark declines to
+annotate — figure interiors, screenshots, page furniture. Nothing about its
+*appearance* differs from body text, so no appearance-based filter can find it.
+The only property that distinguishes it is **position relative to a region a
+layout model would have identified**.
+
+So the 6.7 points require layout analysis — region detection and
+classification — and cannot be had with a threshold. That is a larger piece of
+work than a filter, and it is the same capability PP-StructureV3 and
+Unlimited-OCR already ship. **Recorded as refuted rather than open**, with the
+measurements above, so the cheap version is not re-attempted: it has now failed
+once on a broken instrument and once on a sound one.
+
+`.tools-bench/region_label.py`. Runs off the cached dumps; no recognizer.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
