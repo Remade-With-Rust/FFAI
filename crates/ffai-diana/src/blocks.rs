@@ -345,13 +345,18 @@ impl Attention {
 
         let scale = (self.key_dim as f64).powf(-0.5);
         // (q * scale)ᵀ @ k  ->  (b, heads, n, n)
-        let attn = (q * scale)?.transpose(D::Minus2, D::Minus1)?.contiguous()?.matmul(&k.contiguous()?)?;
+        let qt = crate::profile::timed(|p| &p.attn_t, || {
+            (q * scale)?.transpose(D::Minus2, D::Minus1)?.contiguous()
+        })?;
+        let attn = qt.matmul(&k.contiguous()?)?;
         let attn = candle_nn::ops::softmax(&attn, D::Minus1)?;
 
         // v @ attnᵀ  ->  (b, heads, head_dim, n)  ->  (b, c, h, w)
         let out = v
             .contiguous()?
-            .matmul(&attn.transpose(D::Minus2, D::Minus1)?.contiguous()?)?
+            .matmul(&crate::profile::timed(|p| &p.attn_t, || {
+                attn.transpose(D::Minus2, D::Minus1)?.contiguous()
+            })?)?
             .reshape((b, c, h, w))?;
         let pe = self.pe.forward(&v.reshape((b, c, h, w))?)?;
         self.proj.forward(&(out + pe)?)

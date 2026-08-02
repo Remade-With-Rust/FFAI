@@ -105,6 +105,11 @@ pub struct Profile {
     pub sliceop: Stage,
     /// Every attention block (info tier).
     pub attn: Stage,
+    /// The two `transpose(...).contiguous()` calls inside attention.
+    /// Bucketed because candle's generic transpose measured 4.3x slower
+    /// than a blocked loop, and attention is the ONE op in the profile that
+    /// does not parallelise at all (1.02x from 1 to 24 threads).
+    pub attn_t: Stage,
 }
 
 static PROFILE: Profile = Profile {
@@ -121,6 +126,7 @@ static PROFILE: Profile = Profile {
     conv_dw: Stage::new(),
     act: Stage::new(),
     im2col: Stage::new(),
+    attn_t: Stage::new(),
     conv_wrap: Stage::new(),
     sliceop: Stage::new(),
     gemm: Stage::new(),
@@ -150,6 +156,7 @@ pub fn reset() {
         &PROFILE.conv_dw,
         &PROFILE.act,
         &PROFILE.im2col,
+        &PROFILE.attn_t,
         &PROFILE.conv_wrap,
         &PROFILE.sliceop,
         &PROFILE.gemm,
@@ -240,7 +247,7 @@ impl Profile {
             );
         }
 
-        let info: [(&str, &Stage); 11] = [
+        let info: [(&str, &Stage); 12] = [
             ("conv", &self.conv),
             ("  1x1", &self.conv1x1),
             ("  3x3 s1", &self.conv3x3),
@@ -248,6 +255,7 @@ impl Profile {
             ("  depthw", &self.conv_dw),
             ("  silu", &self.act),
             ("   >im2col", &self.im2col),
+            ("   >attn_t", &self.attn_t),
             ("   >wrap", &self.conv_wrap),
             ("   >sliceop", &self.sliceop),
             ("   >gemm", &self.gemm),

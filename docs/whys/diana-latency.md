@@ -991,3 +991,68 @@ transposes anywhere HOT, it is paying 4.3x. `blocks.rs` has two —
 attention is the op measuring **1.02x scaling from 1 to 24 threads**, the
 only one in the profile that does not parallelise at all. That is the next
 place to look, and it is a much better lead than the one that produced it.
+
+
+---
+
+# THE ACCOUNTING — why parity is not reachable by kernel work
+
+The attention-transpose lead died the way every other one did, and cheaply:
+bucketed, measured at **0.017 s of 5.228 s = 0.3 % of the pipeline** — 9 % of
+attention itself. Fixing it 4.3x would return 0.23 %. One measurement, one
+line of arithmetic, one dead lead.
+
+That was the last unexamined component. The full ledger of this campaign:
+
+| lever | status | worth |
+|---|---|---:|
+| SiLU `round()` -> magic rounding | **SHIPPED** | 1.079x pipeline (z = +2.84) |
+| SiLU double-write removal | **SHIPPED** | 1.12x serial |
+| SiLU AVX2 kernel | **SHIPPED** | <=3.9 % (z = +2.84) |
+| top-k decoding `max_detections` | **SHIPPED** | ~0.5 % + a parity fix |
+| batch parallelism dispatch | **SHIPPED** | CPU 1.08x; wall unproven |
+| thread count / pool size | REFUTED | 9/24, z = -1.22 |
+| `target-cpu=native` | PRUNED | 1.017x, z = +0.65 |
+| per-(channel,tap) im2col | REFUTED | 2.2x WORSE |
+| direct convolution (3 variants) | REFUTED | 9/9 against, z = +3.00 |
+| tiled im2col | PRUNED on arithmetic | call overhead |
+| transposed GEMM | PRUNED | 0.874x after its tax |
+| attention transposes | **REFUTED** | 0.3 % of pipeline |
+| conv wrapper / SliceOp | REFUTED | 1.8 % / ~0 |
+| silu division -> rcp | PRUNED | no measurable cost |
+
+**Sum of every remaining identified lever: ~2-3 %. The gap is ~90 %.**
+
+There is no combination of the things above that reaches 1.0x, and that is
+now a measured statement rather than a tired one. Every component of the
+forward pass has been bucketed, and every bucket has been either shipped,
+refuted with a z-score, or pruned on arithmetic.
+
+## What parity would actually require
+
+Not a kernel. An **algorithm**: an implicit-GEMM or channels-last
+convolution that never materialises the im2col buffer. The evidence for that
+being the real answer, rather than a guess:
+
+* im2col moves **216.9 MiB per image at the n tier** (deterministic counter,
+  not a timing) — 9.5-12.9 ms of pure memory traffic against a ~66 ms
+  reference total, and bandwidth is shared so it does not divide by threads;
+* candle's GEMM is at **69 % of peak** at balanced shapes, so the multiply
+  itself is not the problem;
+* the transposed orientation is **1.33x faster** and unreachable only because
+  the layout change has to propagate through every downstream consumer.
+
+Those three point the same way: the cost is the DATA MOVEMENT the im2col
+formulation forces, and the fix is to stop forcing it. That is a graph-wide
+layout change plus a fused convolution kernel — weeks, not an afternoon, and
+it would be building what oneDNN already is.
+
+## The honest verdict on the bet
+
+**Not reached.** ~1.9x at the start of this descent, and the shipped wins
+(SiLU x3, top-k, batch dispatch) are worth perhaps 10-15 % of it. What the
+campaign bought instead is that nobody has to guess again: fourteen levers
+are closed with numbers attached, the one remaining path is named and priced,
+and the instruments that would have hidden all of it — a null arm, an order
+reversal, a cycle counter, a self-checking A/B harness — now exist in the
+tree.
