@@ -2680,6 +2680,54 @@ sequence.** This is the sixth instrument failure recorded in this campaign and
 the first where the instrument was not broken — it was simply asked a question
 finer than it can answer.
 
+### 8.43 The directing finding, now powered — order owns 89 % of the gap
+
+§8.42 established that this corpus cannot resolve cell-level differences, and
+that work must be directed by aggregates carrying error bars. Applying that
+standard to §8.36 — the result that redirected the whole campaign from
+recognition to ordering — showed it had been reported without one, and on 34
+pages it did not survive:
+
+| n = 34 | value | verdict |
+|---|---:|---|
+| ORDER share | +11.68 pp | 95 % CI **[−0.74, +23.15]** — includes zero |
+| paired sign test | 22/34 pages | z = +1.71 — **not** significant |
+
+Directing four sections of work on an interval spanning zero is exactly what
+this discipline exists to prevent, and the interval should have been computed
+when §8.36 was written, not four sections later. The character-weighted metric
+is dominated by pages like `omni-0245` at 843 % CER, so 34 pages could not
+resolve it — the same 722x page-length spread §8.33 found distorting the macro
+number, resurfacing as variance.
+
+It was also cheap to settle: at the observed rate, n ≈ 50 crosses z > 2. Thirty
+more stratified pages, none previously measured:
+
+| n = 69 | value | verdict |
+|---|---:|---|
+| raw gap (ours − PP-StructureV3) | **+13.29 pp** | |
+| recognition, order-free | **+1.40 pp** | |
+| **attributable to ORDER** | **+11.89 pp** | 95 % CI **[+3.88, +19.45]** — excludes zero |
+| paired sign test | **44/69 pages** | **z = +2.29 — significant** |
+
+**Established.** Order owns **89 %** of the deficit against PP-StructureV3, and
+recognition sits 1.40 pp from parity — tighter than §8.36's 1.8 pp estimate and
+now with an interval behind it. The campaign's direction is correct; it was
+correct on 34 pages too, but it was not yet *known* to be.
+
+Two things this fixes going forward. Every headline claim gets an interval at
+the time it is made — the bootstrap and the paired sign test here are four lines
+each and run off cached hypotheses. And when the two disagree, the sign test is
+the one to trust on this corpus: it is immune to the length outliers that make
+the character-weighted bootstrap so wide, which is why it reached significance
+first (z = +1.71 at n = 34 against a CI that spanned zero).
+
+**Where this leaves the campaign.** Ordering is confirmed as the lever, worth
+~11.9 pp of the ~13.3 pp gap. §8.41's column-first attempt at it is refuted on
+holdout, and §8.42 explains why the target was mis-picked. The next attempt is
+directed by the aggregate inversion rate (holdout 4.44 %), validated on holdout,
+and must clear an interval — not a cell ranking.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
