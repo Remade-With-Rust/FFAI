@@ -79,3 +79,69 @@ One-way, per Prometheus's own rule: the refinery may depend on Diana; Diana
 never references the refinery. What comes back is generated formula code —
 small, self-contained, provenance-commented — landed behind a gate like every
 other brick.
+
+---
+
+## Stage 2 — RUN, and the verdict is "wrong lever for this target class"
+
+Deployed end to end: `PsyTarget::Silu` + `Curve::Silu` in `prom-cli`,
+`harvest_silu`/`silu_target` in `prom-harvest`, sampling x from Diana's
+measured quantiles rather than a uniform sweep. Recorded as campaign
+`diana`, experiment `prom_diana001`, so it does not conflate with `psy`.
+
+Two runs:
+
+| config | formula | rmse | nodes |
+|---|---|---:|---:|
+| depth 2 (fast) | `x0` | 1.267 | 1 |
+| depth 3 (thorough) | `exp(2.1446 - ln(2.8442 - ln(x0))) - 2.3734` | 0.210 | 11 |
+
+**Neither is usable, and the reasons are structural rather than bad luck.**
+
+1. **The accuracy is three orders of magnitude short.** rmse 0.210 against an
+   oracle that a 2 % arithmetic difference already breached. Diana needs
+   ~1e-7; these are perceptual-curve tolerances where 0.2 dB is fine.
+2. **The discovered formula is UNDEFINED on half the data.** It contains
+   `ln(x0)`, and **50 % of the harvested activations are x <= 0** (p50 =
+   -0.08 — the distribution is centred just below zero). A formula that
+   cannot be evaluated on half the dataset scored the best fit in the search.
+3. **It is more expensive than what it replaces.** Two transcendentals
+   (`exp` and `ln`, twice) against the current one `exp` — so even if it were
+   accurate it would lose the speed argument it exists to win.
+
+### Why the lever is wrong, stated so it is not retried
+
+`prom-distill`'s own docs say it: *"EML space is built on `exp`/`ln`, so it
+fits perceptual (log/dB-shaped) codec curves far more naturally than
+artificial arithmetic targets."* SiLU is not log-shaped. It is a smooth
+sigmoid-weighted identity needing near-machine precision on a symmetric
+interval spanning zero — the worst possible fit for a basis built on `ln`.
+
+This is the `codec-symbolic-discovery` cardinal lesson landing on a second
+target class: *"symreg-EML CANNOT strength-reduce a pure power — the
+algebraic-rewrite path wins that class; pick the lever by target class."*
+Here the right lever is a **minimax (Remez) rational fit plus E-graph
+simplification** — `prom-simplify` and `prom-prove` territory — not
+`prom-distill`.
+
+**So: Stages 1, 3 and 4 are the ones Diana wants.** The harvest is valuable
+and already paid for itself (the range finding). The prove stage is the
+reason to come back — an SMT error bound over the measured interval is
+exactly what hand-fitting a shorter polynomial lacks. The discovery stage is
+for a different shape of problem.
+
+### A defect found in Prometheus on the way
+
+`prom-distill` scored a formula containing `ln(x0)` as its best candidate on
+a dataset that is 50 % non-positive. Whatever it does with the resulting
+NaNs — drop the rows, or propagate and ignore — the fit statistic it reports
+is not computed over the data it claims. **A domain-validity check before
+scoring would have rejected that candidate outright**, and without one the
+search will keep proposing `ln`-based forms for any signed target.
+
+Also fixed, unrelated but blocking: `rff-codec-mp3` forwards the
+`prometheus-telemetry` feature to `rusty_mp3` but stopped re-exporting
+`prometheus_telemetry` when mp3 was extracted into a standalone crate, so
+`prom-harvest` would not compile at all. Forwarding a feature without
+re-exporting what it provides is a silent break — the manifest still says
+yes and the module is gone.
