@@ -339,6 +339,8 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("onelevel") => order_one_level(lines, page_w),
         Ok("adaptive") => adaptive_cut(lines, page_w),
         Ok("vfirst") => xy_cut_vfirst(lines, page_w, 0),
+        Ok("vtop") => xy_cut_vtop(lines, page_w, 0),
+        Ok("hybrid") => hybrid_order(lines, page_w),
         _ => xy_cut(lines, page_w, 0),
     }
 }
@@ -356,6 +358,100 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
 /// already computes: no vertical valley at the top level means no columns.
 /// Note this tests the WHOLE page once — it does not disable the recursion's
 /// own per-node choices, which are what handle a headline above two columns.
+/// Dispatch between the two architectures on the property that separates them.
+///
+/// Measured on TRAIN, inversions over real detected lines, both architectures
+/// against the same baseline:
+///
+/// | cell | recursive cut | one-level grid |
+/// |---|---|---|
+/// | academic_literature | 12.01 % | **4.51 %** |
+/// | magazine | 6.07 % | **4.06 %** |
+/// | newspaper | **5.25 %** | 9.13 % |
+/// | book | **3.24 %** | 6.51 % |
+///
+/// They fail on opposite layouts, and the reason is structural rather than
+/// incidental. The recursive cut compares whitespace valleys, so a figure's
+/// horizontal gap (~19 line-heights on `omni-0038`) outbids a column gutter
+/// (~2) and the page is read across its columns. The one-level grid computes
+/// ONE gutter set for the whole page, so it cannot be fooled that way — and
+/// cannot describe a page whose column structure changes down it, which is what
+/// a masthead over three columns is.
+///
+/// So the discriminator is whether the page has a page-wide element at all. A
+/// spanning box means the layout changes vertically and the recursion is the
+/// only one of the two that can follow it; no spanning box means a uniform
+/// grid, which the projection describes exactly and the recursion keeps
+/// mis-cutting. This is the same test §8.29 already uses to protect headlines
+/// from vertical cuts, reused as a routing decision instead of a veto.
+fn hybrid_order(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
+    if lines.iter().any(|l| is_spanning(&line_bbox(l), page_w)) {
+        xy_cut(lines, page_w, 0)
+    } else {
+        order_one_level(lines, page_w)
+    }
+}
+
+/// Find the page's columns FIRST, then cut normally inside them.
+///
+/// §8.41's `vfirst` preferred the column cut at every node and lost on holdout
+/// (4.44 % -> 4.65 %), with `colorful_textbook` regressing 8.06 % -> 10.24 %.
+/// The diagnosis behind it was still right — `omni-0038` interleaves because a
+/// figure's horizontal gap (~19 line-heights) outbids a real column gutter
+/// (~2), so the page is sliced into bands and each band orders its own left and
+/// right lines correctly — but the remedy was too broad. Inside a thin band a
+/// vertical gap is word spacing, not a column, and preferring it there is what
+/// cost `colorful_textbook`.
+///
+/// Column structure is a property of the PAGE, not of every subregion. So the
+/// preference applies at depth 0 only: find the columns, then let the ordinary
+/// larger-valley rule work inside each one, where it was never the problem.
+/// The spanning exception from §8.29 still holds — a headline across the top
+/// must be separated before the page is split down the middle, or the partition
+/// assigns it to whichever side its centre lands on.
+fn xy_cut_vtop(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
+        return sorted_by_y(lines);
+    }
+    let mut hs: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1) as f32;
+
+    let h = best_gap(&lines, lh, page_w, Axis::Horizontal);
+    let v = best_gap(&lines, lh, page_w, Axis::Vertical);
+    let prefer_v = depth == 0 && !lines.iter().any(|l| is_spanning(&line_bbox(l), page_w));
+    let cut = match (h, v) {
+        (Some(a), Some(b)) => Some(if prefer_v {
+            (Axis::Vertical, b.0)
+        } else if a.1 >= b.1 {
+            (Axis::Horizontal, a.0)
+        } else {
+            (Axis::Vertical, b.0)
+        }),
+        (Some(a), None) => Some((Axis::Horizontal, a.0)),
+        (None, Some(b)) => Some((Axis::Vertical, b.0)),
+        (None, None) => None,
+    };
+    let Some((axis, at)) = cut else { return sorted_by_y(lines) };
+
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    for l in lines {
+        let b = line_bbox(&l);
+        let key = match axis {
+            Axis::Horizontal => b.y0.midpoint(b.y1),
+            Axis::Vertical => b.x0.midpoint(b.x1),
+        };
+        if key < at { near.push(l) } else { far.push(l) }
+    }
+    if near.is_empty() || far.is_empty() {
+        return sorted_by_y(if near.is_empty() { far } else { near });
+    }
+    let mut out = xy_cut_vtop(near, page_w, depth + 1);
+    out.extend(xy_cut_vtop(far, page_w, depth + 1));
+    out
+}
+
 /// Prefer the COLUMN cut over the larger valley, unless something spans.
 ///
 /// §8.40 made `academic_literature` the worst ordering cell (12.01 %, double

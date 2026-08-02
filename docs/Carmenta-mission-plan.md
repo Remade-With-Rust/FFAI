@@ -2728,6 +2728,69 @@ holdout, and §8.42 explains why the target was mis-picked. The next attempt is
 directed by the aggregate inversion rate (holdout 4.44 %), validated on holdout,
 and must clear an interval — not a cell ranking.
 
+### 8.44 Four ordering variants, none survive — and the aggregate lied twice
+
+§8.43 confirmed order owns 89 % of the gap. Four attempts at it, all measured on
+the line-level testbed, train first and holdout deciding:
+
+| aggregate inversions | train | holdout |
+|---|---:|---:|
+| baseline `xy_cut` | 5.96 % | **4.44 %** |
+| `vfirst` — prefer columns everywhere | 5.16 % | 4.65 % |
+| `vtop` — prefer columns at depth 0 | 5.28 % | 4.85 % |
+| `onelevel` — explicit column grid | 5.72 % | not run |
+| `hybrid` — route on spanning element | **4.60 %** | **4.25 %** |
+
+`onelevel` is architecturally distinct from the recursion — one x-projection,
+gutters found once, lines assigned to column bands — and its train profile
+confirmed BOTH halves of a prediction made before measuring: it fixes the
+column interleave (`academic_literature` 12.01 % -> 4.51 %, `magazine` 6.07 % ->
+4.06 %) and fragments layouts whose structure changes down the page
+(`newspaper` 5.25 % -> 9.13 %, the stated falsifier). Two architectures failing
+on mechanistically opposite layouts is the sign-flip this campaign routes on, so
+`hybrid` dispatches on the property that separates them — a page-wide element
+means the layout changes vertically and only the recursion can follow it —
+reusing §8.29's existing `is_spanning` test rather than introducing a threshold.
+
+On the aggregate it worked: the only variant to beat baseline on holdout,
+4.44 % -> 4.25 %, keeping `academic_literature` (4.39 % -> 2.19 %) AND
+`newspaper` (5.05 % -> 4.20 %), which no single architecture could hold
+together.
+
+**The paired test says no.**
+
+| | better | worse | tied | sign test | mean Δ, 95 % CI |
+|---|---:|---:|---:|---|---|
+| **holdout** | 25 | **33** | 178 | **z = −1.05** | +0.19 pp, **[−0.93, +1.34]** |
+| train | 12 | 8 | 60 | z = +0.89 | +1.36 pp, [−0.72, +3.68] |
+
+**More holdout pages get worse than better.** The +0.19 pp aggregate is a few
+large pages outvoting a majority of small regressions — the same 722x
+page-length spread that has distorted every character-weighted number in this
+campaign (§8.33 as macro/micro, §8.43 as an interval spanning zero, here as an
+aggregate pointing the wrong way from the page count). Only 58 of 236 pages
+change at all, and among those the router is a coin flip landing slightly
+negative.
+
+**Refuted. The default stays `xy_cut`.** All four variants remain named
+`FFAI_ORDER` modes so the next attempt starts from measurements rather than
+this paragraph.
+
+**Two lessons, both about the aggregate.** The train margin (−1.36 pp) was
+never significant either — its CI spans zero — and running the sign test on
+TRAIN would have cost nothing and saved a 24-minute holdout run. Train is for
+selecting; it still needs an interval before it earns a holdout. And a
+character-weighted aggregate can move opposite to the page majority, so on this
+corpus the page-level test is not a confirmation of the aggregate — where they
+disagree, it is the verdict.
+
+**Where this leaves ordering.** Four attempts, three architecturally distinct,
+none transferring. The failure is no longer plausibly "the wrong rule": routing
+at PAGE granularity cannot work when the same page contains both a uniform grid
+and a structure change, which is what a figure inside a two-column paper IS.
+The next attempt should route per NODE inside the recursion rather than once
+per page — the same discriminator, applied where the ambiguity actually lives.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
