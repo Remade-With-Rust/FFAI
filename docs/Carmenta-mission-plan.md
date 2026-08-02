@@ -2135,6 +2135,76 @@ the weaker claim and the trustworthy one.
 
 This is also the first `correctness PASS` on the full OmniDocBench holdout.
 
+### 8.33 Two averagings, and the 6.7 points we spend reading figures
+
+The full-holdout run and the split probe reported **33.70 %** and **24.77 %**
+on the same 236 pages, same engine, same box. Nine points is not rounding, and
+until it was explained neither number was quotable.
+
+**It is the averaging, and only the averaging.** `runner.rs:1363` computes
+`sum(per-clip CER) / clip_count` — MACRO, every page weighted equally. The
+probes compute `sum(edits) / sum(chars)` — MICRO, every character weighted
+equally. Recomputing both from one pass reproduces the harness figure exactly:
+
+| | micro | macro |
+|---|---:|---:|
+| ALL 236 pages | 24.77 % | **33.70 %** |
+
+Exact reproduction is what rules out a second defect. Both are defensible; they
+are not interchangeable, and this campaign had been quoting both — §8.29's
+XY-cut deltas are micro, §8.30's three-way is macro. **The three-way is
+unaffected**: engine and references both go through the same `mean`
+(`runner.rs:851` and `:958`), so all three arms are macro and the comparison is
+internally consistent. From here every figure states its averaging.
+
+**What macro exposed was worth the confusion.** Per cell the two diverge
+wildly — `book` reads 27.83 % micro and 59.20 % macro — because ground truth
+runs from **55 to 39686 characters, a 722x spread**, and `metrics.rs`
+deliberately does not cap the error rate (capping "would hide gross
+over-generation"). One short page where the detector over-fires can score
+several hundred percent and outweigh dozens of long ones:
+
+| page | source | ref | ours | CER |
+|---|---|---:|---:|---:|
+| omni-0245 | book | 315 | **2972** | **843.5 %** |
+| omni-0055 | academic_literature | 3437 | 11013 | 221.5 % |
+| omni-0213 | book | 418 | 1248 | 199.0 % |
+
+Nine pages exceed 100 %. `omni-0245` alone carries ~25 of `book`'s 59.20 %.
+
+**And the mechanism is not bad reading.** `omni-0245` is a book page containing
+a screenshot of a Google results window. The annotation carries three prose
+regions — 315 characters; we transcribe the whole page, browser chrome and URL
+bar included. `omni-0213` is the same shape: four annotated regions, and we
+read the unannotated figure too. **A large part of our measured error is text
+that is genuinely on the page and deliberately not in the answer key.**
+
+That names the gap precisely, and it is not a recognition gap. PP-StructureV3
+and Unlimited-OCR run layout classification and suppress figure regions. We
+read everything. Their advantage there is knowing what *not* to read.
+
+**The lever, with a measured ceiling** (micro, all 236 pages):
+
+| | value |
+|---|---:|
+| pages emitting >1.5x the reference | **16 / 236** |
+| share of reference characters they hold | 2.8 % |
+| **share of all edits they cause** | **13.3 %** |
+| CER on those 16 pages | 119.00 % |
+| CER on the other 220 | 22.08 % |
+| **ceiling if over-generation were perfectly suppressed** | **24.77 % -> 18.07 %** |
+
+**6.7 points of micro CER for a layout decision rather than a better
+recognizer** — the largest single lever this campaign has measured since
+reading order, and unlike reading order it needs no new model: the detector
+already emits the boxes, and the question is which of them to keep. Note the
+ceiling is micro and therefore NOT comparable to §8.30's macro three-way; what
+it bounds is the prize, not the ranking.
+
+Hypotheses for all 236 pages are cached under `.tools-bench/cache/`, so
+re-scoring under any metric is now instant. Every question in this section
+previously cost a 25-minute re-run, which is why so few of them had been asked.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
