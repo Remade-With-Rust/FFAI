@@ -1979,6 +1979,59 @@ And **one clip's error aborts the whole corpus run** — 42 good pages were
 discarded because page 23 failed, which is why the defect looked like a harness
 quirk instead of a crash.
 
+Both are now fixed (`b4dc952`). The recognize loop records a clip failure and
+continues, and decode is wrapped in `catch_unwind` so a panicking dependency
+costs one page rather than the corpus — rusty_jpeg 0.1.5 unwraps a `None` on
+progressive JPEGs, and 49 of these 316 pages are progressive, so an upstream
+defect had been producing *no data at all* and no indication of which page did
+it. The correctness gate already expressed partial success as
+`clips_ok < clips_total`; aborting was discarding exactly the information the
+gate exists to report, and paying 42 good measurements to learn one bad one.
+Verified on a six-page canary carrying one progressive JPEG: 5/6 processed,
+correctness FAIL naming the culprit, CER still measured on the five.
+`catch_unwind` is deliberately **not** wrapped around the engine — a panic in
+Carmenta is our defect and must abort loudly.
+
+### 8.31 academic_literature at 73 % — one hypothesis refuted, one bounded
+
+The worst cell on the board, 29 points behind the next, and its order component
+is −0.49 pp: this is not reading order. Two hypotheses, both cheap to test
+against the annotations alone.
+
+**REFUTED — small type.** Academic pages carry 40 % more text than average in
+the same pixel dimensions (3771 chars/page against 2646; 419 chars/region
+against 220), which predicts smaller glyphs and a recognizer starved of
+resolution. Measuring the character cell directly — `sqrt(region area /
+characters)` — gives **19.10 px for academic and 19.00 px for newspaper**.
+Identical. And newspaper scores 20.1 %. Same type size, 53 points apart, so
+density is not the mechanism. This is the controlled comparison the corpus
+happens to contain, and it costs nothing to run.
+
+**BOUNDED — inline mathematics.** The corpus filter excluded pages carrying
+`equation_isolated` regions, but inline formulas live inside `text_block` and
+were never filtered. OmniDocBench annotates them as LaTeX *source*: the ground
+truth asks for `$ \mathrm{N i S O}_{4} $` where the page displays NiSO4. Marker
+density is **15.08 per 1k characters against newspaper's 0.91**, on 37 of 43
+pages — a 16× separation on the one axis that distinguishes the two cells.
+
+But the same spans hold only **8.16 % of ground-truth characters**, and 8 %
+cannot by itself be 53 points. So formulas are *a* cause, not *the* cause, and
+the honest status is open. (The equivalent 8.42 % measured on newspapers is the
+`$...$` regex catching dollar *amounts*; the marker counts are the trustworthy
+figure, since `\mathrm` and `^{13}C` are unambiguous.)
+
+**Open, and the measurement that decides it:** six academic pages contain no
+`$...$` at all and 37 do — same journals, same type size. If the clean six read
+like newspapers, formulas own the cell and the fix is a formula path rather
+than a recognizer change. If they also read near 70 %, formulas are a side-show
+and the real cause is still unnamed. `.tools-bench/academic_partition.py`.
+
+Worth stating plainly either way: a formula gap is a **capability** gap, not a
+recognition one. PP-StructureV3 and Unlimited-OCR ship formula heads that emit
+LaTeX and can match this reference; we emit glyphs and structurally cannot. That
+is a real deficit and not a scoring artifact — but it is a different deficit
+from "our recognizer reads academic text badly", and the fixes do not overlap.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
