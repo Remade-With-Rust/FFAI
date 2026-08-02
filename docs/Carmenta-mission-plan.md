@@ -2871,6 +2871,50 @@ contention** — non-deterministic parallel reduction order, ~1e-4, far too smal
 to move text, boxes or ordering. Byte-identity checks must therefore run in
 isolation, or they report differences that are not there.
 
+### 8.47 The ceiling: a perfect layout model is worth 11.95 points
+
+§8.45 concluded the next investment is a layout classifier. Before building one,
+this campaign's rule is ceiling first, then cost — measure what a perfect fix is
+worth before building the thing that approximates it.
+
+The ceiling is computable exactly, with no model and no new runs. Take our OWN
+detected lines carrying our OWN recognized text, and emit them in the order the
+annotation says the regions should be read, each line inheriting the `order` of
+the region its centre falls inside (§8.34's validated geometric labelling). That
+is our pipeline with an ORACLE layout model bolted on: identical detection,
+identical recognition, identical over-generation, perfect sequence.
+
+| 236 holdout pages, micro CER | |
+|---|---:|
+| shipped ordering | **24.77 %** |
+| **ORACLE ordering** | **12.83 %** |
+| **prize for all ordering work** | **11.95 pp** |
+
+**Nearly half our CER is sequence.** Nothing built can exceed this, and every
+variant in §8.44-§8.45 was competing for a share of it — the best of them
+(`pernode`, refuted) captured about 0.7 pp of aggregate against an 11.95 pp
+prize, which is roughly 6 %.
+
+This is the number that justifies the investment. A layout classifier is a large
+build; a prize of 11.95 pp on the metric the campaign is judged by is large
+enough to warrant it, and it also reconciles with §8.43 from a different
+direction: order owns 89 % of the gap to PP-StructureV3, measured against a
+reference, and 48 % of our absolute CER, measured against an oracle. Both say
+the same thing about where the work is.
+
+**A correction to the probe, made before recording the result.** The order-free
+column (20.33 %) was initially labelled a floor. It is not — the oracle beats it,
+12.83 % against 20.33 %. Sorting tokens on BOTH sides destroys the alignment
+structure Levenshtein exploits, so order-free is a DIAGNOSTIC separating
+sequence errors from character errors, not a bound. Reading it as a floor would
+have understated the prize by half and made the layout classifier look barely
+worth building.
+
+**What it does not include.** The oracle inherits our detection and our
+over-generation: 3382 holdout lines fall outside every annotated region and are
+kept at the end, so §8.33's separate 6.7 pp over-generation prize is still on the
+table and is largely independent of this one.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
