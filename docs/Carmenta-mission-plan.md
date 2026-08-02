@@ -2966,6 +2966,72 @@ prediction, not region detection: the model has to output a SEQUENCE, and
 geometry cannot supply it. That is the same capability PP-StructureV3 ships and
 the reason §8.43 finds order owning 89 % of the gap to it.
 
+### 8.49 Geometry refuted at every granularity — and what the fix costs
+
+§8.48 concluded that the prize is 90 % ordering and that reading-order
+PREDICTION is needed. That conclusion had a hole: PP-StructureV3 does not run a
+sequence model — it detects regions and orders them geometrically — so if
+region-scale ordering works when properly calibrated, region DETECTION would be
+the whole build and no sequence model is required. §8.39's failure at region
+scale was a calibration bug (line-height units applied to region boxes), not
+proof the approach fails.
+
+Tested directly, with true regions and the page's true LINE height as the scale:
+
+| 236 holdout pages, micro CER | |
+|---|---:|
+| shipped (our lines, our rule) | **24.72 %** |
+| true regions, XY-cut at line scale | **35.94 %** |
+| true regions, true order | 12.83 % |
+
+**Given perfect regions AND correct calibration, geometric ordering is worse
+than what we ship.** The mechanism is arithmetic: with few large units every
+wrong decision relocates a whole block of text, so cost-per-mistake grows faster
+than the projection's accuracy does. Ordering 100 lines badly is cheaper than
+ordering 8 regions badly.
+
+**Geometry is now refuted at all three granularities it can operate on:**
+
+| units | attempts | result |
+|---|---|---|
+| lines | 5 variants (§8.44, §8.45) | none transfers; best captured ~6 % of the prize |
+| contiguous blocks | grouping oracle (§8.48) | 10 % of the prize |
+| true regions | XY-cut at line scale | **−94 %** — worse than shipped |
+
+So the missing ingredient is not a better projection, a better granularity, or
+better regions. PP-StructureV3's layout models emit CLASSES — title, text,
+figure, caption, header — and its ordering uses that semantics, which is
+information no projection over box geometry contains. That is what §8.43's 89 %
+is measuring.
+
+**The cost, since the ceiling is known.** PP-StructureV3's layout stack as
+installed here:
+
+| model | size |
+|---|---:|
+| PP-DocLayout_plus-L | 130.4 MB |
+| PP-DocBlockLayout | 129.9 MB |
+| *(our entire detector)* | *4.7 MB* |
+
+**~260 MB against our 4.7 MB** — a 55x increase in weights to buy 11.95 pp. That
+is a real tension with the position §8.30 actually won on: 425 MiB steady and
+0.17 pages/s on CPU, against 8745 MiB and 0.01 pages/s. Buying the CER at that
+price would forfeit the deployment class that is our advantage.
+
+**So the decision is a trade, not a task**, and it should be made deliberately:
+
+1. **Port a large layout model** — closes most of 11.95 pp, costs the edge story.
+2. **Find or train a SMALL reading-order head** — the prize is sequence over
+   already-detected boxes, which is a much smaller problem than layout detection
+   from pixels; a few MB is plausible. Unmeasured.
+3. **Bank §8.33's 6.7 pp instead** — over-generation suppression is independent
+   of ordering, needs no new model class, and is unexplored since its cheap
+   filters were refuted.
+
+Option 2 is the one that preserves the position and is unpriced; option 3 is
+smaller but cheap and orthogonal. Both are better next moves than a sixth cut
+rule, which §8.44-§8.49 have now closed off with measurements at every level.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
