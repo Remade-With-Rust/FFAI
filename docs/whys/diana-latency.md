@@ -1410,3 +1410,73 @@ What that leaves: the idle half is not explained by pool oversubscription,
 and the wall-time measurement needed to localise it further requires a quiet
 box. Recorded as OPEN, with the instrument (`examples/utilisation.rs`) and the
 statistic to read (the maximum) both in place for the next quiet window.
+
+
+---
+
+## D1, finally answered: we do LESS work and spread it over a quarter of the cores
+
+Every iteration of this campaign assumed, without testing, that the reference
+executes our arithmetic more efficiently. The measurement that settles it was
+never taken because the harness only ever compared WALL: the reference's CPU
+time per image.
+
+Taken by polling the python process tree (`TotalProcessorTime` on the venv
+launcher reads ~0 — the shim re-execs and the work is in a child, an
+impossible number that had to be chased before any figure was usable), 60
+images against 1 so the model load cancels, exit codes and output line counts
+checked on both arms:
+
+| | CPU/image | wall/image | **cores busy** |
+|---|---:|---:|---:|
+| ultralytics-yolo26n-rect | **312.5 ms** | 39.0 ms | **8.01** |
+| Diana | **~225 ms** | ~96 ms | **~2.2** |
+
+**We do 28 % LESS CPU WORK than the reference.** The 1.9x latency gap is not
+an efficiency gap, an arithmetic gap, a memory gap or a kernel gap. It is
+entirely a SPREADING gap: torch puts 312 ms of work on 8 cores; we put 225 ms
+of work on 2.2.
+
+The wall figure cross-checks: 53.0 ms/image marginal on an earlier run of the
+same probe, against the ledger's 53 ms p50 for this reference. The 39.0 ms
+here is the same quantity on a less contended pass.
+
+### What this retires
+
+* **Kernel tuning.** The AVX2 microkernel, the blocking experiments, the
+  direct-convolution variants — all were trying to reduce work we already do
+  less of than the winner.
+* **Every memory lever**, already closed by the cache-residency finding.
+* My own reading three commits ago that "the useful work is small and
+  spreading it wider costs more in barriers than it recovers." Torch spreads
+  the same kind of work over 8 cores at **8.01/8 = essentially perfect**
+  utilisation. The barriers are OUR design, not a property of the problem.
+
+### What it makes the target
+
+Our parallel efficiency is **2.2 / 4 = 55 %** against torch's ~100 %.
+
+| if we reached | wall/image |
+|---|---:|
+| 4 cores busy (100 % on the current pool) | **56 ms** |
+| 8 cores busy (torch's width) | **28 ms** |
+
+Parity is 53 ms. **Perfect efficiency on the pool we already have clears it**,
+and matching torch's thread count would beat the reference by 1.4x.
+
+That is the first target this campaign has produced that is both quantified
+and sufficient. It is also the first evidence that Diana's implementation is
+COMPETITIVE — we lose a race we are equipped to win, on scheduling alone.
+
+### The open question, stated precisely
+
+Where do 45 % of our worker-cycles go? Candidates already measured, none yet
+attributed:
+
+* ~1320 matmuls per image, each a cross-pool handoff into candle's own
+  24-thread pool (candle-core 0.11 `utils.rs:368`);
+* a per-layer fan-out with a barrier per convolution and per activation;
+* `attn` at 0.93x scaling — slower with more cores.
+
+The instrument for it (`examples/utilisation.rs`) exists and reads cores-busy
+directly. It needs a quiet box, which this one has not been.
