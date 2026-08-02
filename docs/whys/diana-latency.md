@@ -952,3 +952,42 @@ which the measured 1.33x is reachable.
 was a category, not a measurement, and it very nearly closed a door with a
 measured 2x behind it. A prune constrains the approach it tested; it does not
 license a conclusion about the whole component.
+
+### The tax re-priced twice — and candle's transpose is 4.3x slower than a loop
+
+The prune above stands, but two of its numbers were wrong and the second
+error was mine.
+
+**First: 16.55 ms to move ~2.5 M elements is ~20 MB of traffic**, which at
+this machine's bandwidth should cost about 1 ms. A 16x discrepancy is the
+instrument asking for help, not a law of physics. So: candle's
+`t().contiguous()` against a plain blocked transpose.
+
+**Second: my blocked transpose had its inner loop over the wrong axis.**
+With `c` innermost the destination writes stride by `rows` and touch a fresh
+cache line every iteration. Swapping to `r` innermost makes them contiguous —
+same tile, same work:
+
+| transpose | total over the six shapes |
+|---|---:|
+| candle `t().contiguous()` | 18.12 ms |
+| blocked, inner loop over `c` (wrong) | 16.67 ms |
+| **blocked, inner loop over `r`** | **4.19 ms** |
+
+**Candle's generic transpose is 4.3x slower than a naive blocked loop**, and
+my first blocked version was only 1.1x better than candle because it had the
+same defect candle does.
+
+Re-priced: `7.97 + 4.19 = 12.17` against `10.63` as-is — **0.874x. Still
+dead**, but the margin fell from 2.3x worse to 1.5 ms worse. A hand-written
+AVX2 8x8 transpose could plausibly reach ~1.5 ms and flip it to ~1.12x on the
+GEMM, which is 17.2 % of serial, so ~2 % of pipeline. **Not worth the
+rewrite** — recorded so the next person can see the arithmetic rather than
+redo it.
+
+**The finding worth more than the idea it was pricing:** if the graph
+transposes anywhere HOT, it is paying 4.3x. `blocks.rs` has two —
+`transpose(...).contiguous()` on both sides of the attention matmul — and
+attention is the op measuring **1.02x scaling from 1 to 24 threads**, the
+only one in the profile that does not parallelise at all. That is the next
+place to look, and it is a much better lead than the one that produced it.
