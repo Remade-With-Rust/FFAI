@@ -1691,10 +1691,12 @@ The kernel is not the problem, and neither is the fan-out — both work.
 At 8.33 Gelem/s, the image's 10.38 M activation elements should cost
 **1.25 ms**. The profiled bucket is **13.1 ms**.
 
-> **~90 % of the SiLU stage is not the CACHE-WARM SiLU kernel.**
+> **~90 % of the SiLU stage is not the SiLU kernel.**
 >
-> **That qualifier is load-bearing and was missing from the first version of
-> this section.**
+> Downgraded to "not the CACHE-WARM kernel" when the probe's residency was
+> noticed, then RE-ESTABLISHED by the cold-buffer experiment below. The
+> qualifier turned out not to be needed — but it had to be earned, not
+> assumed.
 
 Roughly 11.8 ms per image, across 87 calls, is per-call cost: candle tensor
 and storage construction, the output `Vec` allocation (~476 KiB each, ~41 MiB
@@ -1752,6 +1754,43 @@ campaign has already built three things against prizes that arithmetic later
 showed did not exist, and every one of them was priced with the wrong
 residency assumption.
 
-**Parity needs ~7 ms off a 59 ms floor.** The floor now has a candidate
-mechanism under it rather than a list of stages — but "candidate" is the
-correct word until the cold-buffer probe runs.
+#### It was run, and residency is NOT the explanation
+
+Cold arm: 63 distinct tensors, 48 MiB rotating, comfortably past this box's
+32 MiB L3, so every iteration reads data the caches have evicted. Same
+kernel, same `SliceOp` wrapper, same thread counts.
+
+| threads | warm | cold | warm/cold |
+|---|---:|---:|---:|
+| 1 | 2.44 | 2.19 Gelem/s | 1.12x |
+| 2 | 4.60 | 4.38 | 1.05x |
+| **4** | **8.44** | **7.38** | **1.14x** |
+| 6 | 9.30 | 7.04 | 1.32x |
+| 8 | 4.37 | 3.49 | 1.25x |
+
+**Cold data costs 14 % at four threads.** The pipeline runs the same kernel at
+**0.79 Gelem/s — 9.3x slower than the cold isolated arm.** Residency accounts
+for a seventh of one factor; something else accounts for the other nine.
+
+So the claim stands on its own evidence now rather than on a cache-warm
+artifact: at the cold rate, the image's 10.38 M elements cost **1.4 ms**
+against a profiled **13.1 ms**, leaving **~11.7 ms per image of per-call
+machinery** — **17 % of a 67.6 ms image**, in one stage.
+
+### The prize, now that it is properly supported
+
+`silu` alone carries **~11.7 ms** of per-call machinery. Parity from the clean
+curve's 67.6 ms needs **15.6 ms**. If `pre`, `1x1`, `im2col` and `attn` carry
+the same per-call shape — they have the same wrapper and the same allocation
+pattern, and together hold 27 ms of the spine — the mechanism is larger than
+the gap.
+
+**That is the first lever in this campaign whose measured prize exceeds what
+parity requires.** It is also the first one whose ceiling was established with
+a cold-data control rather than assumed, which is the specific mistake that
+killed the previous three.
+
+The change it implies is NOT the epilogue fusion already refuted. That moved
+an allocation; this is about not performing one per op at all — a pooled
+buffer reused across calls, so the per-call cost amortises. Different change,
+different risk, and it should be built against this number.

@@ -43,6 +43,20 @@ fn main() {
     // the two suspects, so measuring past it would answer the wrong question.
     let x = Tensor::from_vec(xs, (1, n), &Device::Cpu).unwrap();
 
+    // COLD arm: rotate over enough distinct tensors to exceed this box's
+    // 32 MiB L3, so each iteration reads data the caches have evicted. This
+    // is the probe that separates per-call machinery from cold-data cost.
+    let cold_n = (48 * 1024 * 1024 / 4) / n + 1; // >48 MiB of buffers
+    let cold: Vec<Tensor> = (0..cold_n)
+        .map(|k| {
+            let v: Vec<f32> = (0..n).map(|i| ((i + k * 7) % 977) as f32 * 0.01 - 4.0).collect();
+            Tensor::from_vec(v, (1, n), &Device::Cpu).unwrap()
+        })
+        .collect();
+    println!("warm arm: 1 buffer reused; cold arm: {cold_n} buffers ({:.0} MiB) rotating
+",
+             cold_n as f64 * n as f64 * 4.0 / 1048576.0);
+
     for threads in [1usize, 2, 4, 6, 8] {
         let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
         let mut best = f64::MAX;
@@ -58,7 +72,19 @@ fn main() {
             BASE.with(|b| b.set(best));
         }
         let sp = BASE.with(|b| b.get()) / best;
-        println!("threads={threads:<2} min {best:7.3} ms   {gelem:5.2} Gelem/s   speedup {sp:.2}x");
+
+        // Cold arm, same thread count, same kernel, same wrapper.
+        let mut cbest = f64::MAX;
+        for r in 0..reps {
+            let t = Instant::now();
+            let out = pool.install(|| ffai_diana::silu::silu(&cold[r % cold.len()]).unwrap());
+            let ms = t.elapsed().as_secs_f64() * 1e3;
+            std::hint::black_box(&out);
+            cbest = cbest.min(ms);
+        }
+        let cgelem = n as f64 / (cbest / 1e3) / 1e9;
+        println!("threads={threads:<2}  WARM {best:7.3} ms {gelem:5.2} Gelem/s (speedup {sp:.2}x)   COLD {cbest:7.3} ms {cgelem:5.2} Gelem/s   warm/cold {:.2}x",
+                 cbest / best);
     }
 }
 
