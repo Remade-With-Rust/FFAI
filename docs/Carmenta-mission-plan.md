@@ -3129,6 +3129,57 @@ is a genuine fork — text-aware ordering at unknown cost, or a large layout mod
 at 55x our weights — and it is now a decision with numbers on both sides rather
 than a hunch.
 
+### 8.52 Hand-crafted text features add nothing — no cheap lever survives
+
+§8.51 closed boxes-only ordering and named the one free input left: the TEXT,
+which the pipeline recognises before ordering is decided and which carries what
+geometry cannot — a line ending mid-clause, a caption announcing itself, a bare
+number that is furniture.
+
+Added to the same ranker as eight per-line flags (ends in `.!?`, trailing
+hyphen, starts capitalised, starts with a digit, matches
+`figure|table|chapter|section|…`, ALL CAPS, bare number, saturating length):
+
+| features | model | **holdout** |
+|---|---|---:|
+| geometry only (15) | logistic | 7.00 % |
+| geometry only (15) | GBDT-100 | 4.80 % |
+| geometry + text (31) | logistic | **6.96 %** |
+| geometry + text (31) | GBDT-100 | **4.71 %** |
+| *shipped hand rule* | — | **4.44 %** |
+
+**0.09 pp.** Both still lose to the hand-written rule.
+
+**What this does and does not refute.** It refutes *hand-crafted* text flags,
+not text. LayoutReader-class models consume learned token embeddings over the
+line's actual words, not eight booleans — "continued from page 7" and a
+mid-clause break are semantic facts a regex cannot see. So the honest statement
+is that the CHEAP form of the text lever is dead, and the informative form
+requires a language model over the recognised text, which is no longer a
+few-MB head.
+
+**Every cheap path to the 11.95 pp is now closed by measurement:**
+
+| lever | result |
+|---|---|
+| better cut rule | 5 variants, none transfers (§8.44-§8.45) |
+| finer/coarser granularity | refuted at lines, blocks, regions (§8.48-§8.49) |
+| learned ranker over boxes | loses to the hand rule (§8.51) |
+| + hand-crafted text features | +0.09 pp, still loses (§8.52) |
+| suppress over-generation | benchmark-fitting, declined (§8.50) |
+
+What remains costs real weights: a layout model with semantic classes (~260 MB
+as PP-StructureV3 ships it), or a text-embedding sequence model over recognised
+lines. **The 11.95 pp is real and so is the wall in front of it**, and that is a
+more useful position than an untested sixth idea.
+
+**Method note.** The two conditions were run as separate invocations rather than
+the single-pass A/B intended — a patch to `main()` failed silently and was not
+checked. Same script, data, models and metric, and the feature counts (15 vs 31)
+identify which is which, so the comparison stands; but a silently-skipped edit is
+the same class of defect this campaign has now recorded eight times, and it was
+caught here only because the output had one block where two were expected.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
