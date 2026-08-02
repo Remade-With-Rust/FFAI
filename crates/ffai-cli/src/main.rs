@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use ffai_core::engine::{AsrOptions, OcrOptions, Task, TtsOptions, VlmOptions};
+use ffai_core::engine::{AsrOptions, DetectOptions, OcrOptions, Task, TtsOptions, VlmOptions};
 use ffai_core::registry::EngineRegistry;
 
 #[derive(Parser)]

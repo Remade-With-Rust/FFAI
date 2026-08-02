@@ -21,6 +21,7 @@ ffai-media = { workspace = true }
 ffai-models = { workspace = true }
 ffai-mercury = { workspace = true }
 ffai-carmenta = { workspace = true }
+ffai-diana = { workspace = true }
 ffai-argus = { workspace = true }
 ffai-bench = { workspace = true }
 anyhow = { workspace = true }
