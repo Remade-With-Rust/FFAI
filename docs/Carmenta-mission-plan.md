@@ -3311,6 +3311,63 @@ that fire on most inputs, where the current rule is a hand-set constant, and
 where a ceiling check says the prize is worth the loop. The cut-axis rule failed
 the third test, not the first two.
 
+### 8.56 Prometheus cannot close this gap — the gap is not in a constant
+
+§8.55 ran the refinery loop end to end and got "valid, and worth nothing",
+because the target fired on 25 of 1178 nodes. Its stated lesson gives three
+criteria for a Prometheus target: it must **fire on most inputs**, be a
+**hand-set constant**, and have a **ceiling worth the loop**.
+
+The best remaining candidate was the DBNet unclip ratio — `UNCLIP_LINE = 1.5`,
+applied to every detected box on every page, controlling crop tightness and
+therefore feeding recognition directly. It passes the first two criteria
+outright, and there was positive reason to expect slack: the ledger shows unclip
+was swept on **CORD receipts**, never on documents, and this campaign has
+measured content sign-flips repeatedly. A constant tuned for one content class
+sitting unexamined on another is exactly the shape of an easy win.
+
+Ceiling checked FIRST this time, via the existing `FFAI_DB_UNCLIP` override, 30
+train pages:
+
+| unclip | CER |
+|---|---:|
+| 1.2 | 21.42 % |
+| 1.35 | 21.18 % |
+| **1.5 (shipped)** | **21.10 %** |
+| 1.7 | 24.97 % |
+| 1.9 | 25.34 % |
+
+**The shipped constant is already at the optimum.** Flat below (0.32 pp across
+1.2–1.5), sharply worse above (+3.87 pp by 1.7). No prize in re-tuning it, so
+the target fails criterion three and the loop does not run. **Fifteen minutes of
+sweeping instead of a full harvest-label-distill-forge-trial cycle** — which is
+the entire point of ceiling-first, applied at the right moment for once.
+
+A useful side result: 1.5 is now validated on documents, not just inherited from
+a receipt sweep.
+
+**The general answer, which the two checks together support.** Prometheus
+replaces *human-guessed formulas* with discovered ones. That is only worth doing
+where a guessed formula is leaving value on the table, and Carmenta's are not:
+the cut-axis rule is right on the population that reaches it (§8.55, 25/25), and
+the unclip constant is at its optimum (here). Meanwhile **89 % of the remaining
+gap is sequence** (§8.43), and §8.51/§8.52 measured that reading order is *not
+recoverable from box geometry at all* — not by a rule, not by a learned ranker,
+not with hand-crafted text features.
+
+**So the gap is not a badly-tuned formula; it is missing information.** No
+symbolic-regression pipeline can discover a fact its inputs do not contain.
+Closing the rest needs layout semantics — region classes, or a text-embedding
+sequence model — which is a new model, not a better constant. Prometheus is the
+right tool for the codec work it was built for and the wrong tool for this gap,
+and that is now measured rather than asserted.
+
+**What did close 2.15 points**, for the record: per-node reading-order routing
+(§8.53), re-measured on the three-way subset that had never been re-run since it
+landed — 25.91 % -> **23.76 %**, deficit against Unlimited-OCR 10.40 pp ->
+**8.25 pp**. The lesson there is smaller and duller than a refinery: **when a fix
+lands, re-run the benchmarks that quote the old number.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
