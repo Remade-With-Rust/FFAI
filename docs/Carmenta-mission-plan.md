@@ -2630,6 +2630,56 @@ predicted cells — everything a result is supposed to have — is +0.21 pp on t
 split that decides. Had `line_order.py` defaulted to holdout (it did until
 §8.38 caught it), this would have shipped.
 
+### 8.42 Cell-level ordering numbers are noise — tau +0.05 across splits
+
+§8.41's fix failed to transfer, and the reason is not the fix. The per-cell
+inversion rates this thread has been steering by are not resolvable at these
+page counts, and their cross-split ranking is indistinguishable from random.
+
+| cell | train | holdout | rank train -> holdout |
+|---|---:|---:|---|
+| colorful_textbook | 1.22 % ±1.07 | 8.06 % ±2.47 | **5th -> 0th** |
+| newspaper | 5.25 % ±1.71 | 5.05 % ±1.43 | 3rd -> 1st |
+| academic_literature | 12.01 % ±4.73 | 4.39 % ±1.27 | **0th -> 2nd** |
+| magazine | 6.07 % ±2.24 | 4.10 % ±1.14 | 2nd -> 3rd |
+| book | 3.24 % ±2.26 | 3.54 % ±1.54 | 4th -> 4th |
+| PPT2PDF | 6.27 % ±4.90 | 3.37 % ±2.09 | **1st -> 5th** |
+| exam_paper | 0.88 % ±0.88 | 0.52 % ±0.37 | 6th -> 6th |
+| **ALL** | **5.96 % ±1.23** | **4.44 % ±0.60** | |
+
+(± is the standard error of the per-page mean.)
+
+**Kendall tau +0.05 — 11 of 21 pairs concordant against 10.5 expected by
+chance.** `academic_literature` carries ±4.73 on a 12.01 % mean and
+`PPT2PDF` ±4.90 on 6.27 %; those intervals swallow every difference the thread
+treated as a finding. Only the aggregate is stable, and even it moves 1.5 pp
+between splits.
+
+**What this invalidates.** §8.40's "academic_literature is the worst ordering
+cell", already corrected in §8.41, was not merely wrong about which cell — the
+question has no reliable answer at 9-23 pages per cell. §8.36's per-cell CER
+table is subject to the same caveat: its ALL row (13.7 of 15.5 points on
+sequence) is an aggregate over 28 pages and stands, but the cell-by-cell gaps
+are single-digit-page estimates and should not have been read as a ranking.
+
+**The rule this establishes.** On `carmenta-omnidoc`, ordering work is directed
+by the **aggregate** number and validated on holdout. A cell-level difference
+needs roughly n ≈ 60 pages to resolve 2 pp at these variances — more than any
+cell in the train split has, and more than four of seven have in holdout. The
+per-cell columns stay in the tooling because they localise a MECHANISM worth
+inspecting (`omni-0038`'s interleave is real and was found that way), but they
+do not rank work and must not select a target.
+
+**The cost of learning it, stated plainly.** §8.40 picked a target cell,
+§8.41 diagnosed it, built a principled fix, confirmed the mechanism in the raw
+output, measured a −0.80 pp train win in exactly the predicted cells — and lost
+on holdout. Every step was sound except the first, and the first was reading a
+ranking out of numbers whose error bars overlap completely. **A confidence
+interval on §8.40's table would have cost one line of code and saved the entire
+sequence.** This is the sixth instrument failure recorded in this campaign and
+the first where the instrument was not broken — it was simply asked a question
+finer than it can answer.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
