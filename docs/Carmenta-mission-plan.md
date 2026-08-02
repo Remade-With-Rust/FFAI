@@ -2345,6 +2345,62 @@ handicaps pinned in `ppstructure_ref.py`. What the sample establishes is the
 *decomposition* — order versus characters — which is a ratio and far more
 robust to sample size than either absolute number.
 
+### 8.37 The ordering defect is the algorithm, and it has a sign flip
+
+§8.36 put 13.7 points on sequence without saying which half of the pipeline
+owns it, and the two answers need different work: either the rule mis-orders
+even perfect input, or the rule is fine and it is being handed detected LINES
+where it wants REGIONS. The corpus settles this without a recognizer — every
+sidecar carries each region's polygon *and* its annotated reading order, so
+feeding true regions in and counting inversions out isolates the algorithm
+completely.
+
+Inversions rather than exact match: one region out of place should cost one
+unit, not void the page. Normalised by `n(n-1)/2`, so 0 % is a perfect sequence
+and 50 % is random.
+
+| cell | pages | SHIPPED | raster | pages perfect |
+|---|---:|---:|---:|---:|
+| newspaper | 47 | 13.42 % | 29.65 % | 19 % |
+| magazine | 60 | 9.40 % | 20.43 % | 32 % |
+| colorful_textbook | 23 | 8.08 % | 8.67 % | 61 % |
+| academic_literature | 43 | 7.44 % | 16.24 % | 58 % |
+| book | 33 | 4.74 % | 11.66 % | 73 % |
+| **PPT2PDF** | 20 | **2.50 %** | **0.14 %** | 85 % |
+| exam_paper | 10 | 0.35 % | 0.00 % | 90 % |
+| **ALL** | 236 | **8.10 %** | 16.55 % | **50 %** |
+
+**Given perfect regions, the shipped rule still mis-sequences half of all
+pages.** So the algorithm is the defect and improving it does not depend on
+better detection first. It is also clearly worth having — it halves raster's
+inversions overall, and on newspapers cuts them from 29.65 % to 13.42 %.
+
+**And it has a sign flip.** On `PPT2PDF` raster scores **0.14 %** against
+XY-cut's 2.50 %, and on `exam_paper` 0.00 % against 0.35 %; `colorful_textbook`
+is a wash. Recursive cutting *invents* structure on pages that have none, and
+a slide or an exam paper read top-to-bottom is simply correct. This is the
+same shape as every adaptive-dispatch win this campaign has taken: a lever that
+wins big on one content class and loses on another, with the classes
+separable. §8.36's per-cell gaps line up with this table — `exam_paper` is
+0.35 % here and the one cell where we *beat* PP-StructureV3, `PPT2PDF` is
+2.50 % and nearly tied — which is independent corroboration, since those
+numbers come from CER against a different reference.
+
+**Two instrument failures on the way here, both caught by an assertion rather
+than by inspection.** First, the testbed was written as a Python
+reimplementation of `boxes.rs`; it reproduced the shipped order on **2 pages of
+12** and every number from it was discarded. `examples/order_probe.rs` now
+exposes the real `order_reading` and the testbed calls it. Second, that probe
+parsed box coordinates as `usize` while OmniDocBench polygons are floats, so
+`filter_map` silently dropped every row and the probe emitted nothing — which
+the caller's permutation check reported as `order_reading` losing boxes. A
+shipped-code bug was nearly written up. **A parse that discards what it cannot
+read is the same defect as a scorer treating a dead process as empty output**,
+which is §8.31, which is the fifth instance this campaign has recorded.
+
+Next: dispatch on measured structure rather than always cutting — the sign flip
+says the win is available and the classes are separable.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
