@@ -38,9 +38,19 @@
 //! | # | change | stage share | speedup | predicted |
 //! |---|---|---:|---:|---:|
 //! | 1 | top-k decodes `max_detections`, not always 300 | 2.1 % | ~1.3x | **~0.5 %** |
+//! | 2 | blocked transpose instead of candle's generic one | 0.3 % | ~1.4x | **~0.1 %** |
 //!
-//! Predicted stack total: **~0.5 %** — under this box's ~5 % resolution, so
+//! Predicted stack total: **~0.6 %** — under this box's ~5 % resolution, so
 //! nothing is claimed yet.
+//!
+//! Entry 2 is the register's reason for existing, stated plainly. Candle's
+//! `t().contiguous()` measured **4.3x slower than a blocked loop** on large
+//! shapes; at attention's smaller ones it is ~1.4x, worth ~0.1 % of the
+//! pipeline. Nothing about that is resolvable on this box, and it was taken
+//! anyway on principle: being several times slower than a plain loop at
+//! anything is a defect whether or not it currently sits on a hot path. It
+//! is also BYTE-IDENTICAL — a transpose permutes floats rather than
+//! computing with them — so there is no accuracy question to trade against.
 //!
 //! Entry 1 is worth reading as the template: it was justified by PARITY
 //! first (Ultralytics feeds `max_det` into both top-k stages, so decoding
