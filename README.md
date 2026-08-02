@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. On **OmniDocBench** documents: **25.9 % CER on CPU against Baidu Unlimited-OCR's 15.5 % on a GPU — at 17x the throughput and 4.7 MB of detector weights against 6.4 GB**, with reading order computed by projection rather than learned. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is 1.5–2.4× ahead at every tier, both from one structural cause** ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is 1.5–2.4× ahead at every tier, both from one structural cause** ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -519,11 +519,23 @@ to itself, and the table above is a re-run rather than a hand-correction. A
 measurement that only works at one input size has an unstated precondition.
 
 The stronger statement sits
-under it: at n the *detections themselves* are identical — same count, same
-classes, same order, across all 1161 boxes (measured on the 45-image
-corpus; the 450-image run reproduces the mAP exactly but the box-by-box
-comparison has not been re-run at that size). And Diana is byte-identical to
-itself across runs and across thread counts, which PyTorch does not promise.
+under it: the *detections themselves* are identical — same count, same
+classes, same order — at **four tiers**, not just the smallest:
+
+| tier | detections | class agreement | max box delta |
+|---|---:|---|---:|
+| n | 131 | 131/131 | 0.084 px |
+| m | 204 | 204/204 | 0.300 px |
+| l | 187 | 187/187 | 0.170 px |
+| x | 202 | 202/202 | 0.213 px |
+
+**724 detections, no tolerance applied to count, class or order.** That is a
+stronger statement than the mAP table above it: two engines can score the
+same aggregate while disagreeing per box, and structural parity says the
+two-stage top-k selects the same anchors in the same order — the part the
+tier generalisation could plausibly have broken and that no corpus metric
+would catch. Measured on the 45-image corpus. And Diana is byte-identical to
+itself across runs and thread counts, which PyTorch does not promise.
 
 Two disciplines produced that. Every layer was checked against a tracked
 oracle digest dumped from the reference before any Rust ran, and **geometry
