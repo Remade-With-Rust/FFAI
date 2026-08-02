@@ -1480,3 +1480,50 @@ attributed:
 
 The instrument for it (`examples/utilisation.rs`) exists and reads cores-busy
 directly. It needs a quiet box, which this one has not been.
+
+
+### The joint pool sweep — thread tuning is exhausted, the spine is serial
+
+Both pool widths swept together for the first time (ours governs the kernels,
+`RAYON_NUM_THREADS` governs candle's own pool), 30 images each:
+
+| ours : candle | wall/image | CPU/image | cores busy |
+|---|---:|---:|---:|
+| 4 : 24 (shipped) | 80.6 ms | **165.0 ms** | 2.05 |
+| 4 : 4 | 83.9 ms | 166.1 ms | 1.98 |
+| 6 : 6 | **78.9 ms** | 196.1 ms | 2.48 |
+| 8 : 8 | 81.2 ms | 242.3 ms | 2.98 |
+| 8 : 4 | 83.5 ms | 221.2 ms | 2.65 |
+| 12 : 12 | 86.6 ms | 377.7 ms | 4.36 |
+
+**Wall is flat — 78.9 to 86.6 ms — while CPU more than doubles and cores-busy
+goes from 1.98 to 4.36.** Every additional worker burns cycles and returns no
+latency. The 4 : 24 default is at the CPU minimum and within noise of the
+wall minimum, so it stays.
+
+That kills "widen the pool" as a lever and identifies what is actually
+binding. Against the 149 ms single-thread figure measured earlier, 80 ms at
+four workers is a 1.86x speedup, which by Amdahl puts the **serial fraction
+near 38 %** — about **57 ms of serial spine** in a 149 ms workload.
+
+Parity is 53 ms. **The serial spine alone is 57 ms**, so no amount of
+parallelism reaches parity: the ceiling with infinite workers is roughly
+57 ms, and we are at 80.
+
+That is the whole remaining problem, stated in one number for the first time
+in this campaign. It also explains torch's 8.01 cores: it is not that torch
+has more threads available — we have 24 — it is that torch has almost no
+serial spine to be limited by.
+
+**The lever is therefore to shorten the spine, not to widen the pool.** What
+is in it has not been attributed and is the next question:
+
+* candle ops with no fan-out at all — reshape, concat, slice, broadcast — run
+  between every parallel region;
+* `attn` at 0.93x scaling, measured and never fixed;
+* the layer-by-layer dependency itself, which is irreducible.
+
+Note the CPU figure in this table (165 ms) is lower than the ~225 ms recorded
+above; that earlier number was taken while another project's benchmark held
+~12 cores. 165 ms is the quieter reading, and it makes the comparison with
+ultralytics starker still: **165 ms of our CPU against 312 ms of theirs.**
