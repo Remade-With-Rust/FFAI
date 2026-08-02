@@ -31,7 +31,7 @@ ffai models         # list model manifests, licenses, cache status
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. Two detector lineages: the mobile-det engines **pass the speed and footprint gates against PaddleOCR on every corpus** — 5.8x faster than CRAFT at 1/12th its memory on screen text — while photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
+| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, zero-churn, all four gates PASS. On **OmniDocBench** documents: **25.9 % CER on CPU against Baidu Unlimited-OCR's 15.5 % on a GPU — at 17x the throughput and 4.7 MB of detector weights against 6.4 GB**, with reading order computed by projection rather than learned. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical** — same count, classes and order across 1161 detections — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is ~1.6× ahead at every tier, both from one structural cause** ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
@@ -437,6 +437,28 @@ corpus class, not by leaderboard.
 - Against the lineage it reimplements: **~5× better CER than the EasyOCR
   pipeline on pages** (0.73 % vs 3.65 %) — line-level composition dodges its
   word-segmentation errors.
+
+**Documents, against the best in class.** On 43 pages of
+[OmniDocBench](https://github.com/opendatalab/OmniDocBench) (Apache-2.0 — the
+benchmark Baidu's Unlimited-OCR states its record on), identical pixels, every
+number a ledger line:
+
+| 43 real document pages | CER | pages/s | memory |
+|---|---:|---:|---:|
+| Unlimited-OCR (Baidu, 3B MoE, **GPU**) | **15.51 %** | 0.01 | 8745 MiB peak |
+| PP-StructureV3 | 19.14 % | 0.02 | 1481 MiB steady |
+| **`mobiledet-crnn` (ours, CPU)** | 25.91 % | **0.17** | **425 MiB steady** |
+
+**10.4 points behind the model that holds the record, at 17× its throughput on
+a machine with no GPU**, from 4.7 MB of detector weights against 6.4 GB —
+`correctness PASS · quality FAIL · speed PASS · footprint PASS`. Not parity.
+The same order of magnitude, in a deployment class neither reference can enter.
+
+Reading order is computed, not learned: a recursive XY-cut over the boxes the
+detector already produced — a projection, not a model — worth **39.2 % -> 33.0 %**
+across 236 pages and taking newspapers from 34.5 % to 20.1 %. Naming the engine
+matters more than naming the toolkit: on the same pages `craft-crnn` reads
+55.1 % where `mobiledet-crnn` reads 25.9 %.
 
 **Where PaddleOCR still wins, stated plainly:** the full pipeline on real
 photographs. On 45 photographed receipts (CORD-v2, CC-BY), PaddleOCR mobile
