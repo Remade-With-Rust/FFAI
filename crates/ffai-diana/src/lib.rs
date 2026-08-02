@@ -45,6 +45,7 @@ pub mod conv3x3;
 pub mod cpuop;
 pub mod cputime;
 pub mod direct3x3;
+pub mod direct3x3_avx2;
 pub mod dwconv;
 pub mod engine;
 pub mod head;

@@ -148,8 +148,28 @@ pub fn conv3x3_direct(
             // block is interior when `ox0 >= 1` and `ox0 + OXB <= w - 1`.
             // Edge blocks fall to the scalar path, which is 2 of ~20 blocks
             // per row at the stem and does not deserve its own kernel.
-            const OCB: usize = 4;
-            const OXB: usize = 16;
+            // AVX2 microkernel where the CPU has it, scalar register
+            // tiling otherwise.
+            //
+            // The scalar form of this convolution lost 9/9 (z = +3.00) to
+            // candle's im2col + GEMM, and the conclusion drawn was that a
+            // hand-written convolution cannot beat a tuned GEMM. That
+            // compared a SCALAR kernel against a VECTORISED one — explicit
+            // AVX2 had been written for silu and never for the convolution,
+            // which is the larger target. This is the missing arm of that
+            // comparison.
+            const OCB: usize = crate::direct3x3_avx2::OCB; // 8
+            const OXB: usize = crate::direct3x3_avx2::OXB; // 8
+            let simd = crate::direct3x3_avx2::available();
+
+            // Bias first, so both paths accumulate into a primed buffer and
+            // the microkernel does not need to know about bias at all.
+            for oc in 0..c_out {
+                for r in 0..nr {
+                    acc[(oc * nr + r) * ow..(oc * nr + r + 1) * ow].fill(bs[oc]);
+                }
+            }
+
             for r in 0..nr {
                 let oy = r0 + r;
                 for oc0 in (0..c_out).step_by(OCB) {
@@ -157,52 +177,49 @@ pub fn conv3x3_direct(
                     let mut ox0 = 0usize;
                     while ox0 < ow {
                         let oxn = OXB.min(ow - ox0);
+                        // `sx = ox + kx` for ox in [ox0, ox0+7] and kx in
+                        // 0..2, and the load is `src[sx - 1]`, so the top
+                        // index is `ox0 + OXB` and it must stay <= w - 1.
+                        // Writing `<= w` reads one element past the row and
+                        // silently pulls in the next row's data: 4.1e-1
+                        // relative error against candle, which is what an
+                        // off-by-one in a convolution looks like.
                         let interior = oxn == OXB && ox0 >= 1 && ox0 + OXB <= w - 1;
-                        let mut t = [[0f32; OXB]; OCB];
-                        for (o, tr) in t.iter_mut().enumerate().take(ocn) {
-                            tr[..oxn].fill(bs[oc0 + o]);
+                        if simd && interior && ocn == OCB {
+                            // SAFETY: `available()` checked avx2+fma; the
+                            // tile is interior and full by the guard above.
+                            unsafe {
+                                crate::direct3x3_avx2::tile(
+                                    xs, &ws, &mut acc,
+                                    (c_in, h, w), (nr, ow),
+                                    (oc0, ox0, oy, r),
+                                );
+                            }
+                            ox0 += OXB;
+                            continue;
                         }
+                        // Scalar fallback: edges, ragged channel groups, and
+                        // any machine without AVX2.
                         for ic in 0..c_in {
                             for ky in 0..3usize {
                                 let sy = oy + ky;
                                 if sy == 0 || sy > h {
                                     continue;
                                 }
-                                let src =
-                                    &xs[ic * h * w + (sy - 1) * w..ic * h * w + sy * w];
+                                let src = &xs[ic * h * w + (sy - 1) * w..ic * h * w + sy * w];
                                 for kx in 0..3usize {
-                                    if interior {
-                                        // The hot path: contiguous, aligned
-                                        // to a fixed length, no branches.
-                                        let sl = &src[ox0 + kx - 1..ox0 + kx - 1 + OXB];
-                                        for o in 0..ocn {
-                                            let wv = ws[((oc0 + o) * c_in + ic) * 9
-                                                + ky * 3
-                                                + kx];
-                                            let tr = &mut t[o];
-                                            for j in 0..OXB {
-                                                tr[j] += wv * sl[j];
-                                            }
-                                        }
-                                    } else {
-                                        for o in 0..ocn {
-                                            let wv = ws[((oc0 + o) * c_in + ic) * 9
-                                                + ky * 3
-                                                + kx];
-                                            for j in 0..oxn {
-                                                let sx = ox0 + j + kx;
-                                                if sx >= 1 && sx <= w {
-                                                    t[o][j] += wv * src[sx - 1];
-                                                }
+                                    for o in 0..ocn {
+                                        let wv = ws[((oc0 + o) * c_in + ic) * 9 + ky * 3 + kx];
+                                        let base = ((oc0 + o) * nr + r) * ow;
+                                        for j in 0..oxn {
+                                            let sx = ox0 + j + kx;
+                                            if sx >= 1 && sx <= w {
+                                                acc[base + ox0 + j] += wv * src[sx - 1];
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
-                        for (o, tr) in t.iter().enumerate().take(ocn) {
-                            let base = ((oc0 + o) * nr + r) * ow + ox0;
-                            acc[base..base + oxn].copy_from_slice(&tr[..oxn]);
                         }
                         ox0 += OXB;
                     }
