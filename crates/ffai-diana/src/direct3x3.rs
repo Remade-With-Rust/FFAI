@@ -130,43 +130,81 @@ pub fn conv3x3_direct(
             // at once, which is the whole point: the activation row below is
             // read once and consumed by all of them.
             let mut acc = vec![0f32; c_out * nr * ow];
-            for oc in 0..c_out {
-                for r in 0..nr {
-                    acc[(oc * nr + r) * ow..(oc * nr + r + 1) * ow].fill(bs[oc]);
-                }
-            }
+            // REGISTER-TILED inner loop.
+            //
+            // v2 issued one AXPY per output channel over the full row, so
+            // the accumulator it walked was `c_out * ow * 4` bytes — 328 KB
+            // at the widest n-tier layer, which misses L1 on every channel.
+            // A tile of OCB x OXB accumulators is 4 x 16 = 64 floats = 8 YMM
+            // registers, so it lives in registers across the ENTIRE
+            // (c_in, ky, kx) contraction and only touches memory twice: once
+            // to initialise from the bias, once to store.
+            //
+            // Per (ic, ky, kx) step that is 2 loads (16 source floats) and 4
+            // broadcasts feeding 8 FMAs — the ratio AVX2 wants, and the
+            // reason this is register blocking rather than more threads.
+            //
+            // Interior blocks carry no bounds test: `sx = ox + kx - 1`, so a
+            // block is interior when `ox0 >= 1` and `ox0 + OXB <= w - 1`.
+            // Edge blocks fall to the scalar path, which is 2 of ~20 blocks
+            // per row at the stem and does not deserve its own kernel.
+            const OCB: usize = 4;
+            const OXB: usize = 16;
             for r in 0..nr {
                 let oy = r0 + r;
-                for ic in 0..c_in {
-                    for ky in 0..3usize {
-                        let sy = oy + ky;
-                        if sy == 0 || sy > h {
-                            continue;
+                for oc0 in (0..c_out).step_by(OCB) {
+                    let ocn = OCB.min(c_out - oc0);
+                    let mut ox0 = 0usize;
+                    while ox0 < ow {
+                        let oxn = OXB.min(ow - ox0);
+                        let interior = oxn == OXB && ox0 >= 1 && ox0 + OXB <= w - 1;
+                        let mut t = [[0f32; OXB]; OCB];
+                        for (o, tr) in t.iter_mut().enumerate().take(ocn) {
+                            tr[..oxn].fill(bs[oc0 + o]);
                         }
-                        // ONE read of this activation row. It stays in L1
-                        // across the three taps and EVERY output channel;
-                        // the previous version re-read it per channel and
-                        // lost 1.73x for exactly that reason.
-                        let src = &xs[ic * h * w + (sy - 1) * w..ic * h * w + sy * w];
-                        for kx in 0..3usize {
-                            let lo = 1usize.saturating_sub(kx);
-                            let hi = ow.min(w + 1 - kx);
-                            if hi <= lo {
-                                continue;
-                            }
-                            let s0 = lo + kx - 1;
-                            let sl = &src[s0..s0 + (hi - lo)];
-                            for oc in 0..c_out {
-                                let wv = ws[(oc * c_in + ic) * 9 + ky * 3 + kx];
-                                let d = &mut acc[(oc * nr + r) * ow + lo
-                                    ..(oc * nr + r) * ow + hi];
-                                // Broadcast-and-AXPY over a contiguous run:
-                                // one FMA per load, which is what vectorises.
-                                for (dv, sv) in d.iter_mut().zip(sl) {
-                                    *dv += wv * sv;
+                        for ic in 0..c_in {
+                            for ky in 0..3usize {
+                                let sy = oy + ky;
+                                if sy == 0 || sy > h {
+                                    continue;
+                                }
+                                let src =
+                                    &xs[ic * h * w + (sy - 1) * w..ic * h * w + sy * w];
+                                for kx in 0..3usize {
+                                    if interior {
+                                        // The hot path: contiguous, aligned
+                                        // to a fixed length, no branches.
+                                        let sl = &src[ox0 + kx - 1..ox0 + kx - 1 + OXB];
+                                        for o in 0..ocn {
+                                            let wv = ws[((oc0 + o) * c_in + ic) * 9
+                                                + ky * 3
+                                                + kx];
+                                            let tr = &mut t[o];
+                                            for j in 0..OXB {
+                                                tr[j] += wv * sl[j];
+                                            }
+                                        }
+                                    } else {
+                                        for o in 0..ocn {
+                                            let wv = ws[((oc0 + o) * c_in + ic) * 9
+                                                + ky * 3
+                                                + kx];
+                                            for j in 0..oxn {
+                                                let sx = ox0 + j + kx;
+                                                if sx >= 1 && sx <= w {
+                                                    t[o][j] += wv * src[sx - 1];
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
+                        for (o, tr) in t.iter().enumerate().take(ocn) {
+                            let base = ((oc0 + o) * nr + r) * ow + ox0;
+                            acc[base..base + oxn].copy_from_slice(&tr[..oxn]);
+                        }
+                        ox0 += OXB;
                     }
                 }
             }
