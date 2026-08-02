@@ -1691,7 +1691,10 @@ The kernel is not the problem, and neither is the fan-out — both work.
 At 8.33 Gelem/s, the image's 10.38 M activation elements should cost
 **1.25 ms**. The profiled bucket is **13.1 ms**.
 
-> **~90 % of the SiLU stage is not the SiLU kernel.**
+> **~90 % of the SiLU stage is not the CACHE-WARM SiLU kernel.**
+>
+> **That qualifier is load-bearing and was missing from the first version of
+> this section.**
 
 Roughly 11.8 ms per image, across 87 calls, is per-call cost: candle tensor
 and storage construction, the output `Vec` allocation (~476 KiB each, ~41 MiB
@@ -1718,5 +1721,37 @@ hypothesis, and it is the right first experiment for the next session: not
 "fuse the ops" but "stop allocating per op", which is a buffer-pool question
 rather than a fusion one.
 
-**Parity needs ~7 ms off a 59 ms floor.** For the first time the floor has a
-named mechanism underneath it rather than a list of stages.
+### The correction this section needs, applied to itself
+
+The probe above reuses **one 200 k buffer 200 times**, so every iteration
+after the first runs fully cache-warm. The pipeline's SiLU reads a FRESH
+activation on every call — whatever the convolution just left, in whatever
+state it left it.
+
+`codec-measurement` §9 is explicit about this pairing, and the Whisper
+worked example in `codec-six-whys-unknowns` is the same shape: *"Microbench
+was cache-warm; real path streams 77 MB/token"*, and 79 % of a stage went
+unexplained until that was noticed.
+
+So **8.33 Gelem/s is a ceiling the real path may never see**, and the 1.25 ms
+derived from it is a lower bound rather than an achievable target. The honest
+statement of the gap between 1.25 ms and 13.1 ms is:
+
+> Some of it is per-call machinery, and some of it is that the isolated
+> kernel never pays for cold data. **This probe cannot separate them**, and
+> the split decides whether a buffer pool is worth building.
+
+The experiment that WOULD separate them: run the isolated probe over a
+rotating set of buffers large enough to evict L2 between iterations, so the
+kernel pays realistic residency. If throughput falls to ~0.8 Gelem/s, the
+pipeline number is the kernel and there is no per-call prize; if it stays near
+8, the machinery is real.
+
+That is one probe, and it must come BEFORE any buffer-pool work — this
+campaign has already built three things against prizes that arithmetic later
+showed did not exist, and every one of them was priced with the wrong
+residency assumption.
+
+**Parity needs ~7 ms off a 59 ms floor.** The floor now has a candidate
+mechanism under it rather than a list of stages — but "candidate" is the
+correct word until the cold-buffer probe runs.

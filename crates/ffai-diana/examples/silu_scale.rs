@@ -17,6 +17,21 @@
 //! Isolated, at the size the pipeline actually uses (10.38 M elements over 52
 //! fanning-out calls = ~200 k each), min-of-N so the box's tail cannot
 //! dominate.
+//!
+//! # WARNING: this probe is CACHE-WARM and the pipeline is not
+//!
+//! It reuses ONE buffer for every iteration, so after the first the data is
+//! resident and the kernel never pays for a cold read. The pipeline's SiLU
+//! takes a fresh activation each call.
+//!
+//! Its 8.33 Gelem/s at four threads is therefore a CEILING, not a target, and
+//! the 1.25 ms/image derived from it is a lower bound. The pipeline's 0.79
+//! Gelem/s is the honest figure; the gap between them is part per-call
+//! machinery and part cold data, and THIS PROBE CANNOT SEPARATE THEM.
+//!
+//! To separate them, rotate over enough distinct buffers to evict L2 between
+//! iterations. See `docs/whys/diana-latency.md` — that experiment must come
+//! before any buffer-pool work.
 use candle_core::{Device, Tensor};
 use std::time::Instant;
 
