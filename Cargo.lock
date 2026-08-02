@@ -1141,6 +1141,7 @@ dependencies = [
  "ffai-bench",
  "ffai-carmenta",
  "ffai-core",
+ "ffai-diana",
  "ffai-media",
  "ffai-mercury",
  "ffai-models",
@@ -3343,9 +3344,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty_jpeg"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1100f1ba0bf5c30a4ea581c9fba6efcd0c11bb30148909785e21994fb3ab5d61"
+checksum = "e09a973c55778fafcb22d8d2d9df585105e1270d9aa0af4f64d7b1fb948929e4"
 
 [[package]]
 name = "rusty_png"

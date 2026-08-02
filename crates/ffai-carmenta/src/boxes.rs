@@ -247,6 +247,34 @@ fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
     if page_w == 0 {
         return Vec::new();
     }
+    // PAGE-RELATIVE THRESHOLDS ARE DELIBERATE, AND THE OBVIOUS "FIX" IS WORSE.
+    //
+    // Every fraction here scales with `page_w`, while `xy_cut_pernode` calls
+    // this on node SUBSETS. That looks plainly inconsistent, and the reasoning
+    // for making it node-relative is sound: on a half-page node a heading
+    // spanning the whole node measures under `page_w * SPAN_FRAC`, so it is
+    // projected rather than skipped and vetoes every gutter in that node —
+    // reintroducing at depth the veto §8.28 added `is_spanning` to prevent.
+    //
+    // Measured, node-relative thresholds are SIGNIFICANTLY WORSE (§8.54):
+    // holdout CER 20.27 % -> 20.66 %, 95 % CI [-0.70, -0.12] excluding zero,
+    // 30 pages worse against 8 better. A page-relative fraction is STRICTER
+    // when applied to a smaller node, and that strictness is load-bearing: it
+    // is the only thing suppressing spurious gutters deep in the recursion,
+    // where a handful of lines can leave an accidental vertical band. Relaxing
+    // it finds more columns and most of them are not real.
+    //
+    // So the inconsistency is a depth-dependent brake that happens to be spelt
+    // as a page fraction. If it is ever made explicit, it needs to stay a brake
+    // — a node-relative minimum with a floor, not a pure proportion.
+    let (nx0, nx1) = lines.iter().fold((usize::MAX, 0usize), |a, l| {
+        let b = line_bbox(l);
+        (a.0.min(b.x0), a.1.max(b.x1))
+    });
+    if nx1 <= nx0 {
+        return Vec::new();
+    }
+    let _node_w = nx1 - nx0;
     let span_w = (page_w as f32 * SPAN_FRAC) as usize;
     // COUNT crossings, do not just mark occupancy. A single centred element —
     // a page number sitting in the gutter — must not veto a column break, and
@@ -300,14 +328,19 @@ fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
     let (min_w, margin) =
         ((page_w as f32 * GUTTER_MIN_FRAC) as usize, (page_w as f32 * MARGIN_FRAC) as usize);
     let mut out = Vec::new();
-    let (mut run, mut x) = (None::<usize>, 0usize);
-    while x <= page_w {
-        let free = x < page_w && !occupied[x];
+    // Sweep the NODE's extent, not the page's. Outside it every column is free,
+    // and those voids are not gutters — they were previously rejected only
+    // because they happened to touch x=0 or x=page_w and tripped the margin
+    // test, which is an accident of position rather than a reason.
+    let (lo, hi) = (0usize, page_w);
+    let (mut run, mut x) = (None::<usize>, lo);
+    while x <= hi {
+        let free = x < hi && !occupied[x];
         match (free, run) {
             (true, None) => run = Some(x),
             (false, Some(s)) => {
                 // Interior only: a run reaching either margin is the margin.
-                if x - s >= min_w && s > margin && x < page_w - margin {
+                if x - s >= min_w && s > lo + margin && x < hi - margin {
                     out.push((s, x));
                 }
                 run = None;
@@ -341,8 +374,12 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("vfirst") => xy_cut_vfirst(lines, page_w, 0),
         Ok("vtop") => xy_cut_vtop(lines, page_w, 0),
         Ok("hybrid") => hybrid_order(lines, page_w),
-        Ok("pernode") => xy_cut_pernode(lines, page_w, 0),
-        _ => xy_cut(lines, page_w, 0),
+        // DEFAULT is per-node routing (§8.53). It reads 20.27 % CER on the
+        // OmniDocBench holdout against the plain recursive cut's 24.77 %, and
+        // 21.67 % against 28.74 % on train — both bootstrap intervals exclude
+        // zero. `xycut` keeps the previous default reachable for A/B.
+        Ok("xycut") => xy_cut(lines, page_w, 0),
+        _ => xy_cut_pernode(lines, page_w, 0),
     }
 }
 
@@ -359,6 +396,54 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
 /// already computes: no vertical valley at the top level means no columns.
 /// Note this tests the WHOLE page once — it does not disable the recursion's
 /// own per-node choices, which are what handle a headline above two columns.
+/// Emit one row of cut telemetry per recursion node, for Prometheus to distill.
+///
+/// The thresholds this recursion turns on — `H_GAP_MIN`, `V_GAP_MIN`,
+/// `SPAN_FRAC`, the erosion `min(0.6h, 0.25w)` — were all set by hand and never
+/// derived. That is precisely the "human-guessed heuristic" Prometheus exists to
+/// replace, and §8.41 showed the axis choice is where it goes wrong: a figure's
+/// horizontal whitespace (~19 line-heights) outbids a real column gutter (~2).
+///
+/// Traced from the SHIPPED path rather than a reimplementation. §8.39 voided an
+/// entire testbed that mirrored this function in Python and diverged from it on
+/// 10 pages out of 12, so telemetry that is not the real code is not telemetry.
+///
+/// The node's line boxes go out with the features because the LABEL — which
+/// axis the true reading order wanted — needs the region annotations, which live
+/// outside this crate. The probe joins them.
+fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
+    use std::io::Write;
+    let Ok(path) = std::env::var("FFAI_CUT_TRACE") else { return };
+    let mut hs: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1) as f32;
+    let h = best_gap(lines, lh, page_w, Axis::Horizontal);
+    let v = best_gap(lines, lh, page_w, Axis::Vertical);
+    let spans = lines.iter().any(|l| is_spanning(&line_bbox(l), page_w)) as u8;
+    let (x0, y0, x1, y1) = lines.iter().fold((usize::MAX, usize::MAX, 0, 0), |a, l| {
+        let b = line_bbox(l);
+        (a.0.min(b.x0), a.1.min(b.y0), a.2.max(b.x1), a.3.max(b.y1))
+    });
+    let boxes: Vec<String> = lines
+        .iter()
+        .map(|l| { let b = line_bbox(l); format!("{},{},{},{}", b.x0, b.y0, b.x1, b.y1) })
+        .collect();
+    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    let _ = writeln!(
+        f,
+        "{depth}	{}	{lh}	{}	{}	{}	{}	{spans}	{page_w}	{x0},{y0},{x1},{y1}	{}",
+        lines.len(),
+        h.map(|g| g.1).unwrap_or(-1.0),
+        v.map(|g| g.1).unwrap_or(-1.0),
+        h.map(|g| g.0 as i64).unwrap_or(-1),
+        v.map(|g| g.0 as i64).unwrap_or(-1),
+        boxes.join(";")
+    );
+}
+
 /// Route between grid and recursion at every NODE, not once per page.
 ///
 /// §8.44 measured four ordering variants and none transferred to holdout. The
@@ -385,6 +470,7 @@ fn xy_cut_pernode(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<V
     if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
         return sorted_by_y(lines);
     }
+    trace_node(&lines, page_w, depth);
     let spans = lines.iter().any(|l| is_spanning(&line_bbox(l), page_w));
     if !spans {
         let gutters = find_gutters(&lines, page_w);
@@ -662,6 +748,7 @@ fn xy_cut(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBo
     hs.sort_unstable();
     let lh = hs[hs.len() / 2].max(1) as f32;
 
+    trace_node(&lines, page_w, depth);
     let h = best_gap(&lines, lh, page_w, Axis::Horizontal);
     let v = best_gap(&lines, lh, page_w, Axis::Vertical);
     // Prefer the larger valley; ties go to horizontal, which keeps a headline

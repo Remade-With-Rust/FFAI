@@ -3180,6 +3180,83 @@ identify which is which, so the comparison stands; but a silently-skipped edit i
 the same class of defect this campaign has now recorded eight times, and it was
 caught here only because the output had one block where two were expected.
 
+### 8.53 The refutations were on the wrong metric — `pernode` is worth 4.5 points
+
+§8.44 and §8.45 refuted five ordering variants on a paired sign test over
+INVERSIONS. That test weights every page equally. **CER does not — it is
+character-weighted by definition**, and it is the metric in the ledger, the four
+gates, and the three-way against Unlimited-OCR. "Helps a few large pages a lot,
+hurts slightly more small pages a little" is a loss under page-counting and a
+large win under the metric that ships.
+
+Measured on the same holdout dumps, no re-runs:
+
+| variant | CER | delta | 95 % CI on improvement |
+|---|---:|---:|---|
+| baseline `xy_cut` | 24.77 % | — | — |
+| `vfirst` | 23.25 % | −1.52 pp | [−0.37, +3.39] — spans zero |
+| `vtop` | 25.03 % | +0.25 pp | worse |
+| `hybrid` | 25.85 % | +1.08 pp | worse |
+| **`pernode`** | **20.27 %** | **−4.50 pp** | **[+2.10, +7.27] — excludes zero** |
+
+Train agrees: 28.74 % → **21.67 %**, CI [+2.86, +12.11]. Both splits, interval
+clear of zero. **Shipped as default**; `FFAI_ORDER=xycut` keeps the old path.
+
+The four-gate ledger run confirms end to end: **236/236 PASS**, macro CER
+33.70 % → **30.87 %**, WER 49.33 % → 46.38 %, steady memory 453 → 373 MiB.
+
+**`hybrid` proves the two metrics can disagree in SIGN** — better on inversions
+(4.25 % vs 4.44 %), worse on CER (+1.08 pp). So this is not a rescaling; the
+proxy can point the wrong way. On the 44 pages whose order changed, Δinversions
+against ΔCER correlates at **r = +0.853**: the proxy tracks direction and
+understates magnitude ~6.5x. It is a diagnostic, not a verdict.
+
+**And there was no speed cost.** Measured in isolation, interleaved:
+`pernode` 162 s / 24 pages against `xycut` at 176 s and 205 s — two runs of the
+SAME config differing by 17 %. The 0.11 vs 0.16 pg/s in the contaminated
+four-gate run was CPU contention. **The noise floor is larger than the effect
+anyone was worried about**, which is the depth-6 question that should have been
+asked before any of it.
+
+### 8.54 The page-relative gutter thresholds are a brake, and the obvious fix is worse
+
+`find_gutters` scales `SPAN_FRAC`, `GUTTER_MIN_FRAC` and `MARGIN_FRAC` by
+`page_w`, while `xy_cut_pernode` calls it on node SUBSETS. That is plainly
+inconsistent, and the six-whys reasoning for fixing it is sound: on a half-page
+node, a heading spanning the whole node measures under `page_w * 0.60`, so it is
+projected instead of skipped and **vetoes every gutter in that node** —
+reintroducing at depth the exact veto §8.28 added `is_spanning` to prevent. A
+real column gutter inside a narrow node likewise falls under a page-relative
+minimum and is discarded.
+
+Made node-relative and measured:
+
+| | train | holdout |
+|---|---:|---:|
+| `pernode` (page-relative) | 21.67 % | **20.27 %** |
+| node-relative | 21.36 % | **20.66 %** |
+| delta | −0.30 pp | **+0.39 pp WORSE** |
+| 95 % CI | [−0.41, +1.56] spans zero | **[−0.70, −0.12] excludes zero** |
+| pages | 3 better, 11 worse | 8 better, **30 worse** |
+
+**Refuted, significantly, and reverted.** Train already showed the tell — a
+correct-looking change making 11 pages worse against 3 better — and holdout
+confirmed it with an interval clear of zero.
+
+**The inconsistency is load-bearing.** A page-relative fraction is STRICTER when
+applied to a smaller node, and that strictness is the only thing suppressing
+spurious gutters deep in the recursion, where a handful of lines can leave an
+accidental vertical band. Relaxing it finds more columns and most are not real.
+So the "bug" is a depth-dependent brake that happens to be spelt as a page
+fraction. If it is ever made explicit it must stay a brake — a node-relative
+minimum with a floor, not a pure proportion.
+
+**Two of the three proposed `find_gutters` optimisations are also moot.** The
+per-node `vec![0u32; page_w]` allocation and the O(ink-width) inner loop are
+real waste, but §8.53 measured no speed problem to solve: at a 17 % noise floor
+the ordering change is not detectable in wall-clock at all. Optimising them
+would be optimising something nothing is paying for.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
