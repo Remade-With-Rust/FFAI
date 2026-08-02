@@ -198,7 +198,6 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                 // Explicit AVX2: eight lanes of the polynomial at a time.
                 // Allocation still happens once (the double-write lesson),
                 // and the vector kernel writes into it.
-                v.resize(xs.len(), 0.0);
                 let chunk = (1 << 14).max(xs.len().div_ceil(rayon::current_num_threads().max(1)));
                 if xs.len() <= chunk && !crate::smallgains::disabled() {
                     // ONE chunk, so `par_chunks_mut` would fork a job, hand
@@ -215,14 +214,67 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                     //
                     // SAFETY: `avx2_enabled()` verified avx2+fma at runtime;
                     // the slices are the same length by construction.
-                    unsafe { crate::silu_avx2::silu_into(xs, &mut v) }
+                    {
+                        let n = xs.len();
+                        let spare = &mut v.spare_capacity_mut()[..n];
+                        // SAFETY: the kernel writes all `n` elements and
+                        // reads none of them; avx2+fma verified above.
+                        #[allow(unsafe_code)]
+                        let out: &mut [f32] = unsafe {
+                            std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n)
+                        };
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            crate::silu_avx2::silu_into(xs, out)
+                        };
+                        // SAFETY: all `n` elements written just above.
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            v.set_len(n)
+                        };
+                    }
                 } else {
-                    v.par_chunks_mut(chunk).zip(xs.par_chunks(chunk)).for_each(|(o, i)| {
-                        // SAFETY: `avx2_enabled()` verified avx2+fma at
-                        // runtime, and the chunk lengths are equal by
-                        // construction.
-                        unsafe { crate::silu_avx2::silu_into(i, o) }
-                    });
+                    // Write into UNINITIALISED capacity.
+                    //
+                    // This path did `v.resize(len, 0.0)` first — zero-filling
+                    // every element and then overwriting every element with
+                    // the kernel's output. That is the same double write the
+                    // comment above records removing from the `collect`
+                    // path; it was never removed from this one.
+                    //
+                    // 10.38 M elements per image at the n tier = 41.5 MiB
+                    // written twice. See `smallgains` entry 4 for the
+                    // arithmetic and why no speed is claimed for it.
+                    let n = xs.len();
+                    {
+                        let spare = &mut v.spare_capacity_mut()[..n];
+                        spare
+                            .par_chunks_mut(chunk)
+                            .zip(xs.par_chunks(chunk))
+                            .for_each(|(o, i)| {
+                                // SAFETY: `o` and `i` have equal length by
+                                // construction; the kernel writes every
+                                // element of `o` and reads none of it, and
+                                // `avx2_enabled()` verified avx2+fma.
+                                #[allow(unsafe_code)]
+                                let o: &mut [f32] = unsafe {
+                                    std::slice::from_raw_parts_mut(
+                                        o.as_mut_ptr().cast::<f32>(),
+                                        o.len(),
+                                    )
+                                };
+                                #[allow(unsafe_code)]
+                                unsafe {
+                                    crate::silu_avx2::silu_into(i, o)
+                                }
+                            });
+                    }
+                    // SAFETY: the zip covers exactly `n` elements in equal
+                    // chunks, and the kernel writes every element of each.
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        v.set_len(n)
+                    };
                 }
             } else if xs.len() >= COLLECT_ABOVE {
                 v = xs.par_iter().map(|&x| silu_scalar(x)).collect();

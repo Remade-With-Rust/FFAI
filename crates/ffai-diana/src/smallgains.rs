@@ -41,8 +41,28 @@
 //! | 2 | blocked transpose instead of candle's generic one | 0.3 % | ~1.4x | **~0.1 %** |
 //! | 3 | `silu` skips rayon when it has a single chunk | 15.2 % | ~1.08x | **~1.1 %** |
 //!
-//! Predicted stack total: **~1.7 %** — under this box's ~5 % resolution, so
+//! | 4 | `silu`'s AVX2 path stops writing its output twice | 15.2 % | ~1.15x | **~2.0 %** |
+//!
+//! Predicted stack total: **~3.7 %** — under this box's ~5 % resolution, so
 //! nothing is claimed yet.
+//!
+//! Entry 4 is a redundancy, not a trade. The AVX2 branch did
+//! `v.resize(len, 0.0)` and then had the kernel overwrite every element —
+//! **10.38 M elements per image, 41.5 MiB written twice** — while the comment
+//! directly above it recorded removing exactly that double write from the
+//! neighbouring `collect` path. It was fixed there and never here.
+//!
+//! Writing into uninitialised capacity removes one of the two writes. The
+//! output is unchanged bit for bit, because the zeros were never read: every
+//! element is written by the kernel before anything observes it.
+//!
+//! No speed is claimed. A closely related change — removing the im2col
+//! buffer's zero-fill, 216.9 MiB and a much larger arithmetic prize —
+//! measured **z = -0.22, exactly chance**, because the pipeline's zeroed
+//! allocations largely come from fresh OS pages that arrive zero for free.
+//! This one may well do the same. It is taken because a buffer written twice
+//! is a defect at any measured size, and it is registered here so the batch
+//! carries the verdict.
 //!
 //! Entry 3 came out of a thread-scaling sweep and is the clearest case yet
 //! for measuring the stack rather than the brick. `silu` is called ~1305
