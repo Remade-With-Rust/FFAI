@@ -3368,6 +3368,44 @@ landed — 25.91 % -> **23.76 %**, deficit against Unlimited-OCR 10.40 pp ->
 **8.25 pp**. The lesson there is smaller and duller than a refinery: **when a fix
 lands, re-run the benchmarks that quote the old number.**
 
+### 8.57 Engine selection re-measured — the CRNN default is right on the merits
+
+§8.56's closing lesson is that a landed fix invalidates every benchmark quoting
+the old number. Applied to engine SELECTION, which had never been re-run since
+three defects were fixed: the PARSeq long-word overflow (which crashed
+`mobiledet-parseq` mid-page), `pernode` (worth 4.5 pp, applied to every arm),
+and the progressive-JPEG panic (35 unreadable pages).
+
+`mobiledet-parseq`'s 31.56 % had been measured under all three. Re-measured on
+the same 43-page subset with today's build:
+
+| engine | CER | correctness |
+|---|---:|---|
+| **`mobiledet-crnn`** | **23.76 %** | 43/43 |
+| `mobiledet-parseq` | 31.05 % | 43/43 |
+
+**Still 7.3 points worse.** The gap narrowed slightly (31.56 -> 31.05) but the
+ranking is unchanged, so the CRNN default was correct on the merits rather than
+by accident of a crashing competitor. `composed-crnn` turns out not to be a
+registered engine at all — a name in the example's dispatch that never reached
+the registry, worth noting so it is not benchmarked again.
+
+That closes the last cheap lever. Engine selection, unclip, and the cut-axis
+rule are all measured and none moves the deficit; §8.51/§8.52 measured that
+ordering cannot be improved from box geometry by any means tried. **What remains
+is layout semantics — a new model.**
+
+**The gap today**, on the subset where all three engines ran through one harness
+and one metric:
+
+| | CER | |
+|---|---:|---|
+| Unlimited-OCR (3B MoE, GPU) | 15.51 % | |
+| PP-StructureV3 | 19.14 % | |
+| **Carmenta** | **23.76 %** | was 25.91 % this morning |
+
+Deficit **10.40 pp -> 8.25 pp**, from ordering alone, no new weights.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
