@@ -1774,21 +1774,39 @@ for a seventh of one factor; something else accounts for the other nine.
 
 So the claim stands on its own evidence now rather than on a cache-warm
 artifact: at the cold rate, the image's 10.38 M elements cost **1.4 ms**
-against a profiled **13.1 ms**, leaving **~11.7 ms per image of per-call
-machinery** — **17 % of a 67.6 ms image**, in one stage.
+against a profiled **13.1 ms**.
+
+**And 13.1 ms is a PROFILED figure, which has its own tax.** The profiled run
+totals 95.6 ms/image against the unprofiled min-of-60's 69.5 ms — a **1.38x
+instrument tax**, inside the 1.32-1.43x band `codec-measurement` §6 records
+for this exact comparison. Deflating the bucket by it puts SiLU nearer
+**9.5 ms**, and the per-call machinery nearer **8 ms** than 11.7 ms.
+
+That correction is applied rather than left implicit, because the prize is
+what the next change gets built against and this campaign has already priced
+three levers with a number that was too large. **~8 ms in one stage, against
+15.6 ms needed for parity** — still the largest properly-controlled prize
+here, and no longer larger than the gap on its own.
 
 ### The prize, now that it is properly supported
 
-`silu` alone carries **~11.7 ms** of per-call machinery. Parity from the clean
-curve's 67.6 ms needs **15.6 ms**. If `pre`, `1x1`, `im2col` and `attn` carry
-the same per-call shape — they have the same wrapper and the same allocation
-pattern, and together hold 27 ms of the spine — the mechanism is larger than
-the gap.
+`silu` carries **~8 ms** of per-call machinery after the profiler tax is
+removed. Parity from the clean curve's 67.6 ms needs **15.6 ms**, so one stage
+does not reach it alone.
 
-**That is the first lever in this campaign whose measured prize exceeds what
-parity requires.** It is also the first one whose ceiling was established with
-a cold-data control rather than assumed, which is the specific mistake that
-killed the previous three.
+`pre`, `1x1`, `im2col` and `attn` share the same wrapper and the same
+per-call allocation pattern and hold 27 ms of the spine between them. If the
+mechanism is common to all five — which is a HYPOTHESIS, tested on exactly one
+of them — the total exceeds the gap. If it is peculiar to `silu`, it does not.
+
+**That distinction is the next session's first question, and it is cheap:**
+run the cold-vs-pipeline comparison on `1x1`, which has 735 calls per image
+against SiLU's 87 and would show per-call cost far more sharply if it is
+there.
+
+What makes this lever different from the three that failed is not its size —
+it is that its ceiling was established with a cold-data control rather than
+assumed, which is the specific mistake that killed the previous three.
 
 The change it implies is NOT the epilogue fusion already refuted. That moved
 an allocation; this is about not performing one per op at all — a pooled
