@@ -1799,14 +1799,64 @@ per-call allocation pattern and hold 27 ms of the spine between them. If the
 mechanism is common to all five — which is a HYPOTHESIS, tested on exactly one
 of them — the total exceeds the gap. If it is peculiar to `silu`, it does not.
 
-**That distinction is the next session's first question, and it is cheap:**
-run the cold-vs-pipeline comparison on `1x1`, which has 735 calls per image
-against SiLU's 87 and would show per-call cost far more sharply if it is
-there.
+**That distinction was the next session's first question. It needed no
+session and no build — the MAC counters already on the tree answer it
+arithmetically.**
 
-What makes this lever different from the three that failed is not its size —
-it is that its ceiling was established with a cold-data control rather than
-assumed, which is the specific mistake that killed the previous three.
+`1x1` issues 0.803 G MACs = **1.606 GFLOP per image** (total conv 1.828 G
+less 3x3's 1.025 G). Its bucket is 17.7 ms profiled, 12.9 ms after the 1.38x
+tax:
+
+| stage | real ms | GFLOP/s | share of a 384 GFLOP/s peak |
+|---|---:|---:|---:|
+| `1x1` | 12.9 | **125** | **33 %** |
+| `silu` | 9.5 | **18** | **5 %** |
+
+**`1x1` is a healthy GEMM doing real arithmetic, not a stage paying per-call
+machinery.** A third of peak on 4 cores is what a tuned matmul looks like;
+there is no 12.9 ms of overhead in it to recover.
+
+So the mechanism is **NOT common to all five stages**. It is specific to the
+cheap ELEMENTWISE ops, where a few operations per element cannot amortise a
+per-call wrapper — and absent from the compute-heavy ones, where the
+arithmetic dominates whatever the wrapper costs.
+
+The hypothesis that `pre`, `1x1`, `im2col` and `attn` carry another 27 ms of
+the same mechanism is **refuted for `1x1`, the largest of them**, on
+arithmetic, in two minutes and without writing anything.
+
+### Where that leaves parity
+
+The per-call machinery lever is worth **~8 ms in `silu`**, plus whatever share
+of `pre` (5.0), `attn` (3.5) and `decode` (3.1) is machinery rather than work
+— and those have not been separated, so no total can be claimed for them.
+
+**Parity from 67.6 ms needs 15.6 ms.** SiLU's ~8 ms does not reach it, and the
+one large stage that might have doubled the prize has just been shown to be
+arithmetic. **This lever, honestly bounded, falls short of parity.**
+
+What still distinguishes it from the three that failed is not its size — it is
+that its ceiling was established with a cold-data control rather than assumed,
+which is the specific mistake that killed the previous three. It is worth
+taking for its own sake. It is not a route to 52 ms.
+
+### The campaign's terminal position
+
+Parity with Ultralytics on this box requires removing ~15.6 ms of a 67.6 ms
+image, and every mechanism measured to date accounts for at most half of that:
+
+* memory traffic — **ruled out**, nothing leaves L3;
+* kernel arithmetic — **ruled out**, we issue 165 ms of CPU against the
+  reference's 312 ms, and the GEMMs run at 33 % of peak;
+* thread count and pool width — **ruled out**, a clean curve with a broad
+  optimum we already sit on;
+* per-call machinery — **real, ~8 ms, elementwise only.**
+
+The remainder is a **~59 ms serial floor** whose composition is now known
+stage by stage. Beating it needs a structurally different execution model —
+fewer, larger ops — not a faster version of this one. That is a rewrite-scale
+conclusion, and it is the honest end of a measurement campaign rather than a
+lever left untried.
 
 The change it implies is NOT the epilogue fusion already refuted. That moved
 an allocation; this is about not performing one per op at all — a pooled
