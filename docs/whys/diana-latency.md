@@ -1255,3 +1255,51 @@ does NOT stay in L2. That is 4.2x the activation traffic and the one
 remaining structural lever. `examples/zerocost.rs` also prices its zero-fill
 at **4.3 ms/image** — and note that probe's 1 MiB row flips sign, where the
 allocator switches to fresh OS pages, so any fix there must be size-aware.
+
+
+### Iteration 2 — the im2col zero-fill costs nothing in context
+
+The fusion refutation pointed here: the im2col buffer is 216.9 MiB/image, is
+NOT L2-resident, and is allocated with `vec![0f32; k * b]` — zero-filled and
+then overwritten by a fill that preserves on the order of one percent of
+those zeros as genuine padding.
+
+`examples/zerocost.rs` priced it at the real size distribution (585
+allocations, ~380 KiB mean): **4.3 ms per image's worth**, ~4.5 % of a 96 ms
+image. It also found the effect INVERTING at 1 MiB, where the allocator stops
+recycling and takes fresh, already-zero pages from the OS.
+
+Built: `Vec::with_capacity` plus `spare_capacity_mut`, the fill writing every
+element — data where the tap is in bounds, an explicit zero where it is
+padding — guarded to sizes under 1 MiB, `set_len` after.
+
+Gated hard, because uninitialised memory that is *incidentally* zero hides
+exactly this bug: `padding_is_written_not_inherited` POISONS the allocator
+with a recognisable value across the sizes im2col uses, drops it so the
+convolution recycles those blocks, and compares against candle at both
+strides and two shapes. Plus the five-tier oracle. All passed.
+
+**Measured, single process, ABBA, null arm, CPU time: median 0.9997x, 10/21
+rounds, z = -0.22.** Ten of twenty-one is exactly chance. The same harness
+resolved a 6 % effect at 18/21 (z = +3.27) earlier the same session, so a
+4.5 % effect would not have produced this.
+
+An intermediate measurement said the change was **16 % SLOWER**, 6/6, arms
+fully separated. That number was an artifact of its own harness: arms were
+selected by `git stash` and always run in the order new-then-old, so the old
+arm collected every warming benefit. It is recorded because it was wrong in
+the direction that would have made the revert look justified for the wrong
+reason.
+
+**Reverted: no measured effect.** Not "measured worse".
+
+The lesson is `codec-measurement` §9 and the D6 rule, in the form that costs
+the most: **the microbench and the in-context number disagreed, and the
+in-context number wins.** `zerocost.rs` allocates and frees in a tight loop,
+which keeps recycling the same heap block and so pays a real `memset` every
+time. The pipeline's allocation pattern is not that, and `alloc_zeroed` there
+is largely free — the OS hands back pages that are already zero.
+
+`examples/zerocost.rs` is kept, with this outcome noted in it, because the
+probe is correct about what it measures and only wrong about what that
+implies for the pipeline. That distinction is the whole finding.

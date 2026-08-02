@@ -14,6 +14,23 @@
 //! So measure it, at the real size distribution, against the same allocation
 //! WITHOUT the zeroing. `codec-measurement` §11: prune on arithmetic before
 //! building. If this lands under the noise floor there is nothing here.
+//!
+//! # OUTCOME: this probe is right, and its implication was wrong
+//!
+//! It reports ~4.3 ms per image's worth of allocations at the ~380 KiB mean.
+//! The change it motivated — filling uninitialised capacity instead — was
+//! built, gated with an allocator-poisoning test, and measured in context at
+//! **median 0.9997x, 10/21 rounds, z = -0.22**. Exactly chance.
+//!
+//! The reason is in this file's own shape: it allocates and frees in a tight
+//! loop, so the allocator hands back the SAME recycled block every time and
+//! `alloc_zeroed` must genuinely `memset` it. The pipeline does not allocate
+//! that way; its zeroed allocations largely come from fresh OS pages, which
+//! arrive zero at no cost.
+//!
+//! Kept, because the measurement is correct about what it measures. See
+//! `docs/whys/diana-latency.md` — the microbench and the in-context number
+//! disagreed, and the in-context number wins.
 use std::time::Instant;
 
 fn main() {
