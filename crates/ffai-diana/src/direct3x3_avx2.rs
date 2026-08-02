@@ -23,8 +23,30 @@
 //! ratio, which is what the register file is for.
 //!
 //! Interior columns only: `sx = ox + kx - 1`, so a block is interior when
-//! `ox0 >= 1` and `ox0 + 8 <= w`. Edges fall back to the caller's scalar
+//! `ox0 >= 1` and `ox0 + 8 <= w - 1`. Edges fall back to the caller's scalar
 //! path, which is two blocks per row and does not deserve its own kernel.
+//!
+//! # The inversion that looked obvious and measured worse
+//!
+//! Consecutive output channels are `c_in * 9` floats apart, so at c_in = 256
+//! this tile's eight weight broadcasts sit **9 KB apart — every one a
+//! different cache line**. "One load feeding eight FMAs is worthless if the
+//! eight scalars feeding them each cost a miss" is a good argument, and the
+//! obvious fix is to invert: hold ONE output channel across eight
+//! accumulators (64 columns), so each `(ic, ky, kx)` step needs a single
+//! broadcast reused across every column.
+//!
+//! Built and measured: **1.52x behind im2col+GEMM, against this shape's
+//! 1.11x.** Worse, and clearly so (15/15, z = +3.87).
+//!
+//! The inversion trades one load:eight-FMAs for eight loads:eight-FMAs — a
+//! 1:1 ratio, which is memory-bound no matter how well the weights cache.
+//! Source reuse is the scarcer resource here and the strided broadcasts,
+//! though real, are the cheaper problem: they hit L2 rather than DRAM and
+//! the hardware prefetcher sees a constant stride.
+//!
+//! Recorded because the reasoning was sound and the conclusion was wrong —
+//! which is the only kind of prune worth writing down.
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
