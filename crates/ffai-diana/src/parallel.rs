@@ -135,3 +135,70 @@ mod tests {
         assert!(!serial_kernels(), "flag leaked past an unwind");
     }
 }
+
+/// The pool a SINGLE-image `detect` fans out into.
+///
+/// # Why this is not rayon's default pool
+///
+/// Every kernel here fans out once per layer, so one image pays on the order
+/// of a hundred fork-joins. A barrier's cost grows with the number of workers
+/// that must be woken and waited for, while the work behind each barrier does
+/// NOT grow — most activation tensors are small. Past a few workers the pool
+/// is being paid to arrive, not to compute.
+///
+/// Measured on a 16-physical / 24-logical box, n tier, min-of-80 per run,
+/// arms interleaved to break the warming trend (which is large here: a
+/// 10-rep version of this same sweep drifted 140 ms -> 97 ms across a
+/// session and would have been read as a thread effect):
+///
+/// | 24 threads | 4 threads |
+/// |---:|---:|
+/// | 101.2 | 83.2 |
+/// | 100.6 | 85.5 |
+/// | 101.5 | 81.7 |
+/// | 101.1 | 79.5 |
+/// | 99.6 | 83.4 |
+/// | 102.2 | 82.4 |
+///
+/// **6/6, median 1.22x, and the distributions do not overlap** — the slowest
+/// 4-thread run (85.5 ms) beats the fastest 24-thread run (99.6 ms). A
+/// narrow sweep puts the optimum in a flat basin from 3 to 6 workers, with 2
+/// clearly too few.
+///
+/// ## The tension with the A/B recorded above, stated rather than buried
+///
+/// The module docs record a paired in-process ABBA of **8 threads against
+/// 24** finding no wall difference (9/24, z = -1.22, median 0.979x). This
+/// does not overturn that: it tests **4**, not 8, and 8 sits at the edge of
+/// the basin where the effect is small. The two results are consistent with
+/// an optimum near 4 that 8 barely captures. The earlier measurement is the
+/// methodologically stronger design (same process, paired over identical
+/// images); this one is cross-process, and its defence is that 80 reps
+/// amortise pool spin-up and the arms are interleaved and fully separated.
+///
+/// The spin-up confound was checked directly rather than assumed away: at 10
+/// reps the gap is 1.18x and at 80 reps it is 1.22x. Amortising the one-time
+/// cost STRENGTHENED the effect, which is the opposite of what a spin-up
+/// artifact does.
+///
+/// Not used by `detect_batch`: a batch already fills every core across
+/// images, and [`serial_scope`] turns the per-layer fan-out off entirely.
+pub fn latency_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        // Env first: the basin's location is a property of the machine and
+        // the model, and a deployment on different hardware should be able to
+        // re-measure it with `examples/scaling.rs` and set it.
+        let n = std::env::var("FFAI_DIANA_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or_else(|| (cores / 6).clamp(3, 6));
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .thread_name(|i| format!("diana-{i}"))
+            .build()
+            .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().expect("default pool"))
+    })
+}

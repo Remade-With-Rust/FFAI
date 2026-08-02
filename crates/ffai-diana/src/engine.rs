@@ -192,6 +192,46 @@ impl DetectEngine for Yolo26 {
     }
 
     fn detect(&self, image: &ImageBuffer, opts: &DetectOptions) -> Result<DetectOutput> {
+        // A batch has already spent the machine's cores across images, and
+        // `serial_scope` has turned the per-layer fan-out off — installing a
+        // second pool inside it would nest one fan-out in another, the exact
+        // arrangement `crate::parallel` measured at a 2.32x CPU tax.
+        if crate::parallel::serial_kernels() {
+            return self.detect_inner(image, opts);
+        }
+        crate::parallel::latency_pool().install(|| self.detect_inner(image, opts))
+    }
+    fn detect_batch(
+        &self,
+        images: &[ImageBuffer],
+        opts: &DetectOptions,
+    ) -> Result<Vec<DetectOutput>> {
+        // Ensure the weights are loaded BEFORE the fan-out, so N threads do
+        // not race into the same lazy init and serialize on it.
+        self.model()?;
+        images
+            .par_iter()
+            // Parallelism goes HERE and nowhere below it. Nesting the
+            // per-layer fan-out inside a batch that already fills every core
+            // buys nothing and costs a barrier per layer: measured 844 ms of
+            // CPU per image at 24 threads against 363 ms serial, a 2.32x
+            // tax on work that is identical either way. `crate::parallel`
+            // carries the measurements and the sign-flip that makes this a
+            // per-call decision rather than a constant.
+            .map(|image| crate::parallel::serial_scope(|| self.detect(image, opts)))
+            .collect()
+    }
+
+    fn class_names(&self) -> &[String] {
+        match self.model() {
+            Ok(m) => &m.cfg.class_names,
+            Err(_) => &[],
+        }
+    }
+}
+
+impl Yolo26 {
+    fn detect_inner(&self, image: &ImageBuffer, opts: &DetectOptions) -> Result<DetectOutput> {
         let m = self.model()?;
         crate::profile::timed(|p| &p.total, || {
             let (input, lb) = crate::profile::timed(|p| &p.pre, || {
@@ -227,34 +267,6 @@ impl DetectEngine for Yolo26 {
             }
             Ok(output)
         })
-    }
-
-    fn detect_batch(
-        &self,
-        images: &[ImageBuffer],
-        opts: &DetectOptions,
-    ) -> Result<Vec<DetectOutput>> {
-        // Ensure the weights are loaded BEFORE the fan-out, so N threads do
-        // not race into the same lazy init and serialize on it.
-        self.model()?;
-        images
-            .par_iter()
-            // Parallelism goes HERE and nowhere below it. Nesting the
-            // per-layer fan-out inside a batch that already fills every core
-            // buys nothing and costs a barrier per layer: measured 844 ms of
-            // CPU per image at 24 threads against 363 ms serial, a 2.32x
-            // tax on work that is identical either way. `crate::parallel`
-            // carries the measurements and the sign-flip that makes this a
-            // per-call decision rather than a constant.
-            .map(|image| crate::parallel::serial_scope(|| self.detect(image, opts)))
-            .collect()
-    }
-
-    fn class_names(&self) -> &[String] {
-        match self.model() {
-            Ok(m) => &m.cfg.class_names,
-            Err(_) => &[],
-        }
     }
 }
 
