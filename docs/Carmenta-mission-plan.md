@@ -2299,6 +2299,52 @@ and is false. It survived two sections and two commits because it was never
 given its own measurement — and it was cheap to measure, six pages and fifteen
 minutes.
 
+### 8.36 The gap is reading order — 13.7 of 15.5 points, recognition at parity
+
+§8.35 refuted the previous answer to "why are the references ahead" and left
+the question open. Measured, on 28 pages stratified across all seven sources
+(evenly spaced by id within each, so the sample cannot have been picked to
+flatter either side), our engine against PP-StructureV3, micro CER, with the
+order-free column beside it:
+
+| cell | ours | PP-V3 | gap | ours o-free | PP o-free | gap |
+|---|---:|---:|---:|---:|---:|---:|
+| academic_literature | 63.4 % | 29.7 % | **+33.7** | 33.7 % | 32.8 % | **+0.9** |
+| magazine | 40.2 % | 20.4 % | **+19.8** | 15.8 % | 15.5 % | **+0.3** |
+| newspaper | 29.7 % | 12.2 % | +17.5 | 14.5 % | 10.5 % | +4.0 |
+| PPT2PDF | 10.7 % | 3.4 % | +7.3 | 10.6 % | 13.5 % | −2.8 |
+| book | 36.8 % | 31.7 % | +5.2 | 23.9 % | 23.5 % | +0.5 |
+| colorful_textbook | 15.6 % | 12.4 % | +3.1 | 21.9 % | 22.6 % | −0.7 |
+| exam_paper | 22.9 % | 25.6 % | **−2.8** | 24.5 % | 26.0 % | −1.6 |
+| **ALL** | **34.1 %** | **18.6 %** | **+15.5** | **19.9 %** | **18.1 %** | **+1.8** |
+
+**Our recognition is at parity. 13.7 of the 15.5 points is sequence.**
+Destroying order in both outputs collapses the gap from 15.5 pp to 1.8 pp.
+Put the other way: reading order costs us **14.2 points** and costs
+PP-StructureV3 **0.5**. Their layout model emits a near-perfect sequence; our
+geometric XY-cut does not.
+
+The per-cell pattern is the same finding stated seven times. `magazine` is
++19.8 pp raw and **+0.3 pp** order-free — we read a magazine as accurately as
+PP-Structure does and assemble it wrongly. `academic_literature`, the cell
+§8.31 spent a whole descent on, is +33.7 pp raw and **+0.9 pp** order-free: it
+was never a recognition problem there either. Where we already order well
+(`exam_paper`, `colorful_textbook`, `PPT2PDF`) we match or beat them outright,
+and `exam_paper` we simply win.
+
+**This redirects the campaign.** §8.34 priced layout-region suppression at 6.7
+points and found no cheap route to it; this is twice that, on the same
+detector output, and §8.29 already showed the lever moves — recursive XY-cut
+was worth 6 points when it landed. It has considerably further to go, and the
+cells that need it most (magazine, academic, newspaper) are the three largest
+in the corpus.
+
+Caveats, stated: 28 pages not 236; micro CER, so not comparable to §8.30's
+macro three-way; PP-StructureV3 at the mobile tier with oneDNN off, the
+handicaps pinned in `ppstructure_ref.py`. What the sample establishes is the
+*decomposition* — order versus characters — which is a ratio and far more
+robust to sample size than either absolute number.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
