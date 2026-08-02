@@ -1363,3 +1363,50 @@ has been chased to the bottom:
 
 Both are parallel-efficiency questions, not memory questions, and this
 campaign has established that memory questions cannot produce the answer.
+
+
+### Iteration 4 — utilisation, measured instead of fitted
+
+`examples/utilisation.rs`: `QueryProcessCycleTime` over wall, divided by the
+calibrated single-core rate, gives MEAN CORES BUSY directly — no Amdahl fit.
+
+Readings ran 0.65 to 2.01 against a 4-worker pool, contaminated by another
+project's `bench_ocr` occupying ~12 cores of this shared worktree. The ratio
+is CPU over WALL, so contention can only DEPRESS it; the maximum is the least
+contaminated reading and a valid bound:
+
+> **At best 2.01 of 4 workers busy. Half the pool is idle.**
+
+~2x of headroom against a 1.9x gap — the first lever in this campaign large
+enough to REACH parity rather than shave it. A bound, not a result.
+
+### Iteration 5 — candle runs its own thread pool, and shrinking it does nothing
+
+Chasing the idle half found a structural fact worth recording regardless of
+its performance verdict.
+
+**candle 0.11 builds its OWN rayon pool** (`utils.rs:368`, `candle_pool()`),
+sized by `get_num_threads()` — which is rayon's default, 24 here. Our
+`latency_pool().install(...)` therefore never governed matmuls at all. The
+process runs **4 of our workers plus 24 of candle's on 24 logical cores**, and
+the 1.21x pool win measured earlier moved only our half.
+
+That is why `gemm` (13.4 %) and `1x1` (19.0 %) — about a third of the pipeline
+— scale independently of anything `crate::parallel` decides.
+
+`RAYON_NUM_THREADS` does reach candle's pool. Tested on CPU TIME, which
+contention cannot inflate, 8 pairs ABBA:
+
+| | median CPU/image |
+|---|---:|
+| default (candle at 24) | **197 ms** |
+| `RAYON_NUM_THREADS=4` | **199 ms** |
+
+No effect. Oversubscription between the two pools costs no measurable WORK,
+so matching their widths is not the lever — the structure is real and the
+prize is not there.
+
+What that leaves: the idle half is not explained by pool oversubscription,
+and the wall-time measurement needed to localise it further requires a quiet
+box. Recorded as OPEN, with the instrument (`examples/utilisation.rs`) and the
+statistic to read (the maximum) both in place for the next quiet window.
