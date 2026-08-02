@@ -2179,9 +2179,9 @@ bar included. `omni-0213` is the same shape: four annotated regions, and we
 read the unannotated figure too. **A large part of our measured error is text
 that is genuinely on the page and deliberately not in the answer key.**
 
-That names the gap precisely, and it is not a recognition gap. PP-StructureV3
-and Unlimited-OCR run layout classification and suppress figure regions. We
-read everything. Their advantage there is knowing what *not* to read.
+That names the phenomenon precisely. **It does not name a gap against the
+references — see §8.35, which measured that claim and refuted it.** They pay
+the same tax we do.
 
 **The lever, with a measured ceiling** (micro, all 236 pages):
 
@@ -2247,13 +2247,57 @@ The only property that distinguishes it is **position relative to a region a
 layout model would have identified**.
 
 So the 6.7 points require layout analysis — region detection and
-classification — and cannot be had with a threshold. That is a larger piece of
-work than a filter, and it is the same capability PP-StructureV3 and
-Unlimited-OCR already ship. **Recorded as refuted rather than open**, with the
-measurements above, so the cheap version is not re-attempted: it has now failed
-once on a broken instrument and once on a sound one.
+classification — and cannot be had with a threshold. **Recorded as refuted
+rather than open**, with the measurements above, so the cheap version is not
+re-attempted: it has now failed once on a broken instrument and once on a sound
+one. (An earlier draft added "the same capability PP-StructureV3 and
+Unlimited-OCR already ship". §8.35 measured that and it is false.)
 
 `.tools-bench/region_label.py`. Runs off the cached dumps; no recognizer.
+
+### 8.35 PP-Structure reads the screenshot too — the lever is unexploited, not lost
+
+§8.33 and §8.34 both asserted that PP-StructureV3 and Unlimited-OCR suppress
+figure regions, and that this was the source of their lead. It was the one
+claim in either section not backed by a measurement — plausible, because they
+run layout classification and we do not. Measured on the six worst
+over-generating pages, output length against reference length:
+
+| page | ref | ours | x ref | PP-Structure | x ref |
+|---|---:|---:|---:|---:|---:|
+| omni-0245 | 315 | 2972 | 9.43x | 2929 | **9.30x** |
+| omni-0055 | 3437 | 11013 | 3.20x | 11123 | **3.24x** |
+| omni-0039 | 2228 | 6289 | 2.82x | 6216 | **2.79x** |
+| omni-0092 | 1121 | 1841 | 1.64x | 1820 | 1.62x |
+| omni-0025 | 3924 | 6320 | 1.61x | 6029 | 1.54x |
+| omni-0213 | 418 | 1248 | 2.99x | **421** | **1.01x** |
+
+**It reads the Google screenshot too**, and on `omni-0055` emits *more* than we
+do. It suppressed the figure on one page of six.
+
+So the claim is refuted, and two conclusions change:
+
+- **Over-generation is not why the references are ahead.** They pay the same
+  tax. Their lead comes from somewhere else, and this campaign has not yet
+  established from where — a question §8.30 left open and this closes one wrong
+  answer to.
+- **The lever survives, and is better than it looked.** PP-StructureV3's
+  measured 19.14 % *includes* this tax. A suppression pass would move our
+  absolute CER against a reference number that does not benefit from the same
+  fix — so the 6.7 points are ground nobody has taken, rather than ground we
+  are behind on.
+
+The character-count comparison needs no text matching, which is why it is
+trustworthy where §8.34's first instrument was not. Sample is six pages chosen
+as the worst offenders, not a random draw: it establishes that PP-Structure
+does not systematically suppress, not the rate at which it sometimes does.
+
+**The general lesson, third instance this session.** A mechanism that explains
+the data is not evidence for the mechanism. "They classify layout, we do not,
+therefore they suppress what we read" is coherent, fits every number in §8.33,
+and is false. It survived two sections and two commits because it was never
+given its own measurement — and it was cheap to measure, six pages and fifteen
+minutes.
 
 ## 9. Pure-Rust boundary and watchlist
 
