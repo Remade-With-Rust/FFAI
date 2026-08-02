@@ -2401,6 +2401,51 @@ which is §8.31, which is the fifth instance this campaign has recorded.
 Next: dispatch on measured structure rather than always cutting — the sign flip
 says the win is available and the classes are separable.
 
+### 8.38 The adaptive gate is refuted, and the sign flip is worth ~0.2 pp
+
+§8.37's sign flip suggested the obvious lever: do not cut pages that have no
+columns. `adaptive_cut` implements it with the separator the cut already
+computes — no vertical valley at the top level means no column structure, so
+read top-to-bottom. Measured on both splits, inversion rate over annotated
+regions:
+
+| | default | adaptive | raster |
+|---|---:|---:|---:|
+| holdout, 236 pages | **8.10 %** | 8.49 % | 16.55 % |
+| train, 80 pages | **7.53 %** | 7.54 % | 15.74 % |
+
+**Worse on holdout, a wash on train. Refuted.** Both ends of the hypothesis
+were wrong, and the per-cell numbers say why:
+
+- `PPT2PDF` did not move at all (2.50 % either way). Slides *do* have a
+  top-level vertical valley — two-column bullet layouts — so the gate never
+  fired on the cell it was built for.
+- `newspaper` got **worse**, 13.42 % → 15.14 %. Its columns often appear only
+  *after* a horizontal cut separates the masthead, so testing the whole page
+  once gates off the recursion exactly where it was earning its keep.
+
+Only `exam_paper` improved (0.35 % → 0.00 %), and that is 10 pages.
+
+**The more useful finding is that the sign flip is not worth chasing.**
+`PPT2PDF` costs 2.36 pp on a cell holding 8 % of the corpus — about **0.2 pp**
+overall — while `newspaper` alone still carries 13.42 % and `magazine` 9.40 %.
+The prize is making the cut *better on multi-column pages*, not switching it
+off on simple ones. §8.37 framed this as an adaptive-dispatch opportunity
+because that is this campaign's usual shape; measured, the asymmetry is 60:1
+the other way.
+
+`adaptive_cut` stays as a named `FFAI_ORDER` mode rather than being deleted —
+the modes exist so variants can be A/B'd on one binary, and a refuted variant
+that can be re-measured is worth more than a paragraph saying it was tried.
+The default is unchanged.
+
+**A discipline note, because this nearly went wrong.** The testbed ran on
+HOLDOUT, and the adaptive hypothesis was read off a holdout table — searching
+for a threshold there would have burned the split that has to certify the
+answer. It now takes an explicit `split` argument and **defaults to train**.
+The testbed is fast enough (no recognizer, 236 pages in seconds) that it
+actively invites the mistake.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

@@ -337,8 +337,36 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
     match std::env::var("FFAI_ORDER").as_deref() {
         Ok("raster") => sorted_by_y(lines),
         Ok("onelevel") => order_one_level(lines, page_w),
+        Ok("adaptive") => adaptive_cut(lines, page_w),
         _ => xy_cut(lines, page_w, 0),
     }
+}
+
+/// Cut only pages that HAVE column structure; read the rest top-to-bottom.
+///
+/// §8.37 measured a sign flip, on annotated regions so detection is not in the
+/// question: recursive cutting halves raster's inversions on newspapers
+/// (29.65 % -> 13.42 %) and LOSES to it on slides (0.14 % -> 2.50 %) and exam
+/// papers (0.00 % -> 0.35 %). A page with no columns has no structure for the
+/// recursion to find, so every cut it makes is invented, and a slide read
+/// top-to-bottom is simply correct.
+///
+/// The separator costs nothing extra because it is the projection the cut
+/// already computes: no vertical valley at the top level means no columns.
+/// Note this tests the WHOLE page once — it does not disable the recursion's
+/// own per-node choices, which are what handle a headline above two columns.
+fn adaptive_cut(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 2 {
+        return sorted_by_y(lines);
+    }
+    let mut hs: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1) as f32;
+    if best_gap(&lines, lh, page_w, Axis::Vertical).is_none() {
+        return sorted_by_y(lines);
+    }
+    xy_cut(lines, page_w, 0)
 }
 
 fn order_one_level(mut lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
