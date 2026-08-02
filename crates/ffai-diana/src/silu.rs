@@ -153,6 +153,15 @@ const PAR_THRESHOLD: usize = 1 << 16;
 /// three times over.
 pub fn silu(x: &Tensor) -> Result<Tensor> {
     crate::cpuop::SliceOp::new("ffai-silu", |xs, l| {
+        // Counted HERE, above the threshold branch, because a counter placed
+        // inside it can only ever see calls that already passed it. That is
+        // exactly the mistake this instrument made on its first outing: it
+        // reported silu "100 % parallel, 52 of 52 calls" while the profiler
+        // saw 87, and the missing 35 were the serial ones by construction.
+        crate::silu::count_silu(
+            xs.len(),
+            xs.len() >= PAR_THRESHOLD && !crate::parallel::serial_kernels(),
+        );
         let mut v: Vec<f32> = Vec::with_capacity(xs.len());
         // The threshold alone is not the whole decision: inside a parallel
         // batch even a large activation should stay serial, because the
@@ -191,7 +200,6 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                 // and the vector kernel writes into it.
                 v.resize(xs.len(), 0.0);
                 let chunk = (1 << 14).max(xs.len().div_ceil(rayon::current_num_threads().max(1)));
-                count_silu(xs.len(), xs.len() > chunk);
                 if xs.len() <= chunk && !crate::smallgains::disabled() {
                     // ONE chunk, so `par_chunks_mut` would fork a job, hand
                     // the whole buffer to a single worker, and join — the
@@ -305,18 +313,22 @@ mod tests {
 /// A count, not a timing: the box is half-occupied by another project's
 /// benchmark, and this question does not need a clock.
 ///
-/// # ANSWERED: SiLU is 100 % parallel
+/// # A counter placed inside the branch it is testing answers nothing
 ///
-/// 52 calls per image, 10.38 M elements, **zero** of them in a sub-threshold
-/// call. The hypothesis that motivated this counter — that most SiLU calls
-/// are too small to fan out — came from dividing 13.4 M activation elements
-/// by 1305 calls to get a ~10.3 k mean. That 1305 was the profile's
-/// FIFTEEN-IMAGE total. The real mean is 10.38 M / 52 = **200 k elements**,
-/// more than ten times the chunk width.
+/// This first reported SiLU "**100 % parallel** — 52 calls, zero serial",
+/// and it was measuring its own position. It sat inside
+/// `if xs.len() >= PAR_THRESHOLD`, so the only calls it could ever see were
+/// the ones that had already passed the test. The profiler counted 87 calls
+/// per image against its 52, and that impossible pair is what exposed it:
+/// **the missing 35 are the serial ones, by construction.**
 ///
-/// Kept because it is the cheapest possible refutation of a plausible lever,
-/// and because the next person to notice `silu` at 15.2 % of the pipeline
-/// will have the same idea.
+/// It is now at the top of the closure, above every branch, and reports the
+/// split as an argument rather than inferring it from where it was placed.
+///
+/// The scaling measurement had said so all along — SiLU scales 1.24x on four
+/// workers, 74 % serial — and was disbelieved for one round because a count
+/// is supposed to outrank a timing. It does, but only when it counts the
+/// right population.
 static SILU_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SILU_BIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SILU_CALLS_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

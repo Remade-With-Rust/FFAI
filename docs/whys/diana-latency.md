@@ -1575,3 +1575,46 @@ is wrong somewhere. Two candidates, neither yet tested:
 That discrepancy — 87 calls counted by the profiler, 52 by the instrument —
 is exactly the kind of impossible count this skill says to chase before
 interpreting any duration. It is the next thing to do, and it is cheap.
+
+
+### The contradiction resolved — the instrument was measuring its own position
+
+The counter that reported SiLU "100 % parallel, 52 of 52 calls" was placed
+**inside** `if xs.len() >= PAR_THRESHOLD`. The only calls it could ever see
+were the ones that had already passed the test it was supposed to be testing.
+The profiler's 87 calls against its 52 is what exposed it: **the missing 35
+are the serial ones, by construction.**
+
+Moved above every branch, it reports the split as an argument:
+
+| | calls | elements | share |
+|---|---:|---:|---:|
+| SERIAL (below threshold) | 35 | 0.99 M | **8.7 %** |
+| PARALLEL (fans out) | 52 | 10.38 M | 91.3 % |
+
+**And the fix that finding implies is not worth taking.** The serial calls
+carry 8.7 % of SiLU's elements — about **1.3 % of the pipeline**. Lowering
+`PAR_THRESHOLD` cannot buy more than that, and this campaign has already
+learned what happens to sub-2 % prizes on this box.
+
+#### Which leaves a sharper question than the one that was asked
+
+SiLU scales **1.24x on four workers** with **91.3 % of its work in calls that
+DO fan out**. Those two facts do not fit. A stage whose work is nine tenths
+parallel should not scale like a stage that is three quarters serial.
+
+So Amdahl's "74 % serial" for SiLU is a misattribution: it is not
+single-threaded, it is something that does not go faster with more cores.
+Candidates, none tested:
+
+* the polynomial is ~15 operations per 8 bytes moved, which may make it
+  bandwidth-limited at cache level where extra cores share the same ports;
+* the `act` bucket carries the profiler's own tax at 87 calls per image
+  (`codec-measurement` §6 — price the tap before trusting the residue), and
+  1.24x may be partly the instrument;
+* the fan-out is per call, so 52 barriers per image sit inside the bucket.
+
+Recorded and NOT guessed at. The lesson that generalises is the one about the
+counter: **a count only outranks a timing when it counts the right
+population.** This one disagreed with the scaling measurement for a full
+round, and the scaling measurement was right.
