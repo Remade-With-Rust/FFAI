@@ -263,6 +263,7 @@ pub fn conv3x3_strided(
     // question that decides whether more threads can ever help.
     crate::conv3x3::count_im2col(c_in * 9 * ohw);
     crate::conv3x3::count_macs((c_in as u64) * 9 * (ohw as u64) * (c_out as u64));
+    crate::conv3x3::count_acts((c_out as u64) * (ohw as u64));
     let col = crate::profile::timed(|p| &p.im2col, || {
         crate::cpuop::SliceOp::new("ffai-im2col3x3", move |xs, _| {
     let mut col = vec![0f32; c_in * 9 * ohw];
@@ -427,6 +428,26 @@ pub(crate) fn count_macs(n: u64) {
 /// MACs since the last call, and reset.
 pub fn take_macs() -> u64 {
     MACS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Output activation elements produced by convolutions.
+///
+/// Kept after the epilogue-fusion refutation because it is the number that
+/// EXPLAINS it: 13.4 M elements per image is 51.2 MiB, but spread over ~120
+/// convolutions that is ~430 KiB each — an L2-resident working set, not a
+/// DRAM one. Pricing those touches at DRAM bandwidth is what produced an
+/// 8.9 ms prize that did not exist.
+static ACTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn count_acts(n: u64) {
+    if counting() {
+        ACTS.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Activation elements since the last call, and reset.
+pub fn take_acts() -> u64 {
+    ACTS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
 pub(crate) fn count_im2col(n: usize) {

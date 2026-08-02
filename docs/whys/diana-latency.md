@@ -1164,3 +1164,94 @@ attempted here, with a different risk profile and no guarantee at the end.
 Recorded at the point where it was found rather than folded quietly into a
 plan, because the counter that produced it costs nothing and could have been
 run on day one.
+
+
+---
+
+## Fusion campaign — D6 first, then a refutation that cost the prize
+
+Run under `codec-six-whys-unknowns` with `codec-measurement` loaded, on the
+question "fuse the eager graph to reach parity with Ultralytics".
+
+### D6 (run first) — the arms do not do identical work
+
+`crates/ffai-bench/src/runner.rs:539` decodes every clip BEFORE starting the
+per-image timer and times `detect()` alone. `corpora/refs/ultralytics_ref.py`
+times `model.predict(path)` — a FILE PATH, so its decode happens INSIDE the
+timed region.
+
+COUNTED: PNG decode over 45 corpus images, min-of-5 each, same decoder the
+harness uses: **p50 3.4 ms**.
+
+So the reference carries ~3.4 ms/image that we do not, and the published
+ratio flatters us. Corrected, the n-tier gap is **~1.9x, not 1.81x** — which
+is what the README already claimed, arrived at independently.
+
+Two further D6 findings, both about our own tooling:
+
+* **`ffai bench detect --baseline-only` is not honoured** — it ran all eleven
+  references over 450 images. A "quick baseline" took 60+ minutes and its
+  reference subprocesses were the CPU load that voided a whole A/B round.
+* The `ffai` binary **had not compiled since Diana landed** (02849e3 added the
+  registration without the dependency). The gate harness is only load-bearing
+  if the path to it builds; nothing in the test suite covers that.
+
+### D3 — the fusion prize, counted then refuted
+
+COUNTED (`FFAI_DIANA_COUNT=1`, one run):
+
+| quantity | n tier, per image |
+|---|---:|
+| conv MACs (3x3 + 1x1) | 1.828 G = **3.655 GFLOP** |
+| output activation elements | 13.4 M = **51.2 MiB** |
+| im2col buffer | **216.9 MiB** |
+
+Every activation element was written by the GEMM, read and rewritten by
+`broadcast_add` for the bias, then read and rewritten again by SiLU. Four
+extra touches of 51.2 MiB = 204.8 MiB, **~8.9 ms at this box's 24 GB/s
+against a 96 ms image**. That was the prize, and it was wrong.
+
+**Three shapes were built and measured. All three lost.**
+
+| shape | result |
+|---|---|
+| serial `extend` with bias+SiLU mapped in | 15/21 against, z = +1.96, 8.4% (inconclusive, 31.8% floor) |
+| `extend_from_slice` + parallel bias+SiLU | **18/21 against, z = +3.27, 6.0% — direction REAL** |
+| single pass into uninit capacity, parallel | 12/21 against, z = +0.65, 11.4% (inconclusive, 14.6% floor) |
+
+Two distinct defects, then the real reason:
+
+1. **A fused op inherits the PARALLELISM of what it replaced, not only its
+   arithmetic.** Shape 1 ran on the calling thread; the SiLU it replaced
+   fanned out over `par_chunks_mut`. Removing four traversals is worth
+   nothing if it also removes three quarters of the workers.
+2. **The traffic arithmetic counted the touches REMOVED and not the ones
+   ADDED.** Shape 2 replaced four touches (broadcast_add read+write, SiLU
+   read+write) with four touches (copy read+write, apply read+write). It saved
+   nothing by construction, and measured exactly that.
+3. **The prize was priced at the wrong level of the memory hierarchy.** 51.2
+   MiB is the per-IMAGE total across ~120 convolutions — **~430 KiB each,
+   which is L2-resident.** Those touches were never DRAM traffic. At L2
+   bandwidth the real prize is on the order of 1 ms, comfortably under this
+   box's floor, which is why even shape 3 — a genuine halving of touches from
+   four to two — could not be resolved.
+
+**Reverted: measured worse (shape 2, z = +3.27) and unresolvable at best
+(shape 3).** Not "reverted inside the noise" — shape 2 has a direction.
+
+The counter that produced the wrong prize is KEPT (`take_acts`), because it
+is also the counter that explains the refutation, and `examples/roofline.rs`
+now prints the per-convolution figure next to the DRAM one so the same
+mistake cannot be made from the same output.
+
+### What this rules out, and what it does not
+
+It rules out **elementwise epilogue fusion** as a route to parity: bias and
+activation are L2-resident and their traffic is not the bottleneck.
+
+It does NOT rule out the **im2col buffer**, which is a different animal:
+216.9 MiB per image, written once and read back by the GEMM, at a size that
+does NOT stay in L2. That is 4.2x the activation traffic and the one
+remaining structural lever. `examples/zerocost.rs` also prices its zero-fill
+at **4.3 ms/image** — and note that probe's 1 MiB row flips sign, where the
+allocator switches to fresh OS pages, so any fix there must be size-aware.
