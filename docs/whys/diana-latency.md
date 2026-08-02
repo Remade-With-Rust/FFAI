@@ -1669,3 +1669,54 @@ that does not go faster with more cores, and that something has not been
 identified. It is the first thing to measure on the next quiet box, with the
 profiler tax priced first (`codec-measurement` §6) since the bucket carries
 87 scope entries per image.
+
+
+## The spine is not the kernels — it is the per-call wrapper
+
+`examples/silu_scale.rs`, quiet box, min-of-200, through the REAL entry point
+(`silu(&Tensor)`, `SliceOp` wrapper included, because that wrapper was one of
+the two suspects and measuring past it would answer the wrong question):
+
+| threads | 1 | 2 | 4 | 6 | 8 |
+|---|---:|---:|---:|---:|---:|
+| min (ms) | 0.078 | 0.043 | 0.024 | **0.022** | 0.042 |
+| Gelem/s | 2.56 | 4.63 | **8.33** | 9.13 | 4.81 |
+| speedup | 1.00x | 1.81x | **3.25x** | 3.56x | 1.88x |
+
+**SiLU scales 3.25x on four threads in isolation and 1.24x in the pipeline.**
+The kernel is not the problem, and neither is the fan-out — both work.
+
+### The arithmetic that follows is the campaign's sharpest number
+
+At 8.33 Gelem/s, the image's 10.38 M activation elements should cost
+**1.25 ms**. The profiled bucket is **13.1 ms**.
+
+> **~90 % of the SiLU stage is not the SiLU kernel.**
+
+Roughly 11.8 ms per image, across 87 calls, is per-call cost: candle tensor
+and storage construction, the output `Vec` allocation (~476 KiB each, ~41 MiB
+per image), and the fork-join at each call boundary. The profiler's own tax is
+not a candidate — 87 scope entries at ~50 ns is 4 us, three orders of
+magnitude too small (`codec-measurement` §6, priced rather than assumed).
+
+This reframes the whole ranked spine. `silu` was top at 9.7 ms of "serial"
+time, and that time is not serial *arithmetic* — it is **per-call
+machinery that a parallel kernel cannot amortise because it happens once per
+call, not once per element**. The same shape almost certainly explains `pre`,
+`1x1`, `im2col` and `attn`, which is 27 ms of the ~59 ms floor sitting behind
+one mechanism.
+
+### The tension with the fusion refutation, stated not resolved
+
+Epilogue fusion REMOVED one such per-call allocation and measured 18/21
+against. If per-call allocation costs ~135 us, removing one per convolution
+should have won. It did not, and the two results have not been reconciled.
+
+The difference may be that the fused arm still allocated — it built its own
+output `Vec` — so it moved the allocation rather than removing it. That is a
+hypothesis, and it is the right first experiment for the next session: not
+"fuse the ops" but "stop allocating per op", which is a buffer-pool question
+rather than a fusion one.
+
+**Parity needs ~7 ms off a 59 ms floor.** For the first time the floor has a
+named mechanism underneath it rather than a list of stages.
