@@ -1950,13 +1950,34 @@ Three things any use of these numbers has to carry:
    batch rather than one page, which is why four benchmark arms died silently
    before this was found.
 
-**Open, and not a recognition result:** both parseq arms report
-`correctness FAIL 0/43`, and the message is a footprint-accounting note
-("EXCLUDES 855.1 MiB of pre-decoded images held by the harness"). An
-informational note is being promoted to a per-clip failure, so those two
-engines are UNMEASURED here rather than broken — and a gate that fails for a
-non-quality reason is exactly the kind of thing that gets read as a quality
-result later.
+**RESOLVED, and I had it backwards.** Both parseq arms reported
+`correctness FAIL 0/43` beside a footprint-accounting note, and I read the note
+as the cause and called the engines "unmeasured rather than broken". They were
+broken. The harness pushes the real error onto the same `notes` vector the
+footprint note already occupies, and the correctness gate prints
+`notes.first()` — so a genuine failure was masked by a memory sentence pushed
+earlier. Inserting the error at the FRONT surfaced it:
+
+    omni-0023: candle: narrow invalid args start + len > dim_len:
+    [1, 26, 192], dim: 1, start: 0, len: 27
+
+A real defect in our PARSeq port. The AR loop runs `MAX_STEPS` (26) times and
+exits early only on EOS, so a word that never terminates yields `[BOS]` + 26
+ids = 27 positions against a `pos_queries` holding 26. Every synthetic corpus
+we own produces words short enough to hit EOS; real documents do not. Clamped
+to the model's capacity — both PARSeq oracles still pass, so the
+reference-exact path is untouched — and the arm now completes:
+
+| | CER | WER | pages/s |
+|---|---:|---:|---:|
+| mobiledet-parseq | 31.56 % | 61.91 | 0.16 |
+
+Two lessons, both about diagnostics rather than decoding. **A failure message
+assembled from a shared notes list will eventually report the wrong note**, and
+the one it reports will be the one pushed earliest, not the one that matters.
+And **one clip's error aborts the whole corpus run** — 42 good pages were
+discarded because page 23 failed, which is why the defect looked like a harness
+quirk instead of a crash.
 
 ## 9. Pure-Rust boundary and watchlist
 

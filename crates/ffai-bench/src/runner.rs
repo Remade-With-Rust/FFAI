@@ -654,7 +654,14 @@ fn run_detect_engine(
                 ));
             }
         }
-        Err(e) => summary.notes.push(first_error.unwrap_or_else(|| e.to_string())),
+        // FRONT, not back. The correctness gate reports `notes.first()` as the
+        // "first failure", and by this point `notes` already holds
+        // informational entries — the footprint-exclusion note among them. A
+        // failing run therefore reported a memory-accounting sentence as its
+        // cause, which read as a harness quirk rather than a real error and
+        // left two engines wrongly described as "unmeasured rather than
+        // broken". The error goes where the gate actually looks.
+        Err(e) => summary.notes.insert(0, first_error.unwrap_or_else(|| e.to_string())),
     }
     Ok(summary)
 }
@@ -812,7 +819,14 @@ fn run_ocr_engine(
             summary.wer = mean(&wers);
             summary.cer = mean(&cers);
         }
-        Err(e) => summary.notes.push(first_error.unwrap_or_else(|| e.to_string())),
+        // FRONT, not back. The correctness gate reports `notes.first()` as the
+        // "first failure", and by this point `notes` already holds
+        // informational entries — the footprint-exclusion note among them. A
+        // failing run therefore reported a memory-accounting sentence as its
+        // cause, which read as a harness quirk rather than a real error and
+        // left two engines wrongly described as "unmeasured rather than
+        // broken". The error goes where the gate actually looks.
+        Err(e) => summary.notes.insert(0, first_error.unwrap_or_else(|| e.to_string())),
     }
     Ok(summary)
 }
@@ -1053,7 +1067,14 @@ fn run_engine(
             summary.wer = mean(&wers);
             summary.cer = mean(&cers);
         }
-        Err(e) => summary.notes.push(first_error.unwrap_or_else(|| e.to_string())),
+        // FRONT, not back. The correctness gate reports `notes.first()` as the
+        // "first failure", and by this point `notes` already holds
+        // informational entries — the footprint-exclusion note among them. A
+        // failing run therefore reported a memory-accounting sentence as its
+        // cause, which read as a harness quirk rather than a real error and
+        // left two engines wrongly described as "unmeasured rather than
+        // broken". The error goes where the gate actually looks.
+        Err(e) => summary.notes.insert(0, first_error.unwrap_or_else(|| e.to_string())),
     }
 
     // Peak resident memory for our process. Taken after the timed loop so it

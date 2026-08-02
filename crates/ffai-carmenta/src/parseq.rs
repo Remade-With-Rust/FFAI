@@ -299,11 +299,19 @@ impl Parseq {
         if std::env::var("FFAI_PARSEQ_DEBUG").is_ok() {
             eprintln!("AR ids: {tgt_ids:?} -> {out:?}");
         }
-        let l = tgt_ids.len(); // [BOS] + non-EOS tokens = strhub's tgt_in
+        // [BOS] + non-EOS tokens = strhub's tgt_in, CLAMPED to what the model
+        // can address. The AR loop runs MAX_STEPS times and only exits early on
+        // EOS, so a word that never terminates yields MAX_STEPS + 1 positions
+        // against a `pos_queries` holding MAX_STEPS — candle then refuses with
+        // "narrow invalid args start + len > dim_len: [1, 26, 192] ... len:27".
+        // Our synthetic corpora never produced a word that long; a 43-page
+        // OmniDocBench run aborted on the first one and took the whole
+        // benchmark with it.
+        let l = tgt_ids.len().min(MAX_STEPS);
         if l > 1 && std::env::var("FFAI_NO_REFINE").is_err() {
             let mut content_rows = Vec::with_capacity(l);
             content_rows.push(self.text_embed.i(tgt_ids[0] as usize)?);
-            for (k, &id) in tgt_ids.iter().enumerate().skip(1) {
+            for (k, &id) in tgt_ids.iter().enumerate().skip(1).take(l - 1) {
                 content_rows.push((self.text_embed.i(id as usize)? + self.pos_queries.i((0, k - 1))?)?);
             }
             let content = Tensor::stack(&content_rows, 0)?.unsqueeze(0)?;
