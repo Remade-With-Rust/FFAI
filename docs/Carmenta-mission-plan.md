@@ -3085,6 +3085,50 @@ whose MEANING had never been examined. The measurement was right; the inference
 from it was not. Checking what a number is made of costs one sample and is the
 last thing that gets done.
 
+### 8.51 A learned ranker over geometry loses to the hand rule — the limit is the input
+
+§8.49 refuted geometric ordering, but every attempt was a hand-written RULE.
+That does not distinguish "the information is absent from the geometry" from
+"the information is there and hard to express in a projection", and the two cost
+very differently: a few-MB head over boxes, or PP-DocLayout's ~260 MB of pixels
+and classes.
+
+Priced with a pairwise ranker — for every pair of lines on a page, predict from
+geometry alone whether A precedes B, then order by Copeland score. Trained on
+TRAIN, evaluated on HOLDOUT, scored with §8.40's inversion metric so it sits
+directly beside the shipped rule. Features are deliberately the same information
+the cut rules had, so the comparison isolates RULE vs LEARNED on identical input.
+
+| model | params | train | **holdout** |
+|---|---:|---:|---:|
+| logistic | ~15 | 5.77 % | **7.00 %** |
+| GBDT-100 | ~1500 nodes | 2.60 % | **4.80 %** |
+| *shipped hand rule* | 0 | 5.96 % | **4.44 %** |
+
+**Neither beats the hand-written rule.** GBDT fits train to 2.60 % and lands at
+4.80 % on holdout — it learns the training pages, not the problem. So the
+limitation is not that `xy_cut` is poorly written. **The reading order is not
+recoverable from box geometry**, and every approach that consumes only boxes —
+rule or model, cheap or expensive — is bounded by the same wall. That closes
+§8.49's option 2 as stated.
+
+**What is NOT refuted, and is the obvious next probe.** These features were
+positions and sizes only. We also recognise the TEXT, for free, before ordering
+is decided — and text carries exactly the signal geometry lacks: "Chapter 4",
+"continued on page 7", a sentence ending mid-clause, a caption beginning
+"FIGURE 3". LayoutReader-class models use text plus layout for precisely this
+reason. **Geometry + text is unpriced, needs no new pixels, and reuses output the
+pipeline already produces.** That is the cheapest remaining shot at the 11.95 pp,
+and it should be measured the same way before anything is built.
+
+**Standing back.** The ordering campaign now has a clean shape: 11.95 pp
+available (§8.47), 90 % of it sequence rather than grouping (§8.48), geometry
+refuted at three granularities as a rule (§8.49) and as a learned model (§8.51),
+and the one benchmark-fitting shortcut named and declined (§8.50). What remains
+is a genuine fork — text-aware ordering at unknown cost, or a large layout model
+at 55x our weights — and it is now a decision with numbers on both sides rather
+than a hunch.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
