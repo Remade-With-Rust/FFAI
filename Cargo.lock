@@ -3343,9 +3343,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty_jpeg"
-version = "0.1.5"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c814a17f381c46133d6ef10be7af889bd30bdbdbc05aad25fc2b9c17364abac1"
+checksum = "f428387be19efc43bdfe5483deba598cd339fe6a523211083cc4d5e8dd79e6af"
 
 [[package]]
 name = "rusty_png"
