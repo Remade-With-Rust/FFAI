@@ -2345,7 +2345,7 @@ handicaps pinned in `ppstructure_ref.py`. What the sample establishes is the
 *decomposition* — order versus characters — which is a ratio and far more
 robust to sample size than either absolute number.
 
-### 8.37 The ordering defect is the algorithm, and it has a sign flip
+### 8.37 The ordering defect is the algorithm, and it has a sign flip — **RETRACTED, see §8.39**
 
 §8.36 put 13.7 points on sequence without saying which half of the pipeline
 owns it, and the two answers need different work: either the rule mis-orders
@@ -2401,7 +2401,7 @@ which is §8.31, which is the fifth instance this campaign has recorded.
 Next: dispatch on measured structure rather than always cutting — the sign flip
 says the win is available and the classes are separable.
 
-### 8.38 The adaptive gate is refuted, and the sign flip is worth ~0.2 pp
+### 8.38 The adaptive gate is refuted, and the sign flip is worth ~0.2 pp — **measured on the void instrument of §8.37; see §8.39**
 
 §8.37's sign flip suggested the obvious lever: do not cut pages that have no
 columns. `adaptive_cut` implements it with the separator the cut already
@@ -2445,6 +2445,70 @@ for a threshold there would have burned the split that has to certify the
 answer. It now takes an explicit `split` argument and **defaults to train**.
 The testbed is fast enough (no recognizer, 236 pages in seconds) that it
 actively invites the mistake.
+
+### 8.39 §8.37 and §8.38 are void — the testbed fed regions to a line-scale rule
+
+Both sections rest on one number: 8.10 % inversions when the shipped
+`order_reading` is handed perfect annotated regions, from which §8.37 concluded
+"the algorithm mis-sequences half of all pages, so the algorithm is the
+defect". **That number is an artifact of the testbed and the conclusion does not
+follow.**
+
+Diagnosing the worst train newspaper page showed the signature immediately.
+`omni-0288` has three columns at x0 ≈ 121 / 611 / 1103 and a true order that is
+column-major (ranks 0-5, 6-12, 13-16). The cut emitted **0, 6, 13, 1, 7, 14, 2,
+8, 15** — straight across all three columns, row by row. That is raster
+behaviour: the vertical gutters were never found at all.
+
+They could not be. `xy_cut` measures every valley in units of the median box
+height, which is correct when the boxes are text LINES — the units the shipped
+pipeline actually produces — and nonsense when they are REGIONS:
+
+| page | median box height | column gutters | gutter in those units | V_GAP_MIN 0.55 |
+|---|---:|---|---|---|
+| omni-0288 | **311 px** (region) | 19 px, 14 px | 0.06, 0.05 | **never fires** |
+| omni-0288 | ~30 px (line) | 19 px, 14 px | 0.64, 0.47 | fires |
+| omni-0292 | **405 px** (region) | 11 px, 18 px | 0.03, 0.04 | **never fires** |
+| omni-0292 | ~30 px (line) | 11 px, 18 px | 0.38, 0.59 | fires |
+
+So the testbed asked the algorithm to find column gutters while telling it a
+column gutter would have to be ~170 px wide. It answered "there are no columns"
+and fell back to raster, on every multi-column page. **The shipped code is not
+implicated: it only ever receives lines.**
+
+**What is withdrawn:**
+
+- §8.37's headline — "given perfect regions the rule still mis-sequences half
+  of all pages" — and with it "the algorithm is the defect, improving it does
+  not wait on better detection". Unmeasured either way.
+- §8.37's sign flip and its per-cell table. `PPT2PDF` scoring worse than raster
+  is exactly what a crippled cut does on pages whose regions are large.
+- §8.38 entirely. The adaptive gate was measured against a rule that had already
+  degenerated to raster, so "worse on holdout, a wash on train" describes
+  nothing about the real pipeline. Its *reasoning* survives — a whole-page gate
+  cannot help a newspaper whose columns appear only under the masthead — but it
+  was not tested.
+
+**What survives untouched:** §8.36. That decomposition — 13.7 of 15.5 points on
+sequence, recognition at parity — comes from end-to-end CER through the real
+pipeline against PP-StructureV3, with no testbed involved. The target is
+unchanged; only the tool built to attack it was wrong.
+
+**The correct instrument** feeds LINES, because that is what the algorithm
+consumes, and takes their ground-truth order from the region each line falls
+inside — the geometric labelling §8.34 already validated. That is buildable from
+the `FFAI_OCR_CONF` dumps and is the next step.
+
+**Third instrument failure in this thread, and the most expensive.** The first
+two were caught by assertions — a reimplementation that reproduced the shipped
+order on 2 pages of 12, a parse that silently dropped every row. This one
+produced a *plausible* number instead of an obviously broken one: 8.10 % against
+raster's 16.55 % looked like the cut working, just not well enough. **A wrong
+instrument that fails loudly costs an hour; one that returns a believable number
+costs two sections and a commit.** The tell was there and unexamined — a rule
+that halves raster's inversions but leaves half of all pages imperfect, on
+*perfect input*, should have prompted "what does it think a line height is?"
+before it prompted a fix.
 
 ## 9. Pure-Rust boundary and watchlist
 
