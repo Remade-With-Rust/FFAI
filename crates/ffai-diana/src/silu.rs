@@ -191,6 +191,7 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                 // and the vector kernel writes into it.
                 v.resize(xs.len(), 0.0);
                 let chunk = (1 << 14).max(xs.len().div_ceil(rayon::current_num_threads().max(1)));
+                count_silu(xs.len(), xs.len() > chunk);
                 if xs.len() <= chunk && !crate::smallgains::disabled() {
                     // ONE chunk, so `par_chunks_mut` would fork a job, hand
                     // the whole buffer to a single worker, and join — the
@@ -290,4 +291,70 @@ mod tests {
         assert!((y[4] - 60.0).abs() < 1e-3, "large positive -> x, got {}", y[4]);
         assert!(y.iter().all(|v| v.is_finite()), "no NaN/Inf at saturation");
     }
+}
+
+
+/// How much of SiLU's work sits in calls too small to fan out?
+///
+/// The chunk width is `max(1 << 14, len / threads)`, so any call with fewer
+/// than 16384 elements is ONE chunk and runs on a single worker. SiLU is
+/// 15.2 % of the pipeline across ~1305 calls per image, and 13.4 M activation
+/// elements over those calls is a ~10.3 k mean — BELOW the threshold. If that
+/// holds, most of SiLU is serial by construction and no pool width helps it.
+///
+/// A count, not a timing: the box is half-occupied by another project's
+/// benchmark, and this question does not need a clock.
+///
+/// # ANSWERED: SiLU is 100 % parallel
+///
+/// 52 calls per image, 10.38 M elements, **zero** of them in a sub-threshold
+/// call. The hypothesis that motivated this counter — that most SiLU calls
+/// are too small to fan out — came from dividing 13.4 M activation elements
+/// by 1305 calls to get a ~10.3 k mean. That 1305 was the profile's
+/// FIFTEEN-IMAGE total. The real mean is 10.38 M / 52 = **200 k elements**,
+/// more than ten times the chunk width.
+///
+/// Kept because it is the cheapest possible refutation of a plausible lever,
+/// and because the next person to notice `silu` at 15.2 % of the pipeline
+/// will have the same idea.
+static SILU_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SILU_BIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SILU_CALLS_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SILU_CALLS_BIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn count_silu(len: usize, parallel: bool) {
+    use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
+    // Cached, not re-read per call. `std::env::var` allocates and locks the
+    // environment; doing that inside the activation would make the
+    // instrument a cost of the thing it measures — exactly the profiler tax
+    // `codec-measurement` §6 warns about.
+    static ON: AtomicU8 = AtomicU8::new(u8::MAX);
+    let on = match ON.load(Relaxed) {
+        u8::MAX => {
+            let v = std::env::var("FFAI_DIANA_COUNT").is_ok_and(|v| v == "1");
+            ON.store(v as u8, Relaxed);
+            v
+        }
+        v => v == 1,
+    };
+    if on {
+        if parallel {
+            SILU_BIG.fetch_add(len as u64, Relaxed);
+            SILU_CALLS_BIG.fetch_add(1, Relaxed);
+        } else {
+            SILU_SMALL.fetch_add(len as u64, Relaxed);
+            SILU_CALLS_SMALL.fetch_add(1, Relaxed);
+        }
+    }
+}
+
+/// `(serial_elems, serial_calls, parallel_elems, parallel_calls)`, and reset.
+pub fn take_silu_split() -> (u64, u64, u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        SILU_SMALL.swap(0, Relaxed),
+        SILU_CALLS_SMALL.swap(0, Relaxed),
+        SILU_BIG.swap(0, Relaxed),
+        SILU_CALLS_BIG.swap(0, Relaxed),
+    )
 }
