@@ -2115,8 +2115,25 @@ Pending upstream publication, so FFai still carries the `catch_unwind` from
 property the harness should have on its own, not one borrowed from a fixed
 dependency.
 
-**Prize on release:** 35 holdout pages return (201/236 → 236/236), and
-`academic_literature` becomes scoreable on 43 pages instead of 16.
+**The prize, measured rather than predicted.** `cargo --config
+"patch.crates-io.rusty_jpeg.path='…'"` injects the patched crate for one build
+without editing a single file in the worktree — which matters here, because a
+sibling campaign shares it. Same corpus, same engine, same box:
+
+| full holdout | clips | CER | pg/s | steady |
+|---|---:|---:|---:|---:|
+| unpatched decoder | 201/236 · **FAIL** | 31.81 % | 0.18 | 456 MiB |
+| patched decoder | **236/236 · PASS** | **33.70 %** | 0.16 | 453 MiB |
+
+**The headline CER got worse by 1.89 points, and that is the honest result.**
+The 35 recovered pages were never scored badly before — they were *absent from
+the denominator*. Fixing the decoder moves them from "not measured" to
+"measured, and hard", which is what a real corpus figure looks like. A change
+that repairs a defect and improves the headline should be suspected of having
+repaired the measurement in its own favour; this one did the opposite, which is
+the weaker claim and the trustworthy one.
+
+This is also the first `correctness PASS` on the full OmniDocBench holdout.
 
 ## 9. Pure-Rust boundary and watchlist
 
