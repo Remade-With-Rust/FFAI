@@ -290,11 +290,16 @@ pub fn conv3x3_strided(
     })?;
 
     let w_mat = weight.reshape((c_out, c_in * 9))?;
-    let mut y = crate::profile::timed(|p| &p.gemm, || w_mat.matmul(&col))?; // (Cout, OH*OW)
-    if let Some(b) = bias {
-        y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
-    }
-    y.reshape((n, c_out, oh, ow))
+    let y = crate::profile::timed(|p| &p.gemm, || w_mat.matmul(&col))?; // (Cout, OH*OW)
+    // The wrapper, timed separately: bias broadcast and reshape were inside
+    // the parent bucket and therefore invisible.
+    crate::profile::timed(|p| &p.conv_wrap, || {
+        let mut y = y;
+        if let Some(b) = bias {
+            y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
+        }
+        y.reshape((n, c_out, oh, ow))
+    })
 }
 
 #[cfg(test)]

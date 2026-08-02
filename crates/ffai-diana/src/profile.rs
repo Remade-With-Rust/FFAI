@@ -95,6 +95,14 @@ pub struct Profile {
     pub im2col: Stage,
     /// The GEMM inside our 3x3 kernels.
     pub gemm: Stage,
+    /// The WRAPPER around a convolution: bias broadcast-add and the final
+    /// reshape. Split out because `1x1` and `3x3` are PARENT buckets that
+    /// contain im2col + gemm, so everything else inside them was invisible —
+    /// and the arithmetic said ~50 ms/image lived there unaccounted. A
+    /// residue you cannot name is not a residue, it is a hiding place.
+    pub conv_wrap: Stage,
+    /// The `SliceOp`/`CustomOp1` round trip: candle tensor in, Vec out.
+    pub sliceop: Stage,
     /// Every attention block (info tier).
     pub attn: Stage,
 }
@@ -113,6 +121,8 @@ static PROFILE: Profile = Profile {
     conv_dw: Stage::new(),
     act: Stage::new(),
     im2col: Stage::new(),
+    conv_wrap: Stage::new(),
+    sliceop: Stage::new(),
     gemm: Stage::new(),
     attn: Stage::new(),
 };
@@ -140,6 +150,8 @@ pub fn reset() {
         &PROFILE.conv_dw,
         &PROFILE.act,
         &PROFILE.im2col,
+        &PROFILE.conv_wrap,
+        &PROFILE.sliceop,
         &PROFILE.gemm,
         &PROFILE.attn,
     ] {
@@ -228,7 +240,7 @@ impl Profile {
             );
         }
 
-        let info: [(&str, &Stage); 9] = [
+        let info: [(&str, &Stage); 11] = [
             ("conv", &self.conv),
             ("  1x1", &self.conv1x1),
             ("  3x3 s1", &self.conv3x3),
@@ -236,6 +248,8 @@ impl Profile {
             ("  depthw", &self.conv_dw),
             ("  silu", &self.act),
             ("   >im2col", &self.im2col),
+            ("   >wrap", &self.conv_wrap),
+            ("   >sliceop", &self.sliceop),
             ("   >gemm", &self.gemm),
             ("attn", &self.attn),
         ];

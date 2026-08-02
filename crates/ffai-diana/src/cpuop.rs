@@ -68,7 +68,11 @@ where
             let (out, shape) = (self.f)(&xs, x.layout())?;
             return Tensor::from_vec(out, shape, x.device());
         }
-        x.apply_op1_no_bwd(self)
+        // Timed as its own bucket: this wrapper is entered ~2745 times per
+        // image (one per convolution and one per activation), so if it costs
+        // anything it costs it 2745 times, and it was previously folded into
+        // whichever parent happened to call it.
+        crate::profile::timed(|p| &p.sliceop, || x.apply_op1_no_bwd(self))
     }
 }
 
