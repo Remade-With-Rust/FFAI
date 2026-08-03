@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "candle-core",
  "thiserror 2.0.19",
@@ -1178,6 +1178,7 @@ dependencies = [
  "ffai-core",
  "ffai-media",
  "ffai-models",
+ "libmimalloc-sys",
  "mimalloc",
  "rayon",
  "serde",

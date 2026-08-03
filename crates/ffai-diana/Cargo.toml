@@ -8,6 +8,18 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
+# Ship the library, its README and the one example a USER runs.
+#
+# The other 34 examples are this campaign's measurement probes — roofline
+# counters, A/B harnesses, allocator experiments — and every one of them
+# expects `models/` and `corpora/` from the repository. Packaging them would
+# put 34 files that cannot run in front of anyone who opens the crate.
+# `quickstart.rs` is kept precisely because it is the README's code, compiled.
+include = [
+    "src/**/*.rs",
+    "README.md",
+    "examples/quickstart.rs",
+]
 keywords = ["object-detection", "yolo", "computer-vision", "candle", "edge"]
 categories = ["computer-vision", "multimedia::images", "science"]
 

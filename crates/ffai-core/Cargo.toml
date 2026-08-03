@@ -1,7 +1,12 @@
 [package]
 name = "ffai-core"
 description = "FFai shared types, engine traits, and the engine registry"
-version.workspace = true
+# Decoupled from the workspace version. `DetectEngine`, `DetectOptions`,
+# `Detection`, `DetectOutput` and `Letterbox` all landed AFTER 0.6.1 was
+# published, so the crates.io copy of 0.6.1 cannot build ffai-diana — a gap
+# invisible locally, where path dependencies mask it, and caught only by
+# `cargo publish --dry-run`.
+version = "0.6.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

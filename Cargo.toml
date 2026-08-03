@@ -16,7 +16,7 @@ authors = ["Remade With Rust"]
 
 [workspace.dependencies]
 # ---- internal crates ----
-ffai-core = { path = "crates/ffai-core", version = "0.6.1" }
+ffai-core = { path = "crates/ffai-core", version = "0.6.2" }
 ffai-media = { path = "crates/ffai-media", version = "0.6.1" }
 ffai-models = { path = "crates/ffai-models", version = "0.6.1" }
 ffai-mercury = { path = "crates/ffai-mercury", version = "0.7.0" }
