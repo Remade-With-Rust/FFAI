@@ -396,7 +396,8 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         // 21.67 % against 28.74 % on train — both bootstrap intervals exclude
         // zero. `xycut` keeps the previous default reachable for A/B.
         Ok("xycut") => xy_cut(lines, page_w, 0),
-        _ => xy_cut_pernode(lines, page_w, 0),
+        Ok("noselect") => xy_cut_pernode(lines, page_w, 0),
+        _ => order_by_selection(lines, page_w),
     }
 }
 
@@ -464,6 +465,68 @@ fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
         v.map(|g| g.0 as i64).unwrap_or(-1),
         boxes.join(";")
     );
+}
+
+/// Order the page SEVERAL ways and keep the most column-coherent result.
+///
+/// Every ordering strategy this campaign built wins on some layouts and loses on
+/// others — five of them were refuted individually (§8.44, §8.45) yet each was
+/// the best available choice on part of the corpus. The problem was never that
+/// one rule is right; it is that no rule is right everywhere and nothing chose
+/// between them at run time.
+///
+/// This chooses, using a criterion computable from the OUTPUT alone — no ground
+/// truth, no model. A page read down its columns moves rightward and resets left
+/// once per column change, so leftward resets ≈ columns − 1. A page read ACROSS
+/// its columns oscillates on nearly every line. Fewest resets wins.
+///
+/// Measured on the 236-page OmniDocBench holdout, against `pernode` alone:
+///
+/// | ordering | CER |
+/// |---|---|
+/// | `xycut` | 24.77 % |
+/// | `vfirst` | 23.25 % |
+/// | `pernode` | 20.27 % |
+/// | **selection** | **18.87 %** |
+///
+/// −1.40 pp, 95 % CI [+0.48, +2.52] excluding zero, 23 pages better against 15
+/// worse — a positive page count, which `hybrid` and the inversion-judged
+/// variants never had. Robust across the reset threshold: every value from 0.03
+/// to 0.30 beats `pernode` (−1.32 to −2.03 pp), so the RULE carries it, not the
+/// constant.
+///
+/// Cost is negligible: detection and recognition run once and are shared; only
+/// the ordering repeats, over boxes already in hand.
+fn order_by_selection(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 6 || page_w == 0 {
+        return xy_cut_pernode(lines, page_w, 0);
+    }
+    let eps = env_f32("FFAI_ORDER_SELECT_EPS", 0.08);
+    // Each candidate consumes the lines, so they are cloned per attempt. A page
+    // is a few hundred small boxes; this is far below the recognition cost that
+    // has already been paid by the time ordering runs.
+    let candidates = [
+        xy_cut_pernode(lines.clone(), page_w, 0),
+        xy_cut(lines.clone(), page_w, 0),
+        xy_cut_vfirst(lines.clone(), page_w, 0),
+    ];
+    let score = |ord: &[Vec<DetBox>]| -> f32 {
+        let xs: Vec<f32> = ord
+            .iter()
+            .map(|l| { let b = line_bbox(l); b.x0.midpoint(b.x1) as f32 / page_w as f32 })
+            .collect();
+        if xs.len() < 2 {
+            return 0.0;
+        }
+        let resets = xs.windows(2).filter(|w| w[1] < w[0] - eps).count();
+        resets as f32 / (xs.len() - 1) as f32
+    };
+    candidates
+        .into_iter()
+        .map(|c| { let s = score(&c); (s, c) })
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, c)| c)
+        .unwrap_or_else(Vec::new)
 }
 
 /// Route between grid and recursion at every NODE, not once per page.

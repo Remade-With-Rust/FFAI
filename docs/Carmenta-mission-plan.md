@@ -3998,6 +3998,67 @@ to it is now measured shut.
 **Plan doc** `docs/whys/figure-vs-gutter-test-plan.md` updated with the outcome
 so the staging and its gates survive for the next attempt.
 
+### 8.71 Ink is dead on both axes — and the page can choose its own ordering
+
+Two ideas run against the 4.63 pp of §8.69.
+
+**Idea 1: the corrected ink test. REFUTED.** §8.70's Stage 1 sampled VERTICAL
+gutters, but a figure's damage comes from the HORIZONTAL valley it opens — the
+gap that outbids the column gutter. Re-run on the right axis, over the 437
+traced nodes where the horizontal cut wins:
+
+| | n | median ink | inky (>0.02) |
+|---|---:|---:|---:|
+| figure pages | 225 | 0.0300 | 52 % |
+| clean pages | 212 | 0.0170 | 42 % |
+
+1.8x separation with p25 ≈ 0 and p75 ≈ 0.09 on BOTH. **Ink is refuted on both
+axes**, now properly rather than by aiming at the wrong one. Incidental and
+useful: the median winning horizontal valley is **3.0 line-heights, not 19** —
+`omni-0038`'s figure gap is atypical, which is why §8.68's global threshold shift
+could never work.
+
+**Idea 2: self-diagnosis. The trigger failed; the SELECTION won.**
+
+As a detector, column alternation is weak — r = +0.10, and high-alternation pages
+are 40 % of the corpus carrying 53 % of the damage, only 1.3x enrichment. (The
+first attempt looked worse still, at r = +0.12 with 2 % of pages: it thresholded
+|dx| > 0.5 page widths, while a two-column page has centres 0.45 apart and a
+four-column page 0.16. **Every real alternation went uncounted.** Corrected to
+LEFTWARD RESETS.)
+
+But detection was the wrong question. The right one is whether a page can pick
+between orderings at RUN TIME with no ground truth — and it can:
+
+| 236-page holdout | CER |
+|---|---:|
+| `xycut` | 24.77 % |
+| `vfirst` | 23.25 % |
+| `hfirst` | 20.25 % |
+| `pernode` (was default) | 20.27 % |
+| **selection** | **18.88 %** |
+
+**−1.39 pp, 95 % CI [+0.47, +2.54] excluding zero, 23 pages better against 15
+worse.** A positive page count — which `hybrid` and every inversion-judged
+variant lacked (§8.53). Implemented in `order_by_selection`; the Rust reproduces
+the Python simulation to 0.01 pp.
+
+**Robust to its constant:** every reset threshold from 0.03 to 0.30 beats
+`pernode` (−1.32 to −2.03 pp). The RULE carries it, not the tuning — which is
+what distinguishes this from the six constants §8.55–§8.68 found already optimal.
+
+**The idea worth keeping.** Five ordering variants were "refuted" individually
+(§8.44, §8.45) — but each was the best available choice on PART of the corpus.
+They were never wrong rules; they were rules with no arbiter. Leftward resets are
+a runtime-computable proxy for column coherence, so the page selects its own
+strategy. **This is the first thing in the campaign to beat the shipped default
+since `pernode`, and it needed no new information at all** — only a second look
+at output we already produce. Detection and recognition run once and are shared;
+only the ordering repeats, over boxes already in hand.
+
+`FFAI_ORDER=noselect` reverts to `pernode`; `FFAI_ORDER_SELECT_EPS` tunes the
+reset threshold.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
