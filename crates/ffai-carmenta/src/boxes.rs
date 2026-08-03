@@ -482,31 +482,30 @@ fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
 /// element rather than the hole makes them different objects, not different
 /// sizes — which is why §8.68's threshold shift could never work and this might.
 ///
-/// So: if the node contains a spanning line, cut immediately ABOVE it (isolating
-/// what precedes), which walks the page down through its real structural breaks.
-/// With no spanning line the node is a uniform grid and takes the vertical cut.
+/// So: if the node contains a spanning ELEMENT, cut immediately ABOVE it
+/// (isolating what precedes), which walks the page down through its real
+/// structural breaks. With none the node is a uniform grid and takes the
+/// vertical cut.
+///
+/// **The element grouping is load-bearing** (§8.76). `is_spanning` tests a
+/// LINE, and a full-width paragraph is one element but N full-width lines —
+/// median 0 spanning regions per page against a max of 35 spanning lines. Cut
+/// per line, each cut costs a recursion level, and on 9 % of pages the budget
+/// is exhausted peeling single lines off the top; the node then falls through
+/// to `sorted_by_y`, i.e. raster, the worst ordering measured in this campaign.
+/// That defect — not the idea — is what §8.75 measured at +6.42 pp.
 fn xy_cut_span(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBox>> {
     if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
         return sorted_by_y(lines);
     }
-    // topmost spanning element that is not already at the very top
-    let mut spans: Vec<(usize, usize)> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| is_spanning(&line_bbox(l), page_w))
-        .map(|(i, l)| (line_bbox(l).y0, i))
-        .collect();
-    spans.sort_unstable();
-
     let mut hs: Vec<usize> =
         lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
     hs.sort_unstable();
     let lh = hs[hs.len() / 2].max(1) as f32;
 
     let top = lines.iter().map(|l| line_bbox(l).y0).min().unwrap_or(0);
-    let cut = spans
-        .iter()
-        .map(|&(y, _)| y)
+    let cut = element_tops(&lines, page_w, lh)
+        .into_iter()
         .find(|&y| y > top + (lh as usize))
         .map(|y| (Axis::Horizontal, y))
         .or_else(|| best_gap(&lines, lh, page_w, Axis::Vertical).map(|g| (Axis::Vertical, g.0)))
@@ -656,6 +655,16 @@ fn order_by_selection(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>
         // the reset score prefers column-coherent output, and a wrong ordering
         // can be more column-coherent than a right one. A candidate earns its
         // place by being best somewhere, not by existing.
+        //
+        // `xy_cut_span` — element-level banding — was tried here as a fourth
+        // candidate and is NOT kept (§8.78). The pool does not require a
+        // candidate to be good on average, only to be best SOMEWHERE, and this
+        // one is not: 18.63 % -> 19.16 %, CI [-1.34, -0.04] excluding zero, and
+        // the page count is decisive at **1 better, 16 worse**. It is the third
+        // candidate to fail this way after `xy_cut_cost` and `order_one_level`,
+        // and always by the same mechanism: the reset score rewards
+        // column-coherent output, and a wrong ordering can be more
+        // column-coherent than a right one. Reachable as `FFAI_ORDER=span`.
     ];
     let score = |ord: &[Vec<DetBox>]| -> f32 {
         let xs: Vec<f32> = ord
@@ -1149,6 +1158,42 @@ fn median_width(lines: &[Vec<DetBox>]) -> usize {
 /// order shatters. The page width cannot be dragged down that way.
 fn is_spanning(b: &DetBox, page_w: usize) -> bool {
     page_w > 0 && (b.x1.saturating_sub(b.x0)) as f32 >= page_w as f32 * SPAN_FRAC
+}
+
+/// The top edge of each spanning ELEMENT, in reading order down the node.
+///
+/// A spanning element is a contiguous run of full-width lines: a masthead, a
+/// heading, a full-width paragraph. Only the FIRST line of each run is a
+/// candidate band boundary — the interior lines of a paragraph are not
+/// structural breaks, and treating them as such is the §8.76 defect that made
+/// this whole approach look refuted.
+///
+/// A run ends at the first line that does not span, or at a vertical gap wider
+/// than ordinary leading (`H_GAP_MIN`, the same yardstick the valley cuts use),
+/// so a full-width paragraph followed by a full-width heading stays two
+/// elements rather than merging into one.
+fn element_tops(lines: &[Vec<DetBox>], page_w: usize, lh: f32) -> Vec<usize> {
+    let mut by_y: Vec<(usize, usize, bool)> = lines
+        .iter()
+        .map(|l| { let b = line_bbox(l); (b.y0, b.y1, is_spanning(&b, page_w)) })
+        .collect();
+    by_y.sort_unstable();
+
+    let lead = (lh * H_GAP_MIN) as usize;
+    let mut tops = Vec::new();
+    let mut open: Option<usize> = None; // y1 of the previous line in the run
+    for &(y0, y1, spanning) in &by_y {
+        if !spanning {
+            open = None;
+            continue;
+        }
+        match open {
+            Some(prev_y1) if y0 <= prev_y1.saturating_add(lead) => {}
+            _ => tops.push(y0),
+        }
+        open = Some(y1.max(open.unwrap_or(y1)));
+    }
+    tops
 }
 
 fn sorted_by_y(mut lines: Vec<Vec<DetBox>>) -> Vec<Vec<DetBox>> {

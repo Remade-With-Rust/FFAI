@@ -4379,6 +4379,75 @@ different documents, so there is no cross-page context and the measured gain
 would be zero. Worth building for real PDFs, which is what ships; recorded here
 so it is not mistaken for a benchmark lever.
 
+### 8.78 Element grouping built and measured — the idea is refuted, properly this time
+
+§8.76 reopened span-banding because the refutation had tested a defective
+implementation. Both halves of the fix were built and measured.
+
+**A faster instrument.** Reading order is a pure function of the line boxes, so
+an ordering A/B needs no detector and no recognizer — only the lines the engine
+already emitted, re-ordered. `.tools-bench/reorder_cer.py` drives the shipped
+`order_reading` through `examples/order_probe.rs`; ~27 minutes per arm becomes
+seconds, which is the difference between measuring three variants and one.
+`order_probe` gained an explicit page-width argument: `is_spanning` scales by
+`page_w`, and inferring it from the boxes' own extent makes every full-width
+element span by construction.
+
+**Its instrument check FAILED, and the reason is worth keeping.** The dumps were
+written in shipped order, so re-ordering them with the default should reproduce
+them exactly. It does not: 18.88 % as written against 18.63 % re-ordered.
+`sorted_by_y` is a STABLE sort, so ties break by input order — the engine feeds
+lines in DETECTION order, the probe feeds them in SHIPPED order, and the two
+disagree on ties. The probe is therefore valid for relative A/B against its own
+18.63 % baseline and is NOT bit-exact with the engine. Every number below is
+probe-relative; the shipped figure remains 18.88 %.
+
+**1. Element grouping works.** `element_tops` merges contiguous full-width lines
+into one element, ending a run at the first non-spanning line or a gap wider
+than `H_GAP_MIN`:
+
+| | before | after |
+|---|---:|---:|
+| cuts per page (mean) | 3.1 | **1.4** |
+| pages exceeding `MAX_CUT_DEPTH` | 21 | **2** |
+| pages whose cut list changes | — | 62 of 236 (26 %) |
+
+The §8.76 defect was real and is fixed.
+
+**2. And the idea still loses.** Standalone, span-banding measures **25.31 %**
+against the default's 18.63 % — **+6.68 pp**. `FFAI_ORDER=raster` is 70.38 %, so
+this is not the degeneration §8.76 predicted; it is simply a worse ordering.
+
+**3. The pool addition loses too.** The pool does not require a candidate to be
+good on average, only to be best SOMEWHERE, and span beat the default on 21
+pages standalone — so this was the test that mattered:
+
+| | CER |
+|---|---:|
+| 3 candidates | **18.63 %** |
+| 4 candidates (+ span) | **19.16 %** |
+
+delta **+0.53 pp**, CI **[−1.34, −0.04]** excluding zero, and the page count is
+decisive: **1 better, 16 worse**, 219 unchanged.
+
+This is the THIRD candidate refused by this pool after `xy_cut_cost` and
+`order_one_level`, always by the same mechanism: **the reset score rewards
+column-coherent output, and a wrong ordering can be more column-coherent than a
+right one.** Offering a rule per page does not make a bad rule safe, because the
+selector is itself only a proxy — §8.74 already measured 1.91 pp of headroom in
+the selection RULE, and this is that headroom biting.
+
+Kept as `FFAI_ORDER=span` with the grouping fix. The shipped default is
+untouched and verified byte-identical to the pre-change output on 12 of 12
+spot-checked pages.
+
+**What this closes.** Every geometric route to the remaining gap has now been
+measured and refused: threshold shift (§8.68), ink test (§8.71), probability map
+(§8.72), compound selection score (§8.74), element banding (§8.78). The 0.92 pp
+ceiling §8.77 priced is real but is not reachable by geometry. What is left is
+region CLASS, and the only source of it that needs no model is cross-page
+repetition — which this benchmark, sampling pages individually, cannot reward.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

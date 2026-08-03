@@ -25,6 +25,11 @@ use ffai_carmenta::boxes::{order_reading, DetBox};
 use std::io::Read;
 
 fn main() {
+    // Page width matters: `is_spanning` is `width >= page_w * SPAN_FRAC`, so
+    // inferring `page_w` from the boxes' own extent makes every full-width
+    // element span by construction. The region testbed has no image and is
+    // happy with the inferred value; the LINE testbed must pass the real one.
+    let arg_w: Option<usize> = std::env::args().nth(1).and_then(|a| a.parse().ok());
     let mut src = String::new();
     std::io::stdin().read_to_string(&mut src).expect("read stdin");
 
@@ -55,7 +60,7 @@ fn main() {
         let tag = lines.len() as f32;
         lines.push(vec![DetBox { x0: v[0], y0: v[1], x1: v[2], y1: v[3], score: tag }]);
     }
-    let ordered = order_reading(lines, page_w.max(1));
+    let ordered = order_reading(lines, arg_w.unwrap_or(page_w).max(1));
     for l in &ordered {
         println!("{}", l[0].score as usize);
     }
