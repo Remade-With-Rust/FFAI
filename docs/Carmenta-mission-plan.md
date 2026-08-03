@@ -3701,6 +3701,68 @@ model is the strongest single result this campaign has produced, and it says
 plainly where not to spend: not the recognizer, not the detector constants, not
 another cut rule.
 
+### 8.64 The layout-model path needs NEAR-ORACLE ordering — a good ranker is not enough
+
+§8.63 verified that 84 % of the Unlimited-OCR gap is sequence and recommended
+layout semantics. Two measurements now sharpen that into something buildable —
+or not.
+
+**Region CLASSES add nothing.** A pairwise ranker over region geometry, trained
+on train and evaluated on holdout, orders regions to **5.26 %** inversions.
+Adding the TRUE region class (title / text_block / header / footer /
+figure_caption / page_number) as features: **5.24 %**. A 0.02 pp difference.
+Knowing a box is a caption rather than a body block does not help order it — so
+"layout semantics" in the sense of a region CLASSIFIER is refuted before anything
+is built.
+
+**And region-level ordering is savagely error-sensitive.** Feeding that ranker
+perfect region grouping and scoring end-to-end CER:
+
+| 236-page holdout, micro CER | |
+|---|---:|
+| shipped (line-level ordering) | **20.27 %** |
+| oracle grouping + learned region ranker (5.26 % inversions) | **30.63 %** |
+| oracle grouping + oracle order (0 % inversions) | 12.85 % |
+
+**Perfect grouping plus a good ranker is 10 points WORSE than what we ship.**
+5.26 % of region inversions costs 17.8 pp of CER, because a misplaced region
+relocates a whole block of text — the same arithmetic §8.49 found, now priced
+end-to-end. Our line-level cut makes far more ordering mistakes and each costs
+far less.
+
+**What this means for the build.** "Detect regions and order them" — PP-Structure's
+architecture — only beats line-level ordering when the ordering is essentially
+perfect. The gradient is unforgiving: between 0 % and 5.26 % region inversions
+lies the entire difference between 12.85 % and 30.63 % CER. Any region-based
+approach must land in the first percent or it is worse than doing nothing.
+
+That is a far harder target than "port a layout model", and it explains
+something §8.49 left open: PP-StructureV3 scores 19.14 % with this architecture,
+so its region ordering must be very close to oracle. Matching it means matching
+that, not merely detecting regions.
+
+**Where this leaves the campaign, honestly.** Every path has now been measured:
+
+| path | verdict |
+|---|---|
+| better cut rule | 5 variants refuted on holdout |
+| finer/coarser granularity | refuted at lines, blocks, regions |
+| learned ranker over boxes | loses to the hand rule |
+| hand-crafted text features | +0.09 pp |
+| six hand-set constants | none has slack |
+| ink discriminator | separates, too rare to pay for |
+| region classes | +0.02 pp — no signal |
+| **region detection + learned ranker** | **10 pp WORSE than shipped** |
+
+The 7.42 pp of ordering slack is real and every cheap route to it is closed. What
+remains is an ordering model good enough to beat 1 % region inversions, which is
+a research problem, not an integration.
+
+**And the honest headline stands:** order-free, we are **1.63 pp** from a 3B
+multimodal model on a GPU, at 17x its throughput and 4.7 MB of detector weights
+against 6.4 GB. The characters are not the problem and have not been for some
+time.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
