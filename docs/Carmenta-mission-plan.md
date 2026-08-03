@@ -3610,7 +3610,7 @@ gap that remains is layout semantics, and it needs a model, not a formula. That
 conclusion has now survived every cheap alternative this campaign could
 construct.
 
-### 8.62 The Unlimited-OCR decomposition is UNVERIFIED — and the run that tried it was void
+### 8.62 The Unlimited-OCR decomposition attempt — control botched, see §8.63
 
 §8.61 concluded "what remains is layout semantics". That rests on §8.43's
 decomposition — 89 % of the gap is sequence — which was measured against
@@ -3657,6 +3657,49 @@ measured.
 with the pinned configuration from its ledger row, confirm it reproduces
 15.51 %, and only then decompose. If its edge turns out to be recognition, the
 whole §8.58–§8.61 recommendation redirects.
+
+### 8.63 VERIFIED — 84 % of the Unlimited-OCR gap is ordering, not recognition
+
+§8.62 declared the run void on a control that was itself wrong. Two of twelve
+pages returned EMPTY from Unlimited-OCR, and an empty hypothesis scores ~100 %
+CER — dragging its average to 26.59 % against a pinned 15.51 %. **That is §8.31,
+committed inside the instrument check written to catch exactly that.** The
+`batch_command` in `references.toml` uses the defaults, CUDA was available, and
+the command matched the ledger's: there was no config drift.
+
+Rescored on the 10 pages where BOTH engines produced output:
+
+| | CER | order-free | = order |
+|---|---:|---:|---:|
+| Unlimited-OCR | **13.92 %** | 23.98 % | −10.05 pp |
+| ours | 24.34 % | 25.61 % | −1.27 pp |
+| **gap** | **+10.41 pp** | **+1.63 pp** | |
+
+Unlimited-OCR's 13.92 % against the ledger's 15.51 % on a different 43-page
+subset is ordinary page-set variation, so the arm is sound.
+
+**84 % of the deficit is sequence.** Independently measured against a second
+reference, it reproduces §8.43's 89 % against PP-StructureV3 — and order-free we
+sit **1.63 pp** from a 3B multimodal model on a GPU. **We read the characters
+about as well as Unlimited-OCR does. We assemble them worse.**
+
+**This closes §8.62's open question and CONFIRMS the recommendation rather than
+redirecting it.** The concern was that Unlimited-OCR's 3.63 pp edge over
+PP-StructureV3 might be recognition, which no ordering work could touch. It is
+not: its order-free CER is *worse* than ours (23.98 % vs 25.61 % is within the
+noise of a 10-page sample, and its raw score beats ours by 10.41 pp). The
+advantage is almost entirely in assembling the page.
+
+So the whole §8.58–§8.61 conclusion stands, now verified against the reference it
+is actually measured against: **the remaining gap is layout semantics.** Six
+constants have no slack, geometry cannot express reading order at any
+granularity, the ink discriminator is too rare to pay for its plumbing — and the
+one thing that would close it is a model that knows a caption from a column.
+
+**Recognition is explicitly NOT the target.** 1.63 pp order-free against a 3B
+model is the strongest single result this campaign has produced, and it says
+plainly where not to spend: not the recognizer, not the detector constants, not
+another cut rule.
 
 ## 9. Pure-Rust boundary and watchlist
 
