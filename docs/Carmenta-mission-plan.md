@@ -3763,6 +3763,51 @@ multimodal model on a GPU, at 17x its throughput and 4.7 MB of detector weights
 against 6.4 GB. The characters are not the problem and have not been for some
 time.
 
+### 8.65 The spec: what any future ordering model has to hit
+
+§8.64 showed region-level ordering is savagely error-sensitive but gave only two
+points. Measured properly by degrading the oracle order with controlled random
+swaps, 236 holdout pages:
+
+| swaps/page | region inversions | CER |
+|---:|---:|---:|
+| 0 | 0.00 % | **12.85 %** |
+| 1 | 15.61 % | 23.10 % |
+| 2 | 20.44 % | 29.92 % |
+| 3 | 28.02 % | 35.42 % |
+| 5 | 34.47 % | 44.54 % |
+| 8 | 38.21 % | 47.67 % |
+
+**Shipped line-level ordering reads 20.27 %.** Interpolating the first segment, a
+region-based approach must stay under roughly **11 % region inversions** — about
+ONE swap every one-and-a-half pages — merely to MATCH what a projection over
+line boxes already achieves. To reach the 12.85 % oracle it must be essentially
+perfect.
+
+That is the spec, and it is a demanding one. The learned ranker of §8.64 sits at
+5.26 % inversions and still lands at 30.63 % CER — worse than shipped — because
+the curve above is measured on RANDOM swaps while a ranker's errors are
+correlated and concentrated on the hard pages. **A model can be well inside the
+random-swap budget and still lose.**
+
+**What the whole campaign now says, in one line each:**
+
+* the characters are fine — order-free we are **1.63 pp** from a 3B multimodal
+  model on a GPU (§8.63);
+* **84 %** of the remaining deficit is sequence, verified against that model
+  directly, reproducing the 89 % measured against PP-StructureV3 (§8.43, §8.63);
+* every cheap route to it is measured and closed — five cut variants, three
+  granularities, a learned ranker, text features, six hand-set constants, the
+  ink discriminator, region classes, and region-detection-plus-ranker
+  (§8.44–§8.64);
+* the slack is **7.42 pp** and reaching it needs an ordering model whose errors
+  stay inside a budget that a good geometric ranker already fails.
+
+**And what shipped today**: `pernode`, worth **4.5 points** of CER, taking the
+holdout from 201/236 FAIL at 24.77 % to **236/236 PASS at 20.27 %**, and the
+deficit against Unlimited-OCR from **10.40 pp to 8.25 pp** — with no new weights,
+no new model, and no speed cost.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
