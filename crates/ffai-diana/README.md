@@ -1,6 +1,6 @@
 # ffai-diana
 
-**Object detection in pure Rust.** YOLO26 — the real graph, C3k2 / SPPF / C2PSA / attention and the NMS-free one2one head — running on candle from official Ultralytics checkpoints. No Python runtime, no ONNX, no C/C++ by default, and **no vendored weights**.
+**Object detection in pure Rust.** YOLO26 — the real graph, C3k2 / SPPF / C2PSA / attention and the NMS-free one2one head — running on candle from official Ultralytics checkpoints. No Python runtime, no ONNX, and **no vendored weights**.
 
 Diana is [FFai](https://github.com/Remade-With-Rust/FFAI)'s detection component.
 
@@ -40,6 +40,47 @@ let mut reg = ffai_core::registry::EngineRegistry::new();
 ffai_diana::register(&mut reg);
 let engine = reg.detect(Some("yolo26s"))?;
 ```
+
+## Embedding it: what you actually pull in
+
+Diana does **not** drag in the rest of FFai. It has no dependency on
+`ffai-mercury`, `ffai-carmenta` or `ffai-argus` — those are sibling crates,
+not layers underneath. Bundling detection alone is the normal case, not a
+special one.
+
+| | transitive crates |
+|---|---:|
+| `ffai-diana` (default) | **138** |
+| with `ffai-models/fetch` | 308 |
+
+The 170-crate difference is the Hugging Face downloader — `reqwest`, `hyper`,
+`rustls`, `aws-lc-sys` — and Diana never calls it. Its whole use of
+`ffai-models` is `load_dir`, which reads TOML off disk. So the weight-fetching
+stack is **off by default here**; turn it on with `ffai-models/fetch` if you
+want models pulled from the hub rather than shipped alongside.
+
+**One C dependency remains and it is not ours:** `candle-core` takes
+`tokenizers` as a hard, non-optional dependency, and `tokenizers` brings
+`onig`/`onig_sys` — a C regex engine, for text models Diana has no use for.
+It cannot be feature-gated from here; it needs an upstream change in candle.
+If a build must be C-free, that is the one thing standing in the way, and it
+is worth knowing before you plan around it.
+
+**The allocator is not inherited.** Diana's measured latency depends on it
+heavily — the system allocator re-faults nearly every byte it hands back
+(58,634 page faults per image) and costs **1.66×**. A library cannot set a
+global allocator, so an embedding application gets its own default unless it
+opts in:
+
+```rust
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+```
+
+That is a genuine trade, not a free win: it buys the 1.66× and costs roughly
+120 MiB of retained pages, because retention *is* the mechanism. For a
+size-constrained target, the system allocator is the leaner choice and the
+slower one, and both halves of that are measured.
 
 ## Five tiers from one graph
 

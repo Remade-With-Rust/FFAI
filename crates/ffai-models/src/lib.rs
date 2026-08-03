@@ -38,6 +38,7 @@ impl ResolvedModel {
 /// Resolve one file from the shared Hugging Face cache, downloading it when
 /// `cache_only` is false. Uses the same cache as `transformers` and
 /// `faster-whisper`, so a model either side already has is not fetched twice.
+#[cfg(feature = "fetch")]
 fn hub_download(repo: &str, filename: &str, cache_only: bool) -> Result<PathBuf> {
     let (owner, name) = repo
         .split_once('/')
@@ -51,6 +52,15 @@ fn hub_download(repo: &str, filename: &str, cache_only: bool) -> Result<PathBuf>
         .local_files_only(cache_only)
         .send()
         .map_err(|e| Error::Model(format!("{repo}/{filename}: {e}")))
+}
+
+/// Without `fetch`, nothing is downloaded — and the error says which file to
+/// supply rather than failing as a missing symbol.
+#[cfg(not(feature = "fetch"))]
+fn hub_download(repo: &str, filename: &str, _cache_only: bool) -> Result<PathBuf> {
+    Err(Error::Model(format!(
+        "{repo}/{filename} is not present locally and this build has the          `fetch` feature disabled — place the file in the model directory, or          enable `ffai-models/fetch` to download it"
+    )))
 }
 
 /// Verify a downloaded file against its manifest checksum, when one is

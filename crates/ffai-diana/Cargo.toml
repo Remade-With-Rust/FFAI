@@ -1,7 +1,7 @@
 [package]
 name = "ffai-diana"
 description = "Diana — FFai's detection component (YOLO26 on candle, pure Rust)"
-version.workspace = true
+version = "0.6.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -25,7 +25,15 @@ categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }
-ffai-models = { workspace = true }
+# `default-features = false` drops hf-hub and with it 226 of 308 transitive
+# crates — reqwest, hyper, rustls, aws-lc-sys. Diana's entire use of this
+# crate is `load_dir`, which reads TOML off disk; it has never downloaded
+# anything. Weights are supplied by the caller, which is also what the AGPL
+# position requires.
+# Declared directly rather than inherited: `default-features = false` cannot
+# override a workspace dependency's defaults, and setting it at the workspace
+# level would silently strip `fetch` from every other crate that expects it.
+ffai-models = { path = "../ffai-models", version = "0.6.1", default-features = false }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 serde = { workspace = true }

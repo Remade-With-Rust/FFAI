@@ -16,8 +16,23 @@ ffai-core = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
-hf-hub = { workspace = true }
+# Optional: the Hugging Face downloader.
+#
+# It is 226 crates — reqwest, hyper, rustls, aws-lc-sys — and a consumer that
+# ships its own weights never calls it. `ffai-diana` is exactly that consumer:
+# its whole use of this crate is `load_dir`, which reads TOML off disk with
+# `std::fs`. Default-on so nothing changes for existing users; turn it off
+# with `default-features = false` for size-, weight- and power-constrained
+# builds.
+hf-hub = { workspace = true, optional = true }
 sha2 = { workspace = true }
+
+[features]
+default = ["fetch"]
+# Download weights from the Hugging Face hub. Without it, manifests still load
+# and local files still resolve; only fetching is unavailable, and it fails
+# with a message that says so rather than a missing-method error.
+fetch = ["dep:hf-hub"]
 
 [lints]
 workspace = true
