@@ -3953,6 +3953,51 @@ and the tight bound (fix only mis-ordered figure pages) coincide exactly.
 so the plan proceeds to Stage 1. This is the first target this campaign has
 found with both measured slack AND enough size to certify.
 
+### 8.70 Stage 1 kills the gutter fix — the damage is not where the fix would act
+
+§8.69's ceiling passed at 4.63 pp, so Stage 1 asked the question that decides
+buildability: do the gutters `find_gutters` ACCEPTS separate on ink? Measured on
+the full train split, sampling the original image over each accepted band:
+
+| | n | median ink | inky (>0.02) |
+|---|---:|---:|---:|
+| figure pages | 18 | 0.0726 | **94 %** |
+| clean pages | 35 | 0.0439 | **86 %** |
+
+Separation is **1.7x** and the distributions overlap heavily — 86 % of gutters on
+CLEAN pages are also inky, so a threshold rejects most legitimate gutters, and
+the single inkiest band in the sample (0.926) is on a clean page. Narrow gutters
+catch descenders and antialiasing; that is why §8.61's clean bimodal split over
+ALL box-free bands does not survive restriction to the accepted ones.
+
+**But the count is what kills it.** Across 80 train pages, 29 carry figures and
+they contribute **18 accepted gutters between them** — so **38 % of figure pages
+have no accepted gutter at all**. A gutter-rejecting discriminator cannot reach
+them however well it separates.
+
+**So the figure damage is not happening in `find_gutters`.** It happens in
+`xy_cut`'s horizontal-vs-vertical valley competition — §8.41's original
+diagnosis, where a figure's ~19 line-height horizontal gap outbids a ~2
+line-height column gutter — and §8.68 measured that shifting that threshold
+costs **5.3 points**, because the horizontal cut is doing necessary work on
+headers, footers and section breaks.
+
+**Stage 1 kill gate fires. Stages 2 and 3 are not run, and no plumbing is
+written.** That is what the staging was for: the plan cost about an hour of
+measurement instead of a wide API change across `boxes.rs` and every caller,
+followed by a train run, a holdout run, and a revert.
+
+**What the 4.63 pp would actually need.** Not a scalar over the accepted band —
+the evidence has to arrive BEFORE the valley contest, so the cut can know that a
+19-line-height horizontal gap is a figure rather than a section break. That is a
+statement about a REGION of the page, not about a candidate cut, and it is the
+same conclusion §8.64 reached from the other direction: something that knows a
+caption from a column. The prize stays on the books at 4.63 pp; the cheap route
+to it is now measured shut.
+
+**Plan doc** `docs/whys/figure-vs-gutter-test-plan.md` updated with the outcome
+so the staging and its gates survive for the next attempt.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

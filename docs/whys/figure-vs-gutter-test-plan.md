@@ -1,4 +1,12 @@
-# Figure vs gutter: a staged test plan
+# Figure vs gutter: a staged test plan — **EXECUTED, killed at Stage 1**
+
+> **Outcome (2026-08-02).** Stage 0 PASSED: ceiling 4.63 pp, 62 % of remaining
+> ordering slack sits on figure pages. Stage 1 FAILED: accepted gutters separate
+> only 1.7x with 86 % of clean-page gutters also inky, and — decisively — 29
+> figure pages contribute just 18 accepted gutters, so 38 % of figure pages have
+> nothing for a gutter-level fix to reject. The damage is in `xy_cut`'s valley
+> contest, not in `find_gutters`. Stages 2-3 were not run and no plumbing was
+> written. Full record: §8.70.
 
 **Question.** Can we spend compute — of which we have a lot spare — to tell a
 *figure* from a *column gutter*, and does that convert into CER?
