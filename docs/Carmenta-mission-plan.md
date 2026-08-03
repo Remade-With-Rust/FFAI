@@ -4545,6 +4545,75 @@ to move after recognition, or a re-ordering pass to be added — which is an
 architectural change, and the first one this campaign has had a measured reason
 to make.
 
+### 8.81 Text continuity REFUTED — reading order is not textual continuity
+
+§8.80 argued that text is the one signal left outside the exhausted geometric
+channel: a column ending `"incon-"` and one beginning `"clusive"` is direct
+evidence of adjacency that no projection over boxes contains. It was the first
+idea in this campaign with a measured reason to change the architecture. It is
+wrong, and three probes on three different axes say so.
+
+**Probe 1 — as a SELECTION rule.** The pool emits three candidates per page and
+picks by leftward resets. Replacing or augmenting that rule with a continuity
+score, over 234 holdout pages:
+
+| selection rule | CER |
+|---|---:|
+| resets (ships today) | **18.63 %** |
+| continuity only | 18.89 % |
+| continuity primary, resets tie-break | 18.89 % |
+| continuity gated on margin (0.02 / 0.05 / 0.10) | 18.63 % |
+| resets + 3.0 x continuity, blended | **18.59 %** |
+| **ORACLE — pick the lowest-CER candidate** | **17.47 %** |
+
+The entire selection-rule prize is 1.16 pp and the best continuity variant
+captures **0.04 pp of it — 3 %.**
+
+**Probe 2 — as an ORDERING OBJECTIVE.** A selection test caps the idea at the
+3-candidate oracle. The larger claim is optimising continuity directly, which
+is bounded by §8.48's 10.65 pp. That requires the TRUE order to score better
+than ours. It does not:
+
+| 201 holdout pages | continuity (0 = every join reads clean) |
+|---|---:|
+| our order | 0.1699 |
+| the TRUE order | 0.1687 |
+
+Mean advantage +0.0012, **median 0.0000**, and the true order reads WORSE on
+77 % of pages. An objective that does not separate the right answer from ours
+cannot guide a search toward it.
+
+**Probe 3 — undiluted.** The obvious rescue is dilution: a 100-line page has
+~4 column joins, so a page-averaged score is swamped by the 96 % of joins both
+orderings get right. Scoring ONLY the joins where the two orderings differ:
+
+| 184 pages where they differ | |
+|---|---:|
+| ours | 0.3193 |
+| the TRUE order | 0.3168 |
+
+True order better on **26 %** of them. Dilution was not the explanation.
+
+**The premise was wrong. Correct reading order is not textually continuous.**
+Documents are full of legitimate discontinuities — a heading follows a
+paragraph, a caption interrupts a column, a section starts mid-page — so the
+true sequence has broken joins BY CONSTRUCTION. "Reads smoothly" was never a
+property that distinguishes the right order from a wrong one. A secondary cause
+compounds it: at 18.6 % CER the text is itself noisy, and terminal punctuation
+and initial case are exactly the characters an OCR engine misreads.
+
+One positive fragment, recorded because it is real and does not convert:
+continuity ranks candidate PAIRS better than resets does — 67 % concordant
+against 60 % — but decides far fewer pairs (79 against 171). Higher precision,
+lower coverage, and no combination tried turned that into CER.
+
+**What this closes.** §8.80 named text as the last non-geometric signal
+available without a new model. It is measured and it is not one. The remaining
+gap needs region semantics from a LAYOUT MODEL — DocLayout-YOLO or a
+PP-Structure head, ~10-30 M params on the candle spine — or it does not get
+closed. That is now a decision about dependencies and scope, not about
+algorithms, and every cheaper route has been measured rather than assumed.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
