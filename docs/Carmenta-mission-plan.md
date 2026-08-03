@@ -5305,6 +5305,61 @@ truth that had not been chosen for convenience. A result that finally fits, at
 the end of a long series that did not, deserves more suspicion than the ones
 before it.
 
+### 8.94 Why a 7-page feature table cannot decide anything
+
+The seven pages where the split fires with a known outcome — four wins, two
+losses, one flat — invite a search for the feature combination that separates
+them. Several were proposed. The search is the problem, not the combinations.
+
+**Enumerated over 18 features on those 7 pages:**
+
+| | separate perfectly |
+|---|---:|
+| single features | **10 of 18** |
+| 2-feature combos | 125 of 153 (82 %) |
+| **3-feature combos** | **760 of 816 (93 %)** |
+| 4-feature combos | 2990 of 3060 (98 %) |
+
+With 4 wins and 2 losses a random feature separates by luck **2/15 = 13 %** of
+the time, so ~2.4 of 18 are expected by chance alone and correlated features
+(`lines`, `chars`, `regions`, `splits` all measure "big dense page") inflate the
+rest. **Finding a 3-feature rule with 100 % precision and recall is the DEFAULT
+outcome here, not evidence.** Adding variables makes it worse: 98 % of
+4-feature combos succeed.
+
+**Half the separators are unusable regardless.** Of the 10:
+
+* runtime-computable: `aspect`, `lines`, `span60`, `splits`, `w_med`
+* **answer-key only**: `reg_max`, `reg_med`, `regions`, `inside`, `chars`
+
+`largest_region_area`, `%_cut_inside_a_region` and `annotated_regions` come from
+the OmniDocBench annotations. Knowing where the real regions are IS the problem
+being solved; a gate that needs them cannot run on an unseen page.
+
+**And the runtime ones were tested on train, where they fail:**
+
+| variable | HELP range | HURT range | separable |
+|---|---|---|---|
+| `span60` | [0.56, 49.12] | [0.00, 52.94] | no |
+| splits/wide-lines ratio | [0.25, 4.00] | [0.11, 32.00] | no |
+| median cut extent | [2.63, 74.64] | [1.67, 30.72] | no |
+
+The three-variable conjunction applied to train keeps **0 of the 5** pages it
+should and admits 2 of the 15 it should block — strictly worse than blocking
+everything. Each variable had an independent mechanism (is there anything to
+fix; are we cutting more than there is to fix; is this cut at a real gutter),
+and mechanism did not save them.
+
+`lines` is the proof by example: it separates the 7 pages cleanly (91-267 vs
+447-456) and §8.91 measured the two largest train wins at 326 and 350 lines.
+
+**The standing rule.** A feature table over a handful of pages will always yield
+a clean-looking rule; the question is never whether one exists but whether it
+survives a population it was not drawn from. Three times this campaign a
+compelling separation dissolved that way — §8.91's line count, §8.93's 4.7x cut
+extent, and this. Each appeared after a run of honest refutations, which is
+exactly when the temptation to accept one is strongest.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
