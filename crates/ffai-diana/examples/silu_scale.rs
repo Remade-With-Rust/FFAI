@@ -32,6 +32,11 @@
 //! To separate them, rotate over enough distinct buffers to evict L2 between
 //! iterations. See `docs/whys/diana-latency.md` — that experiment must come
 //! before any buffer-pool work.
+// Same allocator the binary ships, or this probe's ceiling is measured against
+// a configuration we no longer run.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use candle_core::{Device, Tensor};
 use std::time::Instant;
 

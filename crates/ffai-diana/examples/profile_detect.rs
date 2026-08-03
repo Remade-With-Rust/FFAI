@@ -15,6 +15,13 @@
 //! FFAI_PROFILE=1 cargo run --release -p ffai-diana --example profile_detect
 //! ```
 
+// The binary sets mimalloc; examples are separate binaries and do not
+// inherit it. Without this line every profile taken here measures the system
+// allocator that the campaign just showed costs 58,634 page faults per image
+// — i.e. it profiles a configuration we no longer ship.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use ffai_core::engine::{DetectEngine, DetectOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
