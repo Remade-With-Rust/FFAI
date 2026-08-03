@@ -4922,6 +4922,55 @@ than the ad-hoc coverage profile built here.
 fixing; it does not license shipping the fix. Both facts are in the same
 measurement and only the paired, population-split A/B shows them together.
 
+### 8.87 Why no trigger exists: 4 merges hide among 737 look-alikes
+
+§8.86 proved the OPERATION and refused two triggers. Two more were built and
+refused, and then the base rate explained all four at once.
+
+**`find_gutters` as the gate — refused.** The ordering path's own finder is
+calibrated across §8.54/§8.55 and does what the ad-hoc coverage profile
+structurally could not: it ERODES each box by ~0.6x its height before
+projecting, undoing the `UNCLIP_LINE` dilation that closes a real gutter, and it
+skips spanning lines so a merged box cannot veto the gutter it straddles. Train:
+**19.90 % -> 23.35 %, +3.45 pp, 4 better and 42 worse** — worse than the profile
+it replaced.
+
+**Height as the gate — refused, and it closes the question.** Among boxes
+spanning >= 60 % of the page on the holdout:
+
+| | count | height / page median line |
+|---|---:|---:|
+| gutter MERGES | **4** | 1.05 |
+| legitimate spans | **737** | 1.03 |
+
+| rule | catches | wrongly splits |
+|---|---|---|
+| height < 1.2x median | 4 of 4 merges | **599 of 737** real spans |
+| height < 1.5x median | 4 of 4 | 675 of 737 |
+| height < 2.0x median | 4 of 4 | 701 of 737 |
+
+**The merges are 0.5 % of the population the rule fires on, and no geometric
+feature separates them** — the two classes differ by 0.02 line heights. A
+trigger would need better than 99 % precision to break even, because each false
+positive shatters a real masthead and §8.29 measured that as expensive.
+
+This is §8.79's rule for the third time (§8.39, §8.79, here): **a geometric
+predicate is evidence only at the scale where its positives are rare.** Here the
+positives are rare in the wrong direction — the thing we want to catch is the
+0.5 %, not the 99.5 %.
+
+**Final state of the lever.** The defect is real and worth 1.03 pp (17 % of all
+ordering damage); the surgery is proven — `omni-0069` 70.26 % -> **1.92 %**,
+recognition intact; and five independent triggers are refused: absolute width,
+outlier-dominance, probability-map emptiness, coverage cleanliness (5
+thresholds), the calibrated `find_gutters`, and box height. What separates a
+merge from a masthead is whether the text on either side belongs to the same
+sentence — which is CONTENT, and §8.81 measured content as unable to arbitrate
+reading order at all.
+
+Kept as `FFAI_GUTTER_SPLIT`, defaulted OFF, with `find_gutters` as the gate
+since it is at least principled. Nothing ships.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

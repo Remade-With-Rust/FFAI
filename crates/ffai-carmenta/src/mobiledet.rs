@@ -684,47 +684,24 @@ fn split_internal_gutters(
     if env_f32("FFAI_GUTTER_SPLIT", 0.0) <= 0.0 || boxes.len() < 8 {
         return boxes;
     }
-    let cov_tol = env_f32("FFAI_GUTTER_COV", 0.15);
     let page_w = (w as f32 / sx).round().max(1.0) as usize;
-    let mut cover = vec![0u32; page_w];
-    for b in &boxes {
-        for c in cover.iter_mut().take(b.x1.min(page_w)).skip(b.x0.min(page_w)) {
-            *c += 1;
-        }
-    }
-    let peak = cover.iter().copied().max().unwrap_or(0) as f32;
-    if peak < 4.0 {
-        return boxes;
-    }
-    // A gutter must be interior — the page margins are uncovered too, and
-    // splitting there would only shave empty space off a box.
-    let (lo, hi) = (page_w / 5, page_w * 4 / 5);
-    let med_h = {
-        let mut hs: Vec<usize> = boxes.iter().map(|b| b.y1.saturating_sub(b.y0)).collect();
-        hs.sort_unstable();
-        hs[hs.len() / 2].max(1)
-    };
-    let mut gutters: Vec<usize> = Vec::new();
-    let (mut run, mut x) = (0usize, 0usize);
-    while x <= page_w {
-        let empty = x < page_w && x >= lo && x < hi && (cover[x] as f32) <= peak * cov_tol;
-        if empty {
-            run += 1;
-        } else {
-            if run >= med_h / 4 {
-                gutters.push(x - run / 2);
-            }
-            run = 0;
-        }
-        x += 1;
-    }
+    // Use the ORDERING path's gutter finder, not a profile invented here. It
+    // ERODES each box by ~0.6x its height before projecting, undoing the
+    // UNCLIP_LINE dilation that closes a real gutter — the ad-hoc coverage
+    // profile did not, which is the likeliest reason it fired on pages with no
+    // columns at all. It also skips spanning lines, so a merged box cannot veto
+    // the very gutter it straddles, and its thresholds are calibrated across
+    // §8.54/§8.55 rather than guessed.
+    let as_lines: Vec<Vec<crate::boxes::DetBox>> = boxes.iter().map(|b| vec![*b]).collect();
+    let gutters = crate::boxes::find_gutters(&as_lines, page_w);
     if gutters.is_empty() {
         return boxes;
     }
-    let mut out = Vec::with_capacity(boxes.len() + gutters.len());
+    let cuts: Vec<usize> = gutters.iter().map(|g| (g.0 + g.1) / 2).collect();
+    let mut out = Vec::with_capacity(boxes.len() + cuts.len());
     for b in boxes {
         let mut left = b.x0;
-        for &g in &gutters {
+        for &g in &cuts {
             if g > left && g < b.x1 {
                 out.push(crate::boxes::DetBox { x0: left, x1: g, ..b });
                 left = g;

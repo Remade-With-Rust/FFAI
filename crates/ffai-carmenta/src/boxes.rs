@@ -254,7 +254,7 @@ fn env_f32(key: &str, default: f32) -> f32 {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
-fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
+pub(crate) fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
     if page_w == 0 {
         return Vec::new();
     }
