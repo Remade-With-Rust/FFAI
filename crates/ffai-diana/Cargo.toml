@@ -25,6 +25,7 @@ rayon = { workspace = true }
 # whether an allocator that keeps pages mapped removes that cost, BEFORE any
 # decision about shipping one.
 mimalloc = { version = "0.1", default-features = false }
+libmimalloc-sys = { version = "0.1", default-features = false }
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 

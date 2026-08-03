@@ -15,41 +15,15 @@
 //!
 //! Min-of-N, because the floor is the honest number for a scaling curve: the
 //! tail is scheduler noise and this box's clock drifts more than the effect.
-// The shipped allocator; examples do not inherit the binary's.
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// NO global allocator: the system one. This example exists to re-test
+// mimalloc's 1.64x, which was measured BEFORE `pre` went 5.7x and both conv
+// paths fused away most of the per-op allocation. codec-measurement §11: a
+// result expires when its baseline moves, and the baseline moved twice.
 
 use ffai_core::engine::{DetectEngine, DetectOptions};
 use std::time::Instant;
 
-#[allow(unsafe_code)]
-unsafe extern "C" {
-    /// mimalloc's own reclaim. `force = false` returns pages the heaps no
-    /// longer need without disturbing what is in use.
-    fn mi_collect(force: bool);
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Optional trimmer: `FFAI_TRIM_MS=200` runs mi_collect on a background
-    // thread at that cadence. mimalloc keeps a per-thread heap and we run 4
-    // of our workers plus candle's 24, so freed pages are retained 28 ways —
-    // 174 MiB steady against 26.3 MiB actually live. `mi_collect` hands them
-    // back; the question is what that costs.
-    if let Ok(ms) = std::env::var("FFAI_TRIM_MS") {
-        if let Ok(ms) = ms.parse::<u64>() {
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(ms));
-                // SAFETY: mi_collect is thread-safe, takes no references and
-                // returns nothing. libmimalloc-sys does not re-export it, so
-                // the symbol is declared here against the static library it
-                // already links.
-                #[allow(unsafe_code)]
-                unsafe {
-                    mi_collect(false)
-                };
-            });
-        }
-    }
     let tier = std::env::args().nth(1).unwrap_or_else(|| "n".into());
     let reps: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(7);
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()).unwrap();
@@ -64,6 +38,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine.detect(&img, &opts)?;
         best = best.min(t.elapsed().as_secs_f64() * 1e3);
     }
-    println!("threads={:2}  tier {tier}  min-of-{reps} = {best:.1} ms", rayon::current_num_threads());
+    println!("SYSTEM-ALLOC threads={:2}  tier {tier}  min-of-{reps} = {best:.1} ms", rayon::current_num_threads());
     Ok(())
 }

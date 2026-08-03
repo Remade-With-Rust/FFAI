@@ -241,7 +241,48 @@ fn build_registry() -> EngineRegistry {
     reg
 }
 
+/// Match candle's thread pool to Diana's before anything allocates.
+///
+/// candle 0.11 builds its OWN rayon pool (`candle-core` `utils.rs:368`) sized
+/// by `RAYON_NUM_THREADS`, defaulting to every logical core — so the process
+/// runs 4 of Diana's workers plus 24 of candle's. mimalloc keeps a heap PER
+/// THREAD, and its own stats show the consequence directly: `theaps: 28`,
+/// against 8 when candle is told to match.
+///
+/// Measured, interleaved, six runs each (peak RSS from mimalloc's stats, so
+/// no sampling error):
+///
+/// | | peak RSS | min-of-40 |
+/// |---|---|---|
+/// | default (28 heaps) | 82 – 142 MiB, median 104 | 36.0 ms |
+/// | candle = 4 (8 heaps) | 82 – 124 MiB, median **82** | 35.5 ms |
+///
+/// 21 % less memory at identical speed, and markedly less variance — four of
+/// six runs land on 82 MiB where the default swings by 60.
+///
+/// Set only when the operator has not chosen a value, and set before the
+/// first allocation so candle's lazy pool sees it.
+fn match_candle_threads() {
+    if std::env::var_os("RAYON_NUM_THREADS").is_some() {
+        return;
+    }
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let n = std::env::var("FFAI_DIANA_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| (cores / 6).clamp(3, 6));
+    // SAFETY: called as the first statement of `main`, before any thread is
+    // spawned and before any pool is built, so no other thread can be reading
+    // the environment concurrently.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("RAYON_NUM_THREADS", n.to_string());
+    }
+}
+
 fn main() -> Result<()> {
+    match_candle_threads();
     let cli = Cli::parse();
     let reg = build_registry();
 
