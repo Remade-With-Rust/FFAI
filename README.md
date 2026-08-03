@@ -32,7 +32,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Per-image latency is ~1.9× behind at every tier — the one gate that fails — while BATCH throughput is 1.5–2.4× ahead at every tier, both from one structural cause** ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Now FASTER than Ultralytics per image at identical mAP — 41 ms against 45 ms p50, on 160 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). Speed remains the one failing gate, and now against **ONNX Runtime** at 31 ms, which Diana beats on accuracy (0.7014 vs 0.6865) ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -585,11 +585,22 @@ into `C3k` — a branch n and s never reach, on a board that was green at
 tested happen to agree is found by configuration N+1, never by testing
 configuration 1 harder.
 
-**Speed is the open gate: ~1.9× behind Ultralytics on per-image latency, at
-every tier, no tier at parity.** The repo's rule is that `verdict: claimable`
-needs all four gates; Diana does not get it. Quality, footprint and
-correctness are each claimed individually because each is gated. The losing
-row goes in the table.
+**Speed is the open gate — but no longer against Ultralytics.** Diana is now
+**41 ms p50 against Ultralytics' 45 ms at identical mAP (0.7014 both), on
+160 MiB against 310 MiB** (yolo26n, 640 rect, 45-image holdout,
+`bench-detect-1785728764`). The gate still FAILS because it compares against
+the *fastest* reference, which is now **ONNX Runtime at 31 ms** — and Diana
+beats that on accuracy (0.7014 vs 0.6865) at level memory. The repo's rule is
+that `verdict: claimable` needs all four gates; Diana does not get it. The
+losing row goes in the table.
+
+The paragraphs below describe the campaign that closed a **1.9× deficit to
+0.91×** and are kept as written, because the wrong turns in them are the
+point. What finally moved it was not in any of the first four hypotheses:
+**the allocator** (1.64×, 58,634 page faults per image), **the thread pool**
+(1.21× wall / 3.5× CPU), **preprocessing** (5.7×), and **epilogue fusion**
+(12.5%). Everything priced against DRAM bandwidth was overstated by 3–15×,
+because nothing in this graph leaves L3.
 
 That number took three tries to state correctly, and the two wrong versions
 are worth more than the right one. It was first published as "~2.5× behind",
