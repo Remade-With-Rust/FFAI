@@ -1862,3 +1862,66 @@ The change it implies is NOT the epilogue fusion already refuted. That moved
 an allocation; this is about not performing one per op at all — a pooled
 buffer reused across calls, so the per-call cost amortises. Different change,
 different risk, and it should be built against this number.
+
+
+---
+
+## `pre` and the 3x3 epilogue — two wins, and a gate broken paying for them
+
+### `pre`: 5.7x, and D6 favoured it for once
+
+`pre` runs ONCE per image, and `codec-measurement` §6 says a stage's share is
+trustworthy exactly when its call count is small — so at a 1.11x spread its
+5.52 ms was the most reliable number in the profile, not the least.
+
+COUNTED: a 640x428 letterbox is 273,920 output pixels at **20 ns each**. Per
+pixel: twelve `data[..] as f32 / 255.0` loads, and the horizontal sample
+position — a divide, a floor, two clamps — recomputed for every column of
+every row though it depends only on `x`. And the whole loop was **serial**,
+the largest single-threaded region left in the engine.
+
+Fixed: `nw` horizontal positions computed once; the fill fans out over
+(channel, row), nested because three channels alone leave a four-worker pool a
+quarter idle. **5.52 ms -> 0.97 ms.**
+
+The `/ 255.0` stays a division. `* (1.0/255.0)` differs in the last ulp and
+this graph has already had an oracle breached by that exact substitution.
+
+### 3x3 epilogue: the other 39 % of the pipeline
+
+1x1 was fused; the 3x3 path was not, because its refutation predated the
+allocator change (§11). Fused now — `silu` fell from 2.7 ms / 45 calls per
+image to **0.27 ms / 6 calls**.
+
+A/B of both fusions, ABBA, min-of-120, six pairs: **40.6 -> 36.1 ms, 12.5 %,
+fully separated.**
+
+### The cost: the footprint gate now FAILS
+
+| bench | ours | ultralytics | rtf | steady |
+|---|---:|---:|---:|---:|
+| pool fix | 85 ms | 52 ms | 11.3 | **43 MiB** |
+| allocator | 55 ms | 51 ms | 17.0 | 126 MiB |
+| 1x1 fusion | 42 ms | 38 ms | 22.9 | 136 MiB |
+| pre + 3x3 | **40 ms** | 49 ms | 22.3 | **174 MiB** |
+
+**Our p50 halved twice over: 85 -> 40 ms.** Against Ultralytics that reads
+0.82x, but its own p50 swung **38-52 ms across four runs (36 %)** — more drift
+than the remaining difference — so the defensible claim is *at or slightly
+better than Ultralytics parity*, per §12, not a headline ratio.
+
+Footprint went 43 -> 174 MiB and **now fails**: 1.08x against ort-yolo26n's
+162 MiB, where it used to pass at 0.27x. Peak LIVE allocation is 26.3 MiB, so
+roughly 148 MiB is allocator retention.
+
+**`MIMALLOC_PURGE_DELAY` is not the fix — refuted.** Eager purge costs the
+speed outright (36.4 -> 87.5 ms, 2.4x, which confirms retention IS the
+mechanism). A first sweep suggested `delay=500` gave 81 MiB at unchanged
+speed; repeated interleaved, peaks scattered 81-140 MiB in BOTH arms and the
+81 MiB reappeared in the default arm. Noise.
+
+The real fix is upstream of the allocator: **293.7 MiB of allocation per image
+against 26.3 MiB live** is the churn mimalloc is retaining. Reducing it fixes
+footprint AND removes the page-fault cost at source, rather than trading one
+gate for the other. That is a buffer-pool project and it is now the highest
+-value work left, because it is the only item that moves both failing gates.
