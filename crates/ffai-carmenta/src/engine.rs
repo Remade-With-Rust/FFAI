@@ -368,6 +368,12 @@ impl OcrEngine for CraftCrnn {
                         // the component walk returns raster order, and reading
                         // order is what the output contract promises.
                         b.sort_by_key(|r| (r.y0, r.x0));
+                        // §8.88: split any box carrying a white corridor wide
+                        // enough to be a column gutter, read from the SOURCE
+                        // PIXELS. The probability map cannot arbitrate this —
+                        // it reads 1.000 at the very gutter that was bridged,
+                        // and that hallucination is the defect.
+                        let mut b = boxes::split_at_white_corridor(b, &gray, w, h);
                         if std::env::var("FFAI_DET_DEBUG").is_ok() {
                             eprintln!(
                                 "mobiledet: {} boxes; image {w}x{h} -> map {pw}x{ph} (sx {sx:.3} sy {sy:.3})",
@@ -380,12 +386,6 @@ impl OcrEngine for CraftCrnn {
                                 );
                             }
                         }
-                        // §8.88: split any box carrying a white corridor wide
-                        // enough to be a column gutter, read from the SOURCE
-                        // PIXELS. The probability map cannot arbitrate this —
-                        // it reads 1.000 at the very gutter that was bridged,
-                        // and that hallucination is the defect.
-                        let b = boxes::split_at_white_corridor(b, &gray, w, h);
                         let lines: Vec<Vec<boxes::DetBox>> =
                             b.into_iter().map(|r| vec![r]).collect();
                         Ok((boxes::order_reading(lines, w), Vec::new(), Vec::new(), 0, 2.0))

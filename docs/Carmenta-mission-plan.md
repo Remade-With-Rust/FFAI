@@ -5253,6 +5253,58 @@ demonstrably repairs the worst page in the corpus. Page-level isolation is
 achievable and insufficient. Box-level isolation is what is required and carries
 no signal. The total prize under a perfect oracle is 0.58 pp. Closed.
 
+### 8.93 Per-cut signals: a real flaw found, and both remedies null
+
+§8.92 closed the lever at the page level. Two per-CUT signals were then proposed
+and tested, because the failure is per-box and every earlier gate was per-page.
+
+**A genuine defect in the splitter, found by asking the question.**
+`split_at_white_corridor` tests whitespace over THE BOX'S OWN HEIGHT — and the
+box is one line tall. A word space is white for the full height of its own line,
+so it passes trivially. That is the false-positive mechanism, and it means the
+"corridor" test never distinguished a gutter from a space at all.
+
+**Signal 1 — vertical extent.** A true gutter is white across many lines; a word
+space dies at the line above and below. Measured on every cut the splitter made
+across the 8 pages where it fires:
+
+| labelling | good | bad | separation |
+|---|---:|---:|---:|
+| cut falls outside any annotation region | 29.42 | 6.30 | **4.7x** |
+| **cut is on a page the split HELPS** | **12.57** | **7.29** | **1.7x** |
+
+**The 4.7x was an artifact of the label.** A newspaper article region CONTAINS
+its own columns, so real gutters inside one were being scored as bad cuts.
+Re-labelling by the outcome actually trusted — did the page improve — collapses
+it to 1.7x. At threshold 10 it keeps 24 of 44 good cuts while 32 % of the damage
+survives. Real signal, unusable gate.
+
+**Signal 2 — neighbour agreement.** For each cut, the fraction of vertically
+nearby boxes that do NOT cross that x. A column boundary should be respected by
+its neighbours; a word space should not be.
+
+| | n | median |
+|---|---:|---:|
+| cuts on pages the split helps | 42 | **0.872** |
+| cuts on pages it destroys | 40 | **0.855** |
+
+**1.02x — null.** Neighbours agree just as often on cuts that destroy the page
+as on cuts that fix it, every threshold removes both classes at the same rate,
+and at 0.98 it INVERTS (7 bad cuts survive against 4 good).
+
+**Thirteen gates now measured on one defect** (§8.89 six, §8.90-§8.91 five,
+these two), against a ceiling of 0.58 pp under a perfect oracle (§8.92). The
+per-cut level was the last structurally different place to look, and it is as
+empty as the per-page level.
+
+**Method note, twice earned.** The 4.7x figure was the second time this campaign
+a compelling number came from the LABEL rather than the data — §8.91's
+line-count gate was the first. Both looked like breakthroughs, both appeared
+after a run of honest refutations, and both dissolved when scored against a
+truth that had not been chosen for convenience. A result that finally fits, at
+the end of a long series that did not, deserves more suspicion than the ones
+before it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
