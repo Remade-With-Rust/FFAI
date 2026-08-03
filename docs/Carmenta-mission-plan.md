@@ -3510,6 +3510,52 @@ is a new model, and it is the honest recommendation.
 `pernode` landed (§8.53), and the benchmark still quoting the pre-`pernode`
 number was re-run (§8.57). **25.91 % -> 23.76 %, deficit 10.40 pp -> 8.25 pp.**
 
+### 8.60 The missing input, located and priced — figures, not formulas
+
+§8.59 closed the Prometheus question with "a refinery cannot discover a fact its
+inputs do not contain". The productive follow-up is not another constant but
+**which fact is missing**, and that is measurable.
+
+`find_gutters` projects BOXES, not pixels. A figure sitting between two columns
+occupies a band containing no text boxes — so the projection reads it as a
+gutter and cuts there. The image contains the fact that it is a figure; the
+projection discards it before the decision is made.
+
+Split the residual ordering slack by whether a page carries figures (detected via
+`figure_caption` regions, since the figure itself is not an annotated text
+region):
+
+| page class | shipped | oracle | ordering slack |
+|---|---:|---:|---:|
+| **has figures** | 23.25 % | 12.12 % | **11.13 pp** |
+| no figures | 18.15 % | 13.38 % | 4.77 pp |
+
+**Figure pages carry 2.3x the slack.** The mechanism §8.41 found on `omni-0038` —
+a figure's whitespace outbidding a real column gutter — is not one dramatic page,
+it is the dominant residual failure across the corpus.
+
+**This is the first target this campaign has found with measured slack**, after
+six constants that had none. And it is a fact the pipeline already possesses:
+the image is in hand at detection time and thrown away before ordering. The
+discriminator is ink — a real gutter is empty in the ORIGINAL IMAGE; a
+figure-induced band is full of it.
+
+**Why this is cheaper than the layout model §8.58 recommended.** It needs no
+region classifier and no new weights — only the mean ink density of a candidate
+gutter band, sampled from the image the detector already decoded. That is a
+formula over a new measurable input, which is precisely the Prometheus shape
+that the six exhausted constants were not.
+
+**Cost, stated honestly.** `find_gutters` takes boxes and `page_w`; it has no
+access to pixels. Plumbing the image through `order_reading` into the cut is a
+real API change across `boxes.rs` and its callers, and this campaign has learned
+not to price a build by its plausibility. The ceiling is 11.13 pp on figure
+pages; whether an ink test captures it is the next measurement, not a claim.
+
+**Sequence for that work**, following the discipline that produced today's two
+retractions: measure the ink separation on annotated figure bands FIRST (a
+probe, no plumbing), and only build if the classes separate.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
