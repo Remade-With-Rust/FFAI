@@ -3610,6 +3610,54 @@ gap that remains is layout semantics, and it needs a model, not a formula. That
 conclusion has now survived every cheap alternative this campaign could
 construct.
 
+### 8.62 The Unlimited-OCR decomposition is UNVERIFIED — and the run that tried it was void
+
+§8.61 concluded "what remains is layout semantics". That rests on §8.43's
+decomposition — 89 % of the gap is sequence — which was measured against
+**PP-StructureV3**, not against Unlimited-OCR. Unlimited-OCR is 3.63 pp better
+than PP-Structure, and whether THAT advantage is ordering or characters has
+never been measured. A 3B multimodal model plausibly reads glyphs better, not
+merely orders them better.
+
+The two answers fund different work:
+
+* advantage is ordering -> our order-free CER sits near theirs, and the layout
+  model is the only path;
+* advantage is recognition -> there is character gap no ordering work can touch,
+  and the next build is the recognizer, not layout semantics.
+
+**Attempted, and the run failed its own control.** Twelve pages through the
+`unlimited_ocr_ref` adapter:
+
+| | this run | ledger |
+|---|---:|---:|
+| Unlimited-OCR CER | **26.59 %** | **15.51 %** |
+| pages returning empty | **2 of 12** | — |
+| its order-free CER | 35.16 % | — |
+
+Eleven points worse than the pinned figure, two empty pages, and an order-free
+score WORSE than its raw score — which a real output cannot produce, since
+removing sequence can only help a text-vs-text edit distance here. The arm is
+degenerate: the adapter defaults to `--device cuda`, and its `--base-size` /
+`--image-size` may not match the pinned run either. **The numbers are not
+reported as a finding.**
+
+Validating a new reference run against its own known figure before believing it
+is what caught this — the sixth instrument catch of this campaign, and the
+cheapest: one comparison against a number already in the ledger.
+
+**What this leaves open, stated plainly.** The recommendation "layout semantics,
+a new model" is inferred from the PP-StructureV3 decomposition and **assumes it
+transfers to Unlimited-OCR**. That assumption is now explicitly unverified. It is
+the same shape as §8.35, where "PP-Structure suppresses figure regions" was
+coherent, consistent with every number then available, and false when finally
+measured.
+
+**Next**, before any layout-model work is funded: re-run the Unlimited-OCR arm
+with the pinned configuration from its ledger row, confirm it reproduces
+15.51 %, and only then decompose. If its edge turns out to be recognition, the
+whole §8.58–§8.61 recommendation redirects.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
