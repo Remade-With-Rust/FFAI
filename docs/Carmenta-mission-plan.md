@@ -3406,6 +3406,53 @@ and one metric:
 
 Deficit **10.40 pp -> 8.25 pp**, from ordering alone, no new weights.
 
+### 8.58 Four constants ceiling-checked, all at optimum — the answer is settled
+
+§8.55 gave three criteria for a Prometheus target: fires on most inputs, is a
+hand-set constant, has a ceiling worth the loop. Four of Carmenta's constants
+have now been checked against the third criterion — the only one that decides
+whether a refinery loop is worth running.
+
+| target | fires on | ceiling check | verdict |
+|---|---|---|---|
+| cut-axis rule (§8.55) | 25 of 1178 nodes | full loop run: −0.02 pp holdout | too rare |
+| unclip ratio (§8.56) | every box | 1.2–1.9 sweep: shipped **1.5 optimal** | no slack |
+| DB binarisation | every pixel | 0.20–0.40: **0.09 pp** total spread | flat |
+| detector `min_side` | every image | 736 native **21.10 %**, upscaling worse (1800 → 21.13, 2200 → 21.52) | native optimal |
+
+**Every hand-set constant tested is already where it should be.** That is a real
+result about the codebase, not a failure of the method: these values were set by
+measurement in earlier campaigns and the measurements held.
+
+**So the answer to "can Prometheus close this gap" is no, and it now rests on
+four independent checks rather than an argument.** Symbolic discovery replaces
+guessed formulas with better ones. There are no badly-guessed formulas left in
+the path. Meanwhile §8.43 attributes **89 % of the remaining deficit to
+sequence**, and §8.51/§8.52 measured that reading order is not recoverable from
+box geometry by a rule, by a learned ranker, or with hand-crafted text features.
+**No symbolic-regression pipeline discovers a fact its inputs do not contain.**
+What remains needs layout semantics — region classes or a text-embedding
+sequence model — which is a new model, not a better constant.
+
+**A methodological note, because it nearly cost a false refutation.** The first
+`min_side` sweep returned **21.10 % at 640, 736, 960 and 1280 — four identical
+figures to the decimal**. That is not a flat response curve; it is a knob that
+never engaged. `min_side` is a MINIMUM short side and these pages are ~1650 px,
+so every value tested was a no-op. The binding range is above 1650, where it
+upscales — and only the corrected sweep is the measurement.
+
+That is the fourth time this session a probe returned a plausible number while
+measuring nothing (§8.39's region-scale testbed, the string-match labeller at 2
+rows of 315, the page-width join, and this). **The tell every time was a number
+too clean to be real.** A refutation recorded from any of them would have been
+permanent and wrong.
+
+**What actually moved the gap today**, for contrast: `pernode` (§8.53), and then
+re-running the benchmark that still quoted the pre-`pernode` number (§8.57).
+25.91 % → **23.76 %**, deficit against Unlimited-OCR **10.40 pp → 8.25 pp**. No
+new weights, no discovered formula — a fix that had landed and a benchmark that
+had not been re-run.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
