@@ -12,6 +12,7 @@ use ffai_carmenta::engine::{CraftCrnn, DetStage, RecStage};
 use ffai_core::engine::{OcrEngine, OcrOptions};
 
 fn main() {
+    let _profile_guard = ();
     let mut args = std::env::args().skip(1);
     let name = args.next().expect("usage: ocr_text <engine> <image>");
     let path = args.next().expect("usage: ocr_text <engine> <image>");
@@ -54,4 +55,12 @@ fn main() {
             }
         }
     }
+    if std::env::var_os("FFAI_PROFILE").is_some() {
+        eprint!("{}", ffai_carmenta::profile::profile().report());
+    }
+
 }
+
+// FFAI_PROFILE=1 prints the stage breakdown. The CLI already does this
+// (main.rs:533) but the CLI links every component, and this example exists
+// precisely so a sibling campaign's mid-edit cannot block a measurement.
