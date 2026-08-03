@@ -3556,6 +3556,60 @@ pages; whether an ink test captures it is the next measurement, not a claim.
 retractions: measure the ink separation on annotated figure bands FIRST (a
 probe, no plumbing), and only build if the classes separate.
 
+### 8.61 The ink discriminator separates — and is too rare to pay for the plumbing
+
+§8.60 located the residual slack on figure pages (11.13 pp against 4.77 pp) and
+recorded the sequence: measure ink separation FIRST, build only if the classes
+separate. Both halves now measured.
+
+**The signal separates.** Ink in box-free x-bands, sampled from the original
+image across 60 holdout pages, by decile:
+
+```
+0.000 0.000 0.000 0.000 0.000 0.000 0.004 0.036 0.083 0.818
+                                          ^ clean valley
+```
+
+Bimodal with an empty valley between 0.004 and 0.036. About 70 % of candidate
+bands are blank paper — real gutters — and 26 % carry ink above 0.02: figures,
+rules, shading. **A threshold in that valley would reject exactly the bands that
+should not be gutters.** The mechanism §8.60 proposed is real.
+
+**The frequency kills it.** Counting what `find_gutters` actually sees, via the
+existing `FFAI_COL_DEBUG`, over 12 train pages:
+
+| | |
+|---|---|
+| pages where `find_gutters` is called at all | **6 of 12** |
+| total candidate free-runs | **22** |
+| mean, over all pages | **1.8 bands/page** |
+
+Six of twelve pages never reach the grid path. On those that do, ~3.7 candidate
+bands each, of which ~26 % carry ink — so the discriminator would act on roughly
+**one band per two pages**, and only some of those change a reading order.
+
+**Priced against the cost:** `find_gutters` takes boxes and `page_w` and has no
+pixel access. Threading the image through `order_reading` into every recursion
+node is an API change across `boxes.rs` and all its callers, plus a per-node
+image sample. That is a substantial change for a lever that fires on half a page
+in one, against a corpus where §8.53 measured **run-to-run CER variance of
+~0.5 pp**. The expected effect is at or below the noise floor of the instrument
+that would have to certify it.
+
+**Refuted on cost, not on mechanism** — a distinction worth preserving, because
+the mechanism is sound and the situation changes if the input gets cheaper. If
+the detector ever surfaces a probability map or an ink summary alongside its
+boxes (it computes one already), the sample becomes free and this is worth
+revisiting. Recorded so the idea is not re-derived from scratch, and not rebuilt
+without re-checking the frequency.
+
+**The honest close on the Prometheus question.** Seven targets examined: one full
+refinery loop, six constants, and this — the only one with measured slack, which
+turns out to be unreachable at acceptable cost from the inputs available. The
+gap that remains is layout semantics, and it needs a model, not a formula. That
+conclusion has now survived every cheap alternative this campaign could
+construct.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
