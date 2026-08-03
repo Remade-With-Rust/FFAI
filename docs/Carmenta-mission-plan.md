@@ -3763,7 +3763,7 @@ multimodal model on a GPU, at 17x its throughput and 4.7 MB of detector weights
 against 6.4 GB. The characters are not the problem and have not been for some
 time.
 
-### 8.65 The spec: what any future ordering model has to hit
+### 8.65 The spec: what any future ordering model has to hit — UNITS CORRECTED IN §8.66
 
 §8.64 showed region-level ordering is savagely error-sensitive but gave only two
 points. Measured properly by degrading the oracle order with controlled random
@@ -3807,6 +3807,47 @@ random-swap budget and still lose.**
 holdout from 201/236 FAIL at 24.77 % to **236/236 PASS at 20.27 %**, and the
 deficit against Unlimited-OCR from **10.40 pp to 8.25 pp** — with no new weights,
 no new model, and no speed cost.
+
+### 8.66 Inversion rate does not predict CER — spec in CER, not in inversions
+
+§8.65 offered a budget ("stay under ~11 % region inversions") derived from a
+random-swap curve. Two measurements show that budget is unsound, and the second
+one is a unit error of my own.
+
+**The character-weighting hypothesis is refuted.** The learned region ranker's
+errors, counted two ways on holdout:
+
+| | |
+|---|---:|
+| raw inversions (pooled over pairs) | 11.54 % |
+| character-weighted inversions | 12.40 % |
+
+Only 1.1x. The ranker is **not** preferentially misplacing the large regions, so
+that is not why it produces 30.63 % CER.
+
+**And the spec mixed units.** §8.64's 5.26 % was a MEAN OF PER-PAGE inversion
+rates; the 11.54 % above is POOLED over all pairs. Same errors, two averagings —
+precisely the macro/micro distinction that already produced a wrong verdict in
+§8.53, committed again three sections later.
+
+**What survives is the negative result, and it is the useful part.** A ranker at
+5.26 % page-mean inversions produces **30.63 %** CER while random swaps at
+15.61 % produce **23.10 %**. Whatever the averaging, **a lower inversion rate is
+giving a much worse CER** — so the inversion metric does not order candidate
+orderings the way CER does, and no budget expressed in it is trustworthy.
+
+**The corrected spec is therefore trivial and honest: evaluate on CER.** Any
+future ordering model must be measured end-to-end against the 20.27 % that
+line-level ordering already achieves, on holdout, with a bootstrap interval.
+Inversions remain useful for LOCALISING a defect — that is how §8.41 found
+`omni-0038`'s interleave — but not for gating a change. That is the same
+conclusion §8.53 reached about a different proxy, and it is now the second time
+this campaign has been misled by optimising a stand-in for the shipping metric.
+
+**The durable rule**: this campaign has now been burned twice by proxies —
+page-weighted inversions for character-weighted CER (§8.53), and region
+inversions for end-to-end CER (here). **Gate on the metric that ships. Use
+proxies to find bugs, never to accept changes.**
 
 ## 9. Pure-Rust boundary and watchlist
 
