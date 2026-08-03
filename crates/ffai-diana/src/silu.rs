@@ -110,7 +110,7 @@ fn old_rounding() -> bool {
 /// campaign built. Runtime feature detection is cached; the crate is
 /// compiled for the x86-64 baseline so a published binary still runs on a
 /// machine without AVX2.
-fn avx2_enabled() -> bool {
+pub(crate) fn avx2_enabled() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
     static C: AtomicU8 = AtomicU8::new(u8::MAX);
     match C.load(Ordering::Relaxed) {
@@ -152,6 +152,21 @@ const PAR_THRESHOLD: usize = 1 << 16;
 /// activation whose whole cost is memory traffic meant paying that traffic
 /// three times over.
 pub fn silu(x: &Tensor) -> Result<Tensor> {
+    // SiLU CANNOT BE PRICED BY ABLATION — measured, not assumed.
+    //
+    // Replacing it with the identity to time its cost made the pipeline
+    // SLOWER: 49.7 ms against 45.1 ms, six pairs, ABBA. Removing work cannot
+    // save negative time, so the arms were not doing the same work
+    // (`codec-measurement` §4). Without SiLU's saturation the activations run
+    // unbounded through sixty layers and the downstream arithmetic almost
+    // certainly lands in denormals, which are orders of magnitude slower on
+    // x86.
+    //
+    // The ablation toggle was deleted rather than documented, because an
+    // instrument that answers backwards is worse than no instrument. It also
+    // means the profiler's 8.7 % share for this bucket has no independent
+    // confirmation, and the "silu costs 6.4 ms/image" figure should be
+    // treated as unverified.
     crate::cpuop::SliceOp::new("ffai-silu", |xs, l| {
         // Counted HERE, above the threshold branch, because a counter placed
         // inside it can only ever see calls that already passed it. That is
@@ -422,3 +437,5 @@ pub fn take_silu_split() -> (u64, u64, u64, u64) {
         SILU_CALLS_BIG.swap(0, Relaxed),
     )
 }
+
+

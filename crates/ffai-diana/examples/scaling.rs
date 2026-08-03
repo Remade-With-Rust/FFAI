@@ -15,6 +15,10 @@
 //!
 //! Min-of-N, because the floor is the honest number for a scaling curve: the
 //! tail is scheduler noise and this box's clock drifts more than the effect.
+// The shipped allocator; examples do not inherit the binary's.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use ffai_core::engine::{DetectEngine, DetectOptions};
 use std::time::Instant;
 

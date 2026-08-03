@@ -12,6 +12,7 @@
 //! refuses a file that says otherwise, because unfused weights would be a
 //! different forward pass rather than a slower one.
 
+use rayon::prelude::*;
 use candle_core::{Result, Tensor, D};
 use candle_nn::{conv2d, Conv2d, Conv2dConfig, Module, VarBuilder};
 
@@ -23,6 +24,22 @@ fn dwconv_disabled() -> bool {
 }
 
 /// Escape hatch back to candle's own SiLU.
+/// `FFAI_DIANA_NO_FUSE=1` restores the unfused epilogue — bias as a
+/// `broadcast_add`, activation as a separate downstream op — so the fusion
+/// can be A/B'd in one process and the oracle run against both arms.
+fn fuse_disabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static C: AtomicU8 = AtomicU8::new(u8::MAX);
+    match C.load(Ordering::Relaxed) {
+        u8::MAX => {
+            let off = std::env::var("FFAI_DIANA_NO_FUSE").is_ok_and(|v| v == "1");
+            C.store(off as u8, Ordering::Relaxed);
+            off
+        }
+        v => v == 1,
+    }
+}
+
 fn silu_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
@@ -62,17 +79,83 @@ fn pointwise_disabled() -> bool {
 /// (`examples/conv_scaling.rs`), at both 1 and 24 threads. This is the
 /// "look for hot loops that are secretly matmuls" law: a tuned GEMM beats a
 /// hand-rolled loop, and candle already ships the tuned GEMM.
-fn pointwise_matmul(x: &Tensor, w: &Tensor, b: Option<&Tensor>) -> Result<Tensor> {
+fn pointwise_matmul(x: &Tensor, w: &Tensor, b: Option<&Tensor>, act: bool) -> Result<Tensor> {
     let (n, c_in, h, wd) = x.dims4()?;
     let c_out = w.dim(0)?;
     // (Co, Ci, 1, 1) -> (Co, Ci); (1, Ci, H, W) -> (Ci, H*W)
     let w_mat = w.reshape((c_out, c_in))?;
     let x_mat = x.reshape((n * c_in, h * wd))?;
-    let mut y = w_mat.matmul(&x_mat)?; // (Co, H*W)
-    if let Some(b) = b {
-        y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
+    let y = w_mat.matmul(&x_mat)?; // (Co, H*W)
+
+    // Bias and activation in ONE traversal of the matmul's output.
+    //
+    // Unfused this is a `broadcast_add` — allocate a tensor, read and write
+    // every element to add one number per channel — followed downstream by
+    // SiLU as its own candle op with its own traversal. Two passes to apply
+    // two elementwise functions to a buffer that is already right here.
+    //
+    // This was tried once before on the 3x3 path and measured 18/21 AGAINST.
+    // That refutation was taken on the system allocator, and the allocator
+    // has since changed the whole pipeline by 1.64x —
+    // `codec-measurement` §11: a refutation expires when its baseline moves.
+    // Re-tested here rather than assumed dead, and gated so the A/B needs no
+    // rebuild.
+    if fuse_disabled() || !act {
+        let mut y = y;
+        if let Some(b) = b {
+            y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
+        }
+        return y.reshape((n, c_out, h, wd));
     }
-    y.reshape((n, c_out, h, wd))
+    let hw = h * wd;
+    let bias_v: Option<Vec<f32>> = match b {
+        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+        None => None,
+    };
+    let out = crate::cpuop::SliceOp::new("ffai-1x1-epilogue", move |ys, _| {
+        let n_out = ys.len();
+        let mut v: Vec<f32> = Vec::with_capacity(n_out);
+        {
+            let spare = &mut v.spare_capacity_mut()[..n_out];
+            let avx2 = crate::silu::avx2_enabled();
+            let fill = |(o, dst): (usize, &mut [std::mem::MaybeUninit<f32>])| {
+                let src = &ys[o * hw..(o + 1) * hw];
+                let bo = bias_v.as_ref().map_or(0.0, |b| b[o]);
+                for (d, s) in dst.iter_mut().zip(src) {
+                    d.write(*s + bo);
+                }
+                // SAFETY: every element of `dst` was written by the loop above.
+                #[allow(unsafe_code)]
+                let dst: &mut [f32] = unsafe {
+                    std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<f32>(), dst.len())
+                };
+                if avx2 {
+                    // SAFETY: avx2+fma verified at runtime.
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        crate::silu_avx2::silu_in_place(dst)
+                    }
+                } else {
+                    for e in dst.iter_mut() {
+                        *e = crate::silu::silu_scalar_pub(*e);
+                    }
+                }
+            };
+            if crate::parallel::serial_kernels() {
+                spare.chunks_mut(hw).enumerate().for_each(fill);
+            } else {
+                spare.par_chunks_mut(hw).enumerate().for_each(fill);
+            }
+        }
+        // SAFETY: `c_out` chunks of `hw` cover exactly `n_out`, all written.
+        #[allow(unsafe_code)]
+        unsafe {
+            v.set_len(n_out)
+        };
+        Ok((v, (c_out, hw).into()))
+    })
+    .run(&y)?;
+    out.reshape((n, c_out, h, wd))
 }
 
 /// A fused convolution with an optional SiLU.
@@ -147,6 +230,16 @@ impl Module for ConvAct {
         // from every sum in the report. High call count, so its own overhead
         // is real — read it, then stop enabling it.
         crate::profile::timed(|p| &p.conv, || {
+            // Can the 1x1 path absorb its own activation? Only when it IS the
+            // path taken and the activation is ours to apply — the condition
+            // mirrors the dispatch below rather than approximating it,
+            // because getting it wrong yields a WRONG graph, not a slow one.
+            let pw_fused = self.act
+                && !silu_disabled()
+                && !fuse_disabled()
+                && !self.depthwise
+                && self.kind == ConvKind::Pointwise
+                && !pointwise_disabled();
             // `FFAI_DIANA_NO_DWCONV=1` restores candle's grouped path — the
             // A/B arm and the shipped fallback in one knob, so the oracle
             // comparison needs no rebuild.
@@ -173,7 +266,7 @@ impl Module for ConvAct {
                 })?
             } else if self.kind == ConvKind::Pointwise && !pointwise_disabled() {
                 crate::profile::timed(|p| &p.conv1x1, || {
-                    pointwise_matmul(x, self.conv.weight(), self.conv.bias())
+                    pointwise_matmul(x, self.conv.weight(), self.conv.bias(), pw_fused)
                 })?
             } else if self.kind == ConvKind::Dense3x3 {
                 crate::profile::timed(|p| &p.conv3x3, || {
@@ -186,7 +279,13 @@ impl Module for ConvAct {
             } else {
                 self.conv.forward(x)?
             };
-            if self.act {
+            // `!pw_fused` because the 1x1 epilogue has ALREADY applied it.
+            // Without this the activation runs twice — silu(silu(x)) — which
+            // is not a shape error, not a panic, and not caught by any unit
+            // test of either piece: both are individually correct. It surfaced
+            // as the determinism test reporting "no detections to compare",
+            // sixty layers downstream of the mistake.
+            if self.act && !pw_fused {
                 crate::profile::timed(|p| &p.act, || {
                     if silu_disabled() {
                         candle_nn::ops::silu(&y)
@@ -571,5 +670,36 @@ impl Module for C2psa {
             b = blk.forward(&b)?;
         }
         self.cv2.forward(&Tensor::cat(&[&a, &b], 1)?)
+    }
+}
+
+
+#[cfg(test)]
+mod pw_fusion_tests {
+    use super::*;
+    use candle_core::Device;
+
+    /// The fused 1x1 epilogue must equal bias-then-SiLU exactly.
+    #[test]
+    fn fused_pointwise_equals_unfused() {
+        let dev = Device::Cpu;
+        let (c_in, c_out, h, w) = (4usize, 6usize, 5usize, 7usize);
+        let xs: Vec<f32> = (0..c_in * h * w).map(|i| (i % 19) as f32 * 0.3 - 2.0).collect();
+        let ws: Vec<f32> = (0..c_out * c_in).map(|i| (i % 11) as f32 * 0.2 - 0.9).collect();
+        let bs: Vec<f32> = (0..c_out).map(|i| i as f32 * 0.17 - 0.3).collect();
+        let x = Tensor::from_vec(xs, (1, c_in, h, w), &dev).unwrap();
+        let wt = Tensor::from_vec(ws, (c_out, c_in, 1, 1), &dev).unwrap();
+        let b = Tensor::from_vec(bs, (c_out,), &dev).unwrap();
+
+        let fused = pointwise_matmul(&x, &wt, Some(&b), true).unwrap();
+        let unfused =
+            crate::silu::silu(&pointwise_matmul(&x, &wt, Some(&b), false).unwrap()).unwrap();
+
+        assert_eq!(fused.dims(), unfused.dims(), "shape diverged");
+        let f = fused.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let u = unfused.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        for (i, (a, e)) in f.iter().zip(&u).enumerate() {
+            assert_eq!(a.to_bits(), e.to_bits(), "element {i}: fused {a} vs unfused {e}");
+        }
     }
 }

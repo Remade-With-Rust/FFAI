@@ -56,6 +56,35 @@ pub fn available() -> bool {
 #[allow(unsafe_code)]
 pub unsafe fn silu_into(src: &[f32], dst: &mut [f32]) {
     assert_eq!(src.len(), dst.len(), "silu_avx2: length mismatch");
+    // SAFETY: equal lengths, both valid for `len` floats.
+    unsafe { silu_ptr(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
+}
+
+/// SiLU over a buffer IN PLACE — what a fused epilogue needs.
+///
+/// The kernel loads lane `i` before storing lane `i`, so `src == dst` is
+/// correct. It cannot be written as `silu_into(x, x)` because that would hold
+/// a shared and a unique reference to one buffer, so both wrappers go through
+/// the raw-pointer core and there remains exactly ONE copy of the polynomial.
+///
+/// # Safety
+///
+/// Caller must have checked [`available`].
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
+pub unsafe fn silu_in_place(x: &mut [f32]) {
+    // SAFETY: one buffer, valid for its length; load-before-store per lane.
+    unsafe { silu_ptr(x.as_ptr(), x.as_mut_ptr(), x.len()) }
+}
+
+/// # Safety
+///
+/// `src`/`dst` valid for `n` floats. They MAY alias exactly.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
+unsafe fn silu_ptr(src: *const f32, dst: *mut f32, n: usize) {
     // The same constants the scalar kernel derives, for the same reason:
     // hand-typed decimals here once silently selected a different f32 and
     // broke the oracle, so the compiler computes them.
@@ -73,10 +102,9 @@ pub unsafe fn silu_into(src: &[f32], dst: &mut [f32]) {
     let (c4, c5) = (_mm256_set1_ps(L4), _mm256_set1_ps(L5));
     let bias = _mm256_set1_epi32(0x3f80_0000u32 as i32);
 
-    let n = src.len();
     let mut i = 0usize;
     while i + 8 <= n {
-        let x = _mm256_loadu_ps(src.as_ptr().add(i));
+        let x = _mm256_loadu_ps(src.add(i));
         // t = clamp(-x * log2e)
         let t = _mm256_min_ps(_mm256_max_ps(_mm256_mul_ps(_mm256_sub_ps(_mm256_setzero_ps(), x), log2e), lo), hi);
         // Round by float addition: z = t + MAGIC, n = z - MAGIC, f = t - n.
@@ -108,13 +136,21 @@ pub unsafe fn silu_into(src: &[f32], dst: &mut [f32]) {
         ));
         // Same reasoning: mul then add, matching `1.0 + exp_fast(-x)`.
         let y = _mm256_div_ps(x, _mm256_add_ps(_mm256_mul_ps(p, scale), one));
-        _mm256_storeu_ps(dst.as_mut_ptr().add(i), y);
+        _mm256_storeu_ps(dst.add(i), y);
         i += 8;
     }
     // Scalar tail — the same function the oracle uses, so the tail cannot
     // drift from the body.
     for j in i..n {
-        dst[j] = crate::silu::silu_scalar_pub(src[j]);
+        *dst.add(j) = crate::silu::silu_scalar_pub(*src.add(j));
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[allow(unsafe_code)]
+pub unsafe fn silu_in_place(x: &mut [f32]) {
+    for v in x.iter_mut() {
+        *v = crate::silu::silu_scalar_pub(*v);
     }
 }
 

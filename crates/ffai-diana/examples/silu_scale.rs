@@ -88,8 +88,29 @@ fn main() {
             cbest = cbest.min(ms);
         }
         let cgelem = n as f64 / (cbest / 1e3) / 1e9;
-        println!("threads={threads:<2}  WARM {best:7.3} ms {gelem:5.2} Gelem/s (speedup {sp:.2}x)   COLD {cbest:7.3} ms {cgelem:5.2} Gelem/s   warm/cold {:.2}x",
-                 cbest / best);
+
+        // THIRD ARM: cold input AND a fresh, non-recyclable output.
+        //
+        // The two arms above free each output immediately, so the allocator
+        // hands back the same hot block every iteration and the output write
+        // never pays write-allocate. The pipeline does the opposite: the
+        // output is a new buffer, allocated while dozens of others are live,
+        // and the next layer holds it. Keeping the results alive here
+        // reproduces that and is the only way to price it.
+        let mut keep: Vec<candle_core::Tensor> = Vec::with_capacity(reps);
+        let mut fbest = f64::MAX;
+        for r in 0..reps {
+            let t = Instant::now();
+            let out = pool.install(|| ffai_diana::silu::silu(&cold[r % cold.len()]).unwrap());
+            let ms = t.elapsed().as_secs_f64() * 1e3;
+            fbest = fbest.min(ms);
+            keep.push(out); // alive -> the allocator cannot recycle it
+        }
+        let fgelem = n as f64 / (fbest / 1e3) / 1e9;
+        std::hint::black_box(&keep);
+        drop(keep);
+        println!("threads={threads:<2}  WARM {best:6.3} ms {gelem:5.2} G/s   COLD-IN {cbest:6.3} ms {cgelem:5.2} G/s   COLD-IN+FRESH-OUT {fbest:6.3} ms {fgelem:5.2} G/s   fresh/warm {:.2}x",
+                 fbest / best);
     }
 }
 

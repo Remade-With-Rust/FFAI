@@ -30,6 +30,12 @@
 //! Arm A sets `ENV_VAR=1`; arm B leaves it unset. `mode` is `serial`
 //! (per-image latency, what the speed gate times) or `batch`.
 
+// The shipped allocator; examples are separate binaries and do not inherit
+// the one set in ffai-cli. Without this the A/B measures a configuration we
+// no longer run.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::process::Command;
 
 fn median(v: &mut [f64]) -> f64 {
