@@ -4681,6 +4681,60 @@ newspaper. Options, in honest order:
 The campaign's real result is that the algorithmic work is done and the residue
 has a name.
 
+### 8.83 A layout model buys 0.56 of a 7.39 pp prize — and the corpus splits in two
+
+§8.82 named newspapers and magazines as 78 % of the ordering damage and left one
+question open: does a layout model (DocLayout-YOLO, a PP-Structure head) touch
+it? Priced before building, per §8.77.
+
+A layout model supplies REGIONS and CLASSES. It does not supply reading order.
+So its ceiling is §8.48's construction — oracle grouping with our own ordering,
+blocks merely made contiguous, each taking the position of its first-emitted
+line — measured on the population in question:
+
+| newspaper + magazine, 632 770 chars | CER | |
+|---|---:|---|
+| A shipped | 14.28 % | |
+| B **oracle grouping, our ordering** | **13.72 %** | what a layout model buys: **0.56 pp** |
+| C oracle grouping AND order | 6.89 % | the whole prize: **7.39 pp** |
+
+**A layout model captures 7.6 % of what is available on the pages it would be
+bought for.** That is a new model, new weights and a new dependency in a
+pure-Rust toolkit, for half a point. **Refused on price**, and refused on the
+same evidence that §8.48 produced corpus-wide: grouping is not the scarce
+ingredient, sequence is.
+
+**The corpus splits into two populations with opposite bottlenecks:**
+
+| | CER | ordering headroom |
+|---|---:|---:|
+| newspaper + magazine | **14.28 %** | **7.39 pp** |
+| everything else | **29.09 %** | 2.90 pp |
+
+Editorial pages are our BEST-RECOGNISED and WORST-ORDERED; everything else is
+the reverse. Editorial is ordering-limited, the rest is recognition-limited.
+This retires a standing assumption of the campaign — that ordering work helps
+the document corpus generally. It helps a quarter of it, and on the other
+three-quarters the remaining error is characters, not sequence.
+
+**Two failure shapes seen by rendering (`render_layout.py`), both distinct from
+§8.82's story-membership argument:**
+
+* `omni-0069` (+56.3 pp, `double_column`) — a plain two-column page where we
+  ZIG-ZAG across the gutter: our sequence alternates left, right, left, right
+  while the truth runs down the left column then down the right. A column
+  failure, not an editorial one, and the worst magazine page in the holdout.
+* `omni-0116` (+44.9 pp) — a contents GRID of tiles. The truth reads
+  **row-major** across each row of tiles; we read **column-major** down each
+  column. A grid reads across, a column layout reads down, and the XY-cut
+  prefers the vertical cut in both.
+
+The grid case is worth pricing separately and is NOT one of the refuted levers:
+a true grid has regions aligned on BOTH axes, whereas text columns have no
+row alignment, so the distinction is geometric and detectable. §8.79's rule
+applies before any build — measure the base rate of grid-aligned pages first,
+because a predicate that fires on everything or nothing is not a signal.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
