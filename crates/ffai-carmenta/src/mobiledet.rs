@@ -608,5 +608,130 @@ pub fn boxes_from_probability(
             out.push(crate::boxes::DetBox { x0, y0, x1, y1, score });
         }
     }
+    split_internal_gutters(out, prob, w, h, sx, sy, bin_thr)
+}
+
+/// Split a detected line that bridges a column gutter.
+///
+/// §8.85: on `omni-0069` one component spanned both columns, so its text came
+/// out interleaved — `"...Knowledge   except that the range is 0..."`, left
+/// column then right column inside a SINGLE line. No reordering can recover
+/// that, and worse, the merged box spans 77 % of the page, so `is_spanning`
+/// fires and `xy_cut_pernode` abandons the column grid for the whole page.
+/// Three such lines out of ninety cost 56.3 pp there, and 20 lines of 26 671
+/// across the holdout carry 17 % of ALL ordering damage.
+///
+/// The gutter is visible in the evidence we already have: a column of the
+/// probability map with no text in it, running the full height of the box.
+/// Unclip dilation (`UNCLIP_LINE` = 1.5) is what closes that gap in the MASK,
+/// but the underlying map still shows it — so the split is read from the map
+/// rather than guessed from geometry.
+///
+/// **The evidence is not in the box and not in the map — it is in the PAGE.**
+/// Two rules were built and refuted on `omni-0069` first:
+///
+/// * *a gutter is a wide gap*: it is 9 map columns against a 30-row box, well
+///   under a line height, so any absolute rule keyed to line height rejects it;
+/// * *a gutter is the outlier gap on its line*: the widest interior run is 9 and
+///   the SECOND widest is 8 — a word space of nearly the same size, so dominance
+///   does not separate them either.
+///
+/// And the probability map cannot arbitrate: at the true gutter the merged boxes
+/// read max probability **1.000**. DBNet hallucinates ink across the columns,
+/// which is why the component bridged in the first place. A map-based split
+/// looks principled and is searching evidence that is not there.
+///
+/// What does separate them is that a word space falls at a random x on each
+/// line while a column gutter sits at the SAME x on every line of the page. So
+/// the gutter is established from the COVERAGE PROFILE of all boxes — columns
+/// crossed by almost no line — and any box straddling one is split there.
+///
+/// **Measured, and REFUSED as written — but the diagnosis is confirmed.** On
+/// holdout the split is BIMODAL: `omni-0069` goes 70.26 % -> **1.92 %**, its
+/// entire failure being this one defect, while `omni-0140` goes 13.03 % ->
+/// 69.26 %. Net +2.56 pp, 13 pages better and 100 worse.
+///
+/// The obvious repair — tighten `FFAI_GUTTER_COV` so only clean gutters split —
+/// was swept on TRAIN (holdout would have contaminated every number in
+/// §8.68-§8.85) and does not exist:
+///
+/// | `FFAI_GUTTER_COV` | train CER | pages |
+/// |---|---:|---|
+/// | off | **19.90 %** | — |
+/// | 0.10 | 21.89 % | 5 better, 31 worse |
+/// | 0.05 | 20.73 % | 3 better, 22 worse |
+/// | 0.02 | 20.79 % | **0 better**, 13 worse |
+/// | 0.01 / 0.00 | 19.90 % | never fires |
+///
+/// **Tightening kills the wins before the losses**, and train carries the defect
+/// at 10 of 80 pages (12.5 %, three times holdout's rate), so this is not a
+/// population artifact. Gutter CLEANLINESS does not separate the pages this
+/// helps from the pages it wrecks.
+///
+/// Left as the seam for a better predicate, defaulted OFF so nothing ships. The
+/// untried signal is `boxes::find_gutters` — the ordering path's own calibrated
+/// gutter finder — rather than this ad-hoc coverage profile.
+/// `FFAI_GUTTER_SPLIT` = 0 disables the pass.
+fn split_internal_gutters(
+    boxes: Vec<crate::boxes::DetBox>,
+    prob: &[f32],
+    w: usize,
+    h: usize,
+    sx: f32,
+    sy: f32,
+    bin_thr: f32,
+) -> Vec<crate::boxes::DetBox> {
+    if env_f32("FFAI_GUTTER_SPLIT", 0.0) <= 0.0 || boxes.len() < 8 {
+        return boxes;
+    }
+    let cov_tol = env_f32("FFAI_GUTTER_COV", 0.15);
+    let page_w = (w as f32 / sx).round().max(1.0) as usize;
+    let mut cover = vec![0u32; page_w];
+    for b in &boxes {
+        for c in cover.iter_mut().take(b.x1.min(page_w)).skip(b.x0.min(page_w)) {
+            *c += 1;
+        }
+    }
+    let peak = cover.iter().copied().max().unwrap_or(0) as f32;
+    if peak < 4.0 {
+        return boxes;
+    }
+    // A gutter must be interior — the page margins are uncovered too, and
+    // splitting there would only shave empty space off a box.
+    let (lo, hi) = (page_w / 5, page_w * 4 / 5);
+    let med_h = {
+        let mut hs: Vec<usize> = boxes.iter().map(|b| b.y1.saturating_sub(b.y0)).collect();
+        hs.sort_unstable();
+        hs[hs.len() / 2].max(1)
+    };
+    let mut gutters: Vec<usize> = Vec::new();
+    let (mut run, mut x) = (0usize, 0usize);
+    while x <= page_w {
+        let empty = x < page_w && x >= lo && x < hi && (cover[x] as f32) <= peak * cov_tol;
+        if empty {
+            run += 1;
+        } else {
+            if run >= med_h / 4 {
+                gutters.push(x - run / 2);
+            }
+            run = 0;
+        }
+        x += 1;
+    }
+    if gutters.is_empty() {
+        return boxes;
+    }
+    let mut out = Vec::with_capacity(boxes.len() + gutters.len());
+    for b in boxes {
+        let mut left = b.x0;
+        for &g in &gutters {
+            if g > left && g < b.x1 {
+                out.push(crate::boxes::DetBox { x0: left, x1: g, ..b });
+                left = g;
+            }
+        }
+        out.push(crate::boxes::DetBox { x0: left, ..b });
+    }
+    let _ = (prob, h, sy, bin_thr);
     out
 }

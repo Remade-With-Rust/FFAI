@@ -4848,6 +4848,80 @@ ceilings are understated on these pages too.
 at a rendered page did. `render_layout.py` and `render_order.py` exist for that
 reason and should be run FIRST on any new failure population, not last.
 
+### 8.86 The gutter split: diagnosis CONFIRMED, every predicate refused
+
+§8.85 found DBNet components bridging the column gutter. Building the fix took
+four attempts, and the three that failed are worth as much as the one that ran.
+
+**Wrong file.** The obvious fix is `group_lines`, which merges on VERTICAL
+overlap with no horizontal constraint. But `mobiledet-crnn` never calls it —
+"DBNet emits text LINES, so there is nothing to group", `engine.rs:385`. Each
+detector box IS a line. Fixing `group_lines` would have edited dead code and
+measured nothing.
+
+**Wrong rule, twice.** On `omni-0069`'s merged box the gutter is **9 map
+columns** against a 30-row box — far under a line height, so any absolute rule
+keyed to line height rejects it. And the widest WORD SPACE on the same line is
+**8**, so "the gutter is the outlier gap" does not separate them either.
+
+**Wrong evidence.** At the true gutter the merged boxes read **max probability
+1.000**. DBNet hallucinates ink across the columns — which is precisely why the
+component bridged. A map-based split looks principled and searches for evidence
+that is not there.
+
+**What fires.** A word space falls at a random x on each line; a column gutter
+sits at the SAME x on every line. Taking the gutter from the COVERAGE PROFILE of
+all boxes and splitting any box that straddles one works: `omni-0069` goes
+90 lines -> 93, the merges resolved.
+
+**And it is REFUSED. Holdout A/B, one variable:**
+
+| population | OFF | ON | delta | pages |
+|---|---:|---:|---:|---|
+| all holdout | **18.88 %** | 21.44 % | +2.56 pp | 13 better, 100 worse |
+| the 10 merge pages | 22.76 % | 42.84 % | +20.09 pp | 3 better, 6 worse |
+| the other 226 | 18.56 % | 19.65 % | +1.10 pp | 10 better, 94 worse |
+
+The OFF arm reproduces 18.88 % exactly — the instrument is sound.
+
+**But it is BIMODAL, and that vindicates the diagnosis completely:**
+
+| page | OFF | ON | |
+|---|---:|---:|---|
+| `omni-0069` | 70.26 % | **1.92 %** | **-68.34 pp** |
+| `omni-0001` | | | -53.72 pp |
+| `omni-0185` | | | -38.85 pp |
+| `omni-0140` | 13.03 % | 69.26 % | +56.23 pp |
+| `omni-0123` | | | +42.05 pp |
+
+`omni-0069`'s ENTIRE failure was this defect. Recognition survives the split —
+the ON text reads cleanly — so the damage elsewhere is the rule firing where no
+gutter exists and shattering every line on the page.
+
+**The adaptive switch does not exist on this signal.** Swept on TRAIN, because
+tuning on holdout would contaminate every number in §8.68-§8.85:
+
+| `FFAI_GUTTER_COV` | train CER | pages |
+|---|---:|---|
+| off | **19.90 %** | — |
+| 0.10 | 21.89 % | 5 better, 31 worse |
+| 0.05 | 20.73 % | 3 better, 22 worse |
+| 0.02 | 20.79 % | **0 better**, 13 worse |
+| 0.01 / 0.00 | 19.90 % | never fires |
+
+**Tightening kills the wins before the losses.** And the population check passes
+— train carries the defect on **10 of 80 pages (12.5 %)**, three times holdout's
+rate — so this is not a sample artifact. Gutter cleanliness does not separate
+the pages the split helps from the pages it wrecks.
+
+Kept as `FFAI_GUTTER_SPLIT`, defaulted OFF; nothing ships. The untried signal is
+`boxes::find_gutters`, the ordering path's own calibrated gutter finder, rather
+than the ad-hoc coverage profile built here.
+
+**The standing lesson.** A -68 pp page proves the defect is real and worth
+fixing; it does not license shipping the fix. Both facts are in the same
+measurement and only the paired, population-split A/B shows them together.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
