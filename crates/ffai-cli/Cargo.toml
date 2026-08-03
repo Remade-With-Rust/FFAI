@@ -1,7 +1,8 @@
 [package]
 name = "ffai-cli"
 description = "The ffai binary — a thin shell over the FFai library crates"
-version.workspace = true
+# follows its dependencies.
+version = "0.6.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

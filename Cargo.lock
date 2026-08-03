@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-bench"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "ffai-core",
  "ffai-media",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-media"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "ffai-core",
  "hound",
