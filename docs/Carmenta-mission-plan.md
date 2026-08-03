@@ -5092,6 +5092,61 @@ measured and closed: §8.68, §8.71, §8.72, §8.74, §8.78, §8.79, §8.81, §8
 PASS, 5.82 pp behind Unlimited-OCR — a gap that §8.82 localised to newspapers
 and magazines and §8.83 showed a layout model does not close.
 
+### 8.90 Editorial pages ARE detectable — and page type is not the gate
+
+If newspapers and magazines carry 78 % of the ordering damage (§8.82), the
+natural question is whether they carry a signature we could gate on. They do,
+and it does not help.
+
+**The signature, all computable at runtime from our own boxes:**
+
+| feature | editorial (n=107) | everything else (n=123) | ratio |
+|---|---:|---:|---:|
+| lines per page | 171 | 62 | **2.76x** |
+| regions per page | 18 | 8 | 2.25x |
+| ink density | 0.454 | 0.284 | 1.60x |
+| **line-width CV** | **0.322** | 0.573 | **0.56x** |
+| fraction display type | 0.008 | 0.000 | — |
+| line-height CV | 0.184 | 0.184 | **1.00x** |
+
+The strongest feature is inverted from intuition: editorial pages have MORE
+UNIFORM line widths, because columns force every line to one measure while
+ragged single-column prose varies freely. And type-size variety — the obvious
+guess for "magazines have mixed fonts" — is identical at 1.00x, refuted.
+
+**It is not the gate for the gutter split.** Every page the split helps and
+every page it hurts is a NEWSPAPER:
+
+| page | source | lines | |
+|---|---|---:|---|
+| omni-0069 | magazine | 90 | helps |
+| omni-0137 | newspaper | 251 | helps |
+| omni-0140 | newspaper | 265 | helps |
+| omni-0144 | newspaper | 447 | **hurts** |
+| omni-0148 | newspaper | 456 | **hurts** |
+| omni-0136 | newspaper | 301 | **hurts** |
+| omni-0131 | newspaper | 295 | **hurts** |
+
+Page type is constant across the outcome being predicted, so it carries zero
+information about it.
+
+**A tempting separation, refused.** Helps <= 265 lines, hurts >= 295. Seven
+points, one threshold, and no mechanism for why 265 lines is splittable and 295
+is not. Fitting it would also mean tuning on HOLDOUT, contaminating every number
+from §8.68 onward. This is §8.50's benchmark-fitting exactly, and the fact that
+it appears after six honest refutations is what makes it dangerous rather than
+promising.
+
+**The structural reason a page-type gate cannot pay.** A gate is only worth
+having if there is a different TREATMENT to apply behind it. There is not:
+every ordering alternative is refuted (§8.68-§8.84), a layout model buys 7.6 %
+of its prize on exactly this population (§8.83), and the split has no setting
+that wins (§8.89). Detecting the population we are worst on does not help while
+we have nothing better to do with it.
+
+Recorded so the question is not re-opened as though unexamined: the signature
+exists, it is strong, and it gates nothing we currently possess.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
