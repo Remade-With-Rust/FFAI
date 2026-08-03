@@ -4448,6 +4448,43 @@ ceiling §8.77 priced is real but is not reachable by geometry. What is left is
 region CLASS, and the only source of it that needs no model is cross-page
 repetition — which this benchmark, sampling pages individually, cannot reward.
 
+### 8.79 Column-relative spanning is a tautology, not a signal
+
+After §8.78 the natural next question is whether the same element grouping
+applies one scale down: a "full COLUMN line" rather than a full-page one. It is
+a real object — on the 179 multi-column holdout pages, **30 % of lines fill
+>= 90 % of their column and 49 % fill >= 60 %** — so the question is fair.
+
+Two uses, two answers.
+
+**As a grouping unit it is capped before it is written.** §8.48 measured an
+ORACLE grouping — perfect knowledge of which lines form a block — at 1.24 pp,
+10 % of the prize, against ordering's 10.65 pp. A width heuristic captures some
+fraction of what the oracle gets for free, so this is bounded well under a
+point.
+
+**As a cut signal it is worse than useless, and the reason generalises.** The
+routing test is `lines.iter().any(|l| is_spanning(...))`. A column's width is
+DEFINED by its widest line, so that line spans 100 % of it **by construction**:
+rescaling `is_spanning` to the node makes `any()` unconditionally true.
+
+Today it is unconditionally FALSE below the root for the mirror-image reason —
+`is_spanning` is measured against `page_w` at every depth, a column is ~45 % of
+page width, and `SPAN_FRAC` is 0.60. In `xy_cut_pernode`, our first pool
+candidate, `spans_something` is therefore dead everywhere except depth 0.
+
+That looks like a defect and is not one. **The page-level test is informative
+precisely BECAUSE spanning is rare there** — median 0 spanning regions per page
+(§8.76). Rarity is what makes it evidence, and rarity is a page-scale property
+that does not survive rescaling. Constant-false and constant-true carry the same
+zero bits; the root is the only regime where the test means anything.
+
+The general form, which has now cost this campaign three sections (§8.39, §8.78,
+this one): **a geometric predicate is evidence only at the scale where its
+positives are rare.** Before reusing one at a new scale, measure its base rate
+there — if it fires on half the units, or on all of them, it is not a signal
+however sound the intuition behind it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
