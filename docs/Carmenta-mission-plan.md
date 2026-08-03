@@ -4785,6 +4785,69 @@ on editorial pages is reading order that requires knowing the document, and
 §8.83's split says the other three-quarters of the corpus is
 recognition-limited anyway.
 
+### 8.85 A real defect found by LOOKING: lines merged across the gutter
+
+Reviewing the rendered failures turned up something no aggregate had, and it is
+upstream of every lever §8.68-§8.84 measured.
+
+On `omni-0069` — the worst magazine page, +56.3 pp — the emitted sequence makes
+**79 column changes in 90 lines**: near-perfect raster. The cause is in the first
+line of the dump, which spans 77 % of the page:
+
+```
+'pher Script +10, Gather Information +9, Knowledge   except that the range is 0 and the effect is a cloud that'
+   ^ left column                                       ^ right column
+```
+
+**`group_lines` merged a left-column line with a right-column line.** Two
+consequences, both fatal and neither recoverable by ordering:
+
+1. the text is interleaved INSIDE the line, so no permutation can fix it;
+2. the merged box spans 77 %, so `is_spanning` fires, `xy_cut_pernode` sees
+   `spans = true`, abandons the gutter grid, and the page falls to raster.
+
+**Three bad lines out of ninety destroy the ordering of the whole page.**
+
+**Scale.** Gutter-merged lines are rare and concentrated:
+
+| | |
+|---|---:|
+| merged lines | 20 of 26 671 (**0.1 %**) |
+| pages affected | 10 of 236 (4 %) |
+| CER on those pages | **22.76 %** vs 18.56 % |
+| share of ALL ordering damage | **1.03 pp of 6.00 pp = 17 %** |
+
+Six of the ten are newspaper — the population §8.82 identified. This is a larger
+prize than several levers chased this campaign (§8.77's 0.92 pp, §8.83's
+0.56 pp) and it comes from 0.1 % of lines.
+
+**The amplification is real; the routing logic is NOT the fix.** `any()` looks
+fragile and replacing it with a fraction was the obvious repair. Measured, it is
+refuted:
+
+| `FFAI_SPAN_TOL` | CER |
+|---|---:|
+| 0.0 (shipped `any()`) | **18.63 %** |
+| 0.01 | 21.08 % (+2.45) |
+| 0.10 | 21.75 % (+3.12) |
+| 0.50 | 21.87 % (+3.24) |
+
+Every value worse. The strictness is load-bearing for exactly the reason §8.29
+built it: a genuine spanning headline sliced by a vertical cut costs far more
+than the rare merged line saves. Reverted, with the numbers recorded in the
+code so the "obvious" repair is not attempted a third time.
+
+**So the fix belongs in `group_lines`** — do not join boxes across a column
+gutter — which is detection, not ordering, and is the first defect in this
+campaign that is neither a threshold nor a rule but a straightforward bug. Its
+ceiling is at least the 1.03 pp above, and likely more: the oracle-order
+measurements in §8.68-§8.84 all reorder these same broken lines, so their
+ceilings are understated on these pages too.
+
+**Method note.** Fourteen sections of aggregates never surfaced this. One look
+at a rendered page did. `render_layout.py` and `render_order.py` exist for that
+reason and should be run FIRST on any new failure population, not last.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

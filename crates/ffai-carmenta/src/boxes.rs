@@ -711,6 +711,14 @@ fn xy_cut_pernode(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<V
     if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
         return sorted_by_y(lines);
     }
+    // `any()` looks fragile — ONE spurious wide line abandons the column grid
+    // for the whole node, and on `omni-0069` three gutter-merged lines out of
+    // ninety cost 56.3 pp (§8.85). Replacing it with a FRACTION was measured
+    // and is REFUTED: tolerance 0.01 costs +2.45 pp and 0.50 costs +3.24 pp,
+    // every value worse. The strictness is load-bearing for the reason §8.29
+    // built it — a genuine spanning headline sliced by a vertical cut costs far
+    // more than the rare merged line saves. The defect is upstream, in line
+    // grouping, not here.
     let spans = lines.iter().any(|l| is_spanning(&line_bbox(l), page_w));
     if !spans {
         let gutters = find_gutters(&lines, page_w);
