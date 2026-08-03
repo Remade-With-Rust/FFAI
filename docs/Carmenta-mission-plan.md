@@ -3453,6 +3453,63 @@ re-running the benchmark that still quoted the pre-`pernode` number (§8.57).
 new weights, no discovered formula — a fix that had landed and a benchmark that
 had not been re-run.
 
+### 8.59 The last two constants — and the definitive answer on Prometheus
+
+§8.47's ordering prize, re-measured after `pernode`:
+
+| 236 holdout pages | CER |
+|---|---:|
+| shipped | **20.27 %** |
+| oracle ordering | 12.85 % |
+| **remaining prize** | **7.42 pp** |
+
+`pernode` captured **4.53 pp** of the original 11.95 — matching its −4.50 pp CER
+exactly, from an independent measurement. So slack remains, and with the axis
+rule exonerated (§8.55, 25/25 correct) it lives in the GRID path: `find_gutters`.
+
+Its two governing constants are the only ones on the hot path never swept in any
+campaign, and §8.54 gave positive reason to expect drift — they are load-bearing
+in a way nobody designed, acting as an accidental depth-dependent brake:
+
+| GUTTER_MIN_FRAC | CER | MARGIN_FRAC | CER |
+|---|---:|---|---:|
+| 0.012 | 21.10 % | 0.04 | 21.10 % |
+| **0.025 (shipped)** | **21.10 %** | **0.08 (shipped)** | 21.10 % |
+| 0.045 | 25.47 % | 0.14 | 21.10 % |
+
+`GUTTER_MIN_FRAC` sits at the edge of a plateau — lowering changes nothing,
+raising costs 4.4 pp. At optimum. `MARGIN_FRAC` is **identical across 3.5x**: the
+gutters on these pages sit well inside the page margins so the exclusion never
+fires. **A non-binding knob, the fifth this session**, and it would have been
+recorded as "flat, refuted" without checking the digits.
+
+**The definitive answer.** Prometheus has now been applied to Carmenta across a
+full refinery loop and six constants:
+
+| target | fires on | verdict |
+|---|---|---|
+| cut-axis rule | 25 / 1178 nodes | full loop run; −0.02 pp holdout |
+| unclip ratio | every box | shipped 1.5 optimal |
+| DB binarisation | every pixel | 0.09 pp spread — flat |
+| detector `min_side` | every image | native optimal; upscaling worse |
+| `GUTTER_MIN_FRAC` | every grid node | at plateau edge — optimal |
+| `MARGIN_FRAC` | every grid node | non-binding on this corpus |
+
+**Not one has slack.** These constants were set by measurement in earlier
+campaigns and the measurements held. Symbolic discovery replaces badly-guessed
+formulas; **Carmenta has none left on this path.**
+
+Meanwhile the 7.42 pp that remains is ordering, and §8.51/§8.52 measured that
+reading order is not recoverable from box geometry — not by a rule, not by a
+learned ranker over the same features, not with hand-crafted text flags. **A
+refinery cannot discover a fact its inputs do not contain.** Closing the rest
+needs layout semantics: region classes, or a text-embedding sequence model. That
+is a new model, and it is the honest recommendation.
+
+**What closed 2.15 pp today**, by contrast, was neither clever nor discovered:
+`pernode` landed (§8.53), and the benchmark still quoting the pre-`pernode`
+number was re-run (§8.57). **25.91 % -> 23.76 %, deficit 10.40 pp -> 8.25 pp.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

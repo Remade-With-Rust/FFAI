@@ -243,6 +243,10 @@ const GUTTER_MIN_FRAC: f32 = 0.025;
 const MARGIN_FRAC: f32 = 0.08;
 
 /// Interior vertical gaps that NO column-content box crosses.
+fn env_f32(key: &str, default: f32) -> f32 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
 fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
     if page_w == 0 {
         return Vec::new();
@@ -325,8 +329,14 @@ fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, usize)> {
         }
         eprintln!("cols: page_w={page_w} span_w={span_w} free-runs={runs:?}");
     }
-    let (min_w, margin) =
-        ((page_w as f32 * GUTTER_MIN_FRAC) as usize, (page_w as f32 * MARGIN_FRAC) as usize);
+    // Env-overridable so the ceiling can be checked without a rebuild. These two
+    // are the only find_gutters constants never swept in any campaign, and the
+    // grid path they gate is where §8.47's remaining 7.42 pp of ordering slack
+    // lives now that the axis rule is exonerated (§8.55, 25/25 correct).
+    let (min_w, margin) = (
+        (page_w as f32 * env_f32("FFAI_GUTTER_MIN", GUTTER_MIN_FRAC)) as usize,
+        (page_w as f32 * env_f32("FFAI_MARGIN", MARGIN_FRAC)) as usize,
+    );
     let mut out = Vec::new();
     // Sweep the NODE's extent, not the page's. Outside it every column is free,
     // and those voids are not gutters — they were previously rejected only
