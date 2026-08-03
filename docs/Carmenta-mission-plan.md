@@ -4485,6 +4485,66 @@ positives are rare.** Before reusing one at a new scale, measure its base rate
 there — if it fires on half the units, or on all of them, it is not a signal
 however sound the intuition behind it.
 
+### 8.80 Furniture barely exists — and ordering runs BEFORE recognition
+
+Two facts found while inventorying what could supply region CLASS. The first
+corrects §8.75-§8.77.
+
+**Furniture is 0.8 % of this corpus.** Holdout region classes:
+
+| class | n |
+|---|---:|
+| text_block | 2865 |
+| title | 816 |
+| figure_caption | 137 |
+| header / page_number / footer | **13 / 9 / 8** |
+
+Thirty regions of 3848. §8.75 through §8.77 reasoned at length about separating
+structural elements from furniture, and §8.76 measured 94 % of spanning
+elements to be true boundaries in BOTH the single- and multi-column buckets —
+this is why. **There was almost nothing to separate.** Cross-page repetition
+(§8.77) would work and would be chasing 0.8 % of regions; it stays a real
+product feature for PDFs and is not a lever on this benchmark or, more
+honestly, on this problem.
+
+The live class question is `text_block` vs `title`, 96 % of all regions, and
+free text features separate them:
+
+| class | n | Fig/Table prefix | numeric only | <= 60 chars |
+|---|---:|---:|---:|---:|
+| text_block | 2865 | 0 % | 0 % | **18 %** |
+| title | 816 | 1 % | 2 % | **88 %** |
+| figure_caption | 137 | **24 %** | 0 % | 45 % |
+| page_number | 9 | 0 % | **100 %** | 100 % |
+
+**`order_reading` runs inside the DETECTION stage** (`engine.rs:323`, `:385`) —
+before recognition. Ordering sees geometry and nothing else, and the text is
+computed immediately afterwards and never fed back. The richest signal we own is
+discarded by construction.
+
+**Inventory of what could supply class, and what each is worth:**
+
+| tool | have it? | sized to the problem? |
+|---|---|---|
+| recognised TEXT (length, prefix, numerals) | yes, free | class yes -> but class mostly buys GROUPING, capped 1.24 pp (§8.48) |
+| text CONTINUITY across a column join | yes, free | **yes — attacks ordering, the 90 %** |
+| line height | yes | weak: 1.15x median structural vs 1.08x furniture (§8.76) |
+| layout model (DocLayout-YOLO, PP-Structure head) | **no** — none on disk | real semantics, ~10-30 M params on the candle spine; new dependency |
+| train a classifier on the train split | labels exist | same 1.24 pp grouping cap |
+
+**The conclusion is that CLASS is the wrong target.** Class buys grouping and
+§8.48 capped all grouping — with an ORACLE — at 1.24 pp. What is large is
+ordering (10.65 pp), and §8.74 localised 1.91 pp of it in the SELECTION RULE,
+which today scores candidates by leftward resets: pure geometry, the exact
+channel §8.68-§8.79 exhausted.
+
+Text continuity is the one available signal that is not geometry. A column
+ending `"incon-"` and one beginning `"clusive"` is direct evidence of
+adjacency, and no projection over boxes can contain it. That requires ordering
+to move after recognition, or a re-ordering pass to be added — which is an
+architectural change, and the first one this campaign has had a measured reason
+to make.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
