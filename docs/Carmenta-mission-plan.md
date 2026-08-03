@@ -3849,6 +3849,61 @@ page-weighted inversions for character-weighted CER (§8.53), and region
 inversions for end-to-end CER (here). **Gate on the metric that ships. Use
 proxies to find bugs, never to accept changes.**
 
+### 8.67 The eighth target is not on this path — and the search is closed
+
+`group_lines` was the strongest remaining candidate on paper: two hand-set
+constants (a 50 % vertical-overlap merge rule and a 3-line lookback), firing on
+every box, and independently implicated — §8.36 named "tilt-sensitive line
+grouping" as the diagnosed cause of the photo-domain gap.
+
+Exposed via `FFAI_LINE_OVERLAP` / `FFAI_LINE_BACK` and swept:
+
+| overlap | CER | lookback | CER |
+|---|---:|---|---:|
+| 0.3 | 21.10 % | 2 | 21.10 % |
+| **0.5 (shipped)** | 21.10 % | **3 (shipped)** | 21.10 % |
+| 0.7 | 21.10 % | 6 | 21.10 % |
+
+Six identical figures — the "too clean to be real" tell, for the sixth time this
+session. Checked with extremes: `overlap=0.01` and `overlap=0.99` produce
+**byte-identical output**. The knob does not bind.
+
+**Because `group_lines` is not on the document path at all.** `DetStage::MobileDet`
+builds boxes straight from DBNet's probability map, and DB emits LINE-level
+regions — each detected box already is a line. `group_lines` serves the CRAFT
+path, which is precisely where §8.36 diagnosed the tilt sensitivity, on CORD
+photographs with `craft-parseq`.
+
+**Not applicable, not refuted** — a distinction worth keeping, because the
+constants may well have slack on the photo path where they do bind. That is a
+different corpus and a different campaign.
+
+**The search is closed.** Eight targets examined against §8.55's criteria:
+
+| target | verdict |
+|---|---|
+| cut-axis rule | full loop run; fires on 25/1178 nodes; −0.02 pp |
+| unclip ratio | shipped 1.5 optimal |
+| DB binarisation | 0.09 pp spread — flat |
+| detector `min_side` | native optimal; upscaling worse |
+| `GUTTER_MIN_FRAC` | at plateau edge — optimal |
+| `MARGIN_FRAC` | non-binding on this corpus |
+| ink discriminator | separates, ~1.8 bands/page — too rare to pay for |
+| `group_lines` constants | **not on the document path** |
+
+**Prometheus cannot close this gap**, and that is now measured eight ways rather
+than argued. Its premise is that a human-guessed formula is leaving value on the
+table; on this path, none is. What remains is 7.42 pp of ordering slack that
+§8.51/§8.52/§8.64 show is not reachable from box geometry by rule, by learned
+ranker, by text features, or by region detection — and §8.66 established that
+even measuring progress on it requires the shipping metric, because every proxy
+tried has misled.
+
+**What did close the gap today**: `pernode` (§8.53) and re-running the benchmark
+that still quoted the pre-`pernode` number (§8.57). **25.91 % -> 23.76 %,
+deficit 10.40 pp -> 8.25 pp**, holdout **201/236 FAIL at 24.77 % -> 236/236 PASS
+at 20.27 %** — no new weights, no new model, no speed cost.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

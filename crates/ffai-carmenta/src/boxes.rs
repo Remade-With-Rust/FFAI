@@ -90,11 +90,18 @@ pub fn group_lines(mut boxes: Vec<DetBox>) -> Vec<Vec<DetBox>> {
     boxes.sort_by_key(|b| b.y0 + b.y1); // by vertical center ×2
     let mut lines: Vec<Vec<DetBox>> = Vec::new();
     for b in boxes {
-        let joined = lines.iter_mut().rev().take(3).find(|line| {
+        // Both constants here are hand-set and fire on EVERY box: the overlap
+        // fraction that merges a box into a line, and how far back the search
+        // looks. Env-overridable so their ceilings can be checked without a
+        // rebuild -- §8.56's rule, applied to the last unexamined pair.
+        let frac = env_f32("FFAI_LINE_OVERLAP", 0.5);
+        let back = std::env::var("FFAI_LINE_BACK").ok()
+            .and_then(|v| v.parse().ok()).unwrap_or(3usize);
+        let joined = lines.iter_mut().rev().take(back).find(|line| {
             let (ly0, ly1) = line_span(line);
             let inter = b.y1.min(ly1).saturating_sub(b.y0.max(ly0));
             let min_h = (b.y1 - b.y0).min(ly1 - ly0).max(1);
-            inter * 2 > min_h // > 50% vertical overlap with the line band
+            inter as f32 > min_h as f32 * frac
         });
         match joined {
             Some(line) => line.push(b),
