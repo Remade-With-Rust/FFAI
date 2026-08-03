@@ -5026,6 +5026,72 @@ Every ordering and detection lever is now measured and closed. PARSeq is already
 built, already shipped, and is not the default on the document path — that is
 the next thing to price.
 
+### 8.89 Gutter merge CLOSED after six triggers; PARSeq refused on documents
+
+**PARSeq, re-tested rather than inherited.** The ledger's refutation was a
+43-page subset at an older version, which §8.53's rule says expires. Current, on
+the full document holdout:
+
+| | CER | |
+|---|---:|---|
+| shipped `mobiledet-crnn` | **18.88 %** | |
+| `mobiledet-parseq` | **26.05 %** | +7.17 pp, 32 better / **199 worse** |
+
+Refused, and now on current evidence.
+
+**The white-corridor split, confirmed on holdout.** Selected on train at 1.0
+(§8.88) and carried across exactly once:
+
+| population | OFF | ON | delta | pages |
+|---|---:|---:|---:|---|
+| all holdout | 18.88 % | 19.77 % | +0.89 pp | 9 better, 29 worse |
+| the 10 merge pages | 22.76 % | 29.45 % | +6.70 pp | **5 better, 3 worse** |
+| the other 226 | 18.56 % | 18.96 % | +0.40 pp | 4 better, 26 worse |
+
+**`omni-0069` reproduces at -68.3 pp**, with `omni-0137` -18.6 and `omni-0140`
+-8.8, and MORE merge pages improve than regress. The diagnosis is right and the
+surgery works. It is broken by `omni-0144` (+37.7) and `omni-0148` (+34.7) —
+themselves merge pages, where the same trigger fires in the wrong place.
+
+**The width gate — principled, and anti-correlated.** The damage mechanism is
+specifically that a box wider than `SPAN_FRAC` makes `is_spanning` fire and
+collapses the page to raster, so a narrow box carrying a corridor is all risk
+and no reward. Restricting the split to wide boxes is derived, not fitted. It is
+WORSE:
+
+| population | OFF | ON | delta | pages |
+|---|---:|---:|---:|---|
+| all holdout | 18.88 % | **20.03 %** | **+1.15 pp** | 3 better, 8 worse |
+| the 10 merge pages | 22.76 % | 32.99 % | +10.23 pp | 2 better, 2 worse |
+| the other 226 | 18.56 % | 18.94 % | +0.39 pp | 1 better, 6 worse |
+
+It narrowed the blast radius exactly as intended — 38 pages touched down to 11 —
+and kept the wrong 11: `omni-0069` -68.3 retained, `omni-0144` +37.7 and
+`omni-0148` +34.7 retained, `omni-0137` -18.6 and `omni-0140` -8.8 LOST.
+`omni-0137` and `omni-0140` are THREE-column pages whose merges bridge two
+columns and never reach `SPAN_FRAC` — the 16 of 20 merges §8.88 identified —
+while the damaging splits are genuinely wide. **Width is anti-correlated with
+correctness.**
+
+**Closed.** Six independent triggers, all refused: absolute width,
+outlier-dominance, probability-map emptiness, coverage cleanliness (5
+thresholds), the calibrated `find_gutters`, box height, source-pixel white
+corridor (4 thresholds), and that corridor width-gated. The best is +0.89 pp.
+
+The defect is real, worth ~1 pp, and its surgery demonstrably repairs the worst
+page in the corpus. What no geometry supplies is WHICH wide box with a white
+corridor is a merge — because the answer is whether the text either side
+continues the same sentence, and §8.81 measured content as unable to arbitrate
+reading order.
+
+Kept as `FFAI_WHITE_SPLIT` / `FFAI_WHITE_WIDE`, both defaulted OFF.
+
+**Campaign status.** Ordering, detection and recognition levers are now all
+measured and closed: §8.68, §8.71, §8.72, §8.74, §8.78, §8.79, §8.81, §8.83,
+§8.84, §8.86, §8.87, §8.88, §8.89. Shipped default remains **18.88 %**, 236/236
+PASS, 5.82 pp behind Unlimited-OCR — a gap that §8.82 localised to newspapers
+and magazines and §8.83 showed a layout model does not close.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

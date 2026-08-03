@@ -1243,10 +1243,24 @@ pub fn split_at_white_corridor(
     let lh = hs[hs.len() / 2].max(1);
     let min_run = ((lh as f32) * mult).round().max(2.0) as usize;
 
+    // ONLY boxes wide enough to do the damage. The harm a merge causes is not
+    // the interleaved text alone — it is that a box spanning `SPAN_FRAC` of the
+    // page makes `is_spanning` fire, which makes `xy_cut_pernode` abandon the
+    // column grid for the WHOLE page and fall to raster. A narrow box carrying a
+    // white corridor cannot do that, so splitting it is all risk and no reward.
+    // This is derived from the damage mechanism, not fitted: the threshold is
+    // `SPAN_FRAC` itself.
+    let span_w = (w as f32 * SPAN_FRAC) as usize;
+    let wide_only = env_f32("FFAI_WHITE_WIDE", 1.0) > 0.0;
+
     let mut out = Vec::with_capacity(boxes.len());
     for b in boxes {
         let (x0, x1) = (b.x0.min(w), b.x1.min(w));
         let (y0, y1) = (b.y0.min(h), b.y1.min(h));
+        if wide_only && x1.saturating_sub(x0) < span_w {
+            out.push(b);
+            continue;
+        }
         if x1.saturating_sub(x0) < min_run * 3 || y1 <= y0 {
             out.push(b);
             continue;
