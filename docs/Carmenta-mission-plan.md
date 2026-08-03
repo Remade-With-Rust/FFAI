@@ -5147,6 +5147,46 @@ we have nothing better to do with it.
 Recorded so the question is not re-opened as though unexamined: the signature
 exists, it is strong, and it gates nothing we currently possess.
 
+### 8.91 The line-count gate INVERTS on train — the pattern was seven-point noise
+
+§8.90 spotted that on holdout the white-corridor split helps editorial pages
+with <= 265 lines and hurts those with >= 295, and refused it as fitting. The
+refusal was right but under-argued: it cited "no mechanism", and a mechanism
+does exist — denser pages take more splits (`omni-0069` 3, `omni-0148` 6,
+`omni-0144` 11), so density gives the trigger more chances to be wrong. That
+predicts SPLITS PER PAGE as the causal variable with line count as its proxy.
+
+Both were tested on TRAIN, which carries its own merge pages and never informed
+the hypothesis. **The relationship does not weaken there — it REVERSES.**
+
+23 train pages where the split fired, 5 help and 15 hurt:
+
+| variable | HELPS | HURTS |
+|---|---|---|
+| lines | [56, 103, 108, **326**, **350**] | [25, 34, 62, 88, 88, 101, 108, 118, 124, 148, 151, 181, 202, 260, **616**] |
+| regions | [7, 14, 31, 34, 55] | [7, 8, 8, 8, 10, 16, 16, 18, 18, 19, 29, 34, 41, 49, 94] |
+| splits | [1, 1, 7, 8, 12] | [1, 2, 2, 2, 2, 2, 3, 3, 5, 9, 12, 13, 14, 26, 32] |
+
+**The two largest wins on train are `omni-0138` (326 lines, -4.12 pp) and
+`omni-0130` (350 lines, -2.81 pp)** — both newspapers, both above the proposed
+cutoff, both pages the gate would have BLOCKED. Most of the damage comes from
+SMALL pages the gate would have allowed. Splits-per-page and region count
+overlap completely and separate nothing.
+
+**The holdout ordering was coincidence.** Seven points sorted that way by
+chance; twenty-three independent ones invert it.
+
+This is the value of the train/holdout split stated concretely. The pattern was
+visually compelling, mechanically explicable, and wrong — and no amount of
+staring at the holdout table could have shown that, because the table is where
+the pattern came from. A hypothesis derived on one population can only be
+adjudicated on another.
+
+It also closes the third adaptive lever. Page type does not gate the split
+(§8.90), line count does not, region count does not, splits-per-page does not.
+Together with §8.89's six triggers, that is ten distinct gates measured and
+refused on one defect worth ~1 pp.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
