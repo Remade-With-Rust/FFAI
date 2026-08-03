@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1178,6 +1178,7 @@ dependencies = [
  "ffai-core",
  "ffai-media",
  "ffai-models",
+ "getrandom 0.3.4",
  "libmimalloc-sys",
  "mimalloc",
  "rayon",
@@ -1699,9 +1700,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if 1.0.4",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]

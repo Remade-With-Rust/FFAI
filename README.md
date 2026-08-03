@@ -3,8 +3,18 @@
 **The AI media toolkit, remade with rust.** OCR, speech recognition (ASR),
 text-to-speech (TTS), and vision-language understanding in one pure-Rust
 toolkit — built the way ffmpeg was built: libraries first, one binary on top,
-everything swappable by name. No Python runtime, no C/C++ by default, no
-gated weights.
+everything swappable by name. No Python runtime, no gated weights.
+
+**One correction to a claim this page carried for weeks:** it said "no C/C++
+by default", and that is not true. `candle-core` takes `tokenizers` as a
+hard, non-optional dependency with `features = ["onig"]`, so `onig_sys`
+compiles Oniguruma — a C regex engine — into every FFai build that touches
+candle. It is build-time only, it produces an ordinary binary with no runtime
+dependency, and it disappears on `wasm32` where candle target-gates the
+dependency out. `tokenizers` marks `onig` optional and ships a pure-Rust
+alternative, so removing it is one feature line upstream in candle rather
+than a redesign here. Stated at the top because a supply-chain claim that is
+wrong is worse than one that is qualified.
 
 Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 
@@ -502,6 +512,30 @@ number traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
 NMS-free end-to-end head — built from official Ultralytics checkpoints by an
 audited offline conversion. No Python at inference. No weights in this
 repo:** they are AGPL-3.0 and stay the user's to fetch, convert and license.
+
+Standalone landing page:
+[Remade-With-Rust/diana](https://github.com/Remade-With-Rust/diana).
+
+**Embedding it pulls detection only.** Diana has no dependency on Mercury,
+Carmenta or Argus — they are siblings, not layers underneath:
+
+| build | transitive crates | compiles C? |
+|---|---:|---|
+| `ffai-diana`, default | **138** | yes — `onig_sys` |
+| `ffai-diana` + `ffai-models/fetch` | 308 | yes — `onig_sys`, `aws-lc-sys` |
+| **`wasm32-unknown-unknown`** | **95** | **no** |
+
+The 170-crate gap on native is the Hugging Face downloader — `reqwest`,
+`hyper`, `rustls`, `aws-lc-sys` — which Diana never calls; its whole use of
+`ffai-models` is `load_dir`, reading TOML off disk. Off by default there.
+
+**The tree does compile C on native, and it is worth stating plainly because
+this README claimed otherwise for weeks.** `candle-core` takes `tokenizers` as
+a hard, non-optional dependency with `features = ["onig"]`, and `onig_sys`
+compiles Oniguruma. It is build-time only — the output is an ordinary binary
+with no runtime dependency — and it vanishes on wasm32, where candle
+target-gates that dependency out. `tokenizers` marks `onig` optional and ships
+a pure-Rust alternative, so the fix is one feature line upstream in candle.
 
 Measured on a hash-pinned **450-image** COCO holdout, CPU only, every tier in
 both geometries, each graded only against the reference declaring the same
