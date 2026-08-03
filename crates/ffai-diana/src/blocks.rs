@@ -27,7 +27,7 @@ fn dwconv_disabled() -> bool {
 /// `FFAI_DIANA_NO_FUSE=1` restores the unfused epilogue — bias as a
 /// `broadcast_add`, activation as a separate downstream op — so the fusion
 /// can be A/B'd in one process and the oracle run against both arms.
-fn fuse_disabled() -> bool {
+pub(crate) fn fuse_disabled() -> bool {
     use std::sync::atomic::{AtomicU8, Ordering};
     static C: AtomicU8 = AtomicU8::new(u8::MAX);
     match C.load(Ordering::Relaxed) {
@@ -234,6 +234,16 @@ impl Module for ConvAct {
             // path taken and the activation is ours to apply — the condition
             // mirrors the dispatch below rather than approximating it,
             // because getting it wrong yields a WRONG graph, not a slow one.
+            // Same question for the 3x3 kernels, mirroring their dispatch.
+            let k3_fused = self.act
+                && !silu_disabled()
+                && !fuse_disabled()
+                && !self.depthwise
+                && match self.kind {
+                    ConvKind::Stride2 => !conv_s2_disabled(),
+                    ConvKind::Dense3x3 => !conv3x3_disabled(),
+                    _ => false,
+                };
             let pw_fused = self.act
                 && !silu_disabled()
                 && !fuse_disabled()
@@ -261,6 +271,7 @@ impl Module for ConvAct {
                             self.conv.weight(),
                             self.conv.bias(),
                             2,
+                            k3_fused,
                         )
                     }
                 })?
@@ -273,7 +284,7 @@ impl Module for ConvAct {
                     if conv3x3_disabled() {
                         self.conv.forward(x)
                     } else {
-                        crate::conv3x3::conv3x3(x, self.conv.weight(), self.conv.bias())
+                        crate::conv3x3::conv3x3(x, self.conv.weight(), self.conv.bias(), k3_fused)
                     }
                 })?
             } else {
@@ -285,7 +296,7 @@ impl Module for ConvAct {
             // test of either piece: both are individually correct. It surfaced
             // as the determinism test reporting "no detections to compare",
             // sixty layers downstream of the mistake.
-            if self.act && !pw_fused {
+            if self.act && !pw_fused && !k3_fused {
                 crate::profile::timed(|p| &p.act, || {
                     if silu_disabled() {
                         candle_nn::ops::silu(&y)

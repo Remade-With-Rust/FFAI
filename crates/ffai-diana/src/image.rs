@@ -11,6 +11,7 @@
 //! recomputed by the caller, and travels onward in
 //! [`ffai_core::types::DetectOutput`].
 
+use rayon::prelude::*;
 use candle_core::{Device, Result as CandleResult, Tensor};
 use ffai_core::types::{ImageBuffer, Letterbox, PixelFormat};
 
@@ -83,31 +84,70 @@ pub fn letterbox_with(
         PixelFormat::Rgba8 => 4,
     };
     let mut out = vec![PAD_VALUE; 3 * size_h * size_w];
+
+    // Horizontal sample positions, computed ONCE.
+    //
+    // They were recomputed inside the pixel loop, and the pixel loop runs
+    // 273,920 times at the n tier for a 640x428 letterbox — so a divide, a
+    // floor and two clamps were being redone for every column of every row.
+    // They depend only on `x`, so `nw` of them is the whole set.
+    let xs: Vec<(usize, usize, f32)> = (0..nw)
+        .map(|x| {
+            let sx = ((x as f32 + 0.5) / scale - 0.5).clamp(0.0, (w0 - 1) as f32);
+            let x0 = sx.floor() as usize;
+            (x0, (x0 + 1).min(w0 - 1), sx - x0 as f32)
+        })
+        .collect();
+
     // Nearest-neighbour would be cheaper and visibly worse; bilinear is
     // what the reference resize does.
-    for y in 0..nh {
-        // Source coordinate of this destination row's centre.
+    //
+    // Parallel over (channel, row). This loop was entirely SERIAL while the
+    // rest of the engine fanned out over four workers, and at 12.6 % of the
+    // pipeline it was the largest single-threaded region left — `pre` is also
+    // the one stage whose profiled share is fully trustworthy, because it
+    // runs once per image and carries no per-call profiler tax.
+    //
+    // The arithmetic per output element is UNCHANGED and evaluated in the
+    // same order, so the result is byte-identical; only who evaluates it
+    // moves. The `/ 255.0` stays a division for that reason — `* (1.0/255.0)`
+    // is a different function in the last ulp, and this graph has already had
+    // one oracle breached by exactly that class of substitution.
+    let plane = size_h * size_w;
+    let fill_row = |(c, oy): (usize, usize), row: &mut [f32]| {
+        let y = oy - pad_y;
         let sy = ((y as f32 + 0.5) / scale - 0.5).clamp(0.0, (h0 - 1) as f32);
         let y0 = sy.floor() as usize;
         let y1 = (y0 + 1).min(h0 - 1);
         let fy = sy - y0 as f32;
-        for x in 0..nw {
-            let sx = ((x as f32 + 0.5) / scale - 0.5).clamp(0.0, (w0 - 1) as f32);
-            let x0 = sx.floor() as usize;
-            let x1 = (x0 + 1).min(w0 - 1);
-            let fx = sx - x0 as f32;
-            let dst = (y + pad_y) * size_w + (x + pad_x);
-            for c in 0..3 {
-                // Gray8 broadcasts its single channel; Rgba8 drops alpha.
-                let src_c = if channels == 1 { 0 } else { c };
-                let at = |yy: usize, xx: usize| -> f32 {
-                    image.data[(yy * w0 + xx) * channels + src_c] as f32 / 255.0
-                };
-                let top = at(y0, x0) * (1.0 - fx) + at(y0, x1) * fx;
-                let bot = at(y1, x0) * (1.0 - fx) + at(y1, x1) * fx;
-                out[c * size_h * size_w + dst] = top * (1.0 - fy) + bot * fy;
-            }
+        // Gray8 broadcasts its single channel; Rgba8 drops alpha.
+        let src_c = if channels == 1 { 0 } else { c };
+        let at = |yy: usize, xx: usize| -> f32 {
+            image.data[(yy * w0 + xx) * channels + src_c] as f32 / 255.0
+        };
+        for (x, &(x0, x1, fx)) in xs.iter().enumerate() {
+            let top = at(y0, x0) * (1.0 - fx) + at(y0, x1) * fx;
+            let bot = at(y1, x0) * (1.0 - fx) + at(y1, x1) * fx;
+            row[x + pad_x] = top * (1.0 - fy) + bot * fy;
         }
+    };
+    let rows = |c: usize, chan: &mut [f32]| {
+        chan.chunks_mut(size_w)
+            .enumerate()
+            .filter(|(oy, _)| *oy >= pad_y && *oy < pad_y + nh)
+            .for_each(|(oy, row)| fill_row((c, oy), row));
+    };
+    if crate::parallel::serial_kernels() {
+        out.chunks_mut(plane).enumerate().for_each(|(c, ch)| rows(c, ch));
+    } else {
+        out.par_chunks_mut(plane).enumerate().for_each(|(c, ch)| {
+            // Nested fan-out: three channels alone would leave a four-worker
+            // pool a quarter idle, and the rows are independent.
+            ch.par_chunks_mut(size_w)
+                .enumerate()
+                .filter(|(oy, _)| *oy >= pad_y && *oy < pad_y + nh)
+                .for_each(|(oy, row)| fill_row((c, oy), row));
+        });
     }
 
     let tensor = Tensor::from_vec(out, (1, 3, size_h, size_w), device)?;

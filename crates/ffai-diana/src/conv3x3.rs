@@ -44,8 +44,8 @@ use rayon::prelude::*;
 /// constant-stride gather, which moves half the bytes but cannot use the
 /// block copy. Whether that trade pays is an empirical question, not a
 /// deduction — see the A/B in the mission plan.
-pub fn conv3x3(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
-    conv3x3_strided(x, weight, bias, 1)
+pub fn conv3x3(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>, act: bool) -> Result<Tensor> {
+    conv3x3_strided(x, weight, bias, 1, act)
 }
 
 /// Tile the im2col so each block is consumed by the GEMM while it is still
@@ -229,16 +229,25 @@ pub fn conv3x3_strided(
     weight: &Tensor,
     bias: Option<&Tensor>,
     stride: usize,
+    // Apply bias AND SiLU in the epilogue, in one traversal of the GEMM's
+    // output. `false` leaves the raw convolution, for the nine
+    // activation-free Convs in this graph.
+    act: bool,
 ) -> Result<Tensor> {
     // Direct convolution first: it never builds the 9x-expanded operand,
     // which is the only thing that moves the GEMM's arithmetic intensity.
     // Falls through to im2col for shapes it declines (stride 2, w < 2).
-    if stride == 1 && crate::direct3x3::enabled() {
+    // The direct and tiled paths have no fused epilogue, so a fused call must
+    // not reach them — they would return the convolution WITHOUT its
+    // activation, a wrong graph rather than a slow one. Both are env-gated
+    // experiments; declining is cheaper than keeping a second fused path in
+    // step with this one.
+    if stride == 1 && !act && crate::direct3x3::enabled() {
         if let Some(y) = crate::direct3x3::conv3x3_direct(x, weight, bias)? {
             return Ok(y);
         }
     }
-    if !tiling_disabled() {
+    if !act && !tiling_disabled() {
         return conv3x3_tiled(x, weight, bias, stride);
     }
     let (n, c_in, h, w) = x.dims4()?;
@@ -325,11 +334,72 @@ pub fn conv3x3_strided(
     // The wrapper, timed separately: bias broadcast and reshape were inside
     // the parent bucket and therefore invisible.
     crate::profile::timed(|p| &p.conv_wrap, || {
-        let mut y = y;
-        if let Some(b) = bias {
-            y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
+        // ONE traversal for bias and activation, the same shape the 1x1 path
+        // uses. Unfused this is a `broadcast_add` — allocate, read and write
+        // every element to add one number per channel — plus SiLU downstream
+        // as its own candle op with its own traversal.
+        //
+        // The 3x3 path carries 39 % of the pipeline against 1x1's 17 %, and
+        // was left unfused when 1x1 was done because its earlier refutation
+        // had not yet been re-tested against the new allocator baseline.
+        if !act && bias.is_none() {
+            return y.reshape((n, c_out, oh, ow));
         }
-        y.reshape((n, c_out, oh, ow))
+        if crate::blocks::fuse_disabled() || !act {
+            let mut y = y;
+            if let Some(b) = bias {
+                y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
+            }
+            return y.reshape((n, c_out, oh, ow));
+        }
+        let bias_v: Option<Vec<f32>> = match bias {
+            Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+            None => None,
+        };
+        let out = crate::cpuop::SliceOp::new("ffai-conv3x3-epilogue", move |ys, _| {
+            let n_out = ys.len();
+            let mut v: Vec<f32> = Vec::with_capacity(n_out);
+            {
+                let spare = &mut v.spare_capacity_mut()[..n_out];
+                let avx2 = crate::silu::avx2_enabled();
+                let fill = |(o, dst): (usize, &mut [std::mem::MaybeUninit<f32>])| {
+                    let src = &ys[o * ohw..(o + 1) * ohw];
+                    let bo = bias_v.as_ref().map_or(0.0, |b| b[o]);
+                    for (d, s) in dst.iter_mut().zip(src) {
+                        d.write(*s + bo);
+                    }
+                    // SAFETY: every element of `dst` written by the loop above.
+                    #[allow(unsafe_code)]
+                    let dst: &mut [f32] = unsafe {
+                        std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<f32>(), dst.len())
+                    };
+                    if avx2 {
+                        // SAFETY: avx2+fma verified at runtime.
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            crate::silu_avx2::silu_in_place(dst)
+                        }
+                    } else {
+                        for e in dst.iter_mut() {
+                            *e = crate::silu::silu_scalar_pub(*e);
+                        }
+                    }
+                };
+                if crate::parallel::serial_kernels() {
+                    spare.chunks_mut(ohw).enumerate().for_each(fill);
+                } else {
+                    spare.par_chunks_mut(ohw).enumerate().for_each(fill);
+                }
+            }
+            // SAFETY: `c_out` chunks of `ohw` cover exactly `n_out`, all written.
+            #[allow(unsafe_code)]
+            unsafe {
+                v.set_len(n_out)
+            };
+            Ok((v, (c_out, ohw).into()))
+        })
+        .run(&y)?;
+        out.reshape((n, c_out, oh, ow))
     })
 }
 
@@ -368,7 +438,7 @@ mod tests {
             let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
             let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
             let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
-            let got = conv3x3(&x, &wt, Some(&b)).unwrap();
+            let got = conv3x3(&x, &wt, Some(&b), false).unwrap();
             let want = oracle(&x, &wt, &b, 1);
             assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w}");
             let d = max_rel(&got, &want);
@@ -396,7 +466,7 @@ mod tests {
             let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
             let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
             let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
-            let got = conv3x3_strided(&x, &wt, Some(&b), 2).unwrap();
+            let got = conv3x3_strided(&x, &wt, Some(&b), 2, false).unwrap();
             let want = oracle(&x, &wt, &b, 2);
             assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w} s2");
             let d = max_rel(&got, &want);
