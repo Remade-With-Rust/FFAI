@@ -40,6 +40,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
 
+# wasm32 needs getrandom's browser backend selected explicitly; it is pulled
+# transitively by candle and cannot configure itself. Costs nothing on native.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
 [dev-dependencies]
 # Experiment only (examples/alloc_ab.rs): 58,634 page faults per image say the
 # system allocator is re-faulting nearly every byte it hands back. This tests

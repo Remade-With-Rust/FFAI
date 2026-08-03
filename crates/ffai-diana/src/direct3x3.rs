@@ -185,6 +185,15 @@ pub fn conv3x3_direct(
                         // relative error against candle, which is what an
                         // off-by-one in a convolution looks like.
                         let interior = oxn == OXB && ox0 >= 1 && ox0 + OXB <= w - 1;
+                        // The call site needs the SAME cfg as the kernel it
+                        // calls. Without it this compiled everywhere the
+                        // kernel existed and nowhere else — the one thing
+                        // standing between this crate and a wasm32 build,
+                        // found by compiling for wasm32 rather than by
+                        // reading. `simd` is already false off x86_64, so
+                        // this is a compile-time guard on dead code, not a
+                        // second runtime check.
+                        #[cfg(target_arch = "x86_64")]
                         if simd && interior && ocn == OCB {
                             // SAFETY: `available()` checked avx2+fma; the
                             // tile is interior and full by the guard above.
@@ -198,6 +207,8 @@ pub fn conv3x3_direct(
                             ox0 += OXB;
                             continue;
                         }
+                        #[cfg(not(target_arch = "x86_64"))]
+                        let _ = (simd, interior);
                         // Scalar fallback: edges, ragged channel groups, and
                         // any machine without AVX2.
                         for ic in 0..c_in {
