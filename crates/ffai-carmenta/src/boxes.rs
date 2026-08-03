@@ -908,7 +908,15 @@ fn best_gap(lines: &[Vec<DetBox>], line_h: f32, page_w: usize, axis: Axis) -> Op
         }
         reach = reach.max(e);
     }
-    let floor = if axis == Axis::Horizontal { H_GAP_MIN } else { V_GAP_MIN };
+    // The ASYMMETRY between these two floors is the axis bias itself, and it
+    // has never been swept. §8.41 diagnosed the defect as a figure's horizontal
+    // whitespace outbidding a real column gutter; raising the horizontal floor
+    // is the most direct expression of a fix. Env-overridable per §8.56's rule.
+    let floor = if axis == Axis::Horizontal {
+        env_f32("FFAI_H_GAP_MIN", H_GAP_MIN)
+    } else {
+        env_f32("FFAI_V_GAP_MIN", V_GAP_MIN)
+    };
     best.filter(|&(_, w)| w >= floor)
 }
 

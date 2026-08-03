@@ -3904,6 +3904,55 @@ that still quoted the pre-`pernode` number (§8.57). **25.91 % -> 23.76 %,
 deficit 10.40 pp -> 8.25 pp**, holdout **201/236 FAIL at 24.77 % -> 236/236 PASS
 at 20.27 %** — no new weights, no new model, no speed cost.
 
+### 8.68 The gap floors are a peak, and axis-biasing cannot fix figures
+
+The ninth and last hand-set constant pair, and the most directly aimed at
+§8.41's diagnosis: `H_GAP_MIN` (1.35) and `V_GAP_MIN` (0.55), the minimum valley
+widths in line-heights before a cut is admissible on each axis. **Their
+asymmetry IS the axis bias**, and neither had ever been swept.
+
+| H_GAP_MIN | CER | V_GAP_MIN | CER |
+|---|---:|---|---:|
+| 0.80 | 22.51 % | 0.30 | 21.10 % |
+| **1.35 (shipped)** | **21.10 %** | **0.55 (shipped)** | **21.10 %** |
+| 2.50 | 26.40 % | 1.00 | 24.92 % |
+| 4.00 | 27.36 % | | |
+
+`H_GAP_MIN` is a **genuine peak** — worse below (0.80 -> 22.51) and sharply worse
+above (2.50 -> 26.40). `V_GAP_MIN` sits at a plateau edge. Both optimal.
+
+**And this refutes the obvious fix for the figure problem.** §8.41 diagnosed a
+figure's ~19 line-height horizontal gap outbidding a ~2 line-height column
+gutter; the direct remedy is to raise the horizontal floor so that whitespace
+stops qualifying. Measured, that costs **5.3 points** (21.10 -> 26.40 at 2.5).
+The horizontal cut is doing necessary work elsewhere — separating headers,
+footers and section breaks — and starving it loses more than the figures cost.
+
+So **the figure problem cannot be solved by shifting a global threshold.** A fix
+must reject SPECIFIC bands on evidence about those bands, which is what the
+figure-vs-gutter plan (`docs/whys/figure-vs-gutter-test-plan.md`) tests.
+
+Nine Prometheus targets now, none with slack. Every hand-set constant on the
+document path is at or beside its optimum.
+
+### 8.69 Figure-vs-gutter Stage 0 — the prize is 4.63 pp
+
+Stage 0 of the plan, on cached `pernode` output, no recognizer runs:
+
+| 236 holdout pages | CER | delta |
+|---|---:|---:|
+| shipped | 20.27 % | — |
+| **all figure pages perfectly ordered** | **15.64 %** | **4.63 pp** |
+| every page perfectly ordered | 12.85 % | 7.42 pp |
+
+**62 % of the remaining ordering slack is on figure-bearing pages**, and all 79
+of them are mis-ordered — which is why the loose bound (fix every figure page)
+and the tight bound (fix only mis-ordered figure pages) coincide exactly.
+
+**PASSES the 1.0 pp gate** — twice the ~0.5 pp run-to-run variance of §8.53 —
+so the plan proceeds to Stage 1. This is the first target this campaign has
+found with both measured slack AND enough size to certify.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
