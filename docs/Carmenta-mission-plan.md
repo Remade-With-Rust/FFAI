@@ -5182,10 +5182,33 @@ staring at the holdout table could have shown that, because the table is where
 the pattern came from. A hypothesis derived on one population can only be
 adjudicated on another.
 
+**Normalising the count does not rescue it.** The natural refinement is to gate
+on DENSITY rather than an absolute number — lines per unit page area — which is
+scale-invariant and needs no magic constant. Every variant was tested on the
+same train pages:
+
+| variable | helps range | hurts range | separable |
+|---|---|---|---|
+| lines | [56, 350] | [25, 616] | no |
+| lines per 1000 px height | [6.2, 49.1] | [13.9, 147.1] | no |
+| lines per megapixel | [0.9, 28.9] | [5.0, 70.3] | no |
+| regions per megapixel | [0.2, 8.3] | [1.1, 10.7] | no |
+| splits as a share of lines | [0.01, 0.12] | [0.01, 0.30] | no |
+
+Every helps-range sits wholly inside its hurts-range. Normalising is sound in
+principle and cannot manufacture a signal the variable does not carry.
+
+**The number that closes it:** the best single threshold on ANY of these scores
+**18 of 23** — and "never split at all" scores **15 of 23**. A maximally
+overfitted gate, chosen knowing the answers, beats doing nothing by three pages
+out of twenty-three, before any generalisation loss. The best line-count
+threshold on train is `lines > 260`, the OPPOSITE direction to holdout's
+`lines <= 265`, which is the inversion stated a second way.
+
 It also closes the third adaptive lever. Page type does not gate the split
-(§8.90), line count does not, region count does not, splits-per-page does not.
-Together with §8.89's six triggers, that is ten distinct gates measured and
-refused on one defect worth ~1 pp.
+(§8.90), line count does not, region count does not, splits-per-page does not,
+and no page-normalised density does. Together with §8.89's six triggers, that is
+eleven distinct gates measured and refused on one defect worth ~1 pp.
 
 ## 9. Pure-Rust boundary and watchlist
 
