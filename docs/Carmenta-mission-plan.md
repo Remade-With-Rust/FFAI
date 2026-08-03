@@ -4614,6 +4614,73 @@ PP-Structure head, ~10-30 M params on the candle spine — or it does not get
 closed. That is now a decision about dependencies and scope, not about
 algorithms, and every cheaper route has been measured rather than assumed.
 
+### 8.82 The problem was never columns — it is NEWSPAPERS AND MAGAZINES
+
+Every section from §8.68 to §8.81 attacked column geometry: figure-vs-gutter,
+threshold shifts, ink tests, probability maps, per-node routing, element
+banding, column-scale banding, text continuity. The corpus carries a per-page
+`layout` label that was never read. Reading it ends the campaign's central
+assumption.
+
+Ordering damage (ours minus the oracle on the SAME lines), 236 holdout pages:
+
+| layout | pages | CER | damage | share |
+|---|---:|---:|---:|---:|
+| **other_layout** | 84 | 19.57 % | **4.90 pp** | **82 %** |
+| `1andmore_column` (the 2->1->2 case) | 25 | 26.19 % | 0.72 pp | 12 % |
+| double_column | 36 | 28.37 % | 0.28 pp | 5 % |
+| single_column | 58 | 31.29 % | 0.07 pp | 1 % |
+| three_column | 33 | **5.30 %** | 0.02 pp | 0 % |
+
+**Column layouts are SOLVED.** Single, double and three-column pages together
+carry 6 % of the ordering damage; three-column pages read at 5.30 % CER. The
+2->1->2 transition that §8.74-§8.78 were built around is 12 %. The recursive
+XY-cut, per-node routing and runtime selection did their job — on the layouts
+they were designed for, the remaining error is recognition, not sequence.
+
+**82 % is `other_layout`, and it is editorial design:**
+
+| data_source | pages | share of the 4.90 pp |
+|---|---:|---:|
+| **newspaper** | 24 | **69 %** |
+| **magazine** | 37 | **27 %** |
+| colorful_textbook / academic / PPT / exam | 23 | 4 % |
+
+**61 pages — newspapers and magazines, 26 % of the holdout — carry 78 % of all
+ordering damage.** Worst pages: `omni-0116` 44.9 pp, `omni-0191` 41.7 pp,
+`omni-0185` 40.4 pp, all magazine.
+
+**Why no cut sequence can fix it.** A newspaper page is not a decomposition of
+one text into columns; it is SEVERAL INDEPENDENT ARTICLES sharing a sheet, with
+text flowing around pull-quotes, advertisements and images. The correct order
+requires knowing which block belongs to which STORY. That is not a property of
+the geometry — two adjacent columns may belong to different articles, and two
+distant ones to the same. Every technique this campaign refuted was searching
+for a partition that does not exist on these pages.
+
+It also explains §8.81 cleanly. Text continuity failed because the true order of
+a newspaper page is discontinuous by design, and it explains §8.48's 90/10
+split: grouping is easy (blocks are visually obvious), sequencing them is the
+whole problem.
+
+**This retargets everything.** The gap against Unlimited-OCR is not a column
+algorithm we have not thought of; it is that a 3 B VLM reads a newspaper as a
+newspaper. Options, in honest order:
+
+1. **Scope the claim.** We are at parity-or-better on academic and business
+   documents — the layouts most OCR is actually run on — and behind on
+   editorial pages. Saying so is accurate and cheap, and it is what the numbers
+   support today.
+2. **A layout model** (DocLayout-YOLO / PP-Structure head, ~10-30 M params on
+   the candle spine) supplies region class but NOT story membership; it would
+   help the 12 % and 6 % buckets that are already nearly solved. **It does not
+   obviously address the 82 %** — which should be measured before it is built.
+3. **Story segmentation** is the thing that would actually close it, and no
+   cheap version of it exists.
+
+The campaign's real result is that the algorithmic work is done and the residue
+has a name.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
