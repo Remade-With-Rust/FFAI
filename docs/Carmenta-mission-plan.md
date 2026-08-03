@@ -4059,6 +4059,76 @@ only the ordering repeats, over boxes already in hand.
 `FFAI_ORDER=noselect` reverts to `pernode`; `FFAI_ORDER_SELECT_EPS` tunes the
 reset threshold.
 
+### 8.72 Ideas 3 and 4 — both refuted, and one of them taught the selection its limit
+
+**Idea 4: cost-based cut selection. REFUTED, twice over.**
+
+§8.68 showed that raising `H_GAP_MIN` globally costs 5.3 pp because horizontal
+cuts do necessary work on headers and footers — the floor is global, the damage
+is local. `xy_cut_cost` makes each cut pay for its own harm instead: count the
+x-bands present on BOTH sides of a candidate horizontal cut, and prefer the
+vertical one when the horizontal severs more than one live column.
+
+| holdout, 236 pages | CER | |
+|---|---:|---|
+| `pernode` | 20.27 % | |
+| **selection, 3 candidates** | **18.88 %** | shipped |
+| `cost` alone | **24.73 %** | +4.46 pp, CI [−7.99, −1.23] |
+| selection + `cost` | 19.66 % | |
+
+Worse standalone, significantly, with 56 pages worse against 44 better —
+counting severed bands sounds principled and fires on section breaks that
+legitimately span columns.
+
+**And adding it to the pool made the SELECTION worse**, 18.88 % → 19.66 %. That
+is a property of §8.71's architecture worth stating plainly: **the reset score
+can prefer a wrong-but-column-coherent ordering, so more candidates is not
+free.** A candidate earns its place by being best SOMEWHERE, not by existing.
+Removed from the pool, kept as `FFAI_ORDER=cost`; the 3-candidate default
+re-measures at exactly 18.88 %.
+
+**Idea 3: the detector probability map. REFUTED, structurally.**
+
+The hope was that DBNet's map sees what ink and boxes cannot:
+
+| region | ink | text-probability |
+|---|---|---|
+| blank gutter | low | low |
+| body text | high | HIGH |
+| **figure** | **high** | **low** |
+
+Measured over the 105 winning horizontal valleys with a dumped map:
+
+| signal | figure median | clean median | separation |
+|---|---:|---:|---:|
+| ink | 0.0089 | 0.0169 | 0.5x |
+| **text-probability** | **0.0000** | **0.0000** | **0.0x** |
+| ink x (1 − prob) | 0.0089 | 0.0169 | 0.5x |
+
+**The map reads zero in every winning valley, figure and blank alike.** Not a
+weak signal — no signal, and the reason is structural: DBNet is a TEXT detector.
+A figure is not text, so it looks exactly like blank paper. The one distinction
+needed is the one the map cannot make.
+
+That also explains §8.70/§8.71 in retrospect: boxes are THRESHOLDED FROM this
+map, so "absence of boxes" and "low text-probability" were always the same
+signal in two coats. Testing ink was testing the map, twice, without knowing it.
+
+**Where this leaves the four ideas** (`FFAI_DUMP_PROB` added for the probe):
+
+| idea | verdict |
+|---|---|
+| 1 — ink on the horizontal axis | refuted, 1.8x |
+| **2 — oracle-free ordering selection** | **SHIPPED, 20.27 % → 18.88 %** |
+| 3 — detector probability map | refuted, structurally (0.0x) |
+| 4 — cost-based cut | refuted, and degrades the pool |
+
+Everything that distinguishes a figure from a gutter WITHOUT a layout model has
+now been measured: ink on both axes, box geometry at three granularities, region
+classes, learned rankers, text features, nine hand-set constants, and the
+detector's own probability map. The one thing that worked needed no new
+information at all — it re-read output the pipeline already produces.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

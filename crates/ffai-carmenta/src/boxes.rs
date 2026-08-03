@@ -397,6 +397,7 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         // zero. `xycut` keeps the previous default reachable for A/B.
         Ok("xycut") => xy_cut(lines, page_w, 0),
         Ok("noselect") => xy_cut_pernode(lines, page_w, 0),
+        Ok("cost") => xy_cut_cost(lines, page_w, 0),
         _ => order_by_selection(lines, page_w),
     }
 }
@@ -467,6 +468,76 @@ fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
     );
 }
 
+/// Choose the cut by what it BREAKS, not by how wide its whitespace is.
+///
+/// §8.68 refuted shifting the valley-width floors: raising `H_GAP_MIN` so a
+/// figure's whitespace stops qualifying costs 5.3 pp, because the horizontal cut
+/// is doing necessary work on headers, footers and section breaks. The floor is
+/// global; the damage is local. A cut needs to pay for the harm IT does.
+///
+/// The cost here is column continuity. A horizontal cut through a live
+/// multi-column block severs every column that spans it — those lines continue
+/// on the far side in the same x-band, and separating them is exactly the
+/// `[0,5,1,5,…]` interleave. A horizontal cut under a masthead severs nothing,
+/// because no column crosses it. So: count the x-bands present on BOTH sides of
+/// a candidate cut, and prefer the cut that severs fewer.
+///
+/// This is not a threshold and adds no tuned constant — it is a comparison
+/// between two candidates that the geometry already produced.
+fn xy_cut_cost(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
+        return sorted_by_y(lines);
+    }
+    let mut hs: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1) as f32;
+    let h = best_gap(&lines, lh, page_w, Axis::Horizontal);
+    let v = best_gap(&lines, lh, page_w, Axis::Vertical);
+
+    // How many distinct x-bands appear on both sides of a horizontal cut at `at`?
+    // Bands are quantised to a twentieth of the page so a column is one band.
+    let severed = |at: usize| -> usize {
+        let band = |b: &DetBox| (b.x0.midpoint(b.x1) * 20 / page_w.max(1)) as u32;
+        let (mut above, mut below) = (Vec::new(), Vec::new());
+        for l in &lines {
+            let b = line_bbox(l);
+            if b.y0.midpoint(b.y1) < at { above.push(band(&b)) } else { below.push(band(&b)) }
+        }
+        above.sort_unstable();
+        above.dedup();
+        below.iter().filter(|x| above.binary_search(x).is_ok()).count().min(above.len())
+    };
+
+    let cut = match (h, v) {
+        (Some(a), Some(b)) => {
+            // A horizontal cut that severs more than one column band is cutting
+            // through live columns; prefer the vertical one that separates them.
+            if severed(a.0) > 1 { Some((Axis::Vertical, b.0)) } else { Some((Axis::Horizontal, a.0)) }
+        }
+        (Some(a), None) => Some((Axis::Horizontal, a.0)),
+        (None, Some(b)) => Some((Axis::Vertical, b.0)),
+        (None, None) => None,
+    };
+    let Some((axis, at)) = cut else { return sorted_by_y(lines) };
+
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    for l in lines {
+        let b = line_bbox(&l);
+        let key = match axis {
+            Axis::Horizontal => b.y0.midpoint(b.y1),
+            Axis::Vertical => b.x0.midpoint(b.x1),
+        };
+        if key < at { near.push(l) } else { far.push(l) }
+    }
+    if near.is_empty() || far.is_empty() {
+        return sorted_by_y(if near.is_empty() { far } else { near });
+    }
+    let mut out = xy_cut_cost(near, page_w, depth + 1);
+    out.extend(xy_cut_cost(far, page_w, depth + 1));
+    out
+}
+
 /// Order the page SEVERAL ways and keep the most column-coherent result.
 ///
 /// Every ordering strategy this campaign built wins on some layouts and loses on
@@ -509,6 +580,13 @@ fn order_by_selection(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>
         xy_cut_pernode(lines.clone(), page_w, 0),
         xy_cut(lines.clone(), page_w, 0),
         xy_cut_vfirst(lines.clone(), page_w, 0),
+        // `xy_cut_cost` is deliberately NOT in this pool. Measured on holdout it
+        // is 24.73 % standalone against `pernode`'s 20.27 % — significantly
+        // worse, CI [-7.99, -1.23] — and adding it as a fourth candidate moved
+        // the selection from 18.88 % to 19.66 %. **More candidates is not free:**
+        // the reset score prefers column-coherent output, and a wrong ordering
+        // can be more column-coherent than a right one. A candidate earns its
+        // place by being best somewhere, not by existing.
     ];
     let score = |ord: &[Vec<DetBox>]| -> f32 {
         let xs: Vec<f32> = ord

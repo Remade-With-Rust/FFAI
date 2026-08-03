@@ -344,6 +344,22 @@ impl OcrEngine for CraftCrnn {
                             RecStage::Crnn => crate::mobiledet::UNCLIP_LINE,
                             RecStage::Parseq => crate::mobiledet::UNCLIP_WORD,
                         };
+                        // FFAI_DUMP_PROB writes the raw text-probability map so
+                        // a probe can ask whether it separates figures better
+                        // than "absence of boxes" does. Boxes are thresholded
+                        // FROM this map, so the marginal information is exactly
+                        // what a continuous value adds over a binary one — and
+                        // ink alone was refuted at 1.8x on both axes (§8.71).
+                        if let Ok(dir) = std::env::var("FFAI_DUMP_PROB") {
+                            let tag = std::env::var("FFAI_TRACE_TAG").unwrap_or_default();
+                            let _ = std::fs::create_dir_all(&dir);
+                            let mut out = format!("{pw} {ph}
+");
+                            for v in &flat {
+                                out.push_str(&format!("{v:.3} "));
+                            }
+                            let _ = std::fs::write(format!("{dir}/{tag}.prob"), out);
+                        }
                         let mut b = crate::mobiledet::boxes_from_probability(
                             &flat, pw, ph, sx, sy, unclip,
                         );
