@@ -4210,6 +4210,48 @@ zero on an academic paper. Distinguishing that from a figure's whitespace is the
 open problem, and §8.71/§8.72 measured that neither ink nor the detector's
 probability map can do it. Their `image` class can, because it was trained to.
 
+### 8.74 The failure, drawn — and the compound selection score refuted
+
+`.tools-bench/render_order.py` draws the worst-ordered holdout pages twice: our
+emission sequence beside the annotation's, each region numbered and joined by a
+path, coloured blue -> red along the reading order. Recognition and detection are
+identical on both sides, so the picture is sequence and nothing else.
+
+`omni-0001` (+62.1 pp, the worst on holdout) is the whole campaign in one image.
+Ours reads **1 left, 2 RIGHT, 3-4 left, 5-6 right, 7-8 left, 9 caption** — the
+path crosses the gutter six times. Correct reads **1-5 straight down the left
+column, 6-8 down the right, 9 caption** — two clean vertical runs. Same boxes,
+same text, 62 points.
+
+Six pages rendered, 41.7 to 62.1 pp: `omni-0001, 0069, 0003, 0116, 0015, 0191`.
+Every one is the same shape — a multi-column page read across instead of down.
+
+**The compound selection score is REFUTED.** §8.73 measured 1.91 pp of headroom
+in the selection RULE (shipped 18.88 %, oracle pick 16.97 %), which looked like
+the cheapest lever left. Seven criteria tested offline on cached dumps, over four
+candidates:
+
+| criterion | CER |
+|---|---:|
+| **leftward resets (shipped)** | **18.78 %** |
+| resets + y-backtracks | 18.78 % |
+| resets + inverse run-length | 18.86 % |
+| resets + 0.5x switches + ybacks | 18.86 % |
+| all column switches | 19.07 % |
+| inverse run-length | 19.07 % |
+| oracle pick | 17.70 % |
+
+**Nothing beats counting leftward resets, and adding signals makes it worse.**
+The reason is instructive: `switches` counts EVERY column change, including the
+one legitimate switch at a column boundary, so it penalises exactly the
+column-major reading it was meant to reward. Only a LEFTWARD move is evidence of
+going backwards in the reading order.
+
+So the 1.08 pp still in the rule is real and none of these signals reach it. The
+shipped criterion is not a first guess that happened to work — it is the best of
+seven, and the only one that distinguishes "moved to the next column" from
+"went back".
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
