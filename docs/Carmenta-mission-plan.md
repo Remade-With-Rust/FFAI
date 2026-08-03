@@ -4971,6 +4971,61 @@ reading order at all.
 Kept as `FFAI_GUTTER_SPLIT`, defaulted OFF, with `find_gutters` as the gate
 since it is at least principled. Nothing ships.
 
+### 8.88 The best discriminator yet, and it still does not convert
+
+§8.87 closed the gutter-merge lever on a base-rate argument. Two corrections to
+that section came from pushing on it, and both were mine.
+
+**The target was under-counted.** The 4-merges-vs-737-spans figure covered only
+boxes spanning >= 60 % of the page. There are **20 merges**; the other 16 bridge
+two columns of a THREE-column layout and never reach 60 %. The height test
+measured a fifth of the problem and was reported as the whole of it.
+
+**And the right test was refused on circular evidence.** Gutter-emptiness was
+rejected because the probability map reads 1.000 at the true gutter — but that
+hallucination IS the defect. Asking the broken detector whether it is broken
+cannot work. **The source pixels were never consulted.**
+
+They separate the classes, where nothing else did:
+
+| widest internal white corridor, source pixels | n | median (line-heights) |
+|---|---:|---:|
+| gutter MERGES | 20 | **1.14** |
+| legitimate spans | 22 588 | **0.33** |
+
+**3.5x**, against the 1.05-vs-1.03 that box height gave. At 0.8x it catches 17
+of 20 merges and touches 1.9 % of everything else.
+
+**Built** (`boxes::split_at_white_corridor`, hooked in the MobileDet path where
+the image is in scope) and it works: `omni-0069` goes 90 lines -> 93 with the
+merge resolved. **And it is REFUSED.** Swept on TRAIN:
+
+| `FFAI_WHITE_SPLIT` | CER | vs off | pages |
+|---|---:|---:|---|
+| off | **19.90 %** | — | |
+| 0.6 | 19.89 % | -0.02 pp | 10 better, 37 worse |
+| 0.8 | 19.89 % | -0.01 pp | 8 better, 26 worse |
+| 1.0 | **19.85 %** | **-0.05 pp** | **5 better, 15 worse** |
+| 1.3 | 20.02 % | +0.11 pp | 2 better, 5 worse |
+
+Best case 0.05 pp — about 90 characters — with a NEGATIVE page count at every
+threshold. §8.78's standard refuses this.
+
+**Why a good discriminator still loses.** 20 merged lines out of 26 671.
+Repairing every one caps near 1 pp, while a 1.9 % false-positive rate applies to
+the other 99.9 % of lines. **The quality of the discriminator was never the
+binding constraint — the base rate was**, which is why five geometric triggers
+and one pixel trigger all land in the same place.
+
+Kept as `FFAI_WHITE_SPLIT`, defaulted OFF. The lever is closed for the second
+and final time, now from the best position available rather than the worst.
+
+**What is left, and it is not layout.** §8.83 measured three-quarters of the
+corpus as RECOGNITION-limited (29.09 % CER, only 2.90 pp reachable by ordering).
+Every ordering and detection lever is now measured and closed. PARSeq is already
+built, already shipped, and is not the default on the document path — that is
+the next thing to price.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

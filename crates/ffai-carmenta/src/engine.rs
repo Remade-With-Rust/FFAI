@@ -380,6 +380,12 @@ impl OcrEngine for CraftCrnn {
                                 );
                             }
                         }
+                        // §8.88: split any box carrying a white corridor wide
+                        // enough to be a column gutter, read from the SOURCE
+                        // PIXELS. The probability map cannot arbitrate this —
+                        // it reads 1.000 at the very gutter that was bridged,
+                        // and that hallucination is the defect.
+                        let b = boxes::split_at_white_corridor(b, &gray, w, h);
                         let lines: Vec<Vec<boxes::DetBox>> =
                             b.into_iter().map(|r| vec![r]).collect();
                         Ok((boxes::order_reading(lines, w), Vec::new(), Vec::new(), 0, 2.0))

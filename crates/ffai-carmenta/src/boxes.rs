@@ -1204,6 +1204,86 @@ fn element_tops(lines: &[Vec<DetBox>], page_w: usize, lh: f32) -> Vec<usize> {
     tops
 }
 
+/// Split a detected box at a white corridor visible in the SOURCE PIXELS.
+///
+/// §8.85-§8.87: DBNet occasionally emits one component spanning two columns, so
+/// its text comes out interleaved — `"...Knowledge   except that the range..."`
+/// — which no reordering can repair, and the wide box then suppresses the column
+/// grid for the whole page. `omni-0069` loses 68 pp to three such lines.
+///
+/// Five triggers were refused (§8.86, §8.87) and every one of them asked the
+/// wrong source. In particular the probability map was tried and rejected
+/// because it reads **1.000 at the true gutter** — but that hallucination IS the
+/// bug, so the map is the last thing that can arbitrate it. The paper cannot
+/// lie: a merge has real whitespace between the columns, a masthead has glyphs.
+///
+/// Measured on holdout, widest internal white corridor in line-heights:
+///
+/// | | n | median |
+/// |---|---:|---:|
+/// | gutter merges | 20 | **1.14** |
+/// | legitimate spans | 22 588 | **0.33** |
+///
+/// A 3.5x separation, against the 1.05-vs-1.03 that box HEIGHT gave. At 0.8x it
+/// catches 17 of 20 merges and touches 1.9 % of everything else; at 1.0x, 15 of
+/// 20 and 0.7 %.
+pub fn split_at_white_corridor(
+    boxes: Vec<DetBox>,
+    gray: &[f32],
+    w: usize,
+    h: usize,
+) -> Vec<DetBox> {
+    let mult = env_f32("FFAI_WHITE_SPLIT", 0.0);
+    if mult <= 0.0 || boxes.is_empty() {
+        return boxes;
+    }
+    let ink = env_f32("FFAI_WHITE_INK", 200.0);
+    let mut hs: Vec<usize> = boxes.iter().map(|b| b.y1.saturating_sub(b.y0)).collect();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1);
+    let min_run = ((lh as f32) * mult).round().max(2.0) as usize;
+
+    let mut out = Vec::with_capacity(boxes.len());
+    for b in boxes {
+        let (x0, x1) = (b.x0.min(w), b.x1.min(w));
+        let (y0, y1) = (b.y0.min(h), b.y1.min(h));
+        if x1.saturating_sub(x0) < min_run * 3 || y1 <= y0 {
+            out.push(b);
+            continue;
+        }
+        // A column is white when its DARKEST pixel is still light: one glyph
+        // stroke anywhere down the box disqualifies it.
+        let white: Vec<bool> = (x0..x1)
+            .map(|x| (y0..y1).map(|y| gray[y * w + x]).fold(255.0, f32::min) > ink)
+            .collect();
+        // Interior only — the margins either side are white by construction and
+        // splitting there just shaves empty space off the box.
+        let (lo, hi) = (white.len() / 10, white.len() * 9 / 10);
+        let mut cuts = Vec::new();
+        let (mut run, mut i) = (0usize, 0usize);
+        while i <= white.len() {
+            if i < white.len() && white[i] && i >= lo && i < hi {
+                run += 1;
+            } else {
+                if run >= min_run {
+                    cuts.push(x0 + i - run / 2);
+                }
+                run = 0;
+            }
+            i += 1;
+        }
+        let mut left = b.x0;
+        for c in cuts {
+            if c > left && c < b.x1 {
+                out.push(DetBox { x0: left, x1: c, ..b });
+                left = c;
+            }
+        }
+        out.push(DetBox { x0: left, ..b });
+    }
+    out
+}
+
 fn sorted_by_y(mut lines: Vec<Vec<DetBox>>) -> Vec<Vec<DetBox>> {
     lines.sort_by_key(|l| { let b = line_bbox(l); (b.y0, b.x0) });
     lines
