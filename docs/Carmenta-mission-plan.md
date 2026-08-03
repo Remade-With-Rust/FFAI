@@ -4252,6 +4252,65 @@ shipped criterion is not a first guess that happened to work — it is the best 
 seven, and the only one that distinguishes "moved to the next column" from
 "went back".
 
+### 8.75 Two corrections from looking at the pictures, and span-banding refuted
+
+Rendering the failures (§8.74) produced two findings that no aggregate had.
+
+**1. Some annotations read RIGHT-TO-LEFT, and on those pages we are correct.**
+`omni-0015` orders its right column before its left; for an English-language
+document that is not the practical reading order, and our left-then-right output
+is the sensible one. Counted across the holdout:
+
+| two-column holdout pages | count |
+|---|---:|
+| annotation reads left column first | 139 (95 %) |
+| **annotation reads right column first** | **8 (5 %)** |
+
+`omni-0003` and `omni-0015` — two of the six worst-damaged pages — are both in
+that set. But the correction is small:
+
+| | ours | annotation | damage |
+|---|---:|---:|---:|
+| all 236 pages | 18.88 % | 12.89 % | **6.00 pp** |
+| excluding the 8 reversed | 18.77 % | 12.95 % | **5.82 pp** |
+| the 8 reversed alone | 27.47 % | 8.43 % | 19.04 pp |
+
+They are savaged individually (19 pp) and rare (3 % of pages), carrying **4 %**
+of the damage. So the gap is 5.82 pp of genuine error, not 6.00 — real, and not
+a rescue. **Chasing those 8 pages would be §8.50's benchmark-fitting.**
+
+**2. Span-banding — band at the ELEMENT, not the gap. REFUTED.**
+
+Every remaining failure is 2-column -> 1-column -> 2-column, and the 1-column
+part is a real full-width ELEMENT. Every cut we have built chose the widest
+VALLEY instead, which is why a figure wins: a figure is a wide gap with NO text,
+a masthead is a wide element WITH text. Measuring the element rather than the
+hole makes them different OBJECTS rather than different sizes — which is exactly
+why §8.68's threshold shift, §8.71's ink test and §8.72's probability map all
+failed, and it looked like the missing distinction.
+
+`xy_cut_span` cuts immediately above the topmost spanning element, falling
+through to the vertical cut when none exists. Measured on holdout:
+
+| | CER |
+|---|---:|
+| shipped selection | **18.88 %** |
+| span-banding alone | **25.31 %** (+6.42 pp, CI [−10.05, −3.14], 63 worse / 26 better) |
+
+**And it fails hardest exactly where it was aimed: on multi-column pages WITH
+figures it wins 8 and loses 51.**
+
+The mechanism is already in the ledger. Running headers, footers and wide
+captions are all spanning elements, so cutting above each one manufactures
+MANY bands — and §8.73 measured bands as monotonically harmful (1 band 35.09 %,
+6 bands 62.63 %). **The fix reintroduces the disease.** A spanning element is
+necessary evidence for a band boundary but nowhere near sufficient; what is
+missing is knowing which spanning elements are STRUCTURAL and which are
+furniture, which is a class question, not a geometry question.
+
+Kept as `FFAI_ORDER=span`, not in the pool: §8.72's rule is that a candidate
+earns its place by being best somewhere, and this is best nowhere that matters.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

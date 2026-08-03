@@ -398,6 +398,7 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("xycut") => xy_cut(lines, page_w, 0),
         Ok("noselect") => xy_cut_pernode(lines, page_w, 0),
         Ok("cost") => xy_cut_cost(lines, page_w, 0),
+        Ok("span") => xy_cut_span(lines, page_w, 0),
         _ => order_by_selection(lines, page_w),
     }
 }
@@ -466,6 +467,67 @@ fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
         v.map(|g| g.0 as i64).unwrap_or(-1),
         boxes.join(";")
     );
+}
+
+/// Band at the SPANNING ELEMENT, not at the widest gap.
+///
+/// A 2-column -> 1-column -> 2-column page is the shape every remaining failure
+/// has (§8.74's renders). The 1-column part is a real full-width ELEMENT — a
+/// masthead, a heading, a wide caption — and that is where the band boundary
+/// belongs.
+///
+/// Every previous cut chose the widest VALLEY instead, which is why a figure
+/// wins: a figure is a wide gap with NO TEXT, a masthead is a wide element WITH
+/// text, and a whitespace projection cannot tell them apart. Measuring the
+/// element rather than the hole makes them different objects, not different
+/// sizes — which is why §8.68's threshold shift could never work and this might.
+///
+/// So: if the node contains a spanning line, cut immediately ABOVE it (isolating
+/// what precedes), which walks the page down through its real structural breaks.
+/// With no spanning line the node is a uniform grid and takes the vertical cut.
+fn xy_cut_span(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 2 || depth >= MAX_CUT_DEPTH {
+        return sorted_by_y(lines);
+    }
+    // topmost spanning element that is not already at the very top
+    let mut spans: Vec<(usize, usize)> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_spanning(&line_bbox(l), page_w))
+        .map(|(i, l)| (line_bbox(l).y0, i))
+        .collect();
+    spans.sort_unstable();
+
+    let mut hs: Vec<usize> =
+        lines.iter().map(|l| { let b = line_bbox(l); b.y1.saturating_sub(b.y0) }).collect();
+    hs.sort_unstable();
+    let lh = hs[hs.len() / 2].max(1) as f32;
+
+    let top = lines.iter().map(|l| line_bbox(l).y0).min().unwrap_or(0);
+    let cut = spans
+        .iter()
+        .map(|&(y, _)| y)
+        .find(|&y| y > top + (lh as usize))
+        .map(|y| (Axis::Horizontal, y))
+        .or_else(|| best_gap(&lines, lh, page_w, Axis::Vertical).map(|g| (Axis::Vertical, g.0)))
+        .or_else(|| best_gap(&lines, lh, page_w, Axis::Horizontal).map(|g| (Axis::Horizontal, g.0)));
+
+    let Some((axis, at)) = cut else { return sorted_by_y(lines) };
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    for l in lines {
+        let b = line_bbox(&l);
+        let key = match axis {
+            Axis::Horizontal => b.y0.midpoint(b.y1),
+            Axis::Vertical => b.x0.midpoint(b.x1),
+        };
+        if key < at { near.push(l) } else { far.push(l) }
+    }
+    if near.is_empty() || far.is_empty() {
+        return sorted_by_y(if near.is_empty() { far } else { near });
+    }
+    let mut out = xy_cut_span(near, page_w, depth + 1);
+    out.extend(xy_cut_span(far, page_w, depth + 1));
+    out
 }
 
 /// Choose the cut by what it BREAKS, not by how wide its whitespace is.
