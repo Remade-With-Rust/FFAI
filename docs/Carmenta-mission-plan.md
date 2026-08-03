@@ -4311,6 +4311,74 @@ furniture, which is a class question, not a geometry question.
 Kept as `FFAI_ORDER=span`, not in the pool: §8.72's rule is that a candidate
 earns its place by being best somewhere, and this is best nowhere that matters.
 
+### 8.76 The §8.75 refutation was WRONG — it tested a defective implementation
+
+§8.75 closed span-banding on ONE measurement, which is exactly what the
+three-probe rule forbids, and the follow-up found the stated mechanism to be
+wrong. Descending on "how is structural told from furniture":
+
+| | spanning elements | a true boundary |
+|---|---:|---:|
+| single-column pages | 133 | **94 %** |
+| multi-column pages | 95 | **94 %** |
+
+**There is no structural-vs-furniture distinction to find.** A spanning element
+is a genuine reading-order boundary 94 % of the time, in BOTH buckets — so the
+"which are furniture?" question §8.75 ended on is not the open problem. The
+column-structure-changes test proposed as the discriminator is *anti*-correlated
+(47 % of structural vs 64 % of furniture), and is refuted.
+
+Nor is detection at fault. Our line-level span test against region truth:
+
+| | count |
+|---|---:|
+| spanning regions found | 271 |
+| flagged but not spanning | 7 |
+| missed | 67 |
+
+**precision 97 %, recall 80 %.** So the rule is right and the detection is good,
+yet the implementation measured +6.42 pp worse — a contradiction, and therefore
+an instrument fault (D6). It is:
+
+`is_spanning()` is evaluated on **LINES, not elements.** A full-width paragraph
+is one element but N spanning *lines*:
+
+| per page | median | max |
+|---|---:|---:|
+| spanning REGIONS | 0 | 13 |
+| spanning **LINES** | 0 | **35** |
+
+Each cut consumes one recursion level against `MAX_CUT_DEPTH = 12`, so on
+**9 % of pages the recursion is exhausted peeling single lines** and the page
+falls through to `sorted_by_y` — raster, the worst ordering measured in this
+campaign. Span-banding degenerated into raster order on the pages with the most
+full-width text.
+
+**The idea was never tested; a defective implementation of it was.** Lines must
+be grouped into elements (contiguous full-width runs) BEFORE banding. §8.75's
+"it manufactures bands" was right by accident and wrong in substance — it bands
+per line, not per element. A wrong refutation is permanent, so this one is
+reopened rather than left to look settled.
+
+### 8.77 What LIVE can and cannot lend the document path
+
+`live.rs` (582 lines) is a temporal-reuse layer: decimated grayscale frame
+differencing, `calibrate_bands`, `crop_rows`, and reuse of `prev_out` when the
+frame is unchanged. It calls the SAME detector and recognizer and contains no
+region classifier and no layout model. **It cannot supply region semantics; it
+is strictly less informed, not more.**
+
+Its *premise* does transfer. LIVE bets that layout persists across FRAMES; a
+document's layout persists across PAGES. A running header repeats at the same y
+on every page and a masthead appears once — which is the structural-vs-furniture
+signal obtained from repetition instead of from a 3B model, and the one signal
+that needs no semantics at all.
+
+**OmniDocBench cannot reward it:** its pages are sampled individually from
+different documents, so there is no cross-page context and the measured gain
+would be zero. Worth building for real PDFs, which is what ships; recorded here
+so it is not mistaken for a benchmark lever.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
