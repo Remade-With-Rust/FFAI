@@ -1,14 +1,22 @@
 [package]
 name = "ffai-carmenta"
-description = "Carmenta — FFai's OCR component (detection + recognition, engine-selectable)"
-version.workspace = true
+description = "Carmenta — pure-Rust OCR: documents, screens, and a change-gated LIVE frame reader. Detection + recognition + computed reading order, engine-selectable."
+# Decoupled from the workspace version, as Mercury is, so Carmenta can ship
+# ahead of the rest. 0.7.0 rather than 0.6.2 because the default reading order
+# changed: per-node routing (`pernode`) replaced the plain recursive cut and
+# moves OmniDocBench holdout CER 24.77 % -> 20.27 %. The API is unchanged, but
+# this crate's OUTPUT ORDER is what a caller consumes, so a different sequence
+# for the same page is a compatibility break for anyone who pinned text.
+# The previous behaviour stays reachable at run time via `FFAI_ORDER=xycut`.
+# Its dependencies stay at the published 0.6.1.
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "README.md"
-keywords = ["ocr", "text-recognition", "computer-vision", "document-ai", "craft"]
+keywords = ["ocr", "text-recognition", "document-ai", "computer-vision", "pdf"]
 categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
