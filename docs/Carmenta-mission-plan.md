@@ -4735,6 +4735,56 @@ row alignment, so the distinction is geometric and detectable. §8.79's rule
 applies before any build — measure the base rate of grid-aligned pages first,
 because a predicate that fires on everything or nothing is not a signal.
 
+### 8.84 The grid lever REFUTED — row/column-major is not a page-level property
+
+§8.83 flagged `omni-0116`, a contents grid whose truth reads ROW-major while we
+read column-major, as the one unpriced lever left. Priced, with §8.79's base-rate
+check first.
+
+**Base rate passes.** Of 173 holdout pages whose regions form a 2-D arrangement,
+the truth reads row-major on **66 (38 %)** and column-major on 102. Non-degenerate
+— the predicate fires on neither everything nor nothing, which is the test
+§8.79 exists to impose. Row-major pages span every source (magazine 15,
+academic 14, book 10, newspaper 10).
+
+**And the ceiling is NEGATIVE.** The decision only exists at block level, so it
+is measured with grouping given, isolating the row/column choice:
+
+| newspaper + magazine, 632 770 chars | CER |
+|---|---:|
+| oracle grouping, **our** block order | **13.72 %** |
+| all blocks ROW-major | 58.43 % |
+| all blocks COLUMN-major | 25.76 % |
+| **ORACLE — pick row/col-major per page** | **23.42 %** |
+| oracle TRUE order | 6.89 % |
+
+**Even a perfect per-page choice loses 9.70 pp to what we already do.** Swept
+across 12 row/column banding thresholds (row gap 0.02-0.15, column gap
+0.05-0.20) the best oracle is 19.21 %, still 5.5 pp worse than baseline. Not a
+parameterisation artifact.
+
+**Why: real pages are not globally row- or column-major.** A magazine page is a
+title THEN a grid; an article is a masthead THEN columns. A global 2-D sort
+cannot express that hierarchy, and expressing it is precisely what the recursive
+XY-cut does — which is why it beats both orderings by a wide margin. The
+`omni-0116` observation was a correct description of ONE PAGE'S TILE REGION and
+wrong as a page-level rule: grid-ness is a LOCAL property of a sub-node, not of
+a page.
+
+The narrower form — row-major applied only inside a node detected as a grid —
+remains logically open, but it is a poor bet: it would enter the candidate pool,
+and that pool has now refused three candidates (`xy_cut_cost`, `order_one_level`,
+`xy_cut_span`) because the reset score cannot reliably pick a winner. §8.81
+priced the entire selection-rule prize at 1.16 pp.
+
+**This closes the ordering campaign.** Every lever is measured: threshold shift
+(§8.68), ink test (§8.71), probability map (§8.72), compound score (§8.74),
+element banding (§8.78), column-scale banding (§8.79), text continuity (§8.81),
+layout model (§8.83, 7.6 % of its prize), grid detection (§8.84). What remains
+on editorial pages is reading order that requires knowing the document, and
+§8.83's split says the other three-quarters of the corpus is
+recognition-limited anyway.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
