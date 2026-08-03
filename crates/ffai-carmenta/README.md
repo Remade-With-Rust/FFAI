@@ -52,10 +52,12 @@ states its record on):
 
 | 236 real document pages | CER | correctness |
 |---|---:|---|
-| `mobiledet-crnn` | **20.27 %** micro · 31.41 % macro | 236/236 PASS |
+| `mobiledet-crnn` | **18.88 %** micro · 30.25 % macro | 236/236 PASS |
 
-Reading order is worth **4.5 points of CER** on this corpus and the recursive cut
-is worth **3.4x** against raster ordering. An oracle layout model would be worth
+Reading order is worth **5.9 points of CER** on this corpus and the recursive cut
+is worth **3.4x** against raster ordering. The page picks its own ordering at run
+time — three strategies are computed and the most column-coherent kept, which no
+single strategy matches. An oracle layout model would be worth
 a further ~12 points — measured, and the ceiling every ordering idea competes
 for.
 

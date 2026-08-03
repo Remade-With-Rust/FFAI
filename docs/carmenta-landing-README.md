@@ -39,11 +39,12 @@ its record on:
 
 | | CER | correctness |
 |---|---:|---|
-| `mobiledet-crnn` | **20.27 %** micro · 31.41 % macro | **236/236** |
+| `mobiledet-crnn` | **18.88 %** micro · 30.25 % macro | **236/236** |
 
 Reading order is computed by a recursive XY-cut over detector boxes, routed
 per-node between a column grid and a projection cut. **No layout model, no extra
-weights.** It is worth 4.5 points of CER, and 3.4x against reading top-to-bottom.
+weights.** It is worth 5.9 points of CER, and 3.4x against reading top-to-bottom.
+The page selects among three orderings at run time on a column-coherence score.
 
 ### Against the state of the art
 

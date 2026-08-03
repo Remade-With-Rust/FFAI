@@ -456,7 +456,7 @@ reduction, from ordering alone, with no new weights.
 
 On the FULL 236-page holdout — obtainable only after a progressive-JPEG decoder
 fix, since 35 pages previously could not be read at all — `mobiledet-crnn` now
-reads **20.27 % CER (micro), 236/236 correctness**. Per-node routing of the
+reads **18.88 % CER (micro), 236/236 correctness**. Per-node routing of the
 reading-order cut is worth **4.5 points** of that, and the recursive cut is worth
 **3.4x** against raster order.
 
