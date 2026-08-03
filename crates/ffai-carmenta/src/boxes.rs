@@ -580,6 +580,13 @@ fn order_by_selection(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>
         xy_cut_pernode(lines.clone(), page_w, 0),
         xy_cut(lines.clone(), page_w, 0),
         xy_cut_vfirst(lines.clone(), page_w, 0),
+        // `order_one_level` — the explicit column grid — was tried in this pool
+        // and is NOT kept. Holdout 18.88 % -> 18.65 %, but the CI spans zero
+        // ([-0.90, +1.44]) and the page count is NEGATIVE: 3 better, 4 worse,
+        // on only 7 pages changed. It is almost never the most column-coherent
+        // candidate, so the reset score rarely picks it. -0.23 pp also sits
+        // under the ~0.5 pp run-to-run variance of §8.53. Reachable as
+        // `FFAI_ORDER=onelevel`.
         // `xy_cut_cost` is deliberately NOT in this pool. Measured on holdout it
         // is 24.73 % standalone against `pernode`'s 20.27 % — significantly
         // worse, CI [-7.99, -1.23] — and adding it as a fourth candidate moved

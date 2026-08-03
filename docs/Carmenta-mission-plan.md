@@ -4129,6 +4129,87 @@ classes, learned rankers, text features, nine hand-set constants, and the
 detector's own probability map. The one thing that worked needed no new
 information at all — it re-read output the pipeline already produces.
 
+### 8.73 What Unlimited-OCR actually does — and why segmentation is the wrong axis
+
+Their adapter leaks the model's raw generation, which settles how they organise a
+page. Every region is emitted as a token span:
+
+```
+<|det|>CLASS [x0, y0, x1, y1]<|/det|>TEXT
+```
+
+**The order of emission IS the reading order.** No sort, no column detection, no
+merge — a single autoregressive sequence, each region conditioned on everything
+already emitted. Ten classes, not OmniDocBench's six: `text, header, title,
+footer, page_number, image, page_footnote, image_footnote, image_caption,
+aside_text`. Note `image` — emitted with EMPTY text, purely to localise the
+figure, the exact object our box projection cannot see (§8.72: text-probability
+reads 0.0000 in every valley, figure or blank).
+
+On `omni-0001` the emission runs page_number, header, then the LEFT column
+top-to-bottom (x≈50, y 86→613), then the RIGHT column (x=500, y 85→508), then
+`image` and `image_caption` together. **Column-major, furniture first, figure
+with its caption.**
+
+**And it is correct.** Mapping their emitted regions onto the annotation by text
+match, on four multi-column figure-bearing holdout pages — the population where
+§8.60 measured our slack concentrating:
+
+| page | matched regions | their inversions |
+|---|---:|---:|
+| omni-0001 | 9 | **0.0 %** |
+| omni-0006 | 6 | **0.0 %** |
+| omni-0007 | 11 | **0.0 %** |
+| omni-0013 | 9 | **0.0 %** |
+
+Perfect sequences. They are not winning a benchmark convention; they are reading
+the page in the order it is meant to be read.
+
+**Our failure is localised precisely.** Holdout, 236 pages:
+
+| | CER |
+|---|---:|
+| shipped | 18.88 % |
+| true region order + OUR within-region sequence | **12.89 %** |
+| true region order + y-sorted within region | 12.84 % |
+
+**0.05 pp apart** — re-sorting inside a region changes nothing. Our
+within-column ordering is already right; **the entire 5.99 pp is which region
+comes next.**
+
+**Segmentation into bands is REFUTED, and it is the bug itself.** Simulated on
+cached output — split the page into N horizontal bands, read column-major within
+each, concatenate:
+
+| bands x cols | CER |
+|---|---:|
+| 1 x 3 | **35.09 %** |
+| 2 x 3 | 51.79 % |
+| 3 x 3 | 55.54 % |
+| 6 x 3 | 62.63 % |
+
+**Monotonically worse with more bands.** Every band boundary severs a column, and
+band-major reading crosses columns by construction — that is exactly
+`omni-0038`'s `[0,5,1,5,1,5…]`. A 3x3 grid reproduces the figure bug
+deliberately. The family's best member is ONE band (no horizontal segmentation
+at all), which is pure column-major.
+
+**So the decomposition axis is vertical, not horizontal.** A column is a
+contiguous run of the true reading order and can be ordered independently then
+concatenated. A band is a slice ACROSS several runs and cannot.
+
+**`order_one_level` in the selection pool: tried, not kept.** Holdout 18.88 % ->
+18.65 %, but the CI spans zero ([−0.90, +1.44]), the page count is NEGATIVE
+(3 better, 4 worse), only 7 pages changed, and −0.23 pp is under §8.53's ~0.5 pp
+run-to-run variance. It is almost never the most column-coherent candidate, so
+the reset score rarely selects it. Reverted; reachable as `FFAI_ORDER=onelevel`.
+
+**What remains.** The one case where a band boundary is genuinely correct is
+where the column COUNT changes — under a masthead. One boundary on a newspaper,
+zero on an academic paper. Distinguishing that from a figure's whitespace is the
+open problem, and §8.71/§8.72 measured that neither ink nor the detector's
+probability map can do it. Their `image` class can, because it was trained to.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
