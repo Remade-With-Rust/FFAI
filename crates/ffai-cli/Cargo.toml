@@ -25,6 +25,17 @@ ffai-diana = { workspace = true }
 ffai-argus = { workspace = true }
 ffai-bench = { workspace = true }
 anyhow = { workspace = true }
+# The allocator is a MEASURED component of this binary, not a preference.
+#
+# The system allocator re-faults nearly every byte it hands back: 58,634 page
+# faults per image, ~234 MiB of freshly-faulted pages against 293.7 MiB/image
+# of allocation. Swapping to an allocator that keeps pages mapped measured
+# 74.6 -> 45.5 ms per image, 6/6 with non-overlapping ranges.
+#
+# A library cannot set a global allocator, so it is set here in the binary.
+# Downstream users of `ffai-diana` as a crate do NOT inherit it and should
+# make the same choice for themselves; the README says so.
+mimalloc = { version = "0.1", default-features = false }
 clap = { workspace = true }
 
 [lints]

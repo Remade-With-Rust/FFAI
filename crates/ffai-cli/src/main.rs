@@ -2,6 +2,31 @@
 //! the `ffmpeg` binary is a thin shell over libav*. All real logic lives in
 //! the crates so any application can embed FFai without this CLI.
 
+/// The allocator, chosen by measurement.
+///
+/// The system allocator returns memory to the OS and re-faults it: **58,634
+/// page faults per image** at the n tier, roughly 234 MiB of freshly-faulted
+/// pages against 293.7 MiB/image of allocation — essentially every byte
+/// allocated arriving on a page the process must fault in.
+///
+/// An allocator that keeps pages mapped removes that. Measured ABBA,
+/// min-of-150 per run, six pairs with non-overlapping ranges:
+///
+/// | | min-of-150 |
+/// |---|---|
+/// | system | 74.5 · 75.2 · 74.3 · 75.7 · 74.6 · 72.8 ms |
+/// | mimalloc | 45.5 · 45.5 · 44.0 · 45.1 · 46.0 · 45.5 ms |
+///
+/// **1.64x, and the slowest mimalloc run beats the fastest system run by
+/// 27 ms.** This is by a wide margin the largest single effect found in the
+/// Diana latency campaign, and it was found last because every earlier
+/// hypothesis priced work rather than page tables.
+///
+/// A library cannot set this; downstream users of the crates do not inherit
+/// it and must choose for themselves.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::path::PathBuf;
 use std::str::FromStr;
 

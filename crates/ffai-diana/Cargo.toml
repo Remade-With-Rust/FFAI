@@ -20,6 +20,11 @@ serde_json = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+# Experiment only (examples/alloc_ab.rs): 58,634 page faults per image say the
+# system allocator is re-faulting nearly every byte it hands back. This tests
+# whether an allocator that keeps pages mapped removes that cost, BEFORE any
+# decision about shipping one.
+mimalloc = { version = "0.1", default-features = false }
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 
