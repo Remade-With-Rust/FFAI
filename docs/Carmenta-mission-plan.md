@@ -5210,6 +5210,49 @@ It also closes the third adaptive lever. Page type does not gate the split
 and no page-normalised density does. Together with §8.89's six triggers, that is
 eleven distinct gates measured and refused on one defect worth ~1 pp.
 
+### 8.92 The final statement: page isolation is achievable and insufficient
+
+"Solved but undeployable because we cannot isolate it" is nearly right and the
+correction matters. The pages ARE isolable — all 10 carrying gutter merges were
+identified from ground truth. Applying the split to exactly those and nothing
+else:
+
+| | holdout CER | |
+|---|---:|---|
+| shipped, no split | **18.88 %** | |
+| split everywhere | 19.77 % | +0.89 pp |
+| **ORACLE page gate** — the 10 merge pages only | **19.40 %** | **+0.52 pp** |
+| ORACLE outcome gate — only where it helps | 18.30 % | **-0.58 pp** |
+
+**A perfect page-level gate still loses.** Inside those 10 pages:
+
+| page | delta |
+|---|---:|
+| `omni-0069` | **-68.34 pp** |
+| `omni-0137` | -18.62 pp |
+| `omni-0140` | -8.84 pp |
+| `omni-0018` | -1.25 pp |
+| `omni-0301` | -0.96 pp |
+| `omni-0124` | +0.05 pp |
+| `omni-0148` | **+34.68 pp** |
+| `omni-0144` | **+37.72 pp** |
+
+`omni-0144` and `omni-0148` ARE merge pages. The split reaches exactly the right
+pages and cuts the wrong BOXES on them. So the isolation required is per-box —
+which of this page's wide boxes is a merge and which is a masthead — and §8.87
+measured that as having no geometric answer: 20 merges hiding among 22 588
+spanning lines that differ from them by 0.02 line heights.
+
+**And the ceiling is small.** An oracle that splits only where splitting helps —
+unrealisable by construction, since it requires knowing the answer — is worth
+**0.58 pp** against a 5.82 pp gap. Every gate in §8.89-§8.91 was competing for
+that, and the best of eleven scored 18/23 against 15/23 for doing nothing.
+
+**Final statement of the lever.** The defect is real. The surgery is correct and
+demonstrably repairs the worst page in the corpus. Page-level isolation is
+achievable and insufficient. Box-level isolation is what is required and carries
+no signal. The total prize under a perfect oracle is 0.58 pp. Closed.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
