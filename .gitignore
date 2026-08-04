@@ -63,3 +63,6 @@ tools/__pycache__/
 # Scratch target dir for -C target-cpu=native experiments (docs/whys/diana-latency.md
 # D6f). Kept separate so the normal build is not invalidated by the flag.
 /target-native
+
+# scratch build dir used to compile while a measurement holds target/
+target-gate/
