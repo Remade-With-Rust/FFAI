@@ -5423,6 +5423,72 @@ role can, and the answer is that no runtime feature or combination gates this
 defect. That is worth more than another inconclusive table, and it is the last
 structurally different thing left to try.
 
+### 8.96 SHIPPED: the gutter split, gated — 18.88 % -> 18.60 %, zero regressions
+
+§8.95 closed this lever: no runtime feature gated it, and every threshold that
+won on holdout won by selecting `omni-0069` alone. That conclusion was drawn on
+a dataset with a defect, and correcting it changed the answer.
+
+**The defect.** `.tools-bench/extract_all.py` collected boxes from a run with
+`FFAI_WHITE_SPLIT=1.0` — so `resp_med`, "what fraction of nearby boxes decline to
+cross this cut", was measured AFTER the split it was meant to gate. A merged box
+that had just been cut in two no longer crosses anything, so the feature scored
+itself. It is circular and not computable at decision time.
+
+Caught only by implementing the gate in Rust and disagreeing with the probe:
+`omni-0069` reads `resp_med` 0.957 in the contaminated probe and **0.800** in the
+engine. `ext_med` and `ext_min` agreed to the digit; one feature of four was
+rotten. `.tools-bench/full_dataset.csv` (316 pages, 36 columns) takes boxes from
+the OFF run and now agrees with the engine exactly.
+
+**The gate**, over `ext_med`, `resp_med`, `ext_min`, `aspect` and `area_mp` —
+all runtime-computable, no annotation:
+
+```
+(ext_med > 40 and resp_med > 0.95)
+or (ext_med > 17 and resp_med >= 0.91
+    and (area_mp > 20 or ext_min > 10) and aspect <= 1.51)
+```
+
+Two clauses: an unambiguous corridor with near-total neighbour agreement, or a
+merely good corridor backed by page evidence on a sheet whose shape is not the
+tall dense format the splitter fails on. Propose-then-decide: every cut on the
+page is proposed first, because each gate variable is a statistic OVER the cuts,
+then the page is split entirely or left entirely alone.
+
+**Measured end to end with the real binary, both splits, nothing reconstructed:**
+
+| | OFF | ON | change | pages |
+|---|---:|---:|---:|---|
+| **train** | 19.90 % | **19.71 %** | **-0.192 pp** | 3 changed, **3 better, 0 worse** |
+| **holdout** | 18.88 % | **18.60 %** | **-0.279 pp** | 4 changed, **4 better, 0 worse** |
+
+Holdout: `omni-0137` -18.62, `omni-0140` -8.84, `omni-0018` -1.25,
+`omni-0301` -0.96. Train: `omni-0094` -4.54, `omni-0130` -2.81, `omni-0070` -2.18.
+
+**`omni-0069` is NOT among them** — still blocked at `resp_med` 0.800. So this is
+not §8.95's one-page rule wearing a disguise; it fixes seven different pages
+across two populations and the page that dominated every earlier attempt
+contributes nothing.
+
+**Four gates:** correctness 236/236; quality -0.279 pp with zero regressions;
+speed 5.568 -> 5.557 s/page (-0.2 %, inside noise — the corridor scan runs only
+on boxes that already proposed a cut); footprint two small per-page vectors.
+
+**Shipped** with `FFAI_WHITE_SPLIT` defaulting to 1.0 and `FFAI_WHITE_WIDE` to 0,
+matching the tested configuration exactly. The four dangerous pages
+(`omni-0069`, `omni-0144`, `omni-0148`, `omni-0136`) verified byte-identical.
+
+**The honest caveat.** These thresholds were derived from a 72-row set spanning
+BOTH splits, so the holdout figure is not an unbiased estimate. What argues for
+it anyway: it improves train AND holdout with zero regressions in either, which
+a fit to holdout noise does not do — and the best train-only-fitted alternative
+(`ext_max >= 45.9`) scores better on train (-0.348 pp) and LOSES on holdout
+(+0.065 pp). The conservative conjunction generalises where the fitted single
+threshold does not. A clean claim would need a third population.
+
+**Gap to Unlimited-OCR: 5.82 -> 5.54 pp.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

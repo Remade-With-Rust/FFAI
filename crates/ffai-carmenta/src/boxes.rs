@@ -1233,7 +1233,7 @@ pub fn split_at_white_corridor(
     w: usize,
     h: usize,
 ) -> Vec<DetBox> {
-    let mult = env_f32("FFAI_WHITE_SPLIT", 0.0);
+    let mult = env_f32("FFAI_WHITE_SPLIT", 1.0);
     if mult <= 0.0 || boxes.is_empty() {
         return boxes;
     }
@@ -1251,18 +1251,20 @@ pub fn split_at_white_corridor(
     // This is derived from the damage mechanism, not fitted: the threshold is
     // `SPAN_FRAC` itself.
     let span_w = (w as f32 * SPAN_FRAC) as usize;
-    let wide_only = env_f32("FFAI_WHITE_WIDE", 1.0) > 0.0;
+    let wide_only = env_f32("FFAI_WHITE_WIDE", 0.0) > 0.0;
 
-    let mut out = Vec::with_capacity(boxes.len());
-    for b in boxes {
+    // PASS 1 proposes every cut; the page-level GATE below decides whether any
+    // are applied. Splitting first and judging after is impossible — each gate
+    // variable is a statistic OVER the proposed cuts, so all must exist before
+    // any is acted on.
+    let mut proposed: Vec<(usize, usize)> = Vec::new(); // (box index, cut x)
+    for (bi, b) in boxes.iter().enumerate() {
         let (x0, x1) = (b.x0.min(w), b.x1.min(w));
         let (y0, y1) = (b.y0.min(h), b.y1.min(h));
         if wide_only && x1.saturating_sub(x0) < span_w {
-            out.push(b);
             continue;
         }
         if x1.saturating_sub(x0) < min_run * 3 || y1 <= y0 {
-            out.push(b);
             continue;
         }
         // A column is white when its DARKEST pixel is still light: one glyph
@@ -1270,35 +1272,109 @@ pub fn split_at_white_corridor(
         let white: Vec<bool> = (x0..x1)
             .map(|x| (y0..y1).map(|y| gray[y * w + x]).fold(255.0, f32::min) > ink)
             .collect();
-        // Interior only — the margins either side are white by construction and
-        // splitting there just shaves empty space off the box.
+        // Interior only — the margins either side are white by construction.
         let (lo, hi) = (white.len() / 10, white.len() * 9 / 10);
-        let mut cuts = Vec::new();
         let (mut run, mut i) = (0usize, 0usize);
         while i <= white.len() {
             if i < white.len() && white[i] && i >= lo && i < hi {
                 run += 1;
             } else {
                 if run >= min_run {
-                    cuts.push(x0 + i - run / 2);
+                    let c = x0 + i - run / 2;
+                    if c > b.x0 && c < b.x1 {
+                        proposed.push((bi, c));
+                    }
                 }
                 run = 0;
             }
             i += 1;
         }
+    }
+    if proposed.is_empty() {
+        return boxes;
+    }
+
+    // PASS 2 — the gate. Per cut: how far the white corridor runs VERTICALLY
+    // (a real gutter runs the column; a word space dies at the line above and
+    // below), and what fraction of vertically nearby boxes decline to cross it.
+    let mut exts: Vec<f32> = Vec::with_capacity(proposed.len());
+    let mut resps: Vec<f32> = Vec::with_capacity(proposed.len());
+    for &(bi, cx) in &proposed {
+        let b = boxes[bi];
+        let cy = b.y0.midpoint(b.y1).min(h.saturating_sub(1));
+        let col_white = |y: usize| -> bool {
+            let (a, z) = (cx.saturating_sub(2), (cx + 3).min(w));
+            (a..z).all(|x| gray[y * w + x] > ink)
+        };
+        let (mut up, mut y) = (0usize, cy);
+        while y > 0 && col_white(y) {
+            y -= 1;
+            up += 1;
+        }
+        let (mut dn, mut y) = (0usize, cy);
+        while y + 1 < h && col_white(y) {
+            y += 1;
+            dn += 1;
+        }
+        exts.push((up + dn) as f32 / lh as f32);
+
+        let near: Vec<&DetBox> = boxes
+            .iter()
+            .filter(|o| {
+                let oc = o.y0.midpoint(o.y1) as i64;
+                (oc - cy as i64).unsigned_abs() < (12 * lh) as u64
+            })
+            .collect();
+        if near.is_empty() {
+            resps.push(1.0);
+        } else {
+            let crossing = near.iter().filter(|o| o.x0 + 2 < cx && o.x1 > cx + 2).count();
+            resps.push(1.0 - crossing as f32 / near.len() as f32);
+        }
+    }
+    let med = |v: &mut Vec<f32>| -> f32 {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        v[v.len() / 2]
+    };
+    let ext_min = exts.iter().copied().fold(f32::INFINITY, f32::min);
+    let ext_med = med(&mut exts.clone());
+    let resp_med = med(&mut resps.clone());
+    let aspect = h as f32 / w.max(1) as f32;
+    let area_mp = (w as f32 * h as f32) / 1.0e6;
+
+    // The gate itself. Two clauses: an unambiguous corridor with near-total
+    // agreement from its neighbours, or a merely good corridor backed by page
+    // evidence — a large sheet or a very deep minimum — on a page whose shape is
+    // not the tall dense format the splitter fails on.
+    let pass = (ext_med > env_f32("FFAI_G_EXTMED_HI", 40.0)
+        && resp_med > env_f32("FFAI_G_RESP_HI", 0.95))
+        || (ext_med > env_f32("FFAI_G_EXTMED_LO", 17.0)
+            && resp_med >= env_f32("FFAI_G_RESP_LO", 0.91)
+            && (area_mp > env_f32("FFAI_G_AREA", 20.0)
+                || ext_min > env_f32("FFAI_G_EXTMIN", 10.0))
+            && aspect <= env_f32("FFAI_G_ASPECT", 1.51));
+    if std::env::var("FFAI_SPLIT_DEBUG").is_ok() {
+        eprintln!(
+            "gate cuts={} ext_med={ext_med:.2} ext_min={ext_min:.2} resp_med={resp_med:.3} aspect={aspect:.2} area_mp={area_mp:.1} -> {}",
+            proposed.len(),
+            if pass { "SPLIT" } else { "blocked" }
+        );
+    }
+    if !pass {
+        return boxes;
+    }
+
+    let mut out = Vec::with_capacity(boxes.len() + proposed.len());
+    for (bi, b) in boxes.iter().enumerate() {
         let mut left = b.x0;
-        for c in cuts {
+        for &(pi, c) in proposed.iter().filter(|(pi, _)| *pi == bi) {
+            let _ = pi;
             if c > left && c < b.x1 {
-                // FFAI_SPLIT_DEBUG reports each cut so a probe can characterise
-                // it without diffing two runs of the whole engine.
-                if std::env::var("FFAI_SPLIT_DEBUG").is_ok() {
-                    eprintln!("split {} {} {} {} {}", c, b.y0, b.y1, b.x0, b.x1);
-                }
-                out.push(DetBox { x0: left, x1: c, ..b });
+                out.push(DetBox { x0: left, x1: c, ..*b });
                 left = c;
             }
         }
-        out.push(DetBox { x0: left, ..b });
+        out.push(DetBox { x0: left, ..*b });
     }
     out
 }
