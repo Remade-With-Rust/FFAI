@@ -5360,6 +5360,69 @@ compelling separation dissolved that way — §8.91's line count, §8.93's 4.7x 
 extent, and this. Each appeared after a run of honest refutations, which is
 exactly when the temptation to accept one is strongest.
 
+### 8.95 72 pages, 18 runtime features, and the answer is still one page
+
+§8.94 showed a 7-page table decides nothing. The fix is more pages, so every
+page where the split fires was characterised — **72 of them, 23 train and 49
+holdout** — on 18 RUNTIME-ONLY features. No annotation-derived feature was
+collected: `largest_region_area`, `%_cut_inside_a_region` and
+`annotated_regions` all separated the 7 pages and all require knowing where the
+real regions are, which is the problem being solved.
+
+Raw data: `.tools-bench/allfeat.csv`, 72 rows x 21 columns.
+
+**A mechanistic rule emerged from train.** `ext_min` — the MINIMUM whitespace
+corridor across all cuts on a page — encodes "every cut must sit in a deep
+corridor, and one bad cut disqualifies the page", which is exactly the observed
+failure (`omni-0148` made 17 cuts and needed only a few bad ones to lose 34 pp).
+On train it is a plateau, not a knife-edge: thresholds 1.5-3.5 all save
++11 to +12.4 pp unweighted, and the biggest train loser `omni-0142` (+13.95 pp)
+has `ext_min` 1.41 and is correctly blocked.
+
+**`ext_min >= 3.0` was committed on train, then judged once. It FAILED:**
+
+| | holdout corpus CER |
+|---|---:|
+| shipped, no split | **18.88 %** |
+| split everywhere | 19.77 % (+0.89) |
+| **`ext_min >= 3.0` (committed)** | **19.35 % (+0.47)** |
+
+**And train and holdout disagree about the optimum**, which is the signature of
+noise rather than signal:
+
+| `ext_min >=` | train (weighted) | holdout (weighted) |
+|---:|---:|---:|
+| 2.0 | **-0.343 pp** | +0.22 pp |
+| 3.0 | **-0.336 pp** | +0.47 pp |
+| 6.0 | -0.182 pp | -0.08 pp |
+| 10.0 | -0.182 pp | **-0.31 pp** |
+
+Train's optimum is holdout's worst region.
+
+**And the holdout "wins" are one page.** Removing `omni-0069` from the selection:
+
+| rule | holdout | without `omni-0069` |
+|---|---:|---:|
+| `ext_min >= 6.0` (15 pages) | 18.80 % (-0.08) | **19.10 % (+0.22)** |
+| `ext_min >= 10.0` (4 pages) | 18.57 % (-0.31) | **18.87 % (-0.01)** |
+
+At threshold 10 the entire gain IS `omni-0069`; the other three pages contribute
+0.01 pp. At threshold 6 the other fourteen are actively harmful and one page
+drags the total negative. **Every threshold that wins on holdout wins by
+selecting one page** — the page whose 68 pp has been known since §8.85. That is
+not a gate, it is `omni-0069` with extra steps.
+
+**Not deployed.** The committed rule lost; adopting 6.0 or 10.0 because the
+holdout curve prefers them is the contamination that already killed §8.91's line
+count, §8.93's 4.7x cut extent and §8.94's combos. The two populations agree on
+nothing except that `omni-0069` should be split.
+
+**What 72 pages bought.** Certainty. A 7-page table could not distinguish a rule
+from noise; 72 pages with a pre-committed threshold and a fixed train/holdout
+role can, and the answer is that no runtime feature or combination gates this
+defect. That is worth more than another inconclusive table, and it is the last
+structurally different thing left to try.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

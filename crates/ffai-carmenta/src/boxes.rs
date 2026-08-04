@@ -1289,6 +1289,11 @@ pub fn split_at_white_corridor(
         let mut left = b.x0;
         for c in cuts {
             if c > left && c < b.x1 {
+                // FFAI_SPLIT_DEBUG reports each cut so a probe can characterise
+                // it without diffing two runs of the whole engine.
+                if std::env::var("FFAI_SPLIT_DEBUG").is_ok() {
+                    eprintln!("split {} {} {} {} {}", c, b.y0, b.y1, b.x0, b.x1);
+                }
                 out.push(DetBox { x0: left, x1: c, ..b });
                 left = c;
             }
