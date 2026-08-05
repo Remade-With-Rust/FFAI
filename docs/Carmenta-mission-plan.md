@@ -6809,6 +6809,82 @@ times a page. Then the other eight. That is worth more than every rule this
 campaign has fitted, and it is the first target in it that is not a statistics
 problem.
 
+### 8.121 `omni-0245` is a screenshot, and the rule that fixes it fixes only it
+
+§8.120 named nine pages carrying 8.77 pp of macro. This opens the largest.
+
+**What the page is.** `omni-0245` is a programming-book page. Its annotation is
+**315 characters — three prose paragraphs**. The rest of the page is a screenshot
+of Google results and a browser devtools panel, and we transcribe the HTML out of
+the screenshot:
+
+```
+Iadiv Ad= €enter col" style visabilatyi #isible; paddang (Op; Gpx;=
+V<div classe ned   1d= re>  role? Fain -
+```
+
+2 803 characters emitted under `FFAI_BODY_ONLY`, against 315 annotated. The
+filter removed 225. It is useless here because a devtools panel is
+GEOMETRICALLY A PARAGRAPH — dense, left-aligned, constant pitch, wide. Every
+feature the filter owns says body text. The signal is not geometry: **the text is
+not language**.
+
+**Which is what the conjunction search had already found.** `conf < 0.9` appears
+in every top candidate of §8.120's 39 111, and it was dismissed because `top3`
+read 98 %. That dismissal applied §8.114's concentration gate, which was built
+for MICRO where concentration means a rule fitted to noise. Under a page-weighted
+metric concentration is not automatically a defect — the metric is SUPPOSED to
+move when a broken page is fixed. So the gate was replaced by the question that
+actually separates the two cases:
+
+> does the rule move the 9 broken pages, and does it leave the other 227 alone?
+
+| rule | TAIL pp | BODY pp | NET pp | prec |
+|---|---:|---:|---:|---:|
+| `conf < 0.90` | +49.77 | -1.170 | +0.772 | 0.341 |
+| `conf < 0.80` | +26.60 | -0.464 | +0.568 | 0.446 |
+| + page >= 25 % low-conf | +49.52 | -1.031 | +0.897 | 0.294 |
+| **+ page >= 40 % low-conf** | **+49.52** | **-0.680** | **+1.235** | 0.344 |
+| + page >= 60 % low-conf | **+0.00** | -0.626 | -0.602 | 0.035 |
+
+The §8.116 density gate transfers: it keeps 99.5 % of the tail gain and halves
+the body damage. And then the threshold sweep refutes the whole thing.
+
+**TAIL is +49.52 at EVERY threshold from 0.20 to 0.55.** It does not move because
+it is one page. Of the nine broken pages the rule reaches exactly one:
+
+| | |
+|---|---:|
+| `omni-0245` contributes | **+1.888 pp** |
+| damage to the other 231 | **-0.654 pp** |
+| net | +1.235 pp |
+
+**§8.95's one-page rule, in a new objective.** The macro-concentration argument
+was correct in principle and does not apply: the right macro gate is whether a
+rule fixes the tail POPULATION, and this fixes one member of it while taxing
+everything else. Refused.
+
+**And the plateau argument is weaker than this campaign has been claiming.**
+0.40-0.50 reads flat, but the flatness is the SAME FIVE PAGES being selected at
+every threshold. A plateau across an unchanging population is not evidence of
+robustness, only of a constant that has stopped mattering. That applies backwards
+to §8.116, whose 4/6/8 plateau selected the same four pages — the branch stands
+because it was validated end-to-end (-0.67 pp predicted, -0.68 pp measured), but
+the plateau was never the reason.
+
+**The real conclusion, and it ends the suppression campaign properly.** The nine
+pages do not fail for a reason a line-level text rule can express. `omni-0245`
+fails because a SCREENSHOT OF A UI is being transcribed as document text — that
+is a region-classification problem, and §8.105 said so from the other direction
+when it measured 14.6 % of output landing in unannotated regions. Ten sections
+of line features cannot see the difference between a paragraph and a picture of
+a paragraph.
+
+**Next: figure/screenshot detection, not another filter.** The target is now
+specific — nine pages, one dominant failure mode, and a class of content
+(embedded UI captures, code listings, terminal output) that the detector should
+never have handed to the recognizer.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
