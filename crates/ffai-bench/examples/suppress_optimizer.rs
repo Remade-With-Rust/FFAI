@@ -69,9 +69,25 @@ struct Args {
 struct Row {
     orphan: bool,
     net_gain: f64,
+    /// `net_gain / page_chars` — this line's worth as a fraction of ONE page's
+    /// CER. Summed over the lines a rule drops and divided by the page count,
+    /// it IS the macro CER delta, in the units the benchmark reports (§8.119).
+    /// Zero when the CSV predates the column, in which case macro is not shown.
+    macro_gain: f64,
+    /// Needed only to count distinct pages, which is macro's denominator.
+    page: String,
+    /// `train` / `holdout`. A rule is fitted on train and judged once on
+    /// holdout; a rule whose splits disagree in SIGN is refused whatever its
+    /// total (§8.114 — `year_paren` looked like a -0.61 pp win on holdout and
+    /// three pages of 236 carried it).
+    split: String,
 
     // Geometry / run features (wide set)
     run_lines: f64,
+    run_chars: f64,
+    nn_gap: f64,
+    y_rel: f64,
+    page_year_hits: f64,
     w_p90: f64,
     same_left: f64,
     same_left_frac: f64,
@@ -79,6 +95,7 @@ struct Row {
     words: f64,
     digit: f64, // fraction 0-1  (wide)
     alpha: f64,
+    sym: f64,
 
     // Long-prose / bibliographic features
     year_paren: bool,
@@ -104,6 +121,14 @@ struct RuleResult {
     name: String,
     n: usize,
     net_gain: f64,
+    /// Macro CER delta in percentage points: `100 * sum(macro_gain) / n_pages`.
+    macro_pp: f64,
+    /// The same figure computed within each split, each over its own page count.
+    macro_train: f64,
+    macro_hold: f64,
+    /// Share of the macro delta carried by its three biggest pages. Approaching
+    /// 100 % means the rule is a page list (§8.114, §8.115).
+    top3: f64,
     precision: f64,
     recall: f64,
     true_gain: f64,
@@ -147,6 +172,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!();
     }
 
+    if rows.iter().any(|r| r.run_chars > 0.0 && r.y_rel > 0.0) {
+        println!("=== ON TOP OF THE SHIPPED FILTER (the only delta that ships) ===");
+        run_incremental(&rows, total_orphans);
+        println!();
+        println!("=== EXHAUSTIVE CONJUNCTION SEARCH, scored on MACRO ===");
+        for depth in [3usize, 4] {
+            run_search(&rows, depth);
+            println!();
+        }
+    }
+
     // Scoring systems
     if has_wide {
         println!("=== Wide scoring system ===");
@@ -159,6 +195,268 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The shipped filter, and incremental rules measured ON TOP of it
+// ---------------------------------------------------------------------------
+
+/// `ffai-carmenta::suppress::is_non_body`, transcribed. A candidate's value is
+/// what it adds to THIS, not what it scores alone — the standalone tables above
+/// double-count everything the shipped branches already drop.
+fn shipped(r: &Row) -> bool {
+    let by_width = if r.w_p90 <= 0.198 {
+        if r.run_chars <= 59.5 { r.nn_gap > 0.0129 } else { r.w_p90 <= 0.0874 }
+    } else {
+        r.y_rel <= 0.0533
+    };
+    let isolated_fragment = r.run_lines <= 3.0 && r.w_p90 < 0.35 && r.same_left < 5.0;
+    let bibliography = r.year_paren && r.page_year_hits >= 4.0;
+    by_width || isolated_fragment || bibliography
+}
+
+fn run_incremental(rows: &[Row], total_orphans: usize) {
+    type Pred = Box<dyn Fn(&Row) -> bool>;
+    // Each entry is the SHIPPED filter OR the candidate, so the delta against
+    // the shipped row is what the candidate is actually worth.
+    let cands: Vec<(&str, Pred)> = vec![
+        ("SHIPPED (baseline)", Box::new(shipped)),
+        (
+            "+ w_p90<0.30 & same_left<5",
+            Box::new(|r| shipped(r) || (r.w_p90 < 0.30 && r.same_left < 5.0)),
+        ),
+        (
+            "+ w_p90<0.25 & same_left<5",
+            Box::new(|r| shipped(r) || (r.w_p90 < 0.25 && r.same_left < 5.0)),
+        ),
+        (
+            "+ w_p90<0.35 & same_left<5",
+            Box::new(|r| shipped(r) || (r.w_p90 < 0.35 && r.same_left < 5.0)),
+        ),
+        (
+            "+ w_p90<0.30 & same_left<8",
+            Box::new(|r| shipped(r) || (r.w_p90 < 0.30 && r.same_left < 8.0)),
+        ),
+        (
+            "+ w_p90<0.30 & same_left<3",
+            Box::new(|r| shipped(r) || (r.w_p90 < 0.30 && r.same_left < 3.0)),
+        ),
+        (
+            "+ run_lines<=6 & w_p90<0.30 & same_left<5",
+            Box::new(|r| shipped(r) || (r.run_lines <= 6.0 && r.w_p90 < 0.30 && r.same_left < 5.0)),
+        ),
+    ];
+    print_header();
+    let mut base = None;
+    for (name, pred) in &cands {
+        let res = evaluate(rows, total_orphans, name, pred.as_ref());
+        print_result(&res);
+        if base.is_none() {
+            base = Some((res.macro_pp, res.macro_train, res.macro_hold, res.net_gain));
+        }
+    }
+    if let Some((bm, bt, bh, bn)) = base {
+        println!("
+  DELTA vs shipped (this is the number that decides):");
+        for (name, pred) in cands.iter().skip(1) {
+            let r = evaluate(rows, total_orphans, name, pred.as_ref());
+            let (dm, dt, dh) = (r.macro_pp - bm, r.macro_train - bt, r.macro_hold - bh);
+            let verdict = if dt > 0.0 && dh > 0.0 { "BOTH SPLITS" } else { "" };
+            println!(
+                "    {:<44} {:+7.3} pp macro  ({:+7.3} train, {:+7.3} holdout,                  {:+6.0} chars)  {verdict}",
+                name, dm, dt, dh, r.net_gain - bn
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Exhaustive conjunction search (3- and 4-variable)
+// ---------------------------------------------------------------------------
+//
+// Hand-picked rules top out around 2 variables because that is what fits in a
+// head. The corpus says the deeper conjunctions are better: the only
+// 4-variable rule in the standalone table (run<=3 & w_p90<0.40 & same_left<5 &
+// digit>0.05) carries precision 0.880 against 0.77-0.79 for every 2-variable
+// rule. Precision is what a conjunction buys -- each added clause removes false
+// drops faster than true ones -- and under MACRO a false drop on a
+// 200-character slide costs a whole page, so precision is worth more than
+// reach.
+//
+// So enumerate rather than guess. Every predicate is a (feature, threshold,
+// direction) triple; a candidate is an AND over 3 or 4 DISTINCT features. Each
+// predicate is precomputed as a bitmask over the corpus, so a candidate costs a
+// few bitwise ANDs and a walk over the survivors.
+//
+// Everything is scored INCREMENTALLY -- restricted to the lines the shipped
+// filter KEEPS -- because a rule that re-drops what is already dropped is worth
+// nothing, and the standalone tables cannot see that.
+
+struct Predicate {
+    feature: usize,
+    label: String,
+    mask: Vec<u64>,
+}
+
+fn build_predicates(rows: &[Row]) -> Vec<Predicate> {
+    type Get = fn(&Row) -> f64;
+    let specs: Vec<(&str, Get, Vec<f64>, bool)> = vec![
+        ("w_p90", (|r: &Row| r.w_p90) as Get, vec![0.20, 0.25, 0.30, 0.35, 0.45], true),
+        ("same_left", |r: &Row| r.same_left, vec![3.0, 5.0, 8.0, 14.0], true),
+        ("run_lines", |r: &Row| r.run_lines, vec![2.0, 3.0, 5.0, 8.0], true),
+        ("run_chars", |r: &Row| r.run_chars, vec![60.0, 150.0, 400.0], true),
+        ("nchars", |r: &Row| r.nchars, vec![15.0, 30.0, 60.0], true),
+        ("words", |r: &Row| r.words, vec![3.0, 6.0, 12.0], true),
+        ("conf", |r: &Row| r.conf, vec![0.90, 0.96], true),
+        ("mean_word_len", |r: &Row| r.mean_word_len, vec![3.0, 4.0], true),
+        ("digit", |r: &Row| r.digit, vec![0.05, 0.15, 0.30], false),
+        ("sym", |r: &Row| r.sym, vec![0.10, 0.25], false),
+        ("caps_word_frac", |r: &Row| r.caps_word_frac, vec![0.40, 0.60], false),
+        ("nn_gap", |r: &Row| r.nn_gap, vec![0.20, 0.60], false),
+    ];
+    let words = rows.len().div_ceil(64);
+    let mut out = Vec::new();
+    for (fi, (name, get, thresholds, less)) in specs.iter().enumerate() {
+        for &t in thresholds {
+            let mut mask = vec![0u64; words];
+            for (i, r) in rows.iter().enumerate() {
+                let v = get(r);
+                if if *less { v < t } else { v > t } {
+                    mask[i >> 6] |= 1u64 << (i & 63);
+                }
+            }
+            out.push(Predicate {
+                feature: fi,
+                label: format!("{name}{}{t}", if *less { "<" } else { ">" }),
+                mask,
+            });
+        }
+    }
+    out
+}
+
+struct Cand {
+    label: String,
+    n: usize,
+    net: f64,
+    macro_pp: f64,
+    train: f64,
+    hold: f64,
+    top3: f64,
+    prec: f64,
+}
+
+fn score_mask(
+    rows: &[Row], mask: &[u64], keep: &[u64], n_pages: usize, n_tr: usize, n_ho: usize,
+) -> Cand {
+    let (mut n, mut net, mut mac, mut mt, mut mh, mut hits) =
+        (0usize, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
+    let mut per: HashMap<&str, f64> = HashMap::new();
+    for w in 0..mask.len() {
+        let mut bits = mask[w] & keep[w];
+        while bits != 0 {
+            let i = (w << 6) + bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            let r = &rows[i];
+            n += 1;
+            net += r.net_gain;
+            mac += r.macro_gain;
+            if r.split == "train" {
+                mt += r.macro_gain;
+            } else {
+                mh += r.macro_gain;
+            }
+            if r.orphan {
+                hits += 1;
+            }
+            *per.entry(r.page.as_str()).or_insert(0.0) += r.macro_gain;
+        }
+    }
+    Cand {
+        label: String::new(),
+        n,
+        net,
+        macro_pp: if n_pages > 0 { 100.0 * mac / n_pages as f64 } else { 0.0 },
+        train: if n_tr > 0 { 100.0 * mt / n_tr as f64 } else { 0.0 },
+        hold: if n_ho > 0 { 100.0 * mh / n_ho as f64 } else { 0.0 },
+        top3: top3_share(&per),
+        prec: if n > 0 { hits as f64 / n as f64 } else { 0.0 },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rec(
+    start: usize, slot: usize, depth: usize, combo: &mut Vec<usize>,
+    preds: &[Predicate], rows: &[Row], keep: &[u64],
+    n_pages: usize, n_tr: usize, n_ho: usize,
+    best: &mut Vec<Cand>, tried: &mut usize,
+) {
+    if slot == depth {
+        let mut m = preds[combo[0]].mask.clone();
+        for &c in combo.iter().skip(1) {
+            for (w, v) in m.iter_mut().enumerate() {
+                *v &= preds[c].mask[w];
+            }
+        }
+        *tried += 1;
+        let mut c = score_mask(rows, &m, keep, n_pages, n_tr, n_ho);
+        // The two gates, applied INSIDE the search rather than after it.
+        if c.train > 0.0 && c.hold > 0.0 && c.macro_pp > 0.05 {
+            c.label = combo
+                .iter()
+                .map(|&i| preds[i].label.as_str())
+                .collect::<Vec<_>>()
+                .join(" & ");
+            best.push(c);
+        }
+        return;
+    }
+    for p in start..preds.len() {
+        if combo[..slot].iter().any(|&c| preds[c].feature == preds[p].feature) {
+            continue;
+        }
+        combo[slot] = p;
+        rec(p + 1, slot + 1, depth, combo, preds, rows, keep,
+            n_pages, n_tr, n_ho, best, tried);
+    }
+}
+
+fn run_search(rows: &[Row], depth: usize) {
+    let preds = build_predicates(rows);
+    let words = rows.len().div_ceil(64);
+    // Only the lines the shipped filter KEEPS are in play.
+    let mut keep = vec![0u64; words];
+    for (i, r) in rows.iter().enumerate() {
+        if !shipped(r) {
+            keep[i >> 6] |= 1u64 << (i & 63);
+        }
+    }
+    let n_pages = n_pages(rows);
+    let (n_tr, n_ho) = split_pages(rows);
+
+    let mut best: Vec<Cand> = Vec::new();
+    let mut tried = 0usize;
+    let mut combo = vec![0usize; depth];
+    rec(0, 0, depth, &mut combo, &preds, rows, &keep,
+        n_pages, n_tr, n_ho, &mut best, &mut tried);
+
+    best.sort_by(|a, b| b.macro_pp.partial_cmp(&a.macro_pp).unwrap());
+    println!(
+        "  {depth}-variable conjunctions: {tried} tried, {} positive on BOTH splits",
+        best.len()
+    );
+    println!(
+        "  {:<50} {:>5} {:>8} {:>8} {:>8} {:>6} {:>6} {:>8}",
+        "Rule (incremental, on top of shipped)", "n", "MACRO", "train", "holdout",
+        "top3", "prec", "chars"
+    );
+    println!("  {}", "-".repeat(108));
+    for c in best.iter().take(12) {
+        println!(
+            "  {:<50} {:>5} {:>+8.3} {:>+8.3} {:>+8.3} {:>6} {:>6.3} {:>+8.0}",
+            c.label, c.n, c.macro_pp, c.train, c.hold, fmt_top3(c.top3), c.prec, c.net
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,8 +666,14 @@ fn evaluate(
     name: &str,
     pred: &dyn Fn(&Row) -> bool,
 ) -> RuleResult {
+    let n_pages = n_pages(rows);
+    let (n_tr, n_ho) = split_pages(rows);
     let mut n = 0usize;
     let mut net = 0.0f64;
+    let mut mac = 0.0f64;
+    let mut mac_tr = 0.0f64;
+    let mut mac_ho = 0.0f64;
+    let mut per_page: HashMap<&str, f64> = HashMap::new();
     let mut orphan_hits = 0usize;
     let mut true_gain = 0.0f64;
     let mut false_cost = 0.0f64;
@@ -378,6 +682,13 @@ fn evaluate(
         if pred(r) {
             n += 1;
             net += r.net_gain;
+            mac += r.macro_gain;
+            if r.split == "train" {
+                mac_tr += r.macro_gain;
+            } else {
+                mac_ho += r.macro_gain;
+            }
+            *per_page.entry(r.page.as_str()).or_insert(0.0) += r.macro_gain;
             if r.orphan {
                 orphan_hits += 1;
                 true_gain += r.net_gain;
@@ -402,6 +713,10 @@ fn evaluate(
         name: name.to_string(),
         n,
         net_gain: net,
+        macro_pp: if n_pages > 0 { 100.0 * mac / n_pages as f64 } else { 0.0 },
+        macro_train: if n_tr > 0 { 100.0 * mac_tr / n_tr as f64 } else { 0.0 },
+        macro_hold: if n_ho > 0 { 100.0 * mac_ho / n_ho as f64 } else { 0.0 },
+        top3: top3_share(&per_page),
         precision,
         recall,
         true_gain,
@@ -409,45 +724,131 @@ fn evaluate(
     }
 }
 
+/// Pages per split, each macro figure's own denominator.
+fn split_pages(rows: &[Row]) -> (usize, usize) {
+    let mut tr = std::collections::HashSet::new();
+    let mut ho = std::collections::HashSet::new();
+    for r in rows {
+        if r.split == "train" { tr.insert(r.page.as_str()); } else { ho.insert(r.page.as_str()); }
+    }
+    (tr.len(), ho.len())
+}
+
+/// Of the macro delta a rule produces, the share carried by its three biggest
+/// pages. `year_paren` reads ~100 % here, which is what §8.114 had to discover
+/// the expensive way.
+fn top3_share(per_page: &HashMap<&str, f64>) -> f64 {
+    let tot: f64 = per_page.values().sum();
+    let gross: f64 = per_page.values().map(|v| v.abs()).sum();
+    // A net that is a near-cancellation of large opposite movements makes this
+    // ratio explode (-3207 % was observed). That is not a concentration reading,
+    // it is a division by almost zero — report NaN and let the caller print n/a.
+    if gross < 1e-12 || tot.abs() < 0.02 * gross {
+        return f64::NAN;
+    }
+    let mut v: Vec<f64> = per_page.values().copied().collect();
+    v.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap());
+    100.0 * v.iter().take(3).sum::<f64>() / tot
+}
+
+/// `top3` as a column: `n/a` when the net is a near-cancellation.
+fn fmt_top3(v: f64) -> String {
+    if v.is_nan() { "  n/a".into() } else { format!("{v:4.0}%") }
+}
+
+/// Macro's denominator: a page counts once, whatever its length.
+fn n_pages(rows: &[Row]) -> usize {
+    rows.iter().map(|r| r.page.as_str()).collect::<std::collections::HashSet<_>>().len()
+}
+
 fn print_header() {
     println!(
-        "{:<60} {:>5} {:>9} {:>7} {:>7} {:>8} {:>9}",
-        "Rule", "n", "net_gain", "prec", "rec", "trueG", "falseC"
+        "{:<48} {:>5} {:>9} {:>9} {:>8} {:>8} {:>6} {:>6}",
+        "Rule", "n", "net_gain", "MACRO pp", "train", "holdout", "top3", "prec"
     );
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(105));
 }
 
 fn print_header_short() {
     println!(
-        "{:<60} {:>5} {:>9} {:>7} {:>7}",
-        "Rule", "n", "net_gain", "prec", "rec"
+        "{:<48} {:>5} {:>9} {:>9} {:>8} {:>8} {:>6} {:>6}",
+        "Rule", "n", "net_gain", "MACRO pp", "train", "holdout", "top3", "prec"
     );
-    println!("{}", "-".repeat(95));
+    println!("{}", "-".repeat(105));
 }
 
 fn print_result(r: &RuleResult) {
     println!(
-        "{:<60} {:>5} {:>+9.0} {:>7.3} {:>7.3} {:>+8.0} {:>+9.0}",
-        r.name, r.n, r.net_gain, r.precision, r.recall, r.true_gain, r.false_cost
+        "{:<48} {:>5} {:>+9.0} {:>+9.3} {:>+8.3} {:>+8.3} {:>6} {:>6.3}",
+        r.name, r.n, r.net_gain, r.macro_pp, r.macro_train, r.macro_hold,
+        fmt_top3(r.top3), r.precision
     );
 }
 
 fn print_best(results: &[RuleResult]) {
-    if let Some(best) = results
+    // Ranked by MACRO, because that is what the benchmark aggregates
+    // (`summary.cer = mean(&cers)`). Ranking by characters optimises MICRO, and
+    // §8.119 found the whole campaign fitted to the wrong one. The two do not
+    // merely differ in size — they pick different rules and flip signs.
+    let best_macro = results
+        .iter()
+        .filter(|r| r.macro_pp > 0.0)
+        .max_by(|a, b| a.macro_pp.partial_cmp(&b.macro_pp).unwrap());
+    let best_micro = results
         .iter()
         .filter(|r| r.net_gain > 0.0)
-        .max_by(|a, b| a.net_gain.partial_cmp(&b.net_gain).unwrap())
-    {
-        println!();
+        .max_by(|a, b| a.net_gain.partial_cmp(&b.net_gain).unwrap());
+
+    println!();
+    if let Some(b) = best_macro {
         println!(
-            "Best positive-gain rule: \"{}\"  ->  net {:+.0}  (prec {:.3}, rec {:.3})",
-            best.name, best.net_gain, best.precision, best.recall
-        );
-        println!(
-            "  NOT a result yet: sum it per PAGE and check the sign on BOTH splits \
-             first (§8.114, §8.115)."
+            "Best by MACRO: \"{}\"  ->  {:+.3} pp   (micro {:+.0} chars, prec {:.3})",
+            b.name, b.macro_pp, b.net_gain, b.precision
         );
     }
+    if let Some(b) = best_micro {
+        println!(
+            "Best by micro: \"{}\"  ->  {:+.0} chars   ({:+.3} pp macro, prec {:.3})",
+            b.name, b.net_gain, b.macro_pp, b.precision
+        );
+    }
+    if let (Some(a), Some(b)) = (best_macro, best_micro) {
+        if a.name != b.name {
+            println!("  ^^ THE OBJECTIVES DISAGREE — macro is the one that scores.");
+        }
+    }
+
+    // Sign disagreement between the objectives is the single most useful thing
+    // this table produces: a rule that loses characters while winning pages is
+    // invisible to every search this campaign ran before §8.119.
+    let flips: Vec<&RuleResult> = results
+        .iter()
+        .filter(|r| r.net_gain * r.macro_pp < 0.0)
+        .collect();
+    if !flips.is_empty() {
+        println!("\n  SIGN FLIPS between micro and macro ({}):", flips.len());
+        for r in flips {
+            let dir = if r.macro_pp > 0.0 { "macro WINS" } else { "macro LOSES" };
+            println!("    {:<48} {:+8.0} chars  {:+7.3} pp   {dir}", r.name, r.net_gain, r.macro_pp);
+        }
+    }
+
+    // The two gates §8.114 and §8.115 were bought at cost. Neither is optional.
+    let ok: Vec<&RuleResult> = results
+        .iter()
+        .filter(|r| r.macro_train > 0.0 && r.macro_hold > 0.0)
+        .collect();
+    println!("\n  Rules positive on BOTH splits (macro): {}", ok.len());
+    for r in ok {
+        println!(
+            "    {:<48} train {:+7.3}  holdout {:+7.3}  top3 {}",
+            r.name, r.macro_train, r.macro_hold, fmt_top3(r.top3)
+        );
+    }
+    println!(
+        "  Still not a result: a rule whose top3 share approaches 100 % is a page \
+         list, not a rule (§8.114)."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -467,16 +868,26 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
     let idx = |name: &str| col.get(name).copied();
 
     let idx_orphan = idx("orphan").ok_or("Missing column: orphan")?;
+    let idx_page = idx("page");
+    let idx_split = idx("split");
+    // Present only in `great_gate_full.csv`; older harvests score micro only.
+    let idx_macro = idx("macro_gain");
+    let idx_page_chars = idx("page_chars");
     let idx_net = idx("net_gain_if_dropped").ok_or("Missing column: net_gain_if_dropped")?;
 
     // Optional columns - default to 0 / false if absent
     let idx_run_lines = idx("run_lines");
+    let idx_run_chars = idx("run_chars");
+    let idx_nn_gap = idx("nn_gap");
+    let idx_y_rel = idx("y_rel");
+    let idx_page_year_hits = idx("page_year_hits");
     let idx_w_p90 = idx("w_p90");
     let idx_same_left = idx("same_left");
     let idx_same_left_frac = idx("same_left_frac");
     let idx_nchars = idx("nchars").or(idx("chars"));
     let idx_words = idx("words");
     let idx_digit = idx("digit");
+    let idx_sym = idx("sym");
     let idx_alpha = idx("alpha");
 
     let idx_year_paren = idx("year_paren");
@@ -520,16 +931,34 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0);
 
+        // Prefer the exported column; fall back to deriving it, so a CSV that
+        // carries `page_chars` but not `macro_gain` still scores macro.
+        let macro_gain = match idx_macro {
+            Some(i) => record.get(i).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+            None => {
+                let pc: f64 = get_f64(idx_page_chars);
+                if pc > 0.0 { net_gain / pc } else { 0.0 }
+            }
+        };
+
         out.push(Row {
             orphan,
             net_gain,
+            macro_gain,
+            page: idx_page.and_then(|i| record.get(i)).unwrap_or("").to_string(),
+            split: idx_split.and_then(|i| record.get(i)).unwrap_or("holdout").to_string(),
             run_lines: get_f64(idx_run_lines),
+            run_chars: get_f64(idx_run_chars),
+            nn_gap: get_f64(idx_nn_gap),
+            y_rel: get_f64(idx_y_rel),
+            page_year_hits: get_f64(idx_page_year_hits),
             w_p90: get_f64(idx_w_p90),
             same_left: get_f64(idx_same_left),
             same_left_frac: get_f64(idx_same_left_frac),
             nchars: get_f64(idx_nchars),
             words: get_f64(idx_words),
             digit: get_f64(idx_digit),
+            sym: get_f64(idx_sym),
             alpha: get_f64(idx_alpha),
             year_paren: get_bool(idx_year_paren),
             et_al: get_bool(idx_et_al),
