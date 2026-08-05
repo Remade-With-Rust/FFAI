@@ -5945,7 +5945,7 @@ pages, so most furniture is unannotated too.
 | shipped today | **18.88 %** |
 | + oracle suppression of unannotated regions | **11.92 %** (-6.96 pp) |
 | + suppression AND oracle ordering | 5.73 % |
-| Unlimited-OCR | ~12.89 % |
+| Unlimited-OCR | ~12.89 % | <!-- WRONG, see §8.118: 12.89 % is OUR oracle-region-order CER, not their score. Measured Unlimited-OCR = 15.51 % on carmenta-omnidoc-mini (43 pages). -->
 
 **Suppression alone moves us from 5.99 pp behind to 0.97 pp AHEAD.** The entire
 competitive gap is emitting text the benchmark does not score.
@@ -6273,7 +6273,7 @@ Perfect suppression, with today's ordering and today's recognizer, puts Carmenta
 Two conclusions that were speculation before and are now arithmetic:
 
 **There is no recognition deficit.** With suppression and ordering both perfect
-we sit at **5.73 %** — less than half Unlimited-OCR's 12.89 % ACTUAL result. The
+we sit at **5.73 %** — less than half Unlimited-OCR's 12.89 % ACTUAL result <!-- WRONG, see §8.118: 12.89 % is OUR oracle number; measured Unlimited-OCR = 15.51 % -->. The
 recognizer is the strong part of this engine, which is exactly what §8.99 found
 from the other side when substitutions came in at 2.36 pp of a 26.19 pp error.
 
@@ -6598,6 +6598,77 @@ That `+0 on train` is the honest label on the branch. It is not that the rule
 fails on train; it is that train contains no page with four citation-years on
 it. The corpus requirement in §8.115 is now a measured quantity rather than a
 suspicion.
+
+### 8.118 CORRECTION — "Unlimited-OCR 12.89 %" is our own oracle, not their result
+
+Asked which document types we lose worst on, the head-to-head produced a clean
+per-class table. It was wrong twice over, and chasing why exposed a third error
+that has been shaping the campaign's framing for several sections.
+
+**1. The comparison was rigged, by me.** `.tools-bench/unlimited_out/` holds 44
+per-page markdown outputs with no manifest ordering — directory `0000` is
+`omni-0001`, `0003` is `omni-0013`. Alignment was recovered by matching each
+output to the clip it most RESEMBLES. That rule minimises Unlimited-OCR's edit
+distance by construction, while our side was scored against the correct page.
+The two arms were not measured the same way, so every per-class gap it produced
+is void. The first version of the same table, before the matching, was worse
+still — it reported Unlimited-OCR at 730 % and 6 204 % CER, and those impossible
+numbers are the only reason any of this was checked (§8.117's lesson, one
+section later).
+
+**2. The dump is a probe, not an artifact.** 44 outputs, duplicate matches (two
+directories match `omni-0006`, two match `omni-0132`), unknown provenance. It
+cannot score anything and should not be used again.
+
+**3. `12.89 %` IS NOT UNLIMITED-OCR'S SCORE.** It is ours. §8.86 measured it:
+
+| | CER |
+|---|---:|
+| shipped | 18.88 % |
+| **true region order + OUR within-region sequence** | **12.89 %** |
+| true region order + y-sorted within region | 12.84 % |
+
+Our own CER with ORACLE REGION ORDERING. The same figure is then cited three
+times — "| Unlimited-OCR | ~12.89 % |", "less than half Unlimited-OCR's 12.89 %
+ACTUAL result" — as the competitor's measured result. **The ledger contains no
+such number.** Unlimited-OCR has been harness-measured on omnidoc data exactly
+once:
+
+| corpus | pages | Unlimited-OCR | ours, that run |
+|---|---:|---:|---:|
+| `carmenta-omnidoc-mini` | 43 | **15.51 %** | 25.91 % |
+| `carmenta-doc` | 16 | 0.07 % | 46.05 % |
+
+**What this invalidates.** Every claim of the form "suppression alone moves us
+from 5.99 pp behind to 0.97 pp AHEAD" was computed against our own oracle
+wearing the competitor's name. The SCOPE thesis itself is unaffected — it rests
+on the oracle-suppression measurement (18.88 % -> 11.92 %) and on substitutions
+being 2.36 pp of 26.19 pp, neither of which involves Unlimited-OCR. What is
+withdrawn is the competitive CONCLUSION drawn from it. We do not currently know
+whether suppression puts us ahead, because the only like-for-like number is on
+43 pages against an engine vintage 6 pp worse than what ships.
+
+**What survives, and answers the question that was asked.** Our own per-page
+scores need no reference and carry no selection bias. On the 43 mini pages:
+
+| document type | our CER | chars |
+|---|---:|---:|
+| **colorful_textbook** | **33.00 %** | 9 127 |
+| **book** | **32.03 %** | 14 252 |
+| academic_literature | 21.86 % | 29 637 |
+| newspaper | 19.97 % | 78 766 |
+| PPT2PDF | 18.65 % | 1 539 |
+| magazine | 15.30 % | 36 397 |
+| exam_paper | 8.23 % | 3 927 |
+
+A **4x spread** between worst and best class. `colorful_textbook` and `book` are
+where we fail worst, and individual pages inside them reach 68-82 % CER — which
+at 2.36 pp of substitutions cannot be recognition, and must be reading order.
+
+**The outstanding measurement**, and it is now the campaign's most important
+one: run the CURRENT engine on the 43 mini pages and put a real number beside
+15.51 %. Until that exists, no statement about beating Unlimited-OCR is
+supportable in either direction.
 
 ## 9. Pure-Rust boundary and watchlist
 
