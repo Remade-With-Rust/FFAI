@@ -2404,3 +2404,44 @@ degrades across a long run, which is exactly what the alternation cancels and
 what a trailing solo pass does not. Kept with a note rather than deleted,
 because "also measure it solo" is a natural instinct and the output looks
 authoritative until you notice solo is slower than paired.
+
+
+---
+
+## The mechanism, finally named: call COUNT, not kernel quality
+
+Diana issues **1,320 matmul calls per image** — 585 from the 3x3 GEMM path and
+735 pointwise. `examples/matmul_overhead.rs` prices what that costs by
+splitting one matmul across tiles:
+
+| covering N = 102400 | calls | ms |
+|---|---:|---:|
+| one call | 1 | **1.578** |
+| ten | 10 | 1.502 |
+| twenty-two | 22 | 1.703 |
+| one hundred | 100 | **4.620** |
+
+Roughly **31 us per extra call**. Applied naively to 1,320 calls that is more
+than the whole 35 ms image, so the figure OVERSTATES the term — the probe
+re-reads the A matrix per tile and therefore prices tiling, not call overhead
+in isolation. The direction is what matters, and it reconciles every result in
+this document:
+
+* **MKL lands within noise of candle's GEMM** — kernel quality is not the gap;
+* **tiling is 30 % WORSE, three times** — it increases the call count;
+* **scaling is linear** — no cliff, no content sensitivity, just per-call cost
+  multiplied by a fixed number of calls;
+* **the matmul term is 46 % at ~50 % of peak** — respectable per call, and
+  there are simply a great many calls.
+
+ORT wins by issuing **far fewer, larger, fused operations**: conv+bn+act as
+one kernel over a blocked NCHWc layout, not 1,320 library calls with im2col
+between them. That is a graph-execution difference, not an arithmetic one, and
+it is why every kernel-level lever in this campaign has returned single digits
+or nothing.
+
+**This is the specification for the remaining work.** Not "write a faster
+GEMM" — that has been measured as a dead end from two directions — but "issue
+fewer ops": operator fusion across conv boundaries, and a layout that lets
+them fuse. Its prize is bounded by the 46 % matmul term plus the 10.5 % im2col
+fill, and it is the only remaining item large enough to matter.
