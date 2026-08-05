@@ -32,6 +32,19 @@ hound = { workspace = true }
 # For a still-image decoder it bought an indirection and cost publication.
 rusty_png = "0.2"
 rusty_jpeg = "0.2"
+# VIDEO INGEST, from crates.io rather than the git workspace.
+#
+# `sample_frames` was a stub waiting on "the rff backend". The backend is
+# PUBLISHED: rff-core, rff-format, rff-format-mp4 and rff-codec-h264 (pure
+# Rust via rusty_h264, decoder bit-exact against Cisco openh264). Depending on
+# the RELEASED crates keeps every FFai crate downstream publishable, which the
+# git dependency in the workspace root does not — that constraint cost this
+# project a publication chain once already.
+rff-core = "0.1"
+rff-format = "0.1"
+rff-format-mp4 = "0.1"
+rff-codec = "0.1"
+rff-codec-h264 = "0.1"
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.

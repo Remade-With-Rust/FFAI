@@ -242,12 +242,141 @@ fn decode_png(data: &[u8]) -> Result<ImageBuffer> {
 /// Sample frames from a video at `fps` frames/second (for Argus video
 /// understanding). Pending the rff demux/decode integration.
 pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
-    let _ = fps;
-    Err(Error::Media(format!(
-        "video frame sampling for `{}` is not wired yet — lands with the \
-         remade_ffmpeg_rs (rff) backend",
-        path.display()
-    )))
+    use rff_codec::{CodecParams, CodecRegistry};
+    use rff_format::FormatRegistry;
+
+    // Mirrors what Ultralytics does with `cv2.VideoCapture`: demux the
+    // container, decode every video packet, hand each frame on in order.
+    // Matching it is a WORK-PARITY decision — if both engines are fed the
+    // same decoded pixels, neither pays for a decode the other does not,
+    // which is the asymmetry that voided a benchmark earlier in this project.
+    let mut formats = FormatRegistry::new();
+    rff_format_mp4::register(&mut formats);
+    let mut codecs = CodecRegistry::new();
+    rff_codec_h264::register(&mut codecs);
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "mp4" | "mov" | "m4v") {
+        return Err(Error::Media(format!(
+            "`{}`: only MP4/MOV is wired (H.264 inside). Other containers land              as their rff-format-* crates publish.",
+            path.display()
+        )));
+    }
+
+    let file = std::fs::File::open(path)?;
+    let mkerr = |e: rff_core::Error| Error::Media(format!("{}: {e}", path.display()));
+    let mut demux = formats
+        .open_demuxer("mp4", Box::new(std::io::BufReader::new(file)))
+        .map_err(mkerr)?;
+    let streams = demux.read_header().map_err(mkerr)?;
+
+    let (vidx, vstream) = streams
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.media_type == rff_core::MediaType::Video)
+        .ok_or_else(|| Error::Media(format!("{}: no video stream", path.display())))?;
+
+    let mut dec = codecs.find_decoder(vstream.codec_id).map_err(mkerr)?;
+    // The decoder needs SPS/PPS from the container: H.264 in MP4 carries them
+    // in `extradata`, not inline in the samples. Without this the first frames
+    // decode to nothing and the failure looks like an empty video.
+    dec.configure(&CodecParams {
+        codec_id: vstream.codec_id,
+        width: vstream.width,
+        height: vstream.height,
+        pixel_format: vstream.pixel_format,
+        sample_rate: 0,
+        channels: 0,
+        sample_format: None,
+        extradata: vstream.extradata.clone(),
+    })
+    .map_err(mkerr)?;
+
+    // `fps <= 0` keeps every frame. Otherwise decimate on the frame INDEX
+    // using the stream's own rate — a fixed stride, reproducible, and not
+    // dependent on wall clock.
+    let src_fps = if vstream.time_base.num > 0 {
+        vstream.time_base.den as f64 / vstream.time_base.num as f64
+    } else {
+        0.0
+    };
+    let tb = vstream.time_base;
+    let stride = if fps > 0.0 && src_fps > 0.0 {
+        (src_fps / fps).round().max(1.0) as usize
+    } else {
+        1
+    };
+
+    let mut out = Vec::new();
+    let mut idx = 0usize;
+    loop {
+        let packet = match demux.read_packet() {
+            Ok(p) => p,
+            Err(rff_core::Error::Eof) => break,
+            Err(e) => return Err(mkerr(e)),
+        };
+        if packet.stream_index != vidx {
+            continue;
+        }
+        if dec.send_packet(&packet).is_err() {
+            continue;
+        }
+        while let Ok(rff_core::Frame::Video(v)) = dec.receive_frame() {
+            if idx % stride == 0 {
+                // Seconds, via the stream's own time base — a raw pts is in
+                // container ticks and means nothing to a caller.
+                let ts = v.pts.map_or(0.0, |p| {
+                    p as f64 * tb.num as f64 / tb.den.max(1) as f64
+                });
+                out.push(from_rff_frame(&v, ts)?);
+            }
+            idx += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// YUV420p to RGB8, the format every FFai engine consumes.
+///
+/// BT.601 limited range, matching OpenCV's `COLOR_YUV2RGB_I420` — so frames
+/// extracted here and frames extracted by the Python tooling agree, and a
+/// comparison between the two engines is not secretly a comparison between
+/// two colour conversions.
+fn from_rff_frame(v: &rff_core::VideoFrame, ts: f64) -> Result<VideoFrame> {
+    let (w, h) = (v.width as usize, v.height as usize);
+    if v.planes.len() < 3 || v.strides.len() < 3 {
+        return Err(Error::Media(format!(
+            "expected 3 planar YUV planes, found {}",
+            v.planes.len()
+        )));
+    }
+    let (yp, up, vp) = (&v.planes[0], &v.planes[1], &v.planes[2]);
+    let (ys, us, vs) = (v.strides[0], v.strides[1], v.strides[2]);
+    let mut rgb = vec![0u8; w * h * 3];
+    for row in 0..h {
+        for col in 0..w {
+            let yv = yp[row * ys + col] as f32 - 16.0;
+            let uv = up[(row / 2) * us + col / 2] as f32 - 128.0;
+            let vv = vp[(row / 2) * vs + col / 2] as f32 - 128.0;
+            let o = (row * w + col) * 3;
+            rgb[o] = (1.164 * yv + 1.596 * vv).clamp(0.0, 255.0) as u8;
+            rgb[o + 1] = (1.164 * yv - 0.813 * vv - 0.391 * uv).clamp(0.0, 255.0) as u8;
+            rgb[o + 2] = (1.164 * yv + 2.018 * uv).clamp(0.0, 255.0) as u8;
+        }
+    }
+    Ok(VideoFrame {
+        image: ImageBuffer {
+            width: v.width,
+            height: v.height,
+            format: ffai_core::types::PixelFormat::Rgb8,
+            data: rgb,
+        },
+        timestamp: ts,
+    })
 }
 
 #[cfg(test)]
