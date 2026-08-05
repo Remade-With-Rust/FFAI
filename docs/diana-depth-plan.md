@@ -150,3 +150,31 @@ weighted 2×2 block". No accumulation, no gradient-style scatter.
 * **Weights stay AGPL.** `-depth.pt` checkpoints carry the same licence as
   the detect ones, so the same rule applies: converted offline by the user,
   never vendored, never redistributed.
+
+
+---
+
+## The bench, scoped — and it needs no ground truth
+
+Step 6 assumed `ffai bench depth` required a ground-truth corpus (NYU/KITTI)
+and an AbsRel / delta<1.25 scorer. Scoping it says otherwise, and the reason
+matters for what the gate would be FOR.
+
+**Quality is already measured, and more strongly than GT would measure it.**
+The oracle compares our depth map against Ultralytics' **per pixel**, at all
+five tiers, worst relative error **7.4e-6**. A ground-truth metric would grade
+Ultralytics' WEIGHTS against nature; this grades our PORT against Ultralytics,
+which is the question a reimplementation has to answer. AbsRel against NYU
+would go up or down with the model, not with us.
+
+So a depth bench would add **speed and footprint**, both of which need no
+ground truth at all — the same reference adapter, the same corpus, timed.
+
+**Not built.** It is a few hours of harness work: `Task::Depth` through
+`ffai-bench`, a depth reference adapter, and a scorer whose quality column is
+reference-agreement rather than mAP. Worth doing, but it buys a ledger LINE
+for numbers we do not currently claim, where the same hours spent on
+documentation made two shipped features discoverable.
+
+**Until it exists, depth carries no speed or memory claim** — only the
+correctness one, which is stated everywhere depth is mentioned.

@@ -79,6 +79,68 @@ are exercised.
 
 ---
 
+## Depth: metric distance per pixel
+
+The same backbone and neck, a different head. `yolo26{n,s,m,l,x}-depth.pt`
+converted the same audited way, giving a dense map in **metres**.
+
+```rust
+use ffai_core::engine::{DepthEngine, DepthOptions};
+use ffai_diana::{depth_engine::Yolo26Depth, image::Geometry};
+
+let engine = Yolo26Depth::build("n", Geometry::Rect, "models");
+let out = engine.depth(&image, &DepthOptions::default())?;
+let (near, far) = out.range().unwrap();
+println!("{}x{} map, {near:.2}-{far:.2} m", out.width, out.height);
+```
+
+```
+ffai depth -i street.jpg -o depth.bin      # raw f32 metres, row-major
+ffai depth -i street.jpg -o depth.png      # 16-bit grayscale, normalised
+```
+
+Output is `(1, H/4, W/4)`, unbounded — `exp` of a clamped logit rather than a
+scaled sigmoid, which is what lets one model span an indoor corridor and an
+outdoor street. `--full-res` maps it back onto the source image.
+
+**Gated at all five tiers against Ultralytics**, per-pixel, through the engine
+rather than the bare graph:
+
+| tier | worst relative error | range on the fixture |
+|---|---:|---|
+| n | 4.05e-6 | 1.48–14.11 m |
+| s | 4.46e-6 | 1.08–16.90 m |
+| m | 7.40e-6 | 1.35–23.51 m |
+| l | 5.54e-6 | 1.47–25.79 m |
+| x | 6.19e-6 | 1.45–31.83 m |
+
+No `ffai bench depth` line yet, so **no speed or memory claim for depth** —
+only this correctness one, which is the stronger statement anyway: a
+ground-truth metric would grade Ultralytics' weights, while this grades the
+port.
+
+## LIVE: skip frames that did not change
+
+```
+ffai detect --live -i frames/          # a directory, sorted by name
+```
+
+A frame whose pixels have not moved reuses the previous detections at zero
+model cost — which also makes it an output stabiliser, since nothing re-rolls
+the model on a static scene.
+
+| sequence | model runs | skip rate | throughput |
+|---|---:|---:|---:|
+| fixed camera, ±2 sensor noise | **1 of 24** | **95.8 %** | **47.1 fps** |
+| 1 px pan per frame | 24 of 24 | 0 % | 3.5 fps |
+
+**This is for fixed cameras** — surveillance, fixed mounts, screen capture. A
+one-pixel shift already changes 63 % of the frame, so on handheld video it
+gates nothing and costs 0.2 % for the privilege. The signal is a changed-pixel
+FRACTION above a per-pixel delta noise cannot reach, not a mean difference:
+harvested on this corpus, ±6 levels of noise moved **0.000000 %** of pixels
+past the delta while a one-pixel shift moved 63 %.
+
 ## Five tiers from one graph
 
 `n`, `s`, `m`, `l`, `x` all run the **same tier-agnostic graph**. There is no
