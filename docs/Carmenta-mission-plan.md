@@ -5832,6 +5832,68 @@ remaining gap is not arithmetic, not input traffic and not scheduling; the next
 candidate is the allocator under 16-way concurrent 1 MB requests, which is a
 dependency question (a different global allocator) rather than a code one.
 
+### 8.104 The allocator WAS the constraint — and the win was already shipped
+
+§8.103 left one candidate for the scaling ceiling: the allocator under 16-way
+concurrent ~1 MB requests. Confirmed, and the investigation ended somewhere
+unexpected.
+
+**The hypothesis is right.** `examples/alloc_scaling.rs` — N threads allocating,
+touching and freeing a buffer, no engine involved:
+
+| threads | 1 MiB efficiency | the engine's efficiency |
+|---:|---:|---:|
+| 2 | 74 % | 89 % |
+| 4 | 60 % | 65 % |
+| 8 | 33 % | 44 % |
+| 16 | **22 %** | 32 % |
+
+The system allocator manages **3 001 allocations/s** of 1 MiB at one thread and
+scales only 3.47x to sixteen. The curve is the engine's curve.
+
+**mimalloc is 16x faster at one thread** (48 050/s) and 20.7x at sixteen. End to
+end on the OCR path: **1.233x, 15/16 paired, z = +3.50** — a larger effect than
+the conv kernel itself.
+
+**And it was already adopted.** `ffai-cli/src/main.rs` has set
+`#[global_allocator] mimalloc` since the Diana latency campaign, with its own
+recorded justification (58 634 page faults per image; **1.64x**, six ABBA pairs
+with non-overlapping ranges). The boundary question was settled before this
+session, and correctly: **a library cannot set a global allocator — only a
+binary can** — so the crates impose nothing on downstream users.
+
+For the record, mimalloc is not the project's first C dependency either:
+`onig_sys` (Oniguruma) arrives through `tokenizers` -> **candle-core itself**,
+and `aws-lc-sys` through `rustls` -> `hf-hub` -> `ffai-models`. The recorded
+boundary is about foreign INFERENCE RUNTIMES ("No ONNX Runtime, no MNN"), which
+this is not.
+
+**The finding that matters is an instrument failure, and it is mine.** A global
+allocator is a LINK-TIME choice, so `examples/` do NOT inherit the CLI's. Every
+wall-clock number in §8.100-§8.103 came from `ocr_text`, running on the system
+allocator — **a program that does not ship**. Corrected:
+
+| | system (measured) | mimalloc (ships) |
+|---|---:|---:|
+| 4 threads | 2.62x | **3.44x** |
+| 8 threads | 3.49x | **4.95x** |
+| 16 threads | 5.09x | **6.07x** |
+| 16-thread wall | 6.03 s | **4.47 s** |
+
+So the scaling §8.103 called "52 % of the silicon" was really 6.07x, and the
+1.56 s it was hunting had already been recovered in the product.
+
+**§8.101's kernel re-verified under the shipping configuration: 1.172x, 15/16
+paired, z = +3.50** — it holds, and is slightly BETTER than the 1.107x measured
+without mimalloc. `ocr_text` now sets the allocator too, so future numbers
+describe the program that ships.
+
+**The lesson.** "Both arms do identical work" is depth 6's first question, and it
+has a corollary this session had to learn the hard way: **both arms must also be
+the SAME PROGRAM as the one that ships.** A harness that differs from the
+product in its allocator, its thread pool or its build profile measures the
+wrong binary, and every number it produces inherits the error.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
@@ -5852,6 +5914,7 @@ dependency question (a different global allocator) rather than a code one.
 | rff image decoders (PNG/JPEG/WebP) | ROADMAP Phase 3 — Carmenta's ingest route |
 | rff video ingest (frame iteration for LIVE) | needed by M-C2; scope it early |
 | **Pure-Rust PDF rasterizer** | does not exist at production grade; candidate future Remade-With-Rust project (`rff-pdf` or sibling). Until then, LONG consumes pre-rendered page images |
+| **Pure-Rust global allocator** | ADOPTED mimalloc (C) in `ffai-cli` only, on measurement: 1.64x Diana, 1.233x Carmenta, 16x on 1 MiB allocation throughput. To be replaced by a Rust equivalent when one is production-grade — no current pure-Rust allocator (`talc`, `rlsf`, `buddy_system_allocator`) targets multithreaded server workloads; they are no_std/real-time designs with a single arena. Candidate future Remade-With-Rust project. A library must never set this; only the binary does |
 | Deferred feature map | preprocessing beyond §3 (dewarp, super-res), ensemble/voting, handwriting + vertical text, seal/chart heads, embeddings output for RAG, VLM-refinement hybrid — parked until a function's gate demands one; nothing lands without a corpus that can fail it |
 
 ---

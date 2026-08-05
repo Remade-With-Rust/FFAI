@@ -8,6 +8,18 @@
 //!
 //! Usage: `ocr_text <engine> <image>`
 
+// MATCH THE SHIPPING BINARY (§8.104). `ffai-cli` sets mimalloc as its global
+// allocator with a recorded 1.64x justification, and a global allocator is a
+// LINK-TIME choice that examples do not inherit. Every wall-clock number this
+// example produced before this line was therefore measured on a configuration
+// that does not ship — the system allocator, whose 1 MiB throughput is 16x
+// lower and whose 16-thread scaling is 5.09x against mimalloc's 6.07x.
+//
+// A measurement harness that differs from the product in its allocator is
+// measuring the wrong program.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use ffai_carmenta::engine::{CraftCrnn, DetStage, RecStage};
 use ffai_core::engine::{OcrEngine, OcrOptions};
 

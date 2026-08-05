@@ -32,6 +32,11 @@ rayon = { workspace = true }
 png = { workspace = true }
 
 [dev-dependencies]
+# Examples only, never the library. `ffai-cli` sets mimalloc as its global
+# allocator (see its main.rs); a global allocator is a link-time choice, so a
+# measurement example must set it too or it measures a program that does not
+# ship (§8.104). The library itself imposes nothing on its consumers.
+mimalloc = { version = "0.1", default-features = false }
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 
