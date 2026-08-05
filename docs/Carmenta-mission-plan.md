@@ -6938,6 +6938,61 @@ decisive —
 
 Recorded before the result so the criterion cannot be chosen to fit it.
 
+### 8.123 Re-priced in MACRO: suppression is worth 2.3x more, and it WINS
+
+Every ceiling this campaign steered by was micro. §8.119 showed the benchmark
+aggregates `mean(&cers)`, so none of them described the metric that decides, and
+§8.118 withdrew the competitive claim built on them. This re-prices them
+EXACTLY — re-scoring every page with Levenshtein under each oracle, never the
+±chars proxy that §8.120 measured under-predicting the engine by ~60 %.
+
+**The instrument validates itself.** The micro column reproduces the campaign's
+own headline figures to the digit:
+
+| holdout, 236 pages | micro | **MACRO** |
+|---|---:|---:|
+| keep everything | **18.88 %** | **30.25 %** |
+| ORACLE suppression | **11.92 %** | **14.11 %** |
+| + oracle ordering | 5.66 % | 8.21 % |
+
+18.88 and 11.92 are §8.86's and §8.105's numbers exactly, so the macro column
+beside them can be trusted.
+
+**Oracle suppression is worth -16.14 pp in macro against -6.96 pp in micro —
+2.3x larger.** It lands at **14.11 %, ahead of Unlimited-OCR's measured
+15.51 %.** §8.118 was right to withdraw the claim that suppression puts Carmenta
+ahead, because it rested on our own oracle wearing the competitor's name. The
+claim is now re-established on a correct number and the correct statistic.
+
+**All nine over-100 % pages fall below 100 % under oracle suppression: 9 -> 0.**
+The tail is entirely a suppression problem, which is what §8.121 concluded from
+the other side — those pages fail because a screenshot is transcribed as document
+text, and removing it fixes them outright. Train shows the same shape at 1 -> 0.
+
+**Where that leaves the campaign, priced correctly for the first time:**
+
+| | macro |
+|---|---:|
+| shipped today (body-only) | 25.85 % |
+| Unlimited-OCR | 15.51 % |
+| **gap** | **10.34 pp** |
+| suppression prize captured | 4.27 pp of 16.14 pp (**26 %**) |
+| **prize remaining** | **~11.9 pp** |
+
+**The remaining prize exceeds the gap.** Closing it needs 87 % of what is left —
+demanding, and a defined target rather than a search. The micro framing hid this
+twice over: it made the prize look like 6.96 pp (half its real size) and made the
+filter's 26 % capture look like most of the work.
+
+**And it says exactly where the remaining 74 % is.** §8.117 and §8.122 proved the
+gate constants are optimal under both objectives; §8.120's 39 111 conjunctions
+found nothing; §8.121 showed the residual is screenshots and UI captures that are
+geometrically identical to paragraphs. **Line-level features are finished, and
+they were only ever going to reach a quarter of the prize.** The other three
+quarters is region classification — deciding that a block of text is a PICTURE of
+text — which is the one thing every filter in §8.106-§8.122 was structurally
+unable to see.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
