@@ -275,32 +275,79 @@ pub fn conv3x3_strided(
     crate::conv3x3::count_acts((c_out as u64) * (ohw as u64));
     let col = crate::profile::timed(|p| &p.im2col, || {
         crate::cpuop::SliceOp::new("ffai-im2col3x3", move |xs, _| {
-    let mut col = vec![0f32; c_in * 9 * ohw];
+    // Uninitialised, then FULLY written by the fill below.
+    //
+    // `vec![0f32; n]` is a complete extra write of a buffer whose every
+    // element the fill overwrites, to preserve the ~1% of it that is padding.
+    // Measured on the shipped allocator at the real size distribution
+    // (examples/zerocost.rs): 585 buffers of 380 KiB cost 3.1 ms per image to
+    // zero, roughly 7% of a 41 ms frame — and 9.4 ms at 1 MiB, where mimalloc
+    // recycles blocks rather than taking pre-zeroed pages from the OS.
+    //
+    // The earlier reading of this probe used the SYSTEM allocator and saw the
+    // 1 MiB case go NEGATIVE, because a fresh OS mapping is already zero. The
+    // allocator changed and the number changed sign; that is why this was
+    // re-measured rather than taken from the note.
+    //
+    // The cost of doing it this way is a real safety obligation: every branch
+    // of the fill must write, including the padding it used to inherit.
+    let need = c_in * 9 * ohw;
+    let mut col: Vec<f32> = Vec::with_capacity(need);
     {
+        let col = &mut col.spare_capacity_mut()[..need];
+        // `FFAI_DIANA_ZEROFILL=1` puts the redundant zero-write back, so the
+        // saving can be A/B'd in one process. ONE fill path either way — the
+        // arm adds only the wasted write, which is exactly the quantity under
+        // test, rather than a second implementation that could differ.
+        if zerofill_enabled() {
+            for d in col.iter_mut() {
+                d.write(0.0);
+            }
+        }
     // One row per (channel, ky, kx). Parallel over channels: each channel
     // owns a contiguous 9*ohw block, so the writes never overlap.
     // See `crate::parallel`: the fan-out is worth its barrier cost for a
     // single image and is pure overhead inside a parallel batch.
-    let im2col_channel = |(c, block): (usize, &mut [f32])| {
+    let im2col_channel = |(c, block): (usize, &mut [std::mem::MaybeUninit<f32>])| {
         let plane = &xs[c * hw..(c + 1) * hw];
         for ky in 0..3usize {
             for kx in 0..3usize {
-                let row = &mut block[(ky * 3 + kx) * ohw..(ky * 3 + kx + 1) * ohw];
+                let row: &mut [std::mem::MaybeUninit<f32>] =
+                    &mut block[(ky * 3 + kx) * ohw..(ky * 3 + kx + 1) * ohw];
                 for oy in 0..oh {
-                    // Source row for this vertical tap; outside the image
-                    // the destination stays zero (the padding).
+                    // Source row for this vertical tap. Outside the image the
+                    // destination is the PADDING, and must now be written
+                    // explicitly — the buffer is no longer pre-zeroed.
                     let sy = oy * stride + ky;
+                    let dst = &mut row[oy * ow..(oy + 1) * ow];
                     if sy == 0 || sy > h {
+                        for d in dst.iter_mut() {
+                            d.write(0.0);
+                        }
                         continue;
                     }
                     let src = &plane[(sy - 1) * w..sy * w];
-                    let dst = &mut row[oy * ow..(oy + 1) * ow];
                     if stride == 1 {
-                        // Contiguous copy with a horizontal offset.
+                        // Contiguous copy with a horizontal offset. The one
+                        // column the shift leaves uncovered is padding.
                         match kx {
-                            0 => dst[1..].copy_from_slice(&src[..w - 1]),
-                            1 => dst.copy_from_slice(src),
-                            _ => dst[..w - 1].copy_from_slice(&src[1..]),
+                            0 => {
+                                dst[0].write(0.0);
+                                for (d, s) in dst[1..].iter_mut().zip(&src[..w - 1]) {
+                                    d.write(*s);
+                                }
+                            }
+                            1 => {
+                                for (d, s) in dst.iter_mut().zip(src) {
+                                    d.write(*s);
+                                }
+                            }
+                            _ => {
+                                for (d, s) in dst[..w - 1].iter_mut().zip(&src[1..]) {
+                                    d.write(*s);
+                                }
+                                dst[w - 1].write(0.0);
+                            }
                         }
                     } else {
                         // sx = 2*ox + kx - 1. Solve the in-bounds range once
@@ -310,8 +357,16 @@ pub fn conv3x3_strided(
                         let lo = if kx == 0 { 1 } else { 0 };
                         let hi =
                             if w >= kx { ((w - kx) / 2 + 1).min(ow) } else { 0 };
+                        // Everything outside [lo, hi) is padding and is now
+                        // written rather than inherited.
+                        for d in dst[..lo.min(ow)].iter_mut() {
+                            d.write(0.0);
+                        }
                         for ox in lo..hi {
-                            dst[ox] = src[ox * 2 + kx - 1];
+                            dst[ox].write(src[ox * 2 + kx - 1]);
+                        }
+                        for d in dst[hi.min(ow)..].iter_mut() {
+                            d.write(0.0);
                         }
                     }
                 }
@@ -324,6 +379,13 @@ pub fn conv3x3_strided(
         col.par_chunks_mut(9 * ohw).enumerate().for_each(im2col_channel);
     }
     }
+    // SAFETY: the fill covers every channel (chunks of 9*ohw over exactly
+    // `need` elements) and, within a channel, every tap and every row — each
+    // branch above writes its whole `ow`-wide destination, padding included.
+    #[allow(unsafe_code)]
+    unsafe {
+        col.set_len(need)
+    };
             Ok((col, (c_in * 9, ohw).into()))
         })
         .run(x)
@@ -550,6 +612,20 @@ pub(crate) fn count_im2col(n: usize) {
         let bucket = (63 - bytes.max(1).leading_zeros() as usize).min(23);
         SIZE_HIST[bucket].fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
         IM2COL_ELEMS.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// See the `col` allocation: restores the redundant zero-fill for A/B.
+fn zerofill_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static C: AtomicU8 = AtomicU8::new(u8::MAX);
+    match C.load(Ordering::Relaxed) {
+        u8::MAX => {
+            let on = std::env::var("FFAI_DIANA_ZEROFILL").is_ok_and(|v| v == "1");
+            C.store(on as u8, Ordering::Relaxed);
+            on
+        }
+        v => v == 1,
     }
 }
 

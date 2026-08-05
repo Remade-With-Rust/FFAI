@@ -31,6 +31,11 @@
 //! Kept, because the measurement is correct about what it measures. See
 //! `docs/whys/diana-latency.md` — the microbench and the in-context number
 //! disagreed, and the in-context number wins.
+// The shipped allocator. The first run of this probe used the system one,
+// and mimalloc changed the whole pipeline by 1.64x — so its numbers expired.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::time::Instant;
 
 fn main() {
