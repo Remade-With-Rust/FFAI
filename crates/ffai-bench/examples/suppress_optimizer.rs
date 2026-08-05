@@ -97,6 +97,25 @@ struct Row {
     alpha: f64,
     sym: f64,
 
+    // BLOCK features (§8.132). Present only when the input is a block harvest;
+    // zero otherwise, which is how block mode is detected.
+    area_frac: f64,
+    w_med: f64,
+    blk_w: f64,
+    blk_h: f64,
+    aspect: f64,
+    n_lines: f64,
+    chars_per_line: f64,
+    isolation: f64,
+    w_cv: f64,
+    left_cv: f64,
+    h_cv: f64,
+    conf_cv: f64,
+    word_len: f64,
+    lh_rel: f64,
+    x_rel: f64,
+    left_rel: f64,
+
     // Long-prose / bibliographic features
     year_paren: bool,
     et_al: bool,
@@ -157,6 +176,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!();
 
     // Detect which feature family is present
+    if is_block_input(&rows) {
+        println!("=== BLOCK unit (§8.131-§8.132) — 98 % of characters sit in blocks");
+        println!("    that are >= 90 % one class, so a block decision loses almost");
+        println!("    nothing to a line decision, and a block carries features a");
+        println!("    line cannot have.\n");
+        println!("=== Block rules ===");
+        run_block_rules(&rows, total_orphans);
+        println!();
+        println!("=== EXHAUSTIVE CONJUNCTION SEARCH over BLOCK features, on MACRO ===");
+        for depth in [3usize, 4] {
+            run_search(&rows, depth);
+            println!();
+        }
+        return Ok(());
+    }
+
     let has_longprose = rows.iter().any(|r| r.year_paren || r.caps_word_frac > 0.0);
     let has_wide = rows.iter().any(|r| r.w_p90 > 0.0 || r.run_lines > 0.0);
 
@@ -273,6 +308,59 @@ fn run_incremental(rows: &[Row], total_orphans: usize) {
     }
 }
 
+/// Block rules, from §8.132's feature ranking. The point of the set is the
+/// CONTRAST: `area_frac` separates blocks superbly by COUNT (AUC 0.924) and the
+/// high-value orphan blocks — reference lists, journal front-matter — are WIDER
+/// and DENSER than body text, so the rules that catch the many cheap blocks and
+/// the rules that catch the expensive ones are different rules.
+fn run_block_rules(rows: &[Row], total_orphans: usize) {
+    type Pred = Box<dyn Fn(&Row) -> bool>;
+    let rules: Vec<(&str, Pred)> = vec![
+        ("area_frac < 0.004", Box::new(|r: &Row| r.area_frac < 0.004)),
+        ("area_frac < 0.010", Box::new(|r: &Row| r.area_frac < 0.010)),
+        ("w_med < 0.30", Box::new(|r: &Row| r.w_med < 0.30)),
+        ("n_lines <= 2", Box::new(|r: &Row| r.n_lines <= 2.0)),
+        ("chars_per_line < 20", Box::new(|r: &Row| r.chars_per_line < 20.0)),
+        (
+            "small: area<0.004 & n_lines<=2",
+            Box::new(|r: &Row| r.area_frac < 0.004 && r.n_lines <= 2.0),
+        ),
+        (
+            "small+narrow: area<0.004 & w_med<0.30",
+            Box::new(|r: &Row| r.area_frac < 0.004 && r.w_med < 0.30),
+        ),
+        (
+            "irregular: w_cv>0.20 & n_lines<=4",
+            Box::new(|r: &Row| r.w_cv > 0.20 && r.n_lines <= 4.0),
+        ),
+        (
+            "isolated: isolation>2.5 & area<0.010",
+            Box::new(|r: &Row| r.isolation > 2.5 && r.area_frac < 0.010),
+        ),
+        (
+            "numeric: digit>0.15 & chars_per_line<20",
+            Box::new(|r: &Row| r.digit > 0.15 && r.chars_per_line < 20.0),
+        ),
+        (
+            "header band: y_rel<0.10 & n_lines<=2",
+            Box::new(|r: &Row| r.y_rel < 0.10 && r.n_lines <= 2.0),
+        ),
+        // The expensive population, which the shape features get backwards.
+        (
+            "DENSE+WIDE (the money): chars/line>35 & blk_w>0.30",
+            Box::new(|r: &Row| r.chars_per_line > 35.0 && r.blk_w > 0.30),
+        ),
+    ];
+    print_header();
+    let mut out = Vec::new();
+    for (name, pred) in &rules {
+        let res = evaluate(rows, total_orphans, name, pred.as_ref());
+        print_result(&res);
+        out.push(res);
+    }
+    print_best(&out);
+}
+
 // ---------------------------------------------------------------------------
 // Exhaustive conjunction search (3- and 4-variable)
 // ---------------------------------------------------------------------------
@@ -301,9 +389,38 @@ struct Predicate {
     mask: Vec<u64>,
 }
 
+fn is_block_input(rows: &[Row]) -> bool {
+    rows.iter().any(|r| r.area_frac > 0.0)
+}
+
 fn build_predicates(rows: &[Row]) -> Vec<Predicate> {
     type Get = fn(&Row) -> f64;
-    let specs: Vec<(&str, Get, Vec<f64>, bool)> = vec![
+    // BLOCK features (§8.132). Thresholds bracket the measured medians —
+    // orphan blocks sit at area_frac 0.001 against body's 0.029, and the
+    // high-VALUE orphan blocks sit at 0.0099, so the grid has to resolve both.
+    let block_specs: Vec<(&str, Get, Vec<f64>, bool)> = vec![
+        ("area_frac", (|r: &Row| r.area_frac) as Get,
+         vec![0.001, 0.004, 0.010, 0.020, 0.040], true),
+        ("w_med", |r: &Row| r.w_med, vec![0.10, 0.30, 0.55, 0.75, 0.90], true),
+        ("blk_w", |r: &Row| r.blk_w, vec![0.05, 0.12, 0.25, 0.40], true),
+        ("blk_h", |r: &Row| r.blk_h, vec![0.015, 0.04, 0.09], true),
+        ("n_lines", |r: &Row| r.n_lines, vec![1.5, 2.5, 4.5, 8.5], true),
+        ("chars_per_line", |r: &Row| r.chars_per_line, vec![8.0, 20.0, 35.0, 50.0], true),
+        ("isolation", |r: &Row| r.isolation, vec![0.6, 1.2, 2.5, 5.0], false),
+        ("aspect", |r: &Row| r.aspect, vec![1.0, 2.5, 6.0], false),
+        ("w_cv", |r: &Row| r.w_cv, vec![0.02, 0.10, 0.20], true),
+        ("left_cv", |r: &Row| r.left_cv, vec![0.002, 0.02], true),
+        ("h_cv", |r: &Row| r.h_cv, vec![0.01, 0.06], true),
+        ("digit", |r: &Row| r.digit, vec![0.05, 0.15, 0.30], false),
+        ("word_len", |r: &Row| r.word_len, vec![3.0, 4.5], true),
+        ("y_rel", |r: &Row| r.y_rel, vec![0.10, 0.35, 0.65], true),
+        ("left_rel", |r: &Row| r.left_rel, vec![0.15, 0.35, 0.55], false),
+        ("conf", |r: &Row| r.conf, vec![0.90, 0.96], true),
+    ];
+    let specs: Vec<(&str, Get, Vec<f64>, bool)> = if is_block_input(rows) {
+        block_specs
+    } else {
+    vec![
         ("w_p90", (|r: &Row| r.w_p90) as Get, vec![0.20, 0.25, 0.30, 0.35, 0.45], true),
         ("same_left", |r: &Row| r.same_left, vec![3.0, 5.0, 8.0, 14.0], true),
         ("run_lines", |r: &Row| r.run_lines, vec![2.0, 3.0, 5.0, 8.0], true),
@@ -316,7 +433,8 @@ fn build_predicates(rows: &[Row]) -> Vec<Predicate> {
         ("sym", |r: &Row| r.sym, vec![0.10, 0.25], false),
         ("caps_word_frac", |r: &Row| r.caps_word_frac, vec![0.40, 0.60], false),
         ("nn_gap", |r: &Row| r.nn_gap, vec![0.20, 0.60], false),
-    ];
+    ]
+    };
     let words = rows.len().div_ceil(64);
     let mut out = Vec::new();
     for (fi, (name, get, thresholds, less)) in specs.iter().enumerate() {
@@ -428,9 +546,13 @@ fn run_search(rows: &[Row], depth: usize) {
     let preds = build_predicates(rows);
     let words = rows.len().div_ceil(64);
     // Only the lines the shipped filter KEEPS are in play.
+    // `shipped` transcribes the LINE filter, so in block mode nothing is
+    // pre-dropped and every block is in play. Scoring blocks against a line
+    // filter would double-count what the two units already share.
+    let block_mode = is_block_input(rows);
     let mut keep = vec![0u64; words];
     for (i, r) in rows.iter().enumerate() {
-        if !shipped(r) {
+        if block_mode || !shipped(r) {
             keep[i >> 6] |= 1u64 << (i & 63);
         }
     }
@@ -950,6 +1072,10 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
 
     let idx_orphan = idx("orphan").ok_or("Missing column: orphan")?;
     let idx_page = idx("page");
+    let bf: Vec<Option<usize>> = ["area_frac", "w_med", "blk_w", "blk_h", "aspect",
+        "n_lines", "chars_per_line", "isolation", "w_cv", "left_cv", "h_cv",
+        "conf_cv", "word_len", "lh_rel", "x_rel", "y_rel", "left_rel"]
+        .iter().map(|n| idx(n)).collect();
     let idx_split = idx("split");
     // Present only in `great_gate_full.csv`; older harvests score micro only.
     let idx_macro = idx("macro_gain");
@@ -1026,6 +1152,22 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
             orphan,
             net_gain,
             macro_gain,
+            area_frac: get_f64(bf[0]),
+            w_med: get_f64(bf[1]),
+            blk_w: get_f64(bf[2]),
+            blk_h: get_f64(bf[3]),
+            aspect: get_f64(bf[4]),
+            n_lines: get_f64(bf[5]),
+            chars_per_line: get_f64(bf[6]),
+            isolation: get_f64(bf[7]),
+            w_cv: get_f64(bf[8]),
+            left_cv: get_f64(bf[9]),
+            h_cv: get_f64(bf[10]),
+            conf_cv: get_f64(bf[11]),
+            word_len: get_f64(bf[12]),
+            lh_rel: get_f64(bf[13]),
+            x_rel: get_f64(bf[14]),
+            left_rel: get_f64(bf[16]),
             page: idx_page.and_then(|i| record.get(i)).unwrap_or("").to_string(),
             split: idx_split.and_then(|i| record.get(i)).unwrap_or("holdout").to_string(),
             run_lines: get_f64(idx_run_lines),
