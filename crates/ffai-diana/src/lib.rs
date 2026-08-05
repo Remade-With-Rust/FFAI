@@ -53,6 +53,7 @@ pub mod dwconv;
 pub mod engine;
 pub mod head;
 pub mod image;
+pub mod live;
 pub mod neck;
 pub mod parallel;
 pub mod profile;
