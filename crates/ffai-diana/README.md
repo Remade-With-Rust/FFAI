@@ -141,19 +141,31 @@ on its first run.
 Runtime on a hash-pinned 45-image COCO holdout, CPU only, yolo26n at 640
 rect ([`bench-detect-1785728764`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl)):
 
-| | mAP50 | p50 latency | ×realtime | steady RSS |
-|---|---:|---:|---:|---:|
-| **Diana** | **0.7014** | **41 ms** | **22.3×** | **160 MiB** |
-| ultralytics-yolo26n-rect | 0.7014 | 45 ms | 19.4× | 310 MiB |
-| ort-yolo26n | 0.6865 | 31 ms | 31.6× | 160 MiB |
+| | mAP50 | p50 latency | steady RSS |
+|---|---:|---:|---:|
+| **Diana** (rect) | **0.7014** | ~41 ms | **121 MiB** |
+| ultralytics-yolo26n-rect | 0.7014 | ~40 ms | 310 MiB |
+| ort-yolo26n (square only) | 0.6865 | 28 ms | 163 MiB |
 
-**mAP is identical to PyTorch to four decimals**, at lower latency and
-**half the memory**. Model load is 68 ms.
+**mAP is identical to PyTorch to four decimals.** Latency is **rough parity
+with Ultralytics** — median **1.11x** across seven PAIRED runs (both numbers
+from the same run, so machine drift cancels), individual runs spanning
+0.82-1.32x. An earlier version of this page said "faster than Ultralytics"
+on the strength of one favourable run; seven runs say parity, and the
+distribution straddles 1.0.
 
-**The speed gate still FAILS**, and against ONNX Runtime rather than
-PyTorch: ORT is 31 ms to our 41. It is the fastest thing in the field and
-the gate compares against the fastest, which is the right rule. We are ahead
-of it on accuracy (0.7014 vs 0.6865) and level on memory.
+Memory is the unambiguous win: **0.4x Ultralytics, 0.75x ONNX Runtime.**
+Model load is 68 ms.
+
+**The speed gate FAILS against ONNX Runtime**, and by more than a naive
+reading suggests. ORT has no rect export — it only runs square — so comparing
+our rect against its square compares our REDUCED-work configuration against
+its full-work one, rect being 70-75 % of square's pixels. At matched square
+geometry the honest figure is **2.89x** (81 ms against 28 ms), not the 1.25x
+that mismatched comparison produces.
+
+We are ahead of ORT on accuracy (0.7014 rect vs 0.6865) and use 0.75x its
+memory.
 
 That gate closed a long way in one campaign — p50 **85 → 41 ms** — and the
 four things that moved it were not the four anyone would guess:

@@ -42,7 +42,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Now FASTER than Ultralytics per image at identical mAP — 41 ms against 45 ms p50, on 160 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). Speed remains the one failing gate, and now against **ONNX Runtime** at 31 ms, which Diana beats on accuracy (0.7014 vs 0.6865) ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **At rough parity with Ultralytics per image at identical mAP — median 1.11× across seven paired runs (0.82–1.32×) — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865) ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -459,48 +459,10 @@ number a ledger line:
 | PP-StructureV3 | 19.14 % | 0.02 | 1481 MiB steady |
 | **`mobiledet-crnn` (ours, CPU)** | **23.76 %** | **0.15** | **425 MiB steady** |
 
-Carmenta's row was **25.91 %** before per-node reading-order routing landed; the
-same 43 pages, same harness, same metric now read **23.76 %**. The deficit
-against the 3B GPU reference fell from **10.40 pp to 8.25 pp** — a 21 %
-reduction, from ordering alone, with no new weights.
-
-On the FULL 236-page holdout — obtainable only after a progressive-JPEG decoder
-fix, since 35 pages previously could not be read at all — `mobiledet-crnn` now
-reads **18.88 % CER (micro), 236/236 correctness**. Per-node routing of the
-reading-order cut is worth **4.5 points** of that, and the recursive cut is worth
-**3.4x** against raster order.
-
-**Where the gap actually is, measured:** 89 % of the deficit against
-PP-StructureV3 is *sequence*, not characters. Destroy ordering in both outputs
-and the gap collapses from 13.29 pp to **1.40 pp** (69 pages, sign test
-z = +2.29). A perfect layout model is worth a further **11.95 pp** — the ceiling
-every ordering idea competes for, and five variants that tried have been refuted
-on holdout.
-
 **10.4 points behind the model that holds the record, at 17× its throughput on
 a machine with no GPU**, from 4.7 MB of detector weights against 6.4 GB —
 `correctness PASS · quality FAIL · speed PASS · footprint PASS`. Not parity.
 The same order of magnitude, in a deployment class neither reference can enter.
-
-Reading order is computed, not learned: a recursive XY-cut over the boxes the
-detector already produced — a projection, not a model — worth **39.2 % -> 33.0 %**
-across 236 pages and taking newspapers from 34.5 % to 20.1 %. Naming the engine
-matters more than naming the toolkit: on the same pages `craft-crnn` reads
-55.1 % where `mobiledet-crnn` reads 25.9 %.
-
-**Where PaddleOCR still wins, stated plainly:** the full pipeline on real
-photographs. On 45 photographed receipts (CORD-v2, CC-BY), PaddleOCR mobile
-scores **15.6 % CER to our 20.9 %** (`--engine craft-parseq`; the default
-`craft-crnn` reads 27.3 % there but wins the screen/HUD class, so the
-engine is a per-content choice, not a ranking) — despite our stronger recognition
-stage. Stage-level instrumentation localized the gap: tilt-sensitive line
-grouping between detection and recognition (deskew is the named fix), a
-share of ground-truth inflation from CORD's privacy-blurred regions that
-taxes every engine, and detection latency (5.6 s vs 2.9 s per receipt after
-adaptive scaling; was 10.5 s). Synthetic corpora tell the same story in
-miniature: Paddle 0.02 % vs our 0.31 % on clean pages. The refuted
-hypotheses (thresholds, color input) are recorded alongside the confirmed
-ones in the mission plan's campaign log.
 
 Full campaign history:
 [docs/Carmenta-mission-plan.md](docs/Carmenta-mission-plan.md) §8; every
@@ -561,15 +523,6 @@ from both sides (ledger `bench-detect-1785550365` and the ten rows after it):
 the ratio narrowing as the model grows because the weights come to dominate
 what is left. The footprint gate passes on all ten.
 
-Those memory figures are what the ledger says, which was not true a day ago.
-The harness pre-decodes every clip so the *speed* measurement excludes image
-decoding — then holds 355 MiB of buffers that the reference, running as a
-subprocess, never pays. At 45 images that cache was 37 MiB and invisible; at
-450 it inverted the gate, reading Diana as a **regression** at 413 MiB
-against 396 while it actually used 58. The harness now charges its own cache
-to itself, and the table above is a re-run rather than a hand-correction. A
-measurement that only works at one input size has an unstated precondition.
-
 The stronger statement sits
 under it: the *detections themselves* are identical — same count, same
 classes, same order — at **four tiers**, not just the smallest:
@@ -581,72 +534,21 @@ classes, same order — at **four tiers**, not just the smallest:
 | l | 187 | 187/187 | 0.170 px |
 | x | 202 | 202/202 | 0.213 px |
 
-**724 detections, no tolerance applied to count, class or order.** That is a
-stronger statement than the mAP table above it: two engines can score the
-same aggregate while disagreeing per box, and structural parity says the
-two-stage top-k selects the same anchors in the same order — the part the
-tier generalisation could plausibly have broken and that no corpus metric
-would catch. Measured on the 45-image corpus. And Diana is byte-identical to
-itself across runs and thread counts, which PyTorch does not promise.
+**Speed is the open gate, and the honest numbers are worse than an early
+reading suggested.** Against Ultralytics at matched rect geometry Diana is at
+**rough parity — median 1.11x across seven PAIRED runs**, individual runs
+spanning 0.82-1.32x. A single favourable run (0.88x) was quoted here as
+"faster than Ultralytics"; seven runs straddle 1.0 and the median is behind.
 
-Two disciplines produced that. Every layer was checked against a tracked
-oracle digest dumped from the reference before any Rust ran, and **geometry
-is a required argument, not a default.** `predict()` silently letterboxes
-rectangularly, so "YOLO's mAP" is two different numbers and M-D0 lost
-1.5–1.8 pp to an unpinned one. Diana names which one it is reporting.
+Against **ONNX Runtime** the gate fails by **2.89x at matched square
+geometry**. ORT has no rect export, so the widely-quoted 1.25x compared our
+reduced-work rect against its full-work square — rect is 70-75 % of square's
+pixels. 2.89x is the like-for-like figure.
 
-**That 1.5–1.8 pp was mostly the corpus.** It came from 45 images. Re-measured
-on 450, the geometry effect collapses to **0.14–0.68 pp** — at or under the
-band the quality gate itself uses to decide whether two numbers differ. The
-*sign* still flips by tier (n prefers rectangular, every larger tier prefers
-square) and that was tempting to wire as a per-tier default; the magnitude
-says don't. Naming the geometry matters because comparing a rectangular
-engine against a square baseline is a 1.5 pp error of pure bookkeeping.
-Choosing between them barely matters at all.
-
-**All five tiers — n/s/m/l/x — come from one tier-agnostic graph**, 2.4 M
-parameters to 55.7 M, and each is oracled independently against its own
-reference dump (worst relative delta 3.8e-6 to 8.7e-6). Widths, repeat
-counts and block kinds are derived from the checkpoint's own scale row, and
-the strict loader fails closed on any mismatch.
-
-**Every new tier found a bug the previous ones hid, which is the argument
-for having them.** s found a head width that was right at n only because
-`max(64, 80)` and `nc` both equal 80. m found that `parse_model` *overrides*
-the YAML's `c3k` flag for scales in `mlx`, turning two `Bottleneck` layers
-into `C3k` — a branch n and s never reach, on a board that was green at
-3.869e-6. A constant that is right only because the configurations you have
-tested happen to agree is found by configuration N+1, never by testing
-configuration 1 harder.
-
-**Speed is the open gate — but no longer against Ultralytics.** Diana is now
-**41 ms p50 against Ultralytics' 45 ms at identical mAP (0.7014 both), on
-160 MiB against 310 MiB** (yolo26n, 640 rect, 45-image holdout,
-`bench-detect-1785728764`). The gate still FAILS because it compares against
-the *fastest* reference, which is now **ONNX Runtime at 31 ms** — and Diana
-beats that on accuracy (0.7014 vs 0.6865) at level memory. The repo's rule is
+mAP is identical to PyTorch to four decimals in both geometries, and memory is
+the unambiguous win at 0.4x Ultralytics and 0.75x ORT. The repo's rule is
 that `verdict: claimable` needs all four gates; Diana does not get it. The
 losing row goes in the table.
-
-The paragraphs below describe the campaign that closed a **1.9× deficit to
-0.91×** and are kept as written, because the wrong turns in them are the
-point. What finally moved it was not in any of the first four hypotheses:
-**the allocator** (1.64×, 58,634 page faults per image), **the thread pool**
-(1.21× wall / 3.5× CPU), **preprocessing** (5.7×), and **epilogue fusion**
-(12.5%). Everything priced against DRAM bandwidth was overstated by 3–15×,
-because nothing in this graph leaves L3.
-
-That number took three tries to state correctly, and the two wrong versions
-are worth more than the right one. It was first published as "~2.5× behind",
-generalised from the n tier alone. The corpus sweep then appeared to show
-the gap narrowing monotonically with model size — 2.24× at n down to 0.94×
-at x, apparently *ahead* at the largest tier — which would have been a much
-better story. It was an artifact: **the sweep runs tiers in order n→x over
-several hours, so tier index and wall-clock time are perfectly confounded**,
-and this box's load drifts. Two checks killed it. A *null arm* — the same
-engine, same corpus, same config, run twice — moved the headline ratio 27%
-with nothing changed, while the reference's own throughput moved 37%. And
-re-running the tiers in **reverse order** flattened the trend to nothing:
 
 | tier | n→x order | x→n order | pinned floor |
 |---|---:|---:|---:|
@@ -655,42 +557,6 @@ re-running the tiers in **reverse order** flattened the trend to nothing:
 | m | 1.33× | 2.12× | 1.82× |
 | l | 1.65× | 1.70× | 1.83× |
 | x | 1.57× | 1.62× | 1.54× |
-
-The m cell alone swung 59% on running order. The third column is the
-cleanest instrument — each arm pinned at High priority, **minimum** of N
-repetitions rather than mean (foreign load only ever adds time, so the
-minimum is the floor of the code's own cost), arms alternated. It was run
-because the box was never quiet enough to measure on directly and waiting
-for quiet is unfalsifiable; pinning discharges the requirement instead.
-
-All three instruments agree: **no trend, no parity, ~1.9× behind.** The
-worst tier is s, not n — so it isn't monotone in model size either.
-Underneath, Diana does ~1.7× more CPU work than PyTorch to produce the
-identical answer.
-
-What is *behind* the row is now diagnosed rather than admitted. A six-whys
-descent ([docs/whys/diana-latency.md](docs/whys/diana-latency.md)) found the
-**activation at 30.9 % of a detection** — larger than any convolution shape,
-and the third time this repo has found an activation at the top of a profile.
-The cause was one function: `f32::round` is ties-away-from-zero, which no x86
-instruction implements, so it blocked vectorisation of the whole loop. The
-module had already removed `exp` for precisely that reason and left `round`
-behind. Rounding by float addition instead is **4.71× on the kernel and
-bit-identical**, worth **1.079× on the pipeline** (17/21 paired rounds,
-z = +2.84).
-
-Two levers were priced and **pruned**, which is worth as much as the fix.
-Cutting rayon's thread count saves 1.66× of CPU work but is *not* faster on
-wall (9/24, z = −1.22) — for a single image the alternative is 15 idle cores.
-And the crate compiles for the x86-64 baseline with no `target-cpu`, worth
-1.39× on the *old* SiLU kernel and **1.017× on the pipeline once the SiLU fix
-landed** (z = +0.65, inside the noise), because AVX2 was mostly rescuing
-`round()`. A confirmation expires when its baseline moves; runtime ISA
-dispatch would have been built on a number that no longer existed.
-
-What remains is structural: **~120 fork-joins per image cost 2.3–3.8× the CPU
-of the work they perform.** That is the largest named thing between Diana and
-the reference on latency, and it is not a flag.
 
 ### The same structure that loses latency wins throughput
 
@@ -710,45 +576,6 @@ Two independent runs, because one was not enough to know which part of the
 result was real. **The direction is: ahead at every tier in both runs.** The
 magnitude is not — it moves by up to 50% between runs on this box, so the
 honest claim is a range, not the 1.6× a single session would have supported.
-
-**One structural fact explains both directions.** Diana puts parallelism
-*across images* — `detect_batch` gives each core a whole image and runs the
-kernels serially inside it, so the per-layer barriers vanish entirely.
-Ultralytics cannot do that: Python's GIL rules out real in-process threads,
-so its throughput path is a batched tensor — bigger GEMMs instead of more
-cores. For **one** image our fork-join overhead dominates and we lose ~1.9×.
-For **many**, that overhead disappears and the cores win.
-
-Two honesty notes, because this is the flattering direction and that is when
-to check hardest. **The reference is measured at its best, not its default**:
-`predict(list)` defaults to batch=1 and loops at 15.76 img/s, while an
-explicit `batch=4` reaches 18.79 — measuring the default would have inflated
-our margin from 1.6× to 1.58× against a hobbled baseline. And **detection
-counts differ by 1–3 out of 68–86** (n matches exactly), the same
-threshold-boundary effect as the 0.08 pp mAP difference: a box at confidence
-0.2501 versus 0.2499 flips. Not identical work, and small enough to state
-rather than hide.
-
-**One gate turned out to be measuring luck, and the way that was
-established is the point.** The oracle asserted that our 300-row top-k
-matched the reference's row for row. On the l tier it failed while every
-layer above it matched at 4.3e-6. Rather than hunt a decode bug, we
-perturbed the *reference's own* tensors by exactly the f32 divergence we
-measure against it and re-ran *its own* selection: it could not reproduce
-its own ordering either — 581 px and 6 class flips on the **n** case that
-was passing. The two-stage top-k ranks 8400x80 candidates to 300, and where
-there are no real detections the rows near the cut sit 1e-8 apart, so their
-order is undefined and asserting on it tests the weather. The gate now
-checks the tie-robust confidence sequence for all 300 rows and positional
-box/class identity only above a measured confidence floor — and when no row
-clears it, it says so rather than reporting a pass.
-
-One methodology note worth repeating, because it inverted a result: A/B on
-**CPU time**, not wall time, when the box is loaded — but CPU time sums
-across threads, so it *dilutes* a change that removes serial work by the
-thread count. Zero-copy read 22/22 wins on wall, 8/22 (z = −1.28) on
-24-thread CPU time, and 19/22 (z = +3.41) at one thread. The A/B harness
-encodes the rule.
 
 Full campaign history:
 [docs/diana-mission-plan.md](docs/diana-mission-plan.md) §8; every number
