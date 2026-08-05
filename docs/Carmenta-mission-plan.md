@@ -5894,6 +5894,82 @@ the SAME PROGRAM as the one that ships.** A harness that differs from the
 product in its allocator, its thread pool or its build profile measures the
 wrong binary, and every number it produces inherits the error.
 
+### 8.105 The gap is SCOPE, not accuracy — we read text the benchmark does not score
+
+The plan was to hand the recognizer oracle crops from the annotation polygons:
+if most of the 26.19 pp survived, the recognizer is the ceiling; if it
+collapsed, detection is. **Depth 6 voided the measurement before it was built,
+and the replacement found something neither branch predicted.**
+
+**D6 — the oracle-crop measurement cannot exist.** The annotation polygons are
+BLOCKS, not lines: 63 % are taller than 90 px, median height 134 px, p90 549 px,
+max 1939 px. Feeding a 549 px block to a CRNN trained on 64 px single lines is
+§8.39's error verbatim, and the corpus carries no line-level geometry to build
+crops from. Any number from it would have described the wrong question.
+
+**The replacement instrument** decomposes the error into insertions, deletions
+and substitutions on the ORACLE-ORDERED text, so ordering damage is excluded and
+what remains is characters:
+
+| route | CER | deleted | substituted | **inserted** |
+|---|---:|---:|---:|---:|
+| editorial | 6.89 % | 1.58 % | 1.36 % | **3.95 %** |
+| everything else | 26.19 % | 5.85 % | **2.36 %** | **17.98 %** |
+
+**Substitutions — the recognizer actually misreading characters — are 2.36 pp of
+26.19 pp.** Insertions are 69 % of the error. The recognizer is NOT the ceiling,
+and neither is missed detection.
+
+**What the insertions are.** 14.6 % of our output characters on non-editorial
+pages land in NO annotated region. Sampled, they are content classes the
+annotation does not carry:
+
+| sample | class |
+|---|---|
+| `Vrms = 8.7 umls`, `180 = 10 mm` | equations |
+| `function getResults (amount) {`, `}` | code blocks |
+| `> 100 mg \| 1`, `8048 ." " 10>4 if` | table cells |
+| `PAEDIATRIC RESPIRATORY REVIEWS (2001) 2, 268-275` | running header |
+| `120`, `87`, `3` | page numbers, figure labels |
+
+The holdout annotation contains exactly six classes — `text_block`, `title`,
+`figure_caption`, `header`, `page_number`, `footer` — and the reference text is
+their concatenation (ratio 1.004). **No tables, no equations, no code, no
+figure-interior text**, and only 30 header/footer/page-number regions in 236
+pages, so most furniture is unannotated too.
+
+**The prize, priced in the SHIPPED order, corpus-wide:**
+
+| | CER |
+|---|---:|
+| shipped today | **18.88 %** |
+| + oracle suppression of unannotated regions | **11.92 %** (-6.96 pp) |
+| + suppression AND oracle ordering | 5.73 % |
+| Unlimited-OCR | ~12.89 % |
+
+**Suppression alone moves us from 5.99 pp behind to 0.97 pp AHEAD.** The entire
+competitive gap is emitting text the benchmark does not score.
+
+**This retargets the campaign and corrects §8.83.** That section priced a layout
+model at 7.6 % of its prize — but it measured the model for GROUPING and
+ORDERING. For SUPPRESSION the same model is worth **6.96 pp**, which is the
+whole gap. Region CLASS was dismissed in §8.80 for the same reason: it was
+evaluated as an input to sequencing, never as a filter on output.
+
+**The honest caveats.** (1) This is an ORACLE — it uses ground-truth regions. A
+real classifier captures a fraction, and the fraction is the next thing to
+measure. (2) For a document-to-text PRODUCT, reading tables and equations is
+arguably correct and the benchmark penalises it; matching the benchmark's scope
+is a benchmark decision, not a quality one, and should be a switch rather than a
+default. (3) Unlimited-OCR emits typed regions, so its harness can filter to the
+scored classes — which is very likely where its lead comes from, not from
+reading characters better.
+
+**The next build is therefore neither a recognizer nor a detector.** It is a
+region classifier used as an output FILTER, and its first measurement is how
+much of the 6.96 pp a cheap geometric one can reach before any model is
+considered.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
