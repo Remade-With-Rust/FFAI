@@ -112,49 +112,11 @@ fn pointwise_matmul(x: &Tensor, w: &Tensor, b: Option<&Tensor>, act: bool) -> Re
         Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
         None => None,
     };
-    let out = crate::cpuop::SliceOp::new("ffai-1x1-epilogue", move |ys, _| {
-        let n_out = ys.len();
-        let mut v: Vec<f32> = Vec::with_capacity(n_out);
-        {
-            let spare = &mut v.spare_capacity_mut()[..n_out];
-            let avx2 = crate::silu::avx2_enabled();
-            let fill = |(o, dst): (usize, &mut [std::mem::MaybeUninit<f32>])| {
-                let src = &ys[o * hw..(o + 1) * hw];
-                let bo = bias_v.as_ref().map_or(0.0, |b| b[o]);
-                for (d, s) in dst.iter_mut().zip(src) {
-                    d.write(*s + bo);
-                }
-                // SAFETY: every element of `dst` was written by the loop above.
-                #[allow(unsafe_code)]
-                let dst: &mut [f32] = unsafe {
-                    std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<f32>(), dst.len())
-                };
-                if avx2 {
-                    // SAFETY: avx2+fma verified at runtime.
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        crate::silu_avx2::silu_in_place(dst)
-                    }
-                } else {
-                    for e in dst.iter_mut() {
-                        *e = crate::silu::silu_scalar_pub(*e);
-                    }
-                }
-            };
-            if crate::parallel::serial_kernels() {
-                spare.chunks_mut(hw).enumerate().for_each(fill);
-            } else {
-                spare.par_chunks_mut(hw).enumerate().for_each(fill);
-            }
-        }
-        // SAFETY: `c_out` chunks of `hw` cover exactly `n_out`, all written.
-        #[allow(unsafe_code)]
-        unsafe {
-            v.set_len(n_out)
-        };
-        Ok((v, (c_out, hw).into()))
-    })
-    .run(&y)?;
+    // IN PLACE on the matmul's own buffer — see `crate::epilogue`. The
+    // previous form allocated a fresh Vec and wrote into it, which is an
+    // allocation plus a write to cold memory the write-allocate policy has to
+    // fetch first. The matmul just wrote this buffer; it is hot.
+    let out = crate::epilogue::apply(y, bias_v, hw, true)?;
     out.reshape((n, c_out, h, wd))
 }
 

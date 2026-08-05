@@ -473,49 +473,9 @@ pub fn conv3x3_strided(
             Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
             None => None,
         };
-        let out = crate::cpuop::SliceOp::new("ffai-conv3x3-epilogue", move |ys, _| {
-            let n_out = ys.len();
-            let mut v: Vec<f32> = Vec::with_capacity(n_out);
-            {
-                let spare = &mut v.spare_capacity_mut()[..n_out];
-                let avx2 = crate::silu::avx2_enabled();
-                let fill = |(o, dst): (usize, &mut [std::mem::MaybeUninit<f32>])| {
-                    let src = &ys[o * ohw..(o + 1) * ohw];
-                    let bo = bias_v.as_ref().map_or(0.0, |b| b[o]);
-                    for (d, s) in dst.iter_mut().zip(src) {
-                        d.write(*s + bo);
-                    }
-                    // SAFETY: every element of `dst` written by the loop above.
-                    #[allow(unsafe_code)]
-                    let dst: &mut [f32] = unsafe {
-                        std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<f32>(), dst.len())
-                    };
-                    if avx2 {
-                        // SAFETY: avx2+fma verified at runtime.
-                        #[allow(unsafe_code)]
-                        unsafe {
-                            crate::silu_avx2::silu_in_place(dst)
-                        }
-                    } else {
-                        for e in dst.iter_mut() {
-                            *e = crate::silu::silu_scalar_pub(*e);
-                        }
-                    }
-                };
-                if crate::parallel::serial_kernels() {
-                    spare.chunks_mut(ohw).enumerate().for_each(fill);
-                } else {
-                    spare.par_chunks_mut(ohw).enumerate().for_each(fill);
-                }
-            }
-            // SAFETY: `c_out` chunks of `ohw` cover exactly `n_out`, all written.
-            #[allow(unsafe_code)]
-            unsafe {
-                v.set_len(n_out)
-            };
-            Ok((v, (c_out, ohw).into()))
-        })
-        .run(&y)?;
+        // IN PLACE — one library op per convolution instead of two. See
+        // `crate::epilogue` for the counted reason.
+        let out = crate::epilogue::apply(y, bias_v, ohw, act)?;
         out.reshape((n, c_out, oh, ow))
     })
 }

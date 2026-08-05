@@ -51,6 +51,7 @@ pub mod direct3x3;
 pub mod direct3x3_avx2;
 pub mod dwconv;
 pub mod engine;
+pub mod epilogue;
 pub mod head;
 pub mod image;
 pub mod live;
