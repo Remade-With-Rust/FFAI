@@ -6060,6 +6060,45 @@ affiliations and long captions geometrically identical to body text. They differ
 from a paragraph only in what they MEAN. Third independent arrival at the same
 wall, after §8.81 (text continuity) and §8.87 (merge vs masthead).
 
+### 8.107 An independently-proposed run-level rule set: tested, not adopted
+
+A hand-built rule set was proposed from the exported `suppress_runs.csv` — a
+three-clause precision gate and a scoring variant, over `wmed`, `chars`,
+`char_share`, `digit` and `alpha`. Tested against the shipped filter:
+
+| | train | holdout |
+|---|---:|---:|
+| proposed 3-rule gate | -1.06 pp (27 %) | **-0.69 pp (10 %)** |
+| proposed score >= 4 | -0.99 pp (25 %) | -0.66 pp (9 %) |
+| **shipped depth-3 line tree** | -1.75 pp (44 %) | **-1.38 pp (20 %)** |
+| union of both | -1.84 pp (46 %) | -1.40 pp (20 %) |
+
+**The union adds +0.02 pp — nothing.** The complementarity check says why:
+
+| | orphan characters caught ONLY by that set |
+|---|---:|
+| proposed run rules | **268** |
+| shipped line tree | **3 150** |
+
+The proposed rules are almost entirely a SUBSET of what the tree already catches.
+
+**Both analyses independently found the same dominant variable** — width
+(`wmed` / `w_rel`), which the boosted model ranks first at 37 % importance and
+which is the tree's root split. The agreement on the physics is real.
+
+**The tree's edge is one variable the proposal does not use: `same_left`**, the
+count of other lines sharing a left edge. Width, length, digit ratio and alpha
+all describe a line in ISOLATION; `same_left` asks whether it belongs to a
+COLUMN OF SIMILAR LINES. That is what separates a narrow line inside aligned
+body text from a narrow line standing alone, and it is where the extra 10 points
+of capture live.
+
+Also worth noting: the proposal's train->holdout drop (27 % -> 10 %) has the
+same shape as §8.106's exhaustive AND search (31 % -> 10 %). Rules fitted by
+eye on a sheet that spans BOTH splits inherit the same optimism as rules fitted
+by search on it; the discipline is not about the fitting METHOD but about which
+rows the fitter can see.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
