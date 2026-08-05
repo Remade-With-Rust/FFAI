@@ -6247,6 +6247,52 @@ measurement is worth more than one recorded after** — this section exists so t
 next offline screening campaign can point at a case where the shortcut was
 validated rather than assumed.
 
+### 8.111 The whole remaining gap is SUPPRESSION — there is no recognition deficit
+
+With the body filter shipped, the ladder from where Carmenta stands to the floor
+(holdout, 236 pages; measured on the pre-§8.96 dumps so every row is 0.28 pp
+above the current engine, which shifts the column but not the structure):
+
+| step | CER | vs Unlimited-OCR |
+|---|---:|---:|
+| shipped, all text | 18.88 % | +5.99 pp |
+| + our body filter | 17.49 % | **+4.60 pp** |
+| + **ORACLE** suppression instead of ours | **11.92 %** | **-0.97 pp** |
+| + oracle ordering as well | 5.73 % | -7.16 pp |
+
+| where the remaining gap lives | |
+|---|---:|
+| suppression headroom still on the table | **5.57 pp** |
+| ordering headroom | 6.19 pp |
+| irreducible — genuinely wrong characters | **5.73 % of CER** |
+
+**The suppression headroom alone (5.57 pp) exceeds the entire gap (4.60 pp).**
+Perfect suppression, with today's ordering and today's recognizer, puts Carmenta
+0.97 pp AHEAD.
+
+Two conclusions that were speculation before and are now arithmetic:
+
+**There is no recognition deficit.** With suppression and ordering both perfect
+we sit at **5.73 %** — less than half Unlimited-OCR's 12.89 % ACTUAL result. The
+recognizer is the strong part of this engine, which is exactly what §8.99 found
+from the other side when substitutions came in at 2.36 pp of a 26.19 pp error.
+
+**There is no ordering deficit either, relative to them.** 6.19 pp sits in
+ordering, but none of it is needed to pass — and §8.68-§8.84 measured every
+geometric route to it as closed anyway.
+
+**Their lead is SCOPE, not accuracy.** A VLM emitting typed regions lets a
+harness filter to the scored classes for free; we pay that by hand and have
+captured 23 % of it. That reframes the whole competitive question: the work is
+not "read the characters better" or "order the page better", it is "know which
+text the task asked for" — and §8.106 measured 69 % of that as needing semantics
+no geometry supplies.
+
+**So the honest statement of the position:** Carmenta's OCR is stronger than the
+comparison implies and its OUTPUT SCOPE is wider than the benchmark's. On the
+task as scored we are 4.60 pp behind; on characters actually read we are ahead by
+a wide margin. Both are true, and quoting either alone misrepresents it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
