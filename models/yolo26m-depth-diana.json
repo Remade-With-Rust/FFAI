@@ -1,0 +1,36 @@
+{
+ "architecture": "yolo26",
+ "scale": "m",
+ "task": "depth",
+ "imgsz": 640,
+ "letterbox": "square-center-pad-114",
+ "inference_branch": "one2one",
+ "fused": true,
+ "fusion": "conv+bn folded at conversion (exact in eval mode)",
+ "conversion_map_version": 1,
+ "source_file": "yolo26m-depth.pt",
+ "source_sha256": "c0ff310571f0f159436e95a2a4fa3f8c40e1fbf36fac66a211347bd189990165",
+ "output_file": "yolo26m-depth-diana.safetensors",
+ "output_sha256": "7a6a3b9cb7e9264693d463fa8a61b998534992d1f177258798364732a53d3e18",
+ "tensor_count": 204,
+ "param_count": 23257603,
+ "source_tensor_count": 600,
+ "dropped_one2many_tensors": 0,
+ "dropped_one2many_params": 0,
+ "head_channels": 256,
+ "proj_in_channels": [
+  256,
+  512,
+  512
+ ],
+ "cal_a": 1.0,
+ "cal_b": 1.630859375,
+ "logit_clamp": [
+  -4.0,
+  5.0
+ ],
+ "output_stride": 4,
+ "output_units": "metres",
+ "refine_stages": 3,
+ "refine_used": 2
+}

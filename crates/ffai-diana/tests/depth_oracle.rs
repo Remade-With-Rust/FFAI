@@ -205,7 +205,7 @@ fn depth_engine_runs_end_to_end() {
 }
 
 
-/// Every tier the oracles exist for, through the ENGINE.
+/// ALL FIVE tiers, through the ENGINE.
 ///
 /// The depth head is width-256 at n, s, m, l and x alike — only the backbone
 /// and neck widths scale, feeding `proj` different input channels. So one
@@ -228,7 +228,7 @@ fn depth_matches_ultralytics_across_tiers() {
     let image = ffai_media::load_image(&img).expect("load fixture");
 
     let mut ran = 0;
-    for tier in ["n", "s", "x"] {
+    for tier in ["n", "s", "m", "l", "x"] {
         let oracle = match tier {
             "n" => fixtures().join("diana_depth_oracle.npy"),
             t => fixtures().join(format!("diana_depth_oracle_{t}.npy")),

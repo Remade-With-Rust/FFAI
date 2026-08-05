@@ -1,0 +1,22 @@
+# YOLO26l-depth, converted for Diana's candle port.
+#
+# LICENSE: the WEIGHTS are AGPL-3.0 (Ultralytics). FFai will not fetch, host or
+# redistribute them; convert your own checkpoint:
+#
+#   .venv-diana/Scripts/python.exe tools/diana_convert.py --model yolo26l-depth
+#
+# The depth HEAD is width-256 at every tier — only backbone and neck widths
+# scale, which is why proj's input channels are recorded in the manifest rather
+# than derived. 27,653,891 parameters.
+name = "yolo26l-depth-diana"
+task = "depth"
+description = "YOLO26l-depth (Ultralytics) converted to safetensors — fused, dense metric depth"
+license = "AGPL-3.0 (Ultralytics YOLO26 weights — NOT redistributed; user-converted)"
+
+[[files]]
+name = "yolo26l-depth-diana.safetensors"
+sha256 = "98e2288c80ec899f7baed10ee99c5aabfe4126f1f3457f82d6de1264b61db653"
+
+[[files]]
+name = "yolo26l-depth-diana.json"
+sha256 = "2361c23cee701981d60b8166ac4eac23baf808060167c56d75c45325d9bf2014"
