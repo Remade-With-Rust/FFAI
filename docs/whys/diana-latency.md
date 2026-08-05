@@ -2554,3 +2554,70 @@ well inside that.
 1080p.** It should be re-measured on a quiet box before anyone relies on it
 for a high-resolution stream, and the crate docs should carry the resolution
 the number was taken at, which they currently do not.
+
+
+---
+
+## Function-level against Ultralytics — three D6 findings before a single comparison
+
+This document said for a long time that no function-vs-function benchmark
+against torch existed. One does: PyTorch ships an operator profiler
+(`tools/diana_op_compare.py`). Constructing it soundly needs three checks, and
+**two of them fail on the obvious approach**.
+
+### D6.1 — profile the path that actually runs
+
+`YOLO(...).model(x)` returns a **tuple of (Tensor, dict)**: the training
+one2many head runs alongside one2one. `predict()` is **0.75x** of it — 65.07 ms
+against 86.21. Diana drops the one2many head at conversion, so profiling the
+raw module credits Ultralytics with work it does not do at inference and
+flatters us by a quarter.
+
+### D6.2 — the profiler's units are not stable, even between its own runs
+
+`self_cpu_time_total` summed over ops, against measured wall:
+
+| profile | ratio to wall |
+|---|---:|
+| `net(x)` | **1.04x** |
+| `predict()`, run 1 | **3.59x** |
+| `predict()`, run 2 | **2.08x** |
+
+It sums worker threads, and how much it captures varies with scheduling.
+**Absolute op milliseconds are not comparable** — not between the two profiles
+and not against Diana's wall-clock stage table. Shares are the only usable
+quantity, and even those move: `silu_` read 16.5 % then 10.4 %.
+
+### D6.3 — a finding that was purely an artefact
+
+The raw module reports `native_batch_norm` at **6.2 ms**, which reads as
+"Ultralytics does not fold BatchNorm — free win for us". `predict()` reports
+**0.00 ms**: it fuses at load, exactly as Diana folds at conversion. The
+finding existed only because the unfused module was profiled, and it would
+have been an attractive thing to write down.
+
+### What survives all of it
+
+| | ultralytics `predict()` | diana |
+|---|---:|---:|
+| convolution | 68–72 % | 75.4 % |
+| **activation** | **10.4–16.5 %** | **0.7 %** |
+| batch norm | 0 % (fused at load) | 0 % (folded at conversion) |
+
+**Convolution shares are comparable** — the thing this campaign spent months
+attacking is not where the engines differ.
+
+**Activation is the one function-level difference large enough to survive the
+instrument's instability**: an order of magnitude in Diana's favour, whichever
+run you take. Ultralytics issues **87 separate `silu_` operations** over the
+activations; Diana applies it inside the convolution epilogue, in place, on
+the matmul's own buffer while it is still hot. That is the `epilogue.rs` work,
+and this is the first evidence of what it is worth *relative to the reference*
+rather than relative to our own previous self.
+
+### The six-whys answer
+
+The descent terminated at **depth 6, three times over** — which is where this
+skill says the answers keep being, and the third consecutive campaign in this
+document where it has been true. There is no function-level convolution gap to
+attack. The measurable difference is one we already hold.
