@@ -79,27 +79,47 @@ struct Feat {
     nn_gap: f32,
     /// CTC confidence, as reported by the recognizer.
     conf: f32,
+    /// Lines in the parent run, and how many other lines share this line's left
+    /// edge. Both are low for the population the width branch alone kept:
+    /// mid-width lines in tiny isolated blocks — code fragments, table rows,
+    /// email addresses, figure text (§8.112).
+    run_lines: usize,
+    same_left: usize,
 }
 
 /// The fitted depth-4 tree, transcribed. Thresholds come from the TRAIN split
 /// and were judged once on holdout at -1.63 pp; they are not re-tunable here
 /// without re-running that fit.
 fn is_non_body(f: &Feat) -> bool {
-    if f.w_p90 <= 0.198 {
-        // Narrower than a fifth of a full column line.
+    // The WIDTH branches. `w_p90 <= 0.198` means narrower than a fifth of a full
+    // column line on this page.
+    let by_width = if f.w_p90 <= 0.198 {
         if f.run_chars <= 59.5 {
-            // In a SMALL block: a label or table cell, unless it sits tight
-            // against a neighbour, which makes it part of real running text.
+            // Small block: a label or table cell, unless it sits tight against a
+            // neighbour, which makes it part of real running text.
             f.nn_gap > 0.0129
         } else {
-            // In a LARGE block: only the very narrow ones are non-body.
+            // Large block: only the very narrow ones are non-body.
             f.w_p90 <= 0.0874
         }
     } else {
-        // Full-width lines are body text — except in the top margin, where a
-        // full-width line is a running header.
+        // Full-width lines are body — except in the top margin, a running header.
         f.y_rel <= 0.0533
-    }
+    };
+
+    // THE ISOLATED-FRAGMENT branch (§8.112). The width rule above guards the
+    // wide case only by top margin, and 89 % of what it missed landed there:
+    // mid-width lines sitting in tiny, poorly-aligned blocks. Body text lives in
+    // blocks of ~1600 characters aligned with ~47 neighbours; these sit in 3-line
+    // blocks with fewer than 5.
+    //
+    // Fitted against CHARACTER-weighted net gain rather than accuracy — the
+    // distinction that made three earlier rules lose — and it generalises:
+    // -0.26 pp on train, -0.27 pp on holdout, which is the agreement a rule that
+    // merely fits one split never shows.
+    let isolated_fragment = f.run_lines <= 3 && f.w_p90 < 0.35 && f.same_left < 5;
+
+    by_width || isolated_fragment
 }
 
 /// Group lines into contiguous runs: cluster by LEFT EDGE first, then split on
@@ -109,8 +129,8 @@ fn is_non_body(f: &Feat) -> bool {
 /// page as L,R,L,R and breaks every run at every line — which read as a
 /// meaningless 100 % run purity until it was caught (§8.106), the same
 /// units-mismatch that voided §8.39 and the oracle-crop plan.
-fn run_chars_per_line(boxes: &[(f32, f32, f32, f32)], text_len: &[usize], pw: f32, ph: f32)
-    -> Vec<f32>
+fn run_stats_per_line(boxes: &[(f32, f32, f32, f32)], text_len: &[usize], pw: f32, ph: f32)
+    -> (Vec<f32>, Vec<usize>)
 {
     let mut cols: Vec<(f32, Vec<usize>)> = Vec::new();
     let mut order: Vec<usize> = (0..boxes.len()).collect();
@@ -125,15 +145,17 @@ fn run_chars_per_line(boxes: &[(f32, f32, f32, f32)], text_len: &[usize], pw: f3
         }
     }
     let mut out = vec![0f32; boxes.len()];
+    let mut nlines = vec![1usize; boxes.len()];
     for (_, mut v) in cols {
         v.sort_by(|&a, &b| {
             boxes[a].1.partial_cmp(&boxes[b].1).unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut run: Vec<usize> = vec![v[0]];
-        let flush = |run: &Vec<usize>, out: &mut Vec<f32>| {
+        let flush = |run: &Vec<usize>, out: &mut Vec<f32>, nl: &mut Vec<usize>| {
             let total: usize = run.iter().map(|&i| text_len[i]).sum();
             for &i in run {
                 out[i] = total as f32;
+                nl[i] = run.len();
             }
         };
         for w in v.windows(2) {
@@ -141,13 +163,13 @@ fn run_chars_per_line(boxes: &[(f32, f32, f32, f32)], text_len: &[usize], pw: f3
             if (boxes[b].1 - boxes[a].1) / ph < 0.035 {
                 run.push(b);
             } else {
-                flush(&run, &mut out);
+                flush(&run, &mut out, &mut nlines);
                 run = vec![b];
             }
         }
-        flush(&run, &mut out);
+        flush(&run, &mut out, &mut nlines);
     }
-    out
+    (out, nlines)
 }
 
 /// Drop non-body lines when `FFAI_BODY_ONLY` is set; otherwise return `lines`
@@ -165,7 +187,8 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
         .map(|l| l.bbox.as_ref().map(|b| (b.x, b.y, b.width, b.height)).unwrap_or((0.0, 0.0, pw, 1.0)))
         .collect();
     let text_len: Vec<usize> = lines.iter().map(|l| l.text.trim().chars().count()).collect();
-    let run_chars = run_chars_per_line(&boxes, &text_len, pw, ph);
+    let (run_chars, run_lines) = run_stats_per_line(&boxes, &text_len, pw, ph);
+    let lefts: Vec<f32> = boxes.iter().map(|b| b.0).collect();
 
     // The page's own 90th-percentile line width: what a FULL COLUMN LINE looks
     // like here, whatever the column count.
@@ -188,9 +211,11 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
                 .filter(|(j, _)| *j != i)
                 .map(|(_, c)| (c - cy).abs())
                 .fold(f32::INFINITY, f32::min);
-            let _ = x;
             !is_non_body(&Feat {
                 run_chars: run_chars[i],
+                run_lines: run_lines[i],
+                same_left: lefts.iter().filter(|&&lx| (lx - x).abs() <= lh / 2.0).count()
+                    .saturating_sub(1),
                 w_p90: (w / pw) / p90,
                 y_rel: cy / ph,
                 nn_gap: if nn.is_finite() { nn / lh } else { 20.0 },
@@ -209,19 +234,43 @@ mod tests {
     #[test]
     fn tree_branches() {
         // small block, narrow, isolated -> label or table cell
-        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.5, conf: 0.99 }));
+        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50 }));
         // small block, narrow, but tight against a neighbour -> body
-        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.005, conf: 0.99 }));
+        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.005, conf: 0.99, run_lines: 40, same_left: 50 }));
         // small block, wide, top margin -> running header
-        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99 }));
+        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50 }));
         // small block, wide, mid-page, confident -> body
-        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.99 }));
+        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50 }));
         // large block, low confidence, mid-sized -> non-body
-        assert!(is_non_body(&Feat { run_chars: 100.0, w_p90: 0.05, y_rel: 0.5, nn_gap: 0.5, conf: 0.5 }));
+        assert!(is_non_body(&Feat { run_chars: 100.0, w_p90: 0.05, y_rel: 0.5, nn_gap: 0.5, conf: 0.5, run_lines: 40, same_left: 50 }));
         // genuinely long prose, even at low confidence -> body
-        assert!(!is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.5 }));
+        assert!(!is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.5, run_lines: 40, same_left: 50 }));
         // large, confident, top margin -> running header
-        assert!(is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99 }));
+        assert!(is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50 }));
+    }
+
+    /// The isolated-fragment branch (§8.112): a mid-width line the width rules
+    /// keep, but which sits in a tiny, poorly-aligned block — a code fragment,
+    /// a table row, an email address, figure text.
+    #[test]
+    fn isolated_fragment_branch() {
+        let frag = |run_lines, same_left, w_p90| Feat {
+            run_chars: 300.0,
+            w_p90,
+            y_rel: 0.5,
+            nn_gap: 0.5,
+            conf: 0.99,
+            run_lines,
+            same_left,
+        };
+        // three-line block, mid width, almost nothing shares its left edge
+        assert!(is_non_body(&frag(3, 2, 0.30)));
+        // the same shape, but aligned with a column of body text
+        assert!(!is_non_body(&frag(3, 40, 0.30)));
+        // the same shape, but part of a long block
+        assert!(!is_non_body(&frag(20, 2, 0.30)));
+        // isolated and short-blocked, but a full column line
+        assert!(!is_non_body(&frag(3, 2, 0.90)));
     }
 
     /// Off by default: a filter that silently deletes output must be asked for.

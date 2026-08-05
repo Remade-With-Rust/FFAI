@@ -6293,6 +6293,71 @@ comparison implies and its OUTPUT SCOPE is wider than the benchmark's. On the
 task as scored we are 4.60 pp behind; on characters actually read we are ahead by
 a wide margin. Both are true, and quoting either alone misrepresents it.
 
+### 8.112 What survives the filter, and the isolated-fragment branch that ships
+
+With the body filter running, 51 149 orphan characters still get through against
+12 148 caught. Characterising them:
+
+| what survives | chars | share | lines |
+|---|---:|---:|---:|
+| long prose (looks like body) | 18 910 | **37.0 %** | 231 |
+| **other short text** | 17 764 | **34.7 %** | 714 |
+| date/citation | 4 949 | 9.7 % | 92 |
+| equation-like | 4 104 | 8.0 % | 128 |
+| digit-heavy | 2 249 | 4.4 % | 150 |
+| affiliation / CAPS / bare number / caption | 3 173 | 6.2 % | 183 |
+
+57 % of it sits on `academic_literature` pages.
+
+**89 % of the short survivors land in ONE branch.** The width rule guards the
+wide case only by top margin, so 633 of 714 pass straight through. Their shape
+against the body text kept beside them:
+
+| feature | survivors | kept body | ratio |
+|---|---:|---:|---:|
+| `run_chars` | **65** | **1600** | 0.04 |
+| `run_lines` | 3 | 40 | 0.07 |
+| `same_left` | 5 | 47 | 0.11 |
+| `nn_gap` | 0.223 | 0.054 | 4.17 |
+
+They are code fragments, table rows, email addresses and figure text — mid-width
+lines in tiny, isolated, poorly-aligned blocks.
+
+**A block-size cut alone is REFUTED, and the reason is now a standing law.**
+Adding `run_chars <= T` to the wide branch is worse at every T (40 -> +1.15 pp,
+600 -> +12.4 pp). The 65-vs-1600 MEDIAN ratio hid the overlap that decides it:
+only 4 % of body LINES fall below the orphan median, but a cut at 40 removes
+**8 525 body characters to catch 2 877 orphan ones — 3:1 against.** The few body
+lines in small blocks are the LONG ones (headings, short paragraphs).
+
+> **A median ratio is not separability, and a line-count overlap is not a
+> character-weighted one.** Check the overlap in the unit the metric charges.
+> This is the third time the two disagreed: §8.108's proposed rules (71 % recall,
+> 47 % precision, +2.68 pp), §8.109's `w_p90` (0 % overlap, no gain), and this.
+
+**What DOES ship** is a three-term conjunction fitted against character-weighted
+net gain rather than accuracy, on the wide-branch dataset exported for the
+purpose (`suppress_wide.csv`, 31 394 rows, with a signed `net_gain_if_dropped`
+column so a rule is good exactly when its selected rows sum positive):
+
+```
+run_lines <= 3  AND  w_p90 < 0.35  AND  same_left < 5
+```
+
+| | train | holdout |
+|---|---:|---:|
+| shipped width rules | 17.99 % | 17.49 % |
+| **+ isolated-fragment branch** | **17.73 %** | **17.22 %** |
+| | **-0.26 pp** | **-0.27 pp** |
+
+**Train and holdout agree to 0.01 pp**, which is the signature this campaign kept
+failing to get: §8.107's proposal read 27 % on train and 10 % on holdout, and
+§8.106's exhaustive search 31 % / 10 %. A rule whose two splits agree is a rule
+that found structure rather than a sample.
+
+Chosen over a five-feature scoring variant that scored -0.28 pp — one hundredth
+of a point for two more features and a threshold ladder.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
