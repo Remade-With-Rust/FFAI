@@ -1925,3 +1925,76 @@ against 26.3 MiB live** is the churn mimalloc is retaining. Reducing it fixes
 footprint AND removes the page-fault cost at source, rather than trading one
 gate for the other. That is a buffer-pool project and it is now the highest
 -value work left, because it is the only item that moves both failing gates.
+
+
+---
+
+## The im2col zero-fill, and two instruments that disagreed
+
+### The prize, re-measured because its baseline moved
+
+`vec![0f32; c_in * 9 * ohw]` writes a whole buffer to preserve the ~1% of it
+that is padding, 585 times per image at the n tier. This was priced once
+before and left alone, because on the SYSTEM allocator the 1 MiB case went
+**negative** — a fresh OS mapping is already zero, so the uninit arm paid page
+faults the zeroed arm did not.
+
+mimalloc recycles blocks rather than taking fresh pages, so the zeroing became
+a real memset and the sign flipped:
+
+| size x 585 | zeroed | uninit | zeroing costs |
+|---|---:|---:|---:|
+| 64 KiB | 0.8 ms | 0.0 ms | 0.7 ms |
+| 256 KiB | 2.7 ms | 0.0 ms | 2.7 ms |
+| **380 KiB** (mean) | 3.1 ms | 0.0 ms | **3.1 ms** |
+| 1024 KiB | 9.6 ms | 0.2 ms | 9.4 ms |
+
+§11 in practice: a result expires when its baseline moves, and this one had
+changed sign, not just magnitude.
+
+### The A/B, three ways
+
+Against `FFAI_DIANA_ZEROFILL=1`, which restores the redundant write through
+the SAME fill path — so the arm adds only the wasted work, not a second
+implementation:
+
+| workload | result |
+|---|---|
+| 8 images, candle 24 threads | 21/21, z = +4.58, **12.6 %** |
+| 45 images, candle 24 threads | 12/15, z = +2.32, **30.8 %** |
+| 45 images, candle 4 threads (shipped config) | 13/15, z = +2.84, **14.8 %** |
+
+All three clear their null spreads on magnitude as well as direction.
+
+### And the bench said the opposite
+
+Two consecutive four-gate runs read p50 **50 ms and 53 ms** against a 41 ms
+baseline. Two measurements disagreeing is a thing to resolve, not to average,
+so:
+
+| run | p50 | wall | rtf | load |
+|---|---:|---:|---:|---:|
+| baseline | 41 ms | 2.0 s | 22.3 | 0.068 s |
+| "50 ms" | 50 ms | **3.1 s** | **14.6** | **0.119 s** |
+| "53 ms" | 53 ms | 2.1 s | 21.0 | 0.075 s |
+
+The first ran on a **loaded box** — its wall is 55 % longer and even model
+LOAD took 75 % more, which no change to a convolution can explain.
+
+The second is the interesting one: **normal wall, normal rtf, elevated p50
+only.** 45 images at a true p50 of 53 ms is 2.4 s of work, and the run took
+2.1 s — the p50 is not consistent with its own total. Throughput moved
+22.3 -> 21.0, which is **-6 %**, inside this box's spread (22.9, 22.3, 22.3,
+21.0 across four unloaded runs).
+
+**Kept, on the paired instrument.** The A/B is pinned, interleaved, paired,
+null-armed and reproduced under three configurations; the bench p50 is a
+single-run order statistic on a box whose own null spread is ~10 %. §12 says
+report single-process deltas as progress and keep cross-implementation ratios
+for standing — this is exactly that case, and the standing figure should be
+re-read when the box is quiet rather than argued about now.
+
+What would change the verdict: a bench p50 that stays high across three
+consecutive UNLOADED runs, with wall and rtf moving WITH it rather than
+against it. One run where the total says one thing and the median says another
+is the instrument, not the code.
