@@ -33,7 +33,8 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ffai_core::engine::{
-    AsrOptions, DepthOptions, DetectOptions, OcrOptions, Task, TtsOptions, VlmOptions,
+    AsrOptions, DepthOptions, DetectEngine, DetectOptions, OcrOptions, Task, TtsOptions,
+    VlmOptions,
 };
 use ffai_core::registry::EngineRegistry;
 
@@ -174,9 +175,10 @@ enum Cmd {
     /// Detect objects in an image (Diana)
     Detect {
         /// An image file — or, with --live, a directory of frames (sorted by
-        /// name) fed to the change gate in order.
-        #[arg(short, long)]
-        input: PathBuf,
+        /// name) fed to the change gate in order. Not required with --serve,
+        /// which takes its frames from stdin.
+        #[arg(short, long, required_unless_present = "serve")]
+        input: Option<PathBuf>,
         /// Stream a frame directory through the change gate: a frame that has
         /// not changed reuses the previous detections at zero model cost.
         ///
@@ -186,6 +188,16 @@ enum Cmd {
         /// surveillance, fixed mounts and screen capture.
         #[arg(long)]
         live: bool,
+        /// Read frame paths from stdin, one per line, and write one timed JSON
+        /// line per frame to stdout. `--input` is ignored.
+        ///
+        /// This exists so an external viewer can drive Diana at video rate
+        /// without paying the 68 ms model load per frame — a per-frame
+        /// subprocess would be measuring process startup, not detection.
+        /// Combine with `--live` to put the change gate in the loop; the
+        /// emitted `gated` flag says whether the model actually ran.
+        #[arg(long)]
+        serve: bool,
         /// Fraction of pixels that must move past the per-pixel delta for a
         /// frame to count as changed.
         #[arg(long, default_value_t = ffai_diana::live::DEFAULT_CHANGE_FRACTION)]
@@ -596,6 +608,7 @@ fn main() -> Result<()> {
             classes,
             output,
             live,
+            serve,
             change_fraction,
             sample_every,
             pixel_delta,
@@ -607,6 +620,12 @@ fn main() -> Result<()> {
                 iou,
                 classes,
             };
+
+            if serve {
+                return serve_stdin(eng, opts, live, change_fraction, sample_every, pixel_delta);
+            }
+
+            let input = input.context("--input is required without --serve")?;
 
             if live {
                 let mut frames: Vec<PathBuf> = std::fs::read_dir(&input)
@@ -835,6 +854,105 @@ fn main() -> Result<()> {
             print!("{}", ffai_bench::runner::render(&record));
             println!("appended to {}", ledger.display());
         }
+    }
+    Ok(())
+}
+
+/// Detect frames named on stdin, one JSON line of results per frame.
+///
+/// # Why this is not just a loop around `ffai detect`
+///
+/// Model load is 68 ms against a ~32 ms detect. A viewer that spawned one
+/// process per frame would spend two thirds of its wall clock in startup and
+/// would report a frame rate that says nothing about the engine. Holding the
+/// engine across frames is the only way the number on screen means what it
+/// says.
+///
+/// The protocol is deliberately dumb — a path in, a line out, flushed every
+/// frame — so the driver can be any language and the timing stays on this side
+/// of the pipe, where the detect call actually happens. `ready` is emitted
+/// after the engine is built so the driver starts its clock after load rather
+/// than including it.
+fn serve_stdin(
+    eng: std::sync::Arc<dyn DetectEngine>,
+    opts: DetectOptions,
+    live: bool,
+    change_fraction: f32,
+    sample_every: usize,
+    pixel_delta: u8,
+) -> Result<()> {
+    use std::io::{BufRead, Write};
+
+    let names = eng.class_names().to_vec();
+    let mut session = live.then(|| {
+        let cfg = ffai_diana::live::LiveConfig {
+            change_fraction,
+            sample_every,
+            pixel_delta,
+            ..Default::default()
+        };
+        ffai_diana::live::LiveSession::new(eng.clone(), cfg, opts.clone())
+    });
+
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{{\"ready\":true,\"live\":{live}}}")?;
+    out.flush()?;
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        let path = line.trim();
+        if path.is_empty() {
+            continue;
+        }
+        // A frame that will not load is reported, not fatal: a viewer driving
+        // a directory someone is still writing into should skip and continue,
+        // not die on a half-written file.
+        let image = match ffai_media::load_image(std::path::Path::new(path)) {
+            Ok(i) => i,
+            Err(e) => {
+                writeln!(out, "{{\"error\":\"{}\"}}", e.to_string().replace('"', "'"))?;
+                out.flush()?;
+                continue;
+            }
+        };
+
+        let t = std::time::Instant::now();
+        let (found, gated) = match session.as_mut() {
+            Some(s) => {
+                let before = s.stats().processed;
+                let r = s.process(&image)?;
+                let ran = s.stats().processed != before;
+                (r, !ran)
+            }
+            None => (eng.detect(&image, &opts)?, false),
+        };
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+
+        let dets = found
+            .detections
+            .iter()
+            .map(|d| {
+                format!(
+                    "{{\"x0\":{:.1},\"y0\":{:.1},\"x1\":{:.1},\"y1\":{:.1},\
+                     \"class\":{},\"name\":\"{}\",\"conf\":{:.3}}}",
+                    d.x0,
+                    d.y0,
+                    d.x1,
+                    d.y1,
+                    d.class_id,
+                    names.get(d.class_id as usize).map(String::as_str).unwrap_or("?"),
+                    d.confidence
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(
+            out,
+            "{{\"ms\":{ms:.2},\"gated\":{gated},\"n\":{},\"detections\":[{dets}]}}",
+            found.detections.len()
+        )?;
+        out.flush()?;
     }
     Ok(())
 }
