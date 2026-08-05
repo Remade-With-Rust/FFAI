@@ -6220,6 +6220,33 @@ is 100 % overlapping and useless — most runs are one line, so the feature is
 1.000 by construction. A normaliser drawn from the same unit it normalises
 carries no information.
 
+### 8.110 End-to-end confirmation: the offline apparatus predicted the engine exactly
+
+Every suppression number in §8.105-§8.109 came from an OFFLINE simulation —
+replaying stored line dumps and re-scoring — because the alternative is a 25
+minute engine run per candidate and dozens were tried. That is only legitimate
+if the simulation predicts the engine, so it was checked against a full holdout
+run through the real binary:
+
+| | CER |
+|---|---:|
+| default (all text) | **18.60 %** |
+| `FFAI_BODY_ONLY=1` | **17.23 %** |
+| delta | **-1.38 pp** |
+
+**The offline simulation predicted -1.38 pp. The engine measured -1.38 pp.** The
+apparatus is sound, which retroactively licenses the dozens of candidates that
+were screened on it and never run end-to-end.
+
+Gap to Unlimited-OCR: **+5.71 -> +4.34 pp.**
+
+That run measured the depth-3 `w_rel` tree, which was what shipped when it
+started; the depth-4 `w_p90` + `run_chars` tree that ships now is predicted at
+-1.59 pp and is being confirmed the same way. **A prediction recorded before its
+measurement is worth more than one recorded after** — this section exists so the
+next offline screening campaign can point at a case where the shortcut was
+validated rather than assumed.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
