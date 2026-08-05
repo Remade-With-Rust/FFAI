@@ -1998,3 +1998,63 @@ What would change the verdict: a bench p50 that stays high across three
 consecutive UNLOADED runs, with wall and rtf moving WITH it rather than
 against it. One run where the total says one thing and the median says another
 is the instrument, not the code.
+
+
+---
+
+## Where the last 1.25x actually is — the closing arithmetic
+
+Four wins this round took the bench p50 from 41 ms to 35 ms and throughput
+from 22.3x to 28.0x realtime, on 0.74x of ort-yolo26n's memory:
+
+| change | effect |
+|---|---|
+| `decode` — sigmoid deferred, sorts to selects | 2.42 -> 0.53 ms (4.6x) |
+| im2col zero-fill removed | bucket 21.1% -> 9.8% |
+| attention `v` materialised once | 1541 -> 1128 us/call |
+| LIVE change gate | 12.58x on a fixed-camera stream |
+
+The gate against ORT still fails, and the profile now says why in one table:
+
+| term | share | ms of 35 |
+|---|---:|---:|
+| **candle matmul** (gemm + 1x1) | 46 % | **16.1** |
+| 3x3 wrappers | 10 % | 3.5 |
+| im2col fill | 10.5 % | 3.7 |
+| attn | 7.5 % | 2.6 |
+| pre + decode + wrap + attn_t | 8 % | 2.8 |
+
+**Deleting the im2col fill AND every remaining overhead lands at 28.5 ms
+against ORT's 28 ms.** That is the entire budget. No combination of the small
+items clears the gate, and the matmul term alone — 16.1 ms, already at ~50 %
+of peak — has survived four refuted attempts to beat it.
+
+### The structural fact under it
+
+im2col hands the GEMM a `[c_in*9, ohw]` operand, so the reduction depth K is
+`c_in * 9`. At the early downsamples that is tiny, and the arithmetic
+intensity collapses (no timer involved in these — they are counts):
+
+| conv | im2col | K | MAC/byte |
+|---|---:|---:|---:|
+| stem `model.0` | 10.5 MiB | **27** | **4.0** |
+| `model.1` | 14.1 MiB | 144 | 8.0 |
+| `model.3` | 7.0 MiB | 288 | 16.0 |
+| `model.5` | 3.5 MiB | 576 | 32.0 |
+| `model.7` | 1.8 MiB | 1152 | 64.0 |
+
+A GEMM with K = 27 is memory movement wearing a matmul's shape. That is what
+ORT's NCHWc blocked layout avoids and what an implicit GEMM would avoid — and
+it is the reason the remaining gap is a LAYOUT project rather than a tuning
+one.
+
+### An instrument that was wrong, deleted rather than kept
+
+A microbench built to price those seven convolutions in isolation reported
+**184 ms for one image's stride-2 work against the in-context profile's
+6 ms** — 30x off. The relative shares it produced looked plausible and were
+not used. It was deleted rather than documented, on the same rule the SiLU
+ablation established: an instrument that disagrees with the pipeline by that
+margin is measuring something else, and one left in the tree will eventually
+be believed. The arithmetic-intensity table above survives because it needs
+no timer.
