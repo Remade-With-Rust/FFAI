@@ -6014,23 +6014,44 @@ lines, and orphan-ness IS a block property:
 | pure among runs of >= 3 lines | 92 % |
 | orphan characters in an all-orphan run | **84 %** |
 
-And deciding at run level is WORSE:
+**The run-level fit fails for a MECHANICAL reason, and the +3.57 pp first
+reported was my own under-sweep.** That figure came from sweeping the drop
+threshold only over 0.3-0.6; extending it to 0.7 gives **-0.48 pp** for the same
+model. The method was never catastrophic — it was mis-tuned, and the number was
+published before the sweep was wide enough to describe it.
 
-| model | line level | run level |
+The real mechanism is a UNIT MISMATCH between the fit and the metric:
+
+| | runs | lines |
 |---|---:|---:|
-| decision tree depth 3 | **-1.38 pp** | **+3.57 pp** |
-| gradient boosting | **-2.16 pp** | -1.95 pp |
+| orphan share | **42 %** | **12 %** |
 
-**The distinction is the DAMAGE MODEL, and it is the transferable lesson.** In
-the Great Gate one bad cut ruined an entire page — damage was SHARED, so
-requiring every proposed cut to be good was right. Here damage is PROPORTIONAL:
-dropping one line costs exactly one line. Aggregating to the block means a single
-wrong decision deletes up to 47 lines at once, which is why the shallow run-tree
-is catastrophic while the same depth at line level ships.
+**72 % of all lines sit in 11.4 % of runs.** Orphan runs reach 12 lines; body
+runs reach 105. So a fit that weights every RUN equally sees a near-balanced
+42/58 problem while the CER judging it weights every LINE 12/88 — it will trade
+one 105-line body block for a handful of one-line page numbers.
 
-> **Aggregate the decision when the damage is SHARED; decide per-item when the
-> damage is PROPORTIONAL.** The unit that is right for the PHENOMENON is not
-> automatically right for the DECISION.
+**Weighting each run by the characters it carries — the unit CER actually
+counts — fixes it:**
+
+| run-level model | unweighted | char-weighted |
+|---|---:|---:|
+| tree depth 3 | -0.48 pp | **-1.30 pp** |
+| tree depth 4 | -0.49 pp | **-1.45 pp** |
+| GBM 200 | -1.95 pp | -0.29 pp |
+
+The weighted depth-4 run tree (-1.45 pp) edges out the shipped line-level tree
+(-1.38 pp); the line-level GBM (-2.16 pp) still leads overall, and weighting
+HURTS the boosted model badly, which is its own caution against applying the
+correction blindly.
+
+> **Fit on the unit the METRIC counts, or weight the fit until it matches.** A
+> classifier scored per line but fitted per block is optimising a different
+> problem, and the gap between them is the size of the block distribution.
+
+Datasets exported for external analysis: `.tools-bench/suppress_lines.csv`
+(35 354 rows x 20 cols) and `suppress_runs.csv` (6 643 x 20), with RUNTIME
+features, the `orphan` label and the recognised text kept separate.
 
 **The ceiling, stated.** 69 % of the prize is unreachable from these features.
 The orphans the rules miss carry FIVE TIMES the characters of the ones they
