@@ -220,13 +220,69 @@ unknowns terminated.
   removal (faults halved, spikes eliminated) worth 0.3 % of latency for 9.6 MiB
   against 1 MiB of gate headroom.
 
+
+---
+
+## The rebuild — the one lever the descent left, and its price
+
+The descent ended on unspent CPU: **3.25x less than Ultralytics at a wall ratio
+near 1.0.** A user feels wall, so unspent CPU is unspent latency. Thread width
+was refuted at 4-6 workers earlier in this campaign, and §11 says a refutation
+expires when its baseline moves — epilogue fusion, JIT decode and the
+decode-timing fix have all landed since, so it was re-run rather than inherited.
+
+### First attempt: void, and the reason is worth keeping
+
+Every width was spawned up front and round-robined between. Six live thread
+pools contend with each other; the curve came back non-monotonic (1 -> 156 ms,
+4 -> 77, 6 -> 167, 12 -> 54) with a **105.8 % within-arm spread**. A width's
+cost is only its own when nothing else of ours is resident. Re-run with one
+process alive at a time.
+
+### The sweep, one process at a time, both corpora
+
+Work parity held at every width on both corpora — 297 detections on MOT17, 180
+on COCO, constant — so thread count is not changing results.
+
+| threads | MOT17 wall | MOT17 cpu | COCO wall | COCO cpu |
+|---:|---:|---:|---:|---:|
+| 1 | 101.3 | 97.3 | 124.9 | 108.6 |
+| **4 (shipped)** | **58.0** | **112.9** | **57.3** | **114.8** |
+| 8 | 56.2 | 169.9 | 54.7 | 194.5 |
+| 12 | 49.6 | 244.1 | 49.4 | 255.9 |
+
+### Verdict: keep 4. The trade is bad and it is bad consistently.
+
+| corpus | 4 -> 12 wall gain | 4 -> 12 CPU cost |
+|---|---:|---:|
+| MOT17 1080p | 1.171x | **2.16x** |
+| COCO 640 | 1.158x | **2.23x** |
+
+- **The wall gain is not a result.** 1.16-1.17x sits under a within-arm spread
+  of 73.6 % (COCO) and 197.1 % (MOT17) on this box. It cannot be claimed.
+- **The CPU cost IS a result.** The CPU curve is monotonic, agrees across two
+  corpora to within 3 %, and CPU is the drift-immune metric (§2). Doubling the
+  pool doubles the bill.
+- **And it would spend the thing the descent actually proved.** At 4 threads
+  Diana uses 113 ms CPU against Ultralytics' 429 — 3.8x better. At 12 it uses
+  244, which is 1.76x better. That trades a **measured, certain 2.2x efficiency
+  advantage for an unproven 1.16x wall gain.**
+
+Refuted on three varied probes as §11 requires: two corpora that differ in
+model work by 37 %, and the level above the change (whole-pipeline wall, not a
+kernel microbench). **No code change. The default stays at 4.**
+
+The idea that survives: the right width is a *deployment* choice, not a
+constant. A latency-bound single-stream user on an idle 24-core box may well
+want 12; a server packing many streams wants 4 and would be actively harmed by
+12. `FFAI_DIANA_THREADS` already exposes it, and it is now documented with the
+numbers above instead of a recommendation.
+
 ## Still open
 
-- **The wall/CPU divergence itself.** 3.25x less CPU at a wall ratio near 1.0
-  means Ultralytics converts more cores into the same wall clock. Whether Diana
-  should spend more CPU to lower wall — the opposite of every optimisation this
-  campaign has made — is a product question, not a measurement one, and it is
-  the most interesting thing this descent turned up.
+- **A quiet box.** Every wall figure here carries a within-arm spread between
+  38 % and 197 %. The thread sweep's 1.16x is the number most likely to change
+  when one is available; the CPU costs beside it will not.
 - Nothing here was measured on a quiet box. Every number above is either a
   COUNT (immune) or a CPU-time ratio (5x tighter than wall, per §2), and the
   wall figures are reported only to show how far they moved.
