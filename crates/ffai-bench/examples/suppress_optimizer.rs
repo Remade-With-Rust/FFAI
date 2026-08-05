@@ -437,6 +437,16 @@ fn run_search(rows: &[Row], depth: usize) {
     let n_pages = n_pages(rows);
     let (n_tr, n_ho) = split_pages(rows);
 
+    // A single-split input cannot pass the both-splits gate, and an empty result
+    // table then reads as "nothing found" when it means "cannot evaluate". Say so.
+    if n_tr == 0 || n_ho == 0 {
+        let missing = if n_tr == 0 { "train" } else { "holdout" };
+        println!("  {depth}-variable search SKIPPED: this input has no {missing} pages,");
+        println!("  so the both-splits gate can never pass. A single-split slice generates");
+        println!("  hypotheses; score them on the full corpus (§8.127).");
+        return;
+    }
+
     let mut best: Vec<Cand> = Vec::new();
     let mut tried = 0usize;
     let mut combo = vec![0usize; depth];
