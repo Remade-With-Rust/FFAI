@@ -203,3 +203,57 @@ fn depth_engine_runs_end_to_end() {
         covered * 100 / full.depth.len()
     );
 }
+
+
+/// Every tier the oracles exist for, through the ENGINE.
+///
+/// The depth head is width-256 at n, s, m, l and x alike — only the backbone
+/// and neck widths scale, feeding `proj` different input channels. So one
+/// code path should serve every tier, and this is what turns "should" into a
+/// number. It is not a formality: the c3k promotion is a tier-DEPENDENT
+/// behaviour in this same graph that looked like a no-op until it was
+/// measured, and it was caught by exactly this shape of test.
+#[test]
+fn depth_matches_ultralytics_across_tiers() {
+    use ffai_core::engine::{DepthEngine, DepthOptions};
+    use ffai_diana::depth_engine::Yolo26Depth;
+    use ffai_diana::image::Geometry;
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
+    let img = root.join("corpora/refs/fixtures/diana_photo_input.png");
+    if !img.exists() {
+        eprintln!("SKIP tiers: fixture image absent");
+        return;
+    }
+    let image = ffai_media::load_image(&img).expect("load fixture");
+
+    let mut ran = 0;
+    for tier in ["n", "s", "x"] {
+        let oracle = match tier {
+            "n" => fixtures().join("diana_depth_oracle.npy"),
+            t => fixtures().join(format!("diana_depth_oracle_{t}.npy")),
+        };
+        let st = root.join(format!("corpora/cache/yolo26{tier}-depth-diana.safetensors"));
+        if !oracle.exists() || !st.exists() {
+            eprintln!("SKIP tier {tier}: weights or oracle absent");
+            continue;
+        }
+        let eng = Yolo26Depth::build(tier, Geometry::Rect, root.join("models"));
+        let got = eng.depth(&image, &DepthOptions::default()).expect("depth");
+        let (_, want) = read_npy_f32(&oracle);
+        assert_eq!(got.depth.len(), want.len(), "tier {tier}: map size differs");
+
+        let mut worst = 0f32;
+        for (a, e) in got.depth.iter().zip(&want) {
+            worst = worst.max((a - e).abs() / e.abs().max(1e-3));
+        }
+        let (lo, hi) = got.range().unwrap();
+        eprintln!("tier {tier}: worst rel {worst:.3e}, range {lo:.2}-{hi:.2} m");
+        assert!(
+            worst < 1e-3,
+            "tier {tier} diverges from Ultralytics by {worst:.3e} relative —              the head is width-256 at every tier, so a tier-dependent failure              is in the backbone/neck widths or in proj's input channels"
+        );
+        ran += 1;
+    }
+    assert!(ran > 0, "no tier had both weights and an oracle; nothing was verified");
+}
