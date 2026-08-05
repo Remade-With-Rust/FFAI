@@ -193,6 +193,13 @@ enum Cmd {
         /// Process every Nth frame; skipped frames cost nothing at all.
         #[arg(long, default_value_t = 1)]
         sample_every: usize,
+        /// Grayscale levels a pixel must move to count as changed.
+        ///
+        /// The default is set by the compressed-video harvest: a codec
+        /// re-quantises every frame, so a "static" scene is not static in
+        /// pixels. Lower it only for uncompressed sources.
+        #[arg(long, default_value_t = ffai_diana::live::DEFAULT_PIXEL_DELTA)]
+        pixel_delta: u8,
         #[arg(long)]
         engine: Option<String>,
         /// Minimum confidence to report
@@ -580,6 +587,7 @@ fn main() -> Result<()> {
             live,
             change_fraction,
             sample_every,
+            pixel_delta,
         } => {
             let eng = reg.detect(engine.as_deref())?;
             let opts = DetectOptions {
@@ -607,6 +615,7 @@ fn main() -> Result<()> {
                 let cfg = ffai_diana::live::LiveConfig {
                     change_fraction,
                     sample_every,
+                    pixel_delta,
                     ..Default::default()
                 };
                 let mut session = ffai_diana::live::LiveSession::new(eng.clone(), cfg, opts);

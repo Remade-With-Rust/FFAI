@@ -34,8 +34,14 @@
 //!
 //! This module inherits the lesson, not the constants — Carmenta gates on
 //! text, which is small, static and high-contrast, while detection gates on
-//! objects, which are large and can move behind low contrast. The threshold
-//! here is picked from [`examples/live_harvest.rs`] on Diana's own content.
+//! objects, which are large and can move behind low contrast.
+//!
+//! **And it inherited the lesson incompletely the first time.** The delta was
+//! harvested on UNCOMPRESSED frames and shipped at 8, where it looked
+//! flawless: sensor noise moved 0.000000 % of pixels past it. On real encoded
+//! video — the content this feature exists for — codec noise moves 9.55 %,
+//! and the gate skips nothing. The harvest was right about the STATISTIC and
+//! wrong about the CONTENT it was harvested on. See [`DEFAULT_PIXEL_DELTA`].
 
 use ffai_core::engine::{DetectEngine, DetectOptions};
 use ffai_core::error::Result;
@@ -49,11 +55,49 @@ pub const DEFAULT_CHANGE_FRACTION: f32 = 0.002;
 
 /// Per-pixel grayscale delta that counts as a changed pixel.
 ///
-/// 8 levels, the same value Carmenta arrived at, for the same reason: it sits
-/// far above any plausible sensor or compression noise and far below a real
-/// object edge moving. The point is not the number, it is that nothing in the
-/// noise class can reach it.
-pub const DEFAULT_PIXEL_DELTA: u8 = 8;
+/// **32, raised from 8 after testing on real compressed video — the content
+/// this feature exists to serve.**
+///
+/// 8 was harvested on UNCOMPRESSED frames, where it separated perfectly:
+/// plus-or-minus 6 levels of sensor noise moved 0.000000 % of pixels past it
+/// while a one-pixel shift moved 63 %. On a real encoded clip it fails
+/// outright, because a codec re-quantises every frame and a "static" scene
+/// is not static in pixels:
+///
+/// | delta | worst static (codec noise) | weakest real motion | separates? |
+/// |---:|---:|---:|---|
+/// | **8** | **9.55 %** | 1.73 % | **NO** |
+/// | 16 | 0.70 % | 1.61 % | barely, 2.3x |
+/// | 24 | 0.056 % | 1.51 % | 27x |
+/// | **32** | **0.0022 %** | **1.42 %** | **647x** |
+/// | 48 | 0.0000 % | 0.97 % | yes |
+///
+/// Measured on `corpora/clips/diana-video`, whose clips are encoded and
+/// decoded with the same `cv2` path Ultralytics ingests video through, and
+/// which record WHICH frames genuinely moved — so codec noise and real change
+/// are told apart by construction rather than by eye.
+///
+/// End to end on the corpus, model runs over 48 frames:
+///
+/// | clip | delta 8 | delta 32 |
+/// |---|---|---|
+/// | static (no real motion) | 8 ran, 40 gated | **2 ran, 46 gated** |
+/// | walk | 39 ran, 9 gated | 33 ran, 15 gated |
+/// | pan (every frame moves) | 48 ran, 0 gated | 48 ran, 0 gated |
+///
+/// **Four times the model runs a static compressed clip needs.** Not a total
+/// failure — the worst-case frame reading of 9.55 % suggested the gate would
+/// skip nothing, and the distribution is milder than its worst frame, which
+/// is a correction worth keeping: codec noise SPIKES at some frames rather
+/// than sitting high on all of them, and it is the spikes that cost the runs.
+/// `pan` gating nothing at both deltas is the control — every frame there
+/// genuinely moved.
+///
+/// 32 keeps the uncompressed case intact — sensor noise still moves
+/// 0.000000 % past it, a one-pixel shift moves 26 %, which is 130x the
+/// default threshold. One constant serves both, and it is the compressed
+/// class that constrains it.
+pub const DEFAULT_PIXEL_DELTA: u8 = 32;
 
 #[derive(Debug, Clone)]
 pub struct LiveConfig {

@@ -60,7 +60,10 @@ fn translated(src: &ImageBuffer, dx: usize, dy: usize) -> ImageBuffer {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()).unwrap();
     let img = ffai_media::load_image(&root.join("corpora/clips/diana-coco/coco-032.png"))?;
-    let delta = ffai_diana::live::DEFAULT_PIXEL_DELTA;
+    let delta: u8 = std::env::args()
+        .nth(1)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ffai_diana::live::DEFAULT_PIXEL_DELTA);
 
     println!("frame {}x{}, pixel_delta = {delta}\n", img.width, img.height);
 
