@@ -52,7 +52,15 @@ use candle_nn::Conv2d;
 /// contiguous run: output element `(oy, ox)` reads
 /// `in_p[(oy+ky)*sw + (ox+kx)] = in_p[oy*sw + ox + (ky*sw + kx)]`. The extra
 /// third row is slack so the last tile's `+2*sw+2` lookahead stays in bounds.
-pub(crate) fn pad(inp: &[f32], c_in: usize, h: usize, w: usize) -> Vec<f32> {
+///
+/// A REUSED thread-local buffer was tried here and is **slower** (§8.103):
+/// 0.969x, 5/20 paired rounds, z = -2.24. A large `vec![0f32; n]` is served by
+/// zero-filled OS pages, so the zeroing this was meant to save is already free,
+/// while re-zeroing the borders by hand costs real work on every call. The
+/// oracle also caught the subtler trap: zeroing a reused buffer only when it
+/// GROWS is wrong, because a later narrower call has a smaller stride and its
+/// padding positions still hold the previous call's interior.
+fn pad(inp: &[f32], c_in: usize, h: usize, w: usize) -> Vec<f32> {
     let sw = w + 2;
     let mut out = vec![0f32; c_in * (h + 3) * sw];
     for c in 0..c_in {
@@ -217,8 +225,8 @@ impl CustomOp2 for Conv3x3Op {
         if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
         {
             // SAFETY: `in_p` is `pad`'s output for exactly these dims, `wt` has
-            // `c_out*c_in*9` elements (checked by the dims4 above and the
-            // caller's 3x3 guard), and `out` has `c_out*h*w`.
+            // `c_out*c_in*9` elements (the dims4 above plus the caller's 3x3
+            // guard), and `out` has `c_out*h*w`.
             unsafe { conv3x3_avx2(&in_p, wt, c_in, c_out, h, w, &mut out) };
             return Ok((CpuStorage::F32(out), (1, c_out, h, w).into()));
         }

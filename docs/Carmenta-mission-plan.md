@@ -5780,6 +5780,58 @@ measured 3.7x on 16 cores and neither a dedicated thread pool (§8.100) nor cach
 blocking (here) moved it. That is a scheduling/contention problem in how 73
 independent line recognitions share a hybrid 8P+8E CPU, not an arithmetic one.
 
+### 8.103 Parallel scaling: load imbalance ruled out, buffer reuse REFUTED
+
+Target was parity on scaling. It is not reached, and three things are now known
+that were not.
+
+**Scaling improved on its own.** §8.100 measured 3.7x on 16 cores with candle's
+conv. With the §8.101 kernel in place, on `omni-0002`:
+
+| threads | speedup | efficiency |
+|---:|---:|---:|
+| 2 | 1.77x | 89 % |
+| 4 | 2.62x | 65 % |
+| 8 | 3.49x | 44 % |
+| 16 | **5.09x** | 32 % |
+| 24 | **5.78x** | 24 % |
+
+3.7x -> 5.78x for free — the kernel's smaller memory footprint helped the
+machine as well as the arithmetic. Against a hybrid 8P+8E CPU whose realistic
+ceiling is ~11.2x (E-cores at ~40 % of a P-core), 5.78x is ~52 % of what the
+silicon can give.
+
+**Load imbalance is NOT the constraint.** On a 73-line page the widths run
+47..1401 and total 47 577. Perfect division at P=16 is 2 974 units per core and
+the longest single line is 1 401 — well under it. No line is on the critical
+path, so LPT scheduling has nothing to recover. **The efficiency curve
+(89 -> 65 -> 44 %) is a shared-resource signature, not a scheduling one.**
+
+**Reusing the padded buffer per thread is REFUTED, and is slower.** `pad()`
+allocates and zeroes up to 1 MB per conv call, 511 calls per page — exactly the
+shared-resource pressure the curve implied. A thread-local buffer with only the
+borders re-zeroed measured **0.969x, 5/20 paired rounds, z = -2.24**: WORSE.
+
+The reason is worth keeping: **a large `vec![0f32; n]` is served by zero-filled
+OS pages, so the zeroing it was meant to save is already free**, while
+re-zeroing borders by hand costs real work on every call. The allocation-churn
+hypothesis does not hold for allocations this size.
+
+**And the oracle caught a correctness trap on the way.** Zeroing a reused buffer
+only when it GROWS is wrong: a later NARROWER call has a smaller stride, so
+positions that are padding for it still hold the previous call's interior data.
+`crnn_ids_match_pytorch_reference_exactly` failed on a handful of timesteps —
+the kind of defect a few byte-identical spot checks would plausibly have missed.
+**A reused scratch buffer needs its invariant re-established per SHAPE, not per
+capacity.**
+
+**Three levers now refused on this scaling problem**: a dedicated thread pool
+with candle's inner rayon pinned off (§8.100, z = +1.50), contraction blocking
+(§8.102, z = 0.00), and padded-buffer reuse (here, z = -2.24, worse). The
+remaining gap is not arithmetic, not input traffic and not scheduling; the next
+candidate is the allocator under 16-way concurrent 1 MB requests, which is a
+dependency question (a different global allocator) rather than a code one.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
