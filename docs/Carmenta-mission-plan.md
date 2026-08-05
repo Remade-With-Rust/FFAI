@@ -7330,6 +7330,61 @@ edges into two; then the same end-to-end engine measurement §8.116 got; then a
 corpus with reference pages in TRAIN, which §8.114 asked for and is now wanted by
 two independent levers.
 
+### 8.129 The rendered pages are TWO categories, and the small one is the one I was about to build
+
+Reading the §8.128 renders, the 18 over-emission pages separate by eye into two
+groups: `01-12`, where the orphan text is a BLOCK sitting slightly right of the
+body margin (reference entries, affiliations, front-matter, funding statements),
+and `13-18`, where it is text INSIDE FIGURES — axis labels, chart titles, tick
+values, `= 7.2 Points`, `180 = 10 mm`. `omni-0040` is the clearest: its only
+annotated regions are the figure CAPTIONS, and every plot internal is orphan.
+
+**The split is real and it reprices the roadmap:**
+
+| group | pages | residual | share | §8.128 reaches |
+|---|---:|---:|---:|---:|
+| **01-12 indented text blocks** | 12 | **19 703** | **91 %** | **61 %** |
+| 13-18 text inside figures | 6 | 2 043 | 9 % | 0 % |
+
+**§8.121 and §8.124 concluded the next brick was region classification — deciding
+that a block of text is a PICTURE of text. That was right about the mechanism and
+wrong about the priority.** The picture-of-text problem is 9 % of the
+over-emission residual. Ninety-one per cent is indented text blocks, and the
+References-section rule already reaches 61 % of them. The section rule reaches
+exactly 0 % of the figure group, correctly — it is a document-structure rule for
+prose, and a chart axis has no section.
+
+**The indent itself was tested as a rule and REFUSED.** The observation is
+visually correct and the signal is real, but it cannot carry a line-level rule:
+
+| population | n | median | p90 |
+|---|---:|---:|---:|
+| orphan, filter keeps | 1 299 | 0.000 | **0.066** |
+| annotated, filter keeps | **30 053** | -0.001 | **0.009** |
+
+Orphans indent 7x further at p90 — and there are **23 annotated lines for every
+orphan** among the lines the filter keeps, so the precision ceiling is 4 % before
+a threshold is even chosen. Every cut measured 0.10-0.16 precision at a body cost
+of 5-17 pp. The medians are both approximately zero; the separation lives entirely
+in the upper tail, which is not where a base rate of 23:1 can be beaten.
+
+**Why the observation still mattered.** It explains why §8.128 works: a reference
+block is visually coherent — indented, hanging, homogeneous — which is exactly
+what makes "everything after the References heading" a clean cut rather than a
+guess. The indent is the reason the section rule has a block to find, not a
+substitute for it.
+
+**Revised order of work**, from the evidence rather than from the last thing
+measured:
+
+1. **Fix the column ordering** so §8.128 stops marking 40 annotated lines on
+   `omni-0055`, then measure it end-to-end as §8.116 was. This is 61 % of 91 %
+   of the reachable residual and the mechanism is already written.
+2. **Find what covers the other 39 %** of group 01-12 — affiliations,
+   received/revised dates, funding statements — which have no heading to anchor
+   to and are §8.127's five sub-populations.
+3. **Region classification, last.** It is 9 %, and it was about to be first.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
