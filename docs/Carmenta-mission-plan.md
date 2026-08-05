@@ -6993,6 +6993,67 @@ quarters is region classification — deciding that a block of text is a PICTURE
 text — which is the one thing every filter in §8.106-§8.122 was structurally
 unable to see.
 
+### 8.124 `rc = 200` refused — every macro lever on this corpus is `omni-0245`
+
+§8.122 recorded three outcomes in advance. The train run settles which applies:
+**train holds ONE page over 100 % CER (`omni-0062`, 132.5 %), and the shipped
+filter already fixes it** — 1 -> 0. So for judging incremental tail work train's
+tail population is zero, and even unsuppressed n=1 is below the resolution of any
+test this campaign would trust. Outcome two: the both-splits gate is inapplicable
+to tail work here.
+
+That left the pre-registered substitute — ships when body damage is <= 0 — which
+had been evaluated at +0.004 pp on holdout body before train existed. So the
+whole decision was resting on the ±chars proxy, an instrument §8.120 measured
+under-predicting by ~60 %, more than the effect size. Settled exactly instead,
+re-scoring every page with Levenshtein from the line dumps:
+
+| `run_chars` | train | holdout | TAIL | BODY | corpus |
+|---:|---:|---:|---:|---:|---:|
+| **59.5 (shipped)** | 18.09 | 26.04 | 178.56 | 18.98 | 24.03 |
+| 120 | +0.089 | -0.108 | -1.13 | -0.023 | -0.058 |
+| **200** | **+0.101** | **-0.297** | **-6.05** | **-0.004** | **-0.196** |
+| 400 | +0.126 | -0.259 | -6.51 | +0.046 | -0.161 |
+
+The instrument validates: shipped train reads **18.09 %** against the engine's
+measured 18.09 %. A smooth optimum at 200, body flat, tail -6.05 pp — everything
+the proxy promised, confirmed exactly.
+
+**And it is one page.**
+
+| page | shipped | `rc=200` | delta |
+|---|---:|---:|---:|
+| **`omni-0245`** | 773.3 % | 721.9 % | **-51.43** |
+| `omni-0228` | 105.8 % | 97.0 % | -8.77 |
+| `omni-0055` | 108.0 % | 107.7 % | -0.35 |
+| the other seven | | | **+0.00** |
+
+Two of ten tail pages move; `omni-0245` is **85 %** of the gain. Refused — the
+same standard that refused §8.121, and it costs train +0.101 pp, real damage to
+79 body pages to buy one. Note also that the "win" leaves the page at **721.9 %**;
+no threshold reaches it, while oracle suppression takes it under 100 %.
+
+**Three levers, three times the same page.** §8.114's `year_paren` was three
+pages including `omni-0055`. §8.121's confidence-density rule was `omni-0245`
+alone. §8.124's `rc = 200` is `omni-0245` at 85 %. Under a page-weighted metric
+on a 316-page corpus, one page carrying 3.57 pp of 33.70 pp means **every
+threshold that incidentally catches some of its screenshot text reads as a
+corpus-level win.** That is not a series of coincidences; it is what this metric
+does on this corpus, and it is the single most useful thing to know before
+proposing another rule.
+
+**The conclusion is now overdetermined.** Constants optimal on micro (§8.117) and
+on macro (§8.122). 39 111 conjunctions returning nothing (§8.120). Three
+refutations that were all the same page. And a measured prize of **11.9 pp still
+on the table** (§8.123) that line features provably cannot reach, because the
+content they must reject — screenshots, devtools panels, code listings, terminal
+captures — is geometrically identical to the content they must keep.
+
+**Tuning is finished. The next brick is region classification**: deciding that a
+block of text is a PICTURE of text. It is the only lever left, its ceiling is
+measured rather than hoped for, and it is worth more than everything §8.106-§8.124
+delivered combined.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
