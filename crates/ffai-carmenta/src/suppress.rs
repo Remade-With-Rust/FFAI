@@ -55,9 +55,22 @@ struct Feat {
     /// non-body mostly because of the BLOCK it sits in, not its own shape.
     /// This is what carries the block context down to a per-line decision.
     run_chars: f32,
-    /// Line width as a fraction of the page (20 % importance). Table cells,
-    /// page numbers and figure labels are narrow; body lines span their column.
-    w_rel: f32,
+    /// Line width divided by the page's OWN 90th-percentile line width — i.e.
+    /// how wide this line is against a FULL COLUMN LINE on this page.
+    ///
+    /// Not width-over-page-width, which is confounded by column count: the same
+    /// physical body line reads ~0.85 on a single-column page, ~0.45 on two
+    /// columns and ~0.30 on three (§8.109). Normalised this way body lines
+    /// cluster at 0.97 — they ARE the p90 width — and non-body at 0.085, with
+    /// ZERO overlap on train.
+    ///
+    /// In-corpus the two are equivalent for a tree (-1.59 vs -1.63 pp), because
+    /// a tree carves the space per page-population and does not need one global
+    /// cutoff. This form ships for TRANSFER: fitted on single-column pages, a
+    /// page-width threshold makes multi-column pages WORSE (+0.26 pp), while
+    /// this one still helps (-0.33 pp). Production meets layouts the fit never
+    /// saw.
+    w_p90: f32,
     /// Vertical centre as a fraction of page height; catches running headers.
     y_rel: f32,
     /// Distance to the nearest other line centre, in line heights. A displayed
@@ -72,23 +85,20 @@ struct Feat {
 /// and were judged once on holdout at -1.63 pp; they are not re-tunable here
 /// without re-running that fit.
 fn is_non_body(f: &Feat) -> bool {
-    if f.run_chars <= 55.5 {
-        // A SMALL block. Narrow lines in one are labels and cells unless they
-        // sit tight against a neighbour; wide ones are non-body only in the
-        // top margin or when the recognizer was unsure.
-        if f.w_rel <= 0.115 {
-            f.nn_gap > 0.013
+    if f.w_p90 <= 0.198 {
+        // Narrower than a fifth of a full column line.
+        if f.run_chars <= 59.5 {
+            // In a SMALL block: a label or table cell, unless it sits tight
+            // against a neighbour, which makes it part of real running text.
+            f.nn_gap > 0.0129
         } else {
-            f.y_rel <= 0.052 || f.conf <= 0.933
+            // In a LARGE block: only the very narrow ones are non-body.
+            f.w_p90 <= 0.0874
         }
-    } else if f.conf <= 0.889 {
-        // A LARGE block the recognizer struggled with: non-body if it is
-        // mid-sized, body if it is genuinely long prose.
-        f.run_chars <= 147.0
     } else {
-        // A large, confident block is body text — except in the top margin,
-        // where it is a running header.
-        f.y_rel <= 0.067
+        // Full-width lines are body text — except in the top margin, where a
+        // full-width line is a running header.
+        f.y_rel <= 0.0533
     }
 }
 
@@ -157,6 +167,12 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
     let text_len: Vec<usize> = lines.iter().map(|l| l.text.trim().chars().count()).collect();
     let run_chars = run_chars_per_line(&boxes, &text_len, pw, ph);
 
+    // The page's own 90th-percentile line width: what a FULL COLUMN LINE looks
+    // like here, whatever the column count.
+    let mut ws: Vec<f32> = boxes.iter().map(|b| b.2 / pw).collect();
+    ws.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p90 = ws[(ws.len() * 9) / 10 - usize::from(ws.len() * 9 % 10 == 0)].max(1e-6);
+
     let mut hs: Vec<f32> = boxes.iter().map(|b| b.3).collect();
     hs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let lh = hs.get(hs.len() / 2).copied().unwrap_or(1.0).max(1.0);
@@ -175,7 +191,7 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
             let _ = x;
             !is_non_body(&Feat {
                 run_chars: run_chars[i],
-                w_rel: w / pw,
+                w_p90: (w / pw) / p90,
                 y_rel: cy / ph,
                 nn_gap: if nn.is_finite() { nn / lh } else { 20.0 },
                 conf: lines[i].confidence.unwrap_or(1.0),
@@ -193,19 +209,19 @@ mod tests {
     #[test]
     fn tree_branches() {
         // small block, narrow, isolated -> label or table cell
-        assert!(is_non_body(&Feat { run_chars: 20.0, w_rel: 0.05, y_rel: 0.5, nn_gap: 0.5, conf: 0.99 }));
+        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.5, conf: 0.99 }));
         // small block, narrow, but tight against a neighbour -> body
-        assert!(!is_non_body(&Feat { run_chars: 20.0, w_rel: 0.05, y_rel: 0.5, nn_gap: 0.005, conf: 0.99 }));
+        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.005, conf: 0.99 }));
         // small block, wide, top margin -> running header
-        assert!(is_non_body(&Feat { run_chars: 20.0, w_rel: 0.4, y_rel: 0.02, nn_gap: 0.5, conf: 0.99 }));
+        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99 }));
         // small block, wide, mid-page, confident -> body
-        assert!(!is_non_body(&Feat { run_chars: 20.0, w_rel: 0.4, y_rel: 0.5, nn_gap: 0.5, conf: 0.99 }));
+        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.99 }));
         // large block, low confidence, mid-sized -> non-body
-        assert!(is_non_body(&Feat { run_chars: 100.0, w_rel: 0.4, y_rel: 0.5, nn_gap: 0.5, conf: 0.5 }));
+        assert!(is_non_body(&Feat { run_chars: 100.0, w_p90: 0.05, y_rel: 0.5, nn_gap: 0.5, conf: 0.5 }));
         // genuinely long prose, even at low confidence -> body
-        assert!(!is_non_body(&Feat { run_chars: 900.0, w_rel: 0.4, y_rel: 0.5, nn_gap: 0.5, conf: 0.5 }));
+        assert!(!is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.5 }));
         // large, confident, top margin -> running header
-        assert!(is_non_body(&Feat { run_chars: 900.0, w_rel: 0.4, y_rel: 0.02, nn_gap: 0.5, conf: 0.99 }));
+        assert!(is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99 }));
     }
 
     /// Off by default: a filter that silently deletes output must be asked for.

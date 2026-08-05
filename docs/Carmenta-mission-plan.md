@@ -6182,9 +6182,38 @@ only the boosted model gains, by 0.08 pp. **Nothing shipped.**
 The reason is worth keeping: a depth-4 tree can find an equivalent split on the
 confounded feature anyway, because it splits per page-population rather than
 needing one global threshold. **A better-conditioned feature helps a model that
-must use ONE cutoff; it barely helps a model that can carve the space.** The
-normalisation matters for interpretability and for any future linear or
-threshold rule — it did not matter for the tree that ships.
+must use ONE cutoff; it barely helps a model that can carve the space.**
+
+**That explanation makes two predictions, and both hold.**
+
+*One global threshold, nothing to carve with:*
+
+| feature | holdout | captured |
+|---|---:|---:|
+| `w_rel` | -0.35 pp | 5 % |
+| **`w_p90`** | **-0.82 pp** | **12 %** |
+
+*Cross-layout transfer — fit on one column count, judge on another:*
+
+| fit -> judge | `w_rel` | `w_p90` |
+|---|---:|---:|
+| single-column -> multi-column | **+0.26 pp** (harmful) | **-0.33 pp** |
+| multi-column -> single-column | -3.42 pp (19 %) | **-3.78 pp (21 %)** |
+
+**A `w_rel` threshold fitted on single-column pages makes multi-column pages
+WORSE.** It does not merely weaken — it inverts, because the same physical line
+means something different on each layout. `w_p90` transfers in both directions.
+
+**SHIPPED on that evidence**, despite the in-corpus tie. The corpus is a sample;
+a production system meets layouts no fit has seen, and the transfer test is
+measured evidence about exactly that. The tree simplifies as well:
+
+```
+if w_p90 <= 0.198          // narrower than a fifth of a full column line
+    if run_chars <= 59.5   -> drop unless tight against a neighbour
+    else                   -> drop only if very narrow (< 0.087)
+else                       -> drop only if in the top margin
+```
 
 Also refuted here: normalising by the widest line in the line's own RUN, which
 is 100 % overlapping and useless — most runs are one line, so the feature is
