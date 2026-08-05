@@ -216,7 +216,19 @@ impl Head {
         let (_, _, a) = boxes.dims3()?;
         let nc = self.nc;
         let b = boxes.flatten_all()?.to_vec1::<f32>()?;
-        let s = candle_nn::ops::sigmoid(scores)?.flatten_all()?.to_vec1::<f32>()?;
+
+        // RAW LOGITS. The sigmoid is deferred to the survivors.
+        //
+        // Sigmoid is strictly monotonic, so `max`, `argmax` and every
+        // top-k ORDER are identical whether taken on logits or on
+        // probabilities — the selection cannot know the difference. Applying
+        // it up front evaluated it 8400 x 80 = 672,000 times to report 300
+        // numbers, which is 2,240 wasted evaluations per detection.
+        //
+        // The transform is exact, not approximate: same survivors, same
+        // order, same reported scores, because sigmoid is still applied — to
+        // the ones that survive.
+        let s = scores.flatten_all()?.to_vec1::<f32>()?;
 
         // Stage one: best class per anchor, then the top `k` anchors.
         let k = max_det.min(a);
@@ -232,8 +244,14 @@ impl Head {
                 (i, m)
             })
             .collect();
-        best.sort_by(|x, y| y.1.total_cmp(&x.1));
-        best.truncate(k);
+        // Partition, do not sort. Stage one only needs the top-k SET — its
+        // order is irrelevant because stage two re-ranks the whole block. A
+        // full sort of 8400 to keep 300 is ~13x the comparisons of a
+        // selection, for an ordering nothing reads.
+        if k < best.len() {
+            best.select_nth_unstable_by(k - 1, |x, y| y.1.total_cmp(&x.1));
+            best.truncate(k);
+        }
 
         // Stage two: top `k` over those anchors' full class block.
         let mut cand: Vec<(usize, usize, f32)> = Vec::with_capacity(k * nc);
@@ -242,12 +260,20 @@ impl Head {
                 cand.push((i, c, s[c * a + i]));
             }
         }
+        // Here the order IS read, so: select the k best, then sort only
+        // those. 300 sorted out of 24,000 instead of 24,000 sorted to keep
+        // 300.
+        if k < cand.len() {
+            cand.select_nth_unstable_by(k - 1, |x, y| y.2.total_cmp(&x.2));
+            cand.truncate(k);
+        }
         cand.sort_by(|x, y| y.2.total_cmp(&x.2));
-        cand.truncate(k);
 
         Ok(cand
             .into_iter()
-            .map(|(i, c, score)| {
+            .map(|(i, c, logit)| {
+                // Sigmoid HERE, on the survivors only.
+                let score = 1.0 / (1.0 + (-logit).exp());
                 let (ax, ay, stride) = anchors.at(i);
                 let (l, t, r, btm) = (b[i], b[a + i], b[2 * a + i], b[3 * a + i]);
                 DecodedBox {
