@@ -6099,6 +6099,53 @@ eye on a sheet that spans BOTH splits inherit the same optimism as rules fitted
 by search on it; the discipline is not about the fitting METHOD but about which
 rows the fitter can see.
 
+### 8.108 Parent-block context is the dominant feature — an externally-found lever that WORKS
+
+§8.107 tested a proposed RUN-level rule set and found it a subset of the shipped
+line tree. A companion LINE-level analysis then proposed something the shipped
+tree did not have at all: **the parent run's size as a per-line feature.**
+
+**The proposed rules themselves lose badly** — `run_lines <= 3` alone drops 18 %
+of all lines at ~47 % precision, so over half of what it removes is body text:
+
+| | holdout |
+|---|---:|
+| proposed 4-rule line gate | **+2.68 pp** |
+| proposed score >= 5 | +1.61 pp |
+| shipped tree | -1.38 pp |
+
+This is the precision/recall-vs-CER gap stated concretely. A rule with 71 %
+recall and 47 % precision is a good CLASSIFIER and a bad FILTER, because CER
+charges deletions exactly as it charges insertions and weights both by
+CHARACTERS. **Classification metrics and the shipping metric disagree, and only
+one of them ships.**
+
+**But the FEATURE is the best one found.** Refitting the line tree with parent-run
+context added:
+
+| model | holdout | captured |
+|---|---:|---:|
+| 13 features, tree d4 | -1.51 pp | 22 % |
+| **+ run_chars, run_lines, tree d4** | **-1.63 pp** | **23 %** |
+| shipped before this | -1.38 pp | 20 % |
+| GBM 200 (either feature set) | -2.12..-2.16 pp | 31 % |
+
+And it DOMINATES the importances: **`run_chars` 52 %**, against `w_rel` 20 % and
+everything else under 8 %. One refinement on the proposal: it is the parent run's
+CHARACTER count that carries the signal, not its line count.
+
+**This is the synthesis §8.106 was missing.** That section found the phenomenon
+is block-shaped (98 % pure runs) but that deciding at block level loses, and drew
+a damage-model conclusion. The right answer was neither: **decide per LINE — the
+unit the metric counts — but hand the line its BLOCK context as a feature.** The
+unit of decision and the unit of evidence do not have to be the same, and forcing
+them together is what made both earlier attempts worse.
+
+Shipped: depth-4 tree over `run_chars`, `w_rel`, `y_rel`, `nn_gap`, `conf`, with
+column-aware run grouping (left edge first, then vertical pitch — sorting by `y`
+interleaves a two-column page and breaks every run, §8.106's bug, now guarded by
+a comment in the code).
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
