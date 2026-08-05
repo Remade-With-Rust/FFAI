@@ -2157,3 +2157,78 @@ scoping is wrong and generous. Before any of it:
 This is the first measurement in the campaign taken at a DIFFERENT INPUT SIZE,
 and it invalidated a scoping estimate on its first run. Everything above was
 measured at 640 rect and should be re-read with that in mind.
+
+
+---
+
+## RETRACTION: there is no cache cliff. Diana scales linearly.
+
+The section above concluded from a matched-geometry run that Diana scales
+**superlinearly** — 2.31x the time for 1.43x the pixels — and named a
+mechanism, im2col's working set crossing L3. Both were wrong.
+
+### The sweep
+
+`examples/size_knee.rs`, width pinned at 640 and height swept so the rect
+letterbox actually moves, min-of-25:
+
+| in h | letterbox | Mpx | ms | ms/Mpx |
+|---:|---|---:|---:|---:|
+| 160 | 640x160 | 0.102 | 24.3 | 237 |
+| 224 | 640x224 | 0.143 | 30.4 | 212 |
+| 288 | 640x288 | 0.184 | 39.1 | 212 |
+| 352 | 640x352 | 0.225 | 46.8 | 208 |
+| 416 | 640x416 | 0.266 | 54.2 | 204 |
+| 480 | 640x480 | 0.307 | 90.8 | 296 |
+| 544 | 640x544 | 0.348 | 76.4 | 219 |
+| 608 | 640x608 | 0.389 | 82.4 | 212 |
+| 640 | 640x640 | 0.410 | 96.7 | 236 |
+
+**No monotonic trend.** 480 spikes to 296 and 544 comes straight back to 219;
+160 sits at 237, above 640's 236. Flat within this box's spread.
+
+### How the wrong conclusion was reached
+
+| | value |
+|---|---|
+| rect bench p50, three runs | 35, 50, **53** |
+| square bench p50 | 81 (n = 1) |
+| 81 / rect BEST (35) | **2.31x** — "superlinear" |
+| 81 / rect MEDIAN (50) | **1.62x** — essentially linear |
+
+**A best-case reading was compared against a single sample.** That is the
+error this document warns about in three other places, and it produced a
+confident mechanism for a phenomenon that is not there. The scoping note it
+generated — "the layout project is priced wrong, the term is bigger at
+square" — is void.
+
+### Two defects in the probe itself, both instructive
+
+* Its first version swept the SIDE LENGTH of a square input. A square input
+  letterboxes to 640x640 whatever its size, so it measured **one point six
+  times** and reported a flat line that meant nothing. Aspect ratio is the
+  variable that moves a rect letterbox.
+* It used **min-of-5** on a box whose within-run spread reaches 2.8x, reading
+  roughly double the true floor — 54 ms where the `scaling` harness's
+  min-of-60 reads 28.7 ms for the same work. A minimum needs enough samples to
+  actually be one.
+
+The knee marker was removed as well: it fired on a single point 10 % above its
+neighbour, which here is noise. A cliff is a SUSTAINED rise across several
+sizes.
+
+### What survives
+
+The matched-geometry standing, which is a same-instrument comparison and
+stands:
+
+| | p50 at 640 square | mAP50 |
+|---|---:|---:|
+| ffai-diana | 81 ms | 0.6865 |
+| ultralytics-yolo26n | 55 ms | 0.6865 |
+| **ort-yolo26n** | **28 ms** | 0.6865 |
+
+Diana is **2.89x** behind ORT and **1.47x** behind Ultralytics at matched
+square geometry, and **0.88x — ahead of Ultralytics** at matched rect. Both
+comparisons are matched-config and both are real; the geometry qualifier is
+the part that was missing, and it is the part that survives this retraction.
