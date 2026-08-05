@@ -7444,6 +7444,80 @@ do is the other 70 %, and now the reason is measured rather than inferred.
 label is already harvested, and the ceiling is 96 % rather than the 9 % this
 section was opened to explore.
 
+### 8.132 CORRECTION to §8.131 — the block is the right UNIT, not a reachable 96 %
+
+§8.131 measured two things and I conflated them. That blocks are **98 % pure** is
+true, important and stands. That "blocks capture 96 % of the prize" is an ORACLE
+figure, and presenting it as the classifier's ceiling was wrong. Building the
+classifier says so.
+
+**The features are genuinely far stronger than any line had.** 4 789 blocks, 21
+features, ranked by AUC on train:
+
+| feature | orphan median | body median | AUC |
+|---|---:|---:|---:|
+| `area_frac` | 0.001 | 0.029 | **0.924** |
+| `w_med` | 0.088 | 0.915 | 0.893 |
+| `blk_w` | 0.045 | 0.282 | 0.891 |
+| `chars_per_line` | 5.0 | 32.2 | 0.860 |
+| `n_lines` | 1.0 | 5.0 | 0.802 |
+
+Line features lived at 0.6-0.7. These reach 0.92.
+
+**And the tree still only reaches a tenth of the oracle.** Grown against
+character-weighted net gain (§8.112's objective, not accuracy), fitted on train,
+judged once:
+
+| depth | min-leaf | train | holdout | of oracle (train / holdout) |
+|---:|---:|---:|---:|---|
+| 3 | 40 | +1.444 | +1.023 | 32 % / **13 %** |
+| 4 | 25 | +1.505 | +0.796 | 34 % / **10 %** |
+| 8 | 15 | +1.510 | +0.803 | 34 % / **10 %** |
+
+Depth saturates at 4 — nothing above it changes anything.
+
+**The control settles what is limiting.** Fitted on HOLDOUT ITSELF, which is not a
+shippable number but is a ceiling: **18 %** of its own oracle. Not the 80-page
+train split, not the model, not the depth. **The features.**
+
+**Why, exactly.** The gain is concentrated — top 10 blocks are 32.4 % of it, top
+50 are 50.9 % — and those blocks look like body text:
+
+| | top-200 orphan blocks | body blocks |
+|---|---:|---:|
+| `area_frac` | 0.0099 | 0.0193 |
+| `w_med` | 0.735 | 0.878 |
+| `n_lines` | 3 | 4 |
+| **`chars_per_line`** | **48.5** | **29.7** |
+| **`blk_w`** | **0.379** | **0.272** |
+
+**The valuable orphan blocks are WIDER and DENSER than body text, not smaller.**
+`area_frac`'s 0.924 comes from separating the many SMALL figure labels, which
+carry 60 % of the blocks and little of the money. What carries the money is
+reference lists and journal front-matter, and those are paragraphs by every
+geometric measure — §8.115's wall, one level up, exactly as stated there: *"they
+differ from a paragraph only in what they MEAN"*.
+
+**What this does and does not change.**
+
+* **Stands:** the block is the right unit. 98 % purity means a block-level
+  decision loses almost nothing to a line-level one, and a block carries features
+  a line cannot have. Any future classifier should work here.
+* **Withdrawn:** that a block classifier reaches ~14.8 % macro and passes
+  Unlimited-OCR. On these features it reaches roughly a fifth of that.
+* **Explained:** why §8.130's section-scope rule works at precision 1.000 while
+  every geometric rule failed. It does not measure the block's SHAPE, it uses the
+  document's STRUCTURE — a heading that ends the body. That is the only signal so
+  far that separates a reference list from a paragraph, because it is the only
+  one that is not geometric.
+
+**So the direction is structure, not shape.** §8.130 catches reference sections;
+the same idea should reach abstracts, acknowledgements, author blocks and figure
+captions — all of which are announced by a heading or by position within the
+document, none of which look different from a paragraph. That is where the
+remaining prize is, and geometry has now been measured to a dead end twice: once
+per line (§8.115) and once per block (here).
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
