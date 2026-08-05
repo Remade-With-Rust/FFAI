@@ -7267,6 +7267,69 @@ that suppression can reach, the residual fragments into five sub-populations of
 2-4 pages each. **No amount of text-pattern work will resolve that here, and the
 73 % of the prize still outstanding is not reachable by syntax.**
 
+### 8.128 Rendering the pages found the lever the tables could not: SECTION SCOPE
+
+§8.127 refuted citation-syntax rules and concluded the residual fragments into
+sub-populations too small to fit. That was an argument from tables. The 18
+over-emission pages were drawn instead, every line colour-coded — red for orphan
+text still emitted, blue for correctly dropped, green for annotated and kept,
+magenta for annotated and wrongly dropped, with the annotated regions outlined.
+
+`omni-0039` answers the question by looking. A two-column journal page: the body
+prose is green and correct, the **"References" heading is green**, and every one
+of the 76 lines after it is red — a contiguous block to the end of the page.
+
+**The signal is not what the lines look like. It is where they sit.** Everything
+after a references heading is outside the document body, whatever citation style
+it uses, which is precisely the property no syntax rule had.
+
+| rule (incremental on shipped) | n | train | holdout | tail | **body** | prec | top3 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **after a References heading** | 282 | +0.000 | **+1.739** | **+31.37** | **+0.564** | **0.855** | 77 % |
+| + not in the top 10 % of the page | 276 | +0.000 | +1.719 | +30.85 | +0.564 | 0.859 | 76 % |
+| `year_paren >= 4` (shipped; sanity) | **0** | +0.000 | +0.000 | +0.00 | +0.000 | — | — |
+
+**Every previous candidate had body <= 0. This one improves the body pages too.**
+Holdout +1.739 pp against `rc = 200`'s +0.297 and the confidence rule's +1.235,
+and unlike both it is not one page:
+
+| page | marked | orphan | precision | chars |
+|---|---:|---:|---:|---:|
+| `omni-0055` | 153 | 113 | **0.739** | 7 456 |
+| `omni-0039` | 78 | 78 | **1.000** | 3 975 |
+| `omni-0047` | 49 | 46 | 0.939 | 2 267 |
+| `omni-0060` | 39 | 39 | **1.000** | 1 850 |
+| `omni-0049` | 25 | 25 | **1.000** | 1 392 |
+| `omni-0048` | 20 | 20 | **1.000** | 1 131 |
+| `omni-0045` | 9 | 9 | **1.000** | 362 |
+
+**Five of seven pages at perfect precision**, and it catches `omni-0039`
+(Vancouver, `year_hits = 0`), `omni-0055` (APA, 50 hits) and `omni-0048` (URLs
+and dates, 0 hits) with one mechanism — the three §8.127 proved had no syntax in
+common.
+
+**The one failure is the column order, and it is diagnosed.** `omni-0055` marks
+40 annotated lines. Its heading sits at `x_rel = 0.091`, but the wrongly-marked
+lines run `x_rel = 0.253-0.267` at `y` as low as **0.103** — the top of a later
+column. The 0.18 clustering tolerance merges that page's 31 distinct left edges
+wrongly, so "after in column order" sweeps in text that reads BEFORE the heading.
+`omni-0039` scores 1.000 because its right column genuinely is all references.
+**The rule is sound; the reading order feeding it is not**, and §8.86 already
+measured our within-column ordering as correct while region ORDER carries the
+error — the same defect, arriving from a third direction.
+
+**Two things block shipping it today, both stated rather than worked around.**
+The heading fires on **7 of 316 pages, all holdout** — train contains none, so
+the both-splits gate cannot judge it, exactly as with §8.116's bibliography
+branch, which shipped on an end-to-end validation instead (-0.67 pp predicted,
+-0.68 pp measured). And at `top3 = 77 %` it is concentrated, though across seven
+pages with five at perfect precision rather than one page at 85 %.
+
+**What it needs next, in order:** a column assignment that does not merge 31 left
+edges into two; then the same end-to-end engine measurement §8.116 got; then a
+corpus with reference pages in TRAIN, which §8.114 asked for and is now wanted by
+two independent levers.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

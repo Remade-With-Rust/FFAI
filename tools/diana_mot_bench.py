@@ -133,11 +133,77 @@ def run_ultralytics(frames_dir, model):
             for k in range(len(cf)):
                 dets[fr].append((float(cf[k]), tuple(float(v) for v in xy[k])))
     return dets, n
+def run_one(seq, model):
+    """One sequence, three arms, scored. Returns None if it is not complete."""
+    frames = os.path.join(seq, "img1")
+    gtp = os.path.join(seq, "gt.txt")
+    if not os.path.isdir(frames) or not os.path.exists(gtp):
+        return None
+    gt = load_gt(gtp)
+    n = len(os.listdir(frames))
+    o = os.path.join(seq, "diana_ungated.tsv")
+    _, log_un = run_diana(frames, o, gated=True, extra=["--change-fraction", "0.0"])
+    d_un = parse_diana(o)
+    o = os.path.join(seq, "diana_gated.tsv")
+    _, log_ga = run_diana(frames, o, gated=True)
+    d_ga = parse_diana(o)
+    ud, _ = run_ultralytics(frames, model)
+    gated = 0
+    for line in log_ga.splitlines():
+        if " gated" in line:
+            try:
+                gated = int(line.split("model, ")[1].split(" gated")[0])
+            except Exception:
+                pass
+    return {
+        "frames": n,
+        "ap_un": average_precision(d_un, gt, 0.5)[0],
+        "ap_ga": average_precision(d_ga, gt, 0.5)[0],
+        "ap_ul": average_precision(ud, gt, 0.5)[0],
+        "gated": gated,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seq", default="corpora/clips/mot17-09")
+    ap.add_argument("--all", action="store_true", help="every downloaded MOT17 sequence")
     ap.add_argument("--model", default="corpora/cache/yolo26n.pt")
     args = ap.parse_args()
+    if args.all:
+        import glob
+        seqs = sorted(glob.glob(os.path.join(ROOT, "corpora/clips/mot17-*")))
+        # Which sequences are fixed cameras. The LIVE gate's whole claim is
+        # that it helps the first group and refuses on the second, so the
+        # split is the point of running all of them.
+        static = {"02", "04", "09"}
+        rows = []
+        for sd in seqs:
+            tag = os.path.basename(sd).split("-")[-1]
+            r = run_one(sd, os.path.join(ROOT, args.model))
+            if r:
+                r["camera"] = "static" if tag in static else "moving"
+                r["seq"] = tag
+                rows.append(r)
+        print()
+        print(f"{'seq':>6} {'camera':>8} {'frames':>7} {'diana AP50':>11} {'ultra AP50':>11} "
+              f"{'gap pp':>8} {'gated':>7} {'gate pp':>8}")
+        for r in rows:
+            print(f"{r['seq']:>6} {r['camera']:>8} {r['frames']:>7} {r['ap_un']*100:10.2f}% "
+                  f"{r['ap_ul']*100:10.2f}% {(r['ap_un']-r['ap_ul'])*100:+7.2f} "
+                  f"{r['gated']:>4}/{r['frames']:<4} {(r['ap_ga']-r['ap_un'])*100:+7.2f}")
+        n = len(rows)
+        if n:
+            print()
+            print(f"  mean |AP50 gap| vs ultralytics : "
+                  f"{sum(abs(r['ap_un']-r['ap_ul']) for r in rows)/n*100:.3f} pp")
+            print(f"  mean gate cost                 : "
+                  f"{sum(r['ap_ga']-r['ap_un'] for r in rows)/n*100:+.3f} pp")
+            tf = sum(r['frames'] for r in rows); tg = sum(r['gated'] for r in rows)
+            print(f"  frames gated overall           : {tg}/{tf} = {tg/tf*100:.1f}%")
+        with open(os.path.join(ROOT, "corpora/clips/mot17_summary.json"), "w") as f:
+            json.dump(rows, f, indent=1)
+        return
     seq = os.path.join(ROOT, args.seq)
     frames = os.path.join(seq, "img1")
     gt = load_gt(os.path.join(seq, "gt.txt"))

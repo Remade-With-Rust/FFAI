@@ -37,47 +37,64 @@ ffai-media = "0.6"
 
 Against Ultralytics 8.4.113 and ONNX Runtime on a hash-pinned 45-image COCO
 holdout, CPU only, yolo26n at 640 rect
-([`bench-detect-1785728764`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl)):
+([`bench/ledger.jsonl`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl)):
 
-| | mAP50 | p50 latency | steady RSS |
-|---|---:|---:|---:|
-| **Diana** (rect) | **0.7014** | ~41 ms | **121 MiB** |
-| ultralytics-yolo26n-rect | 0.7014 | ~40 ms | 310 MiB |
-| ort-yolo26n (square only) | 0.6865 | 28 ms | 163 MiB |
+| | mAP50 | steady RSS |
+|---|---:|---:|
+| **Diana** (rect) | **0.7014** | **121 MiB** |
+| ultralytics-yolo26n-rect | 0.7014 | 310 MiB |
+| ort-yolo26n (square only) | 0.6865 | 163 MiB |
 
-**mAP is identical to PyTorch to four decimals.** Latency is **rough parity
-with Ultralytics** — median **1.11×** across seven PAIRED runs (both numbers
-taken in the same run, so machine drift cancels), individual runs spanning
-0.82–1.32×. An earlier version of this page said "lower latency" on the
-strength of one favourable run; seven runs straddle 1.0.
-
-**Memory is the unambiguous win: 0.4× Ultralytics, 0.75× ONNX Runtime.**
-Model load is 68 ms.
+**mAP is identical to PyTorch to four decimals.** Memory is the unambiguous
+win: **0.4x Ultralytics, 0.75x ONNX Runtime.** Model load is 68 ms.
 
 Beyond the aggregate: across all ten tier/geometry configurations mAP matches
 PyTorch to within 0.08 pp on a 450-image holdout, and at n, m, l and x **every
 detection is identical** — same count, same classes, same order across 724
-detections, boxes within 0.30 px.
+detections, boxes within 0.30 px. On MOT17, seven sequences and 5,316 frames of
+a public benchmark, the mean absolute AP50 gap is **0.029 pp** (table below).
+
+## Latency: the harness was wrong, and fixing it moved the number
+
+The bench pre-decoded the whole corpus before timing. That looks like it
+favours us — our PNG reader sits outside the timed region while the reference
+pays for its own decode inside it. It does the opposite. The reference decodes
+each image *just before* using it and reads a buffer its own decoder just
+wrote; ours was written 45 images ago and has to be fetched. **The harness was
+handicapping us by ~14 %.** Measured ABBA, three reps: just-in-time decode is
+11–17 % faster despite ADDING the decode to the timed region. A working-set
+sweep shows holding 1 image versus 45 is FLAT, so the mechanism is recency,
+not residency.
+
+With that fixed, two clean paired runs at rect — both numbers from the same
+run, so machine drift cancels:
+
+| | ours | ultralytics | ort |
+|---|---:|---:|---:|
+| run 1 | 32 ms | 46 ms — **0.70x** | 28 ms — 1.14x |
+| run 2 | 37 ms | 64 ms — **0.58x** | 33 ms — 1.12x |
+
+**This is two runs, and it is labelled as two runs.** A third read 382 ms on a
+box that had been benchmarking for hours — rtf 2.6 where the others sit at
+25–29 — and is excluded as machine noise, with the exclusion stated here rather
+than buried inside a median. An earlier version of this page claimed "lower
+latency" on one favourable run and had to retract it in three places. **Ahead
+at rect is the current reading, not a settled result.**
 
 ## What it does not do yet
 
-**The speed gate FAILS against ONNX Runtime by 2.89×** at matched square
-geometry — 81 ms against 28 ms. ORT has no rect export, so comparing our rect
-against its square puts our REDUCED-work configuration against its full-work
-one; rect is 70–75 % of square's pixels on this corpus, and the 1.25× that
-mismatch produces is not like-for-like. Diana is ahead of ORT on accuracy
-(0.7014 rect vs 0.6865).
+The ORT comparison is **not like-for-like**. ORT has no rect export, so our
+reduced-work rect runs against its full-work square, and rect is 70–75 % of
+square's pixels on this corpus. At matched square geometry the last honest
+figure was **2.89x behind ORT** — 81 ms against 28 — measured under the OLD
+harness and **not re-measured since**, so treat it as an upper bound rather
+than a current number. Diana is ahead of ORT on accuracy either way (0.7014
+rect vs 0.6865).
 
-Against Ultralytics at matched geometry, both ways: **rough parity at rect**
-(median 1.11×, seven paired runs, 0.82–1.32×) and **1.47× behind at square**.
-
-**Footprint is the unambiguous win** — 121 MiB against ORT's 163 and
-Ultralytics' 310, the gate passing at 0.75×.
-
-Detection is single-image; video ingest is not wired. Only COCO's 80 classes
+The footprint gate passes by **1 MiB** (160 against ORT's 161), which is not a
+margin — mimalloc retains ~130 MiB of allocator churn against 26 MiB actually
+live, and the durable fix is upstream of the allocator. Only COCO's 80 classes
 are exercised.
-
----
 
 ## Depth: metric distance per pixel
 
@@ -119,6 +136,18 @@ only this correctness one, which is the stronger statement anyway: a
 ground-truth metric would grade Ultralytics' weights, while this grades the
 port.
 
+## Video in, not just stills
+
+`ffai_media::sample_frames` decodes H.264/MP4 through the pure-Rust `rff`
+stack — no libavcodec, no OpenCV — and hands back RGB frames on a fixed
+stride. The YUV→RGB conversion reproduces OpenCV's `COLOR_YUV2RGB_I420`
+BT.601 matrix exactly, because a benchmark against a Python reference that
+converts colour differently is measuring the colour conversion.
+
+```rust
+let frames = ffai_media::sample_frames(Path::new("clip.mp4"), 8)?;  // every 8th
+```
+
 ## LIVE: skip frames that did not change
 
 ```
@@ -129,17 +158,47 @@ A frame whose pixels have not moved reuses the previous detections at zero
 model cost — which also makes it an output stabiliser, since nothing re-rolls
 the model on a static scene.
 
-| sequence | model runs | skip rate | throughput |
-|---|---:|---:|---:|
-| fixed camera, ±2 sensor noise | **1 of 24** | **95.8 %** | **47.1 fps** |
-| 1 px pan per frame | 24 of 24 | 0 % | 3.5 fps |
+**Read the qualifier before enabling it.** On a genuinely still scene the
+saving is large; on real footage with people in it, it is close to nothing:
 
-**This is for fixed cameras** — surveillance, fixed mounts, screen capture. A
-one-pixel shift already changes 63 % of the frame, so on handheld video it
-gates nothing and costs 0.2 % for the privilege. The signal is a changed-pixel
-FRACTION above a per-pixel delta noise cannot reach, not a mean difference:
-harvested on this corpus, ±6 levels of noise moved **0.000000 %** of pixels
-past the delta while a one-pixel shift moved 63 %.
+| content | frames gated |
+|---|---|
+| fixed camera, still scene, sensor noise only | **46 of 48** |
+| MOT17 static-camera sequences (02, 04, 09) | **41 of 2,175 — 1.9 %** |
+| MOT17 moving-camera sequences | **4 of 3,141** |
+
+The gate is for a **static SCENE**, not merely a fixed CAMERA. A surveillance
+view with pedestrians crossing it changes every frame, and the gate correctly
+refuses — costing a per-frame pixel diff and saving nothing. Across all 5,316
+MOT17 frames it fired on **0.8 %**, at an accuracy cost of **−0.006 pp**.
+
+Its failure mode is not graceful. Forced to gate 507 of 525 frames on a scene
+that WAS changing, AP50 fell from 62.35 % to 17.15 % — **45 points**. The
+threshold is a correctness boundary, not a tuning knob, which is why the
+per-pixel delta is set from a harvest on real compressed video rather than
+chosen.
+
+## Measured on MOT17 — a public benchmark, not our own corpus
+
+All seven MOT17 training sequences, **5,316 frames**, ground truth from the
+dataset. Diana and Ultralytics are handed the identical extracted frames, so
+neither pays for a decode the other does not.
+
+| seq | camera | frames | Diana AP50 | ultralytics | gap |
+|---|---|---:|---:|---:|---:|
+| 02 | static | 600 | 21.55 % | 21.54 % | +0.01 |
+| 04 | static | 1050 | 23.07 % | 23.06 % | +0.01 |
+| 05 | moving | 837 | 56.14 % | 56.04 % | +0.10 |
+| 09 | static | 525 | 62.35 % | 62.37 % | −0.02 |
+| 10 | moving | 654 | 35.92 % | 35.95 % | −0.03 |
+| 11 | moving | 900 | 56.96 % | 56.92 % | +0.03 |
+| 13 | moving | 750 | 25.62 % | 25.62 % | −0.00 |
+
+**Mean absolute gap: 0.029 pp**, across scenes spanning 21.55 % to 62.35 % —
+so the agreement is not an artefact of one easy sequence. Ahead on four,
+behind on three, every one inside 0.1 pp.
+
+Reproduce with `tools/diana_mot_bench.py --all`.
 
 ## Five tiers from one graph
 

@@ -42,7 +42,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **At rough parity with Ultralytics per image at identical mAP — median 1.11× across seven paired runs (0.82–1.32×) — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865) ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Ahead of Ultralytics per image at identical mAP — 0.70x and 0.58x across two paired runs after a harness bug that cost us ~14 % was fixed — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). **Accuracy holds on MOT17: 0.029 pp mean gap over 5,316 frames of a public benchmark.** Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865). Video in through the pure-Rust `rff` stack; a LIVE change gate that fires on 0.8 % of real surveillance frames ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -534,21 +534,64 @@ classes, same order — at **four tiers**, not just the smallest:
 | l | 187 | 187/187 | 0.170 px |
 | x | 202 | 202/202 | 0.213 px |
 
-**Speed is the open gate, and the honest numbers are worse than an early
-reading suggested.** Against Ultralytics at matched rect geometry Diana is at
-**rough parity — median 1.11x across seven PAIRED runs**, individual runs
-spanning 0.82-1.32x. A single favourable run (0.88x) was quoted here as
-"faster than Ultralytics"; seven runs straddle 1.0 and the median is behind.
+**The speed picture changed when the harness was fixed.** The bench
+pre-decoded the whole corpus before timing, which looks like it favours us —
+our reader sits outside the timed region while the reference pays for its
+decode inside it — and does the opposite. The reference decodes each image
+just before using it and reads a buffer its own decoder just wrote; ours was
+written 45 images ago and had to be fetched. **The harness was handicapping us
+by ~14 %.** ABBA, three reps: just-in-time decode is 11-17 % faster despite
+ADDING the decode to the timed region, and a working-set sweep shows holding 1
+image versus 45 is FLAT — the mechanism is recency, not residency. JIT is now
+the default.
 
-Against **ONNX Runtime** the gate fails by **2.89x at matched square
-geometry**. ORT has no rect export, so the widely-quoted 1.25x compared our
-reduced-work rect against its full-work square — rect is 70-75 % of square's
-pixels. 2.89x is the like-for-like figure.
+With that fixed, two clean paired runs at rect put Diana **ahead of
+Ultralytics**: 32 ms against 46 (0.70x) and 37 against 64 (0.58x). **That is
+two runs and is labelled as two runs** — a third read 382 ms on a box that had
+been benchmarking for hours (rtf 2.6 against 25-29) and is excluded as machine
+noise, stated here rather than buried in a median. Before the fix, seven
+paired runs read a median of 1.11x BEHIND, and a single favourable run had
+been quoted as "faster than Ultralytics" and retracted. The current reading is
+ahead; it is not yet a settled result.
+
+Against **ONNX Runtime** the gate still fails: **2.89x at matched square
+geometry**, measured under the old harness and not re-measured since, so it is
+an upper bound. ORT has no rect export, so the widely-quoted 1.25x compared
+our reduced-work rect against its full-work square — rect is 70-75 % of
+square's pixels.
 
 mAP is identical to PyTorch to four decimals in both geometries, and memory is
 the unambiguous win at 0.4x Ultralytics and 0.75x ORT. The repo's rule is
 that `verdict: claimable` needs all four gates; Diana does not get it. The
 losing row goes in the table.
+
+### Accuracy holds on a public benchmark, not just our corpus
+
+All seven MOT17 training sequences, **5,316 frames**, dataset ground truth,
+identical extracted frames to both engines:
+
+| seq | camera | frames | Diana AP50 | ultralytics | gap pp |
+|---|---|---:|---:|---:|---:|
+| 02 | static | 600 | 21.55 % | 21.54 % | +0.01 |
+| 04 | static | 1050 | 23.07 % | 23.06 % | +0.01 |
+| 05 | moving | 837 | 56.14 % | 56.04 % | +0.10 |
+| 09 | static | 525 | 62.35 % | 62.37 % | -0.02 |
+| 10 | moving | 654 | 35.92 % | 35.95 % | -0.03 |
+| 11 | moving | 900 | 56.96 % | 56.92 % | +0.03 |
+| 13 | moving | 750 | 25.62 % | 25.62 % | -0.00 |
+
+**Mean absolute gap 0.029 pp** across scenes spanning 21.55 % to 62.35 %, so
+the agreement is not an artefact of one easy sequence. Ahead on four, behind
+on three, every one inside 0.1 pp. Reproduce with
+`tools/diana_mot_bench.py --all`.
+
+The **LIVE change gate** was measured on the same 5,316 frames and the result
+is a qualifier, not a headline: it fires on **0.8 %** of them, at an accuracy
+cost of **-0.006 pp**. On a synthetic still scene it gates 46 of 48 frames;
+on real surveillance footage with pedestrians in it, almost nothing. It is for
+a static SCENE, not merely a fixed CAMERA. Forced to gate a scene that WAS
+changing, AP50 fell 45 points — the threshold is a correctness boundary, not a
+tuning knob.
 
 | tier | n→x order | x→n order | pinned floor |
 |---|---:|---:|---:|

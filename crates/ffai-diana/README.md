@@ -81,6 +81,18 @@ only this correctness one, which is the stronger statement anyway: a
 ground-truth metric would grade Ultralytics' weights, while this grades the
 port.
 
+## Video in, not just stills
+
+`ffai_media::sample_frames` decodes H.264/MP4 through the pure-Rust `rff`
+stack — no libavcodec, no OpenCV — and hands back RGB frames on a fixed
+stride. The YUV→RGB conversion reproduces OpenCV's `COLOR_YUV2RGB_I420`
+BT.601 matrix exactly, because a benchmark against a Python reference that
+converts colour differently is measuring the colour conversion.
+
+```rust
+let frames = ffai_media::sample_frames(Path::new("clip.mp4"), 8)?;  // every 8th
+```
+
 ## LIVE: skip frames that did not change
 
 ```
@@ -91,84 +103,47 @@ A frame whose pixels have not moved reuses the previous detections at zero
 model cost — which also makes it an output stabiliser, since nothing re-rolls
 the model on a static scene.
 
-| sequence | model runs | skip rate | throughput |
-|---|---:|---:|---:|
-| fixed camera, ±2 sensor noise | **1 of 24** | **95.8 %** | **47.1 fps** |
-| 1 px pan per frame | 24 of 24 | 0 % | 3.5 fps |
+**Read the qualifier before enabling it.** On a genuinely still scene the
+saving is large; on real footage with people in it, it is close to nothing:
 
-**This is for fixed cameras** — surveillance, fixed mounts, screen capture. A
-one-pixel shift already changes 63 % of the frame, so on handheld video it
-gates nothing and costs 0.2 % for the privilege. The signal is a changed-pixel
-FRACTION above a per-pixel delta noise cannot reach, not a mean difference:
-harvested on this corpus, ±6 levels of noise moved **0.000000 %** of pixels
-past the delta while a one-pixel shift moved 63 %.
+| content | frames gated |
+|---|---|
+| fixed camera, still scene, sensor noise only | **46 of 48** |
+| MOT17 static-camera sequences (02, 04, 09) | **41 of 2,175 — 1.9 %** |
+| MOT17 moving-camera sequences | **4 of 3,141** |
 
-## Embedding it: what you actually pull in
+The gate is for a **static SCENE**, not merely a fixed CAMERA. A surveillance
+view with pedestrians crossing it changes every frame, and the gate correctly
+refuses — costing a per-frame pixel diff and saving nothing. Across all 5,316
+MOT17 frames it fired on **0.8 %**, at an accuracy cost of **−0.006 pp**.
 
-Diana does **not** drag in the rest of FFai. It has no dependency on
-`ffai-mercury`, `ffai-carmenta` or `ffai-argus` — those are sibling crates,
-not layers underneath. Bundling detection alone is the normal case, not a
-special one.
+Its failure mode is not graceful. Forced to gate 507 of 525 frames on a scene
+that WAS changing, AP50 fell from 62.35 % to 17.15 % — **45 points**. The
+threshold is a correctness boundary, not a tuning knob, which is why the
+per-pixel delta is set from a harvest on real compressed video rather than
+chosen.
 
-| build | transitive crates | compiles C? |
-|---|---:|---|
-| `ffai-diana`, default | **138** | yes — `onig_sys` |
-| `ffai-diana` + `ffai-models/fetch` | 308 | yes — `onig_sys`, `aws-lc-sys` |
-| **`wasm32-unknown-unknown`** | **95** | **no** |
+## Measured on MOT17 — a public benchmark, not our own corpus
 
-The 170-crate difference on native is the Hugging Face downloader —
-`reqwest`, `hyper`, `rustls`, `aws-lc-sys` — and Diana never calls it. Its
-whole use of `ffai-models` is `load_dir`, which reads TOML off disk. The
-fetch stack is **off by default here**; enable `ffai-models/fetch` if you want
-weights pulled from the hub rather than shipped alongside.
+All seven MOT17 training sequences, **5,316 frames**, ground truth from the
+dataset. Diana and Ultralytics are handed the identical extracted frames, so
+neither pays for a decode the other does not.
 
-### The C dependency, and where it is not
+| seq | camera | frames | Diana AP50 | ultralytics | gap |
+|---|---|---:|---:|---:|---:|
+| 02 | static | 600 | 21.55 % | 21.54 % | +0.01 |
+| 04 | static | 1050 | 23.07 % | 23.06 % | +0.01 |
+| 05 | moving | 837 | 56.14 % | 56.04 % | +0.10 |
+| 09 | static | 525 | 62.35 % | 62.37 % | −0.02 |
+| 10 | moving | 654 | 35.92 % | 35.95 % | −0.03 |
+| 11 | moving | 900 | 56.96 % | 56.92 % | +0.03 |
+| 13 | moving | 750 | 25.62 % | 25.62 % | −0.00 |
 
-A native build **needs a C compiler**, for one library that is not ours:
+**Mean absolute gap: 0.029 pp**, across scenes spanning 21.55 % to 62.35 % —
+so the agreement is not an artefact of one easy sequence. Ahead on four,
+behind on three, every one inside 0.1 pp.
 
-```
-cc → onig_sys → onig → tokenizers → candle-core → ffai-diana
-```
-
-`candle-core` takes `tokenizers` as a hard, non-optional dependency with
-`features = ["onig"]` — a C regex engine, for text models Diana never touches,
-reached through one candle module (`quantized::tokenizer`) it never calls.
-`tokenizers` itself marks `onig` **optional** and ships a pure-Rust
-alternative, so nothing technical requires this; it is one hardcoded feature
-line upstream. It cannot be gated from here.
-
-This is **build-time only**. The result is an ordinary native binary with
-Oniguruma statically linked; there is no shared library to ship and no runtime
-dependency. It matters for musl/static builds, cross-compilation, minimal
-containers, and any no-C-in-the-supply-chain policy — and nowhere else.
-
-**On wasm32 it disappears entirely.** candle declares that dependency as
-`[target.'cfg(not(target_arch = "wasm32"))'.dependencies.tokenizers]`, so a
-wasm build is 95 crates with no `onig` and no `cc`.
-`cargo check --target wasm32-unknown-unknown` is clean.
-
-Compiling is not deploying, and two runtime pieces are **not** done: weights
-load through `std::fs`, which a browser does not have (a from-bytes
-constructor is the missing API), and `rayon` compiles for wasm but needs
-atomics plus a threaded build to do anything — without it the numbers below,
-which were measured with a 4-worker pool, do not carry.
-
-### The allocator is not inherited
-
-Diana's latency depends on it heavily: the system allocator re-faults nearly
-every byte it hands back — **58,634 page faults per image** — and costs
-**1.66×**. A library cannot set a global allocator, so an embedding
-application gets its own default unless it opts in:
-
-```rust
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-```
-
-That is a trade, not a free win: it buys the 1.66× and costs roughly 120 MiB
-of retained pages, because retention *is* the mechanism. On a
-size-constrained target the system allocator is the leaner and slower choice,
-and both halves of that are measured.
+Reproduce with `tools/diana_mot_bench.py --all`.
 
 ## Five tiers from one graph
 
@@ -199,63 +174,86 @@ on its first run.
 
 ## Status: `experimental`, honestly
 
-**Three of four gates PASS.** Measured against Ultralytics 8.4.113 and ONNX
-Runtime on a hash-pinned 45-image COCO holdout, CPU only, yolo26n at 640
-rect ([`bench-detect-1785728764`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl)):
+Measured against Ultralytics 8.4.113 and ONNX Runtime on a hash-pinned
+45-image COCO holdout, CPU only, yolo26n at 640 rect
+([`bench/ledger.jsonl`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl)):
 
-| | mAP50 | p50 latency | steady RSS |
+| | mAP50 | steady RSS |
+|---|---:|---:|
+| **Diana** (rect) | **0.7014** | **121 MiB** |
+| ultralytics-yolo26n-rect | 0.7014 | 310 MiB |
+| ort-yolo26n (square only) | 0.6865 | 163 MiB |
+
+**mAP is identical to PyTorch to four decimals**, and memory is the
+unambiguous win — **0.4x Ultralytics, 0.75x ONNX Runtime**. Model load is
+68 ms.
+
+### The latency number moved, because the harness was wrong
+
+The bench pre-decoded the whole corpus before timing. That looks like it
+favours us — our PNG reader sits outside the timed region while the reference
+pays for its own decode inside it. It does the opposite. The reference decodes
+each image *just before* using it and reads a buffer its own decoder has just
+written; under pre-decode ours was written 45 images ago and has to be fetched.
+**The harness was handicapping us by ~14 %.** Measured ABBA, three reps,
+just-in-time decode is 11–17 % faster despite ADDING the decode to the timed
+region — and a working-set sweep shows holding 1 image versus 45 is FLAT, so
+the mechanism is recency, not residency. JIT is now the default;
+`FFAI_BENCH_PREDECODE=1` restores the old behaviour.
+
+With that fixed, two clean paired runs at rect (both numbers from the same run,
+so machine drift cancels):
+
+| | ours | ultralytics | ort |
 |---|---:|---:|---:|
-| **Diana** (rect) | **0.7014** | ~41 ms | **121 MiB** |
-| ultralytics-yolo26n-rect | 0.7014 | ~40 ms | 310 MiB |
-| ort-yolo26n (square only) | 0.6865 | 28 ms | 163 MiB |
+| run 1 | 32 ms | 46 ms — **0.70x** | 28 ms — 1.14x |
+| run 2 | 37 ms | 64 ms — **0.58x** | 33 ms — 1.12x |
 
-**mAP is identical to PyTorch to four decimals.** Latency is **rough parity
-with Ultralytics** — median **1.11x** across seven PAIRED runs (both numbers
-from the same run, so machine drift cancels), individual runs spanning
-0.82-1.32x. An earlier version of this page said "faster than Ultralytics"
-on the strength of one favourable run; seven runs say parity, and the
-distribution straddles 1.0.
+**This is two runs, and it is labelled as two runs.** A third read 382 ms
+against ultralytics' 49 — rtf 2.6 where the others sit at 25–29 — on a box
+that had been benchmarking for hours; it is excluded as machine noise and the
+exclusion is stated here rather than buried in a median. An earlier version of
+this page claimed "faster than Ultralytics" on one favourable run and had to
+retract it across three published places. **Ahead at rect is the current
+reading, not yet a settled result.**
 
-Memory is the unambiguous win: **0.4x Ultralytics, 0.75x ONNX Runtime.**
-Model load is 68 ms.
+The ORT column is **not like-for-like**: ORT has no rect export, so our
+reduced-work rect runs against its full-work square, and rect is 70–75 % of
+square's pixels on this corpus. At matched square geometry the last honest
+figure was **2.89x behind ORT** (81 ms against 28) — measured under the OLD
+harness and **not re-measured since**, so treat it as an upper bound rather
+than a current number.
 
-**The speed gate FAILS against ONNX Runtime**, and by more than a naive
-reading suggests. ORT has no rect export — it only runs square — so comparing
-our rect against its square compares our REDUCED-work configuration against
-its full-work one, rect being 70-75 % of square's pixels. At matched square
-geometry the honest figure is **2.89x** (81 ms against 28 ms), not the 1.25x
-that mismatched comparison produces.
+### What moved it, and what did not
 
-We are ahead of ORT on accuracy (0.7014 rect vs 0.6865) and use 0.75x its
-memory.
+p50 went **85 → 41 ms** in one campaign, and the four levers were not the four
+anyone would guess:
 
-That gate closed a long way in one campaign — p50 **85 → 41 ms** — and the
-four things that moved it were not the four anyone would guess:
-
-* **the allocator**, worth 1.64×. 58,634 page faults per image; the system
+* **the allocator**, worth 1.64x. 58,634 page faults per image; the system
   allocator was returning memory to the OS and re-faulting nearly every byte;
-* **the thread pool**, worth 1.21× wall and 3.5× CPU — one image wants ~4
+* **the thread pool**, worth 1.21x wall and 3.5x CPU — one image wants ~4
   workers, not 24, and candle keeps its own pool besides;
-* **preprocessing**, 5.7× on its own — a serial bilinear resize recomputing
+* **preprocessing**, 5.7x on its own — a serial bilinear resize recomputing
   the horizontal sample position for every column of every row;
-* **epilogue fusion** on both convolution paths, 12.5% — bias and SiLU in one
+* **epilogue fusion** on both convolution paths, 12.5 % — bias and SiLU in one
   traversal instead of three.
 
 What did **not** move it, each refuted with numbers: im2col tiling (twice),
 direct convolution (four shapes, including an AVX2 microkernel), implicit
-GEMM, the im2col zero-fill, and elementwise traffic fusion — because
-**nothing in this graph leaves L3**, so every prize priced at DRAM bandwidth
-was overstated by 3–15×.
+GEMM, the im2col zero-fill, elementwise traffic fusion, Intel MKL (within
+noise of candle's GEMM), thread width beyond 4–6, cache pollution (flat across
+44x residency), and content-adaptive dispatch. **Nothing in this graph leaves
+L3**, so every prize priced at DRAM bandwidth was overstated by 3–15x.
 
 Not yet `stable`: the footprint gate passes by **1 MiB** (160 against ORT's
 161), which is not a margin — mimalloc retains ~130 MiB of allocator churn
 against 26 MiB actually live, and the durable fix is upstream of the
-allocator. Detection is single-image; video ingest is not wired. Only COCO's
-80 classes are exercised.
+allocator. Only COCO's 80 classes are exercised.
 
 Every number traces to a line in
 [`bench/ledger.jsonl`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl).
-The full campaign, every reverted experiment included:
+The full campaign, every reverted experiment and every retracted number
+included:
 [docs/whys/diana-latency.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/whys/diana-latency.md).
 
 ## License
