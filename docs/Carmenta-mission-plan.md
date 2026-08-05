@@ -6733,6 +6733,82 @@ their own CER, not by the characters they contribute, and fix the small ones.
 A page at 82 % CER costs the same as a page at 5 % under this metric, and we
 have a supply of them.
 
+### 8.120 NINE PAGES ARE THE GAP — the concentration was never the blocker
+
+The Great Gate search was rebuilt for MACRO (§8.119): `macro_gain =
+net_gain / page_chars`, a line's worth as a fraction of ONE page, which is the
+unit `summary.cer = mean(&cers)` actually counts. The tool now reports both
+objectives, both splits, and the top-3 page concentration on every row, and runs
+an exhaustive 3- and 4-variable conjunction search — 39 111 candidates — scored
+incrementally against the shipped filter.
+
+**The external spreadsheet analysis and this tool agree exactly.** Six proposed
+rules reproduce to the digit: "pure geometry A" reads 2 599 / +6 303 / 0.773 on
+both sides, `year_paren` reads 126 / +5 804 / 0.841. Two independent
+implementations of the objective agreeing is worth the check.
+
+**And the recommendation was already shipped.** Its geometry clause IS §8.112's
+isolated-fragment branch verbatim, its citation clause is §8.116's; the shipped
+filter adds the width branch on top and scores +2.580 pp macro against the
+proposal's +1.680 pp. Adopting it would be a **-0.90 pp regression**. The
+proposed 91 %-precision variant (`run<=2 & w<0.25 & sl<5 & digit>0.2`) is a
+strict SUBSET of the isolated-fragment branch and adds exactly zero. One
+improvement did come out of it: gating the citation clause at >=4/page beats the
+ungated form on micro (+12 146 vs +11 991), macro (+1.749 vs +1.680), holdout
+and precision — §8.116's gate is not a safety compromise, it is free.
+
+**The conjunction search found nothing.** 5 302 three-variable and 33 809
+four-variable candidates; the best adds +0.385 pp with **top3 98 %**, and the
+best 4-variable is BELOW the best 3-variable — a fourth clause narrows the same
+rule rather than reaching a new population. `conf < 0.9` appears in every top
+candidate, worth ~+0.38 pp macro against the +399 characters §8.115 priced it at
+on micro, a 100x difference because low-confidence junk lands on small pages.
+
+**Then the three worst classes were sliced out and the answer fell out of them.**
+`colorful_textbook`, `book` and `PPT2PDF` are 76 of 236 holdout pages at
+**42.45 % macro** against the corpus's 33.70 %. Their oracle looked impossibly
+large — 29.66 pp — so it was decomposed, and one page was 44 % of it:
+
+| page | class | ref chars | orphan/ref | page CER |
+|---|---|---:|---:|---:|
+| `omni-0245` | book | 315 | **8.02x** | **843.5 %** |
+| `omni-0213` | book | 418 | 1.91x | 199.0 % |
+| `omni-0252` | book | 662 | 1.06x | 110.1 % |
+| `omni-0233` | PPT2PDF | 196 | 1.02x | 116.3 % |
+
+Pages where we emit two to eight times the text the reference annotates. Priced
+across the whole holdout:
+
+| | |
+|---|---|
+| pages scoring **over 100 % CER** | **9 of 236 (3.8 %)** |
+| their share of macro | **8.77 pp of 33.70 pp — 26 %** |
+| `omni-0245` alone | **3.57 pp** |
+| median page CER | **19.39 %** |
+| mean (macro) | **33.70 %** |
+| capped at 100 % | macro -> **28.74 %** |
+| fixed to the median | macro -> **25.66 %** |
+
+**The gap to Unlimited-OCR is 6.19 pp and nine pages carry 8.77 pp.**
+
+**These are the pages the campaign has been circling all along.** `omni-0055`,
+`omni-0039` and `omni-0049` are the three that carried `year_paren` through
+§8.114 and §8.116. `omni-0245` was the largest prose survivor in §8.115. Every
+concentration warning this campaign issued was pointing at the same short list.
+
+**And that inverts §8.115's conclusion.** It read the concentration as a blocker:
+"half the residual is on ten pages, so no rule can be fitted or validated here."
+That is true and it is beside the point. **Under a page-weighted metric you do
+not need a rule for nine pages — you need to fix nine pages.** Ten sections were
+spent looking for a general rule over a population that turned out to be a list
+short enough to read.
+
+**The next step is not a search.** Open `omni-0245` — 315 reference characters,
+2 500 emitted, 843.5 % CER — and find out what makes an engine transcribe eight
+times a page. Then the other eight. That is worth more than every rule this
+campaign has fitted, and it is the first target in it that is not a statistics
+problem.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

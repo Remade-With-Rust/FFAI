@@ -173,6 +173,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if rows.iter().any(|r| r.run_chars > 0.0 && r.y_rel > 0.0) {
+        println!("=== CALCULATOR RULE SET, under the full discipline ===");
+        run_calculator_rules(&rows, total_orphans);
+        println!();
         println!("=== ON TOP OF THE SHIPPED FILTER (the only delta that ships) ===");
         run_incremental(&rows, total_orphans);
         println!();
@@ -455,6 +458,74 @@ fn run_search(rows: &[Row], depth: usize) {
         println!(
             "  {:<50} {:>5} {:>+8.3} {:>+8.3} {:>+8.3} {:>6} {:>6.3} {:>+8.0}",
             c.label, c.n, c.macro_pp, c.train, c.hold, fmt_top3(c.top3), c.prec, c.net
+        );
+    }
+}
+
+
+/// The rules proposed by the external spreadsheet analysis, scored under the
+/// full discipline rather than on net characters alone.
+///
+/// They reproduce this tool exactly where they overlap -- "Pure geometry A"
+/// reads 2599 / +6303 / 0.773 in both, and `year_paren` reads 126 / +5804 /
+/// 0.841 -- so the objective is implemented the same way on both sides. What
+/// the spreadsheet cannot see is what the rest of these columns say.
+fn run_calculator_rules(rows: &[Row], total_orphans: usize) {
+    type Pred = Box<dyn Fn(&Row) -> bool>;
+    let geo = |r: &Row| r.run_lines <= 3.0 && r.w_p90 < 0.35 && r.same_left < 5.0;
+    let rules: Vec<(&str, Pred)> = vec![
+        (
+            "1 year_paren OR (run<=3 & w<0.35 & sl<5)",
+            Box::new(move |r| r.year_paren || geo(r)),
+        ),
+        (
+            "2 year_paren OR (w<0.25 & sl<5)",
+            Box::new(|r| r.year_paren || (r.w_p90 < 0.25 && r.same_left < 5.0)),
+        ),
+        (
+            "3 year_paren OR (run<=2 & w<0.30 & sl<5)",
+            Box::new(|r| {
+                r.year_paren || (r.run_lines <= 2.0 && r.w_p90 < 0.30 && r.same_left < 5.0)
+            }),
+        ),
+        ("4 pure geometry A", Box::new(move |r| geo(r))),
+        ("5 year_paren alone", Box::new(|r| r.year_paren)),
+        (
+            "6 ultra-precise: run<=2 & w<0.25 & sl<5 & digit>0.2",
+            Box::new(|r| {
+                r.run_lines <= 2.0 && r.w_p90 < 0.25 && r.same_left < 5.0 && r.digit > 0.2
+            }),
+        ),
+        // The same #1, with the citation-year clause DENSITY-GATED as shipped.
+        (
+            "1b same, but year_paren gated at >=4/page (§8.116)",
+            Box::new(move |r| (r.year_paren && r.page_year_hits >= 4.0) || geo(r)),
+        ),
+    ];
+    print_header();
+    let mut results = Vec::new();
+    for (name, pred) in &rules {
+        let res = evaluate(rows, total_orphans, name, pred.as_ref());
+        print_result(&res);
+        results.push(res);
+    }
+
+    // What each adds ON TOP of what already ships. The shipped filter already
+    // contains the geometry clause verbatim (the §8.112 isolated-fragment
+    // branch) and a density-gated year_paren, so most of these totals are
+    // re-counting work already done.
+    let base = evaluate(rows, total_orphans, "shipped", &shipped);
+    println!("\n  vs the SHIPPED filter (which already contains both clauses):");
+    println!(
+        "  {:<48} {:>9} {:>9} {:>8} {:>8}",
+        "", "macro pp", "vs ship", "train", "holdout"
+    );
+    println!("  {:<48} {:>+9.3} {:>9} {:>+8.3} {:>+8.3}",
+             "SHIPPED", base.macro_pp, "-", base.macro_train, base.macro_hold);
+    for r in &results {
+        println!(
+            "  {:<48} {:>+9.3} {:>+9.3} {:>+8.3} {:>+8.3}",
+            r.name, r.macro_pp, r.macro_pp - base.macro_pp, r.macro_train, r.macro_hold
         );
     }
 }
