@@ -2293,3 +2293,65 @@ established that the hand-written kernel loses to candle's by 1.111x even
 before packing is considered. That is a multi-week project with a real chance
 of not paying, and it should start from this document rather than from
 scratch.
+
+
+---
+
+## The MKL diagnostic — the GEMM is NOT the gap, and that prunes a multi-week project
+
+Every conclusion above pointed at the same remaining term: 52 % of the
+pipeline is candle's matmul at ~50 % of peak, and beating it by hand is
+refuted four times. The obvious next move was a packed-panel GEMM — months of
+work with no guarantee.
+
+Before funding that, the question worth answering was cheaper: **is the GEMM
+actually the gap?** candle ships an `mkl` feature routing matmul to Intel MKL,
+which is as good as an sgemm gets on this hardware. If MKL closes the distance
+to ORT, the matmul is the story and a pure-Rust GEMM effort is worth the
+months. If it does not, those months would have gone on the wrong term.
+
+### Two confounds, in order
+
+**First reading: MKL 36.0 ms vs candle 29.6 ms — MKL 22 % SLOWER.** Wrong.
+MKL brings its own OpenMP runtime, which oversubscribes against rayon:
+
+| MKL_NUM_THREADS | 1 | 2 | 4 | unconstrained |
+|---|---:|---:|---:|---:|
+| ms | 46.5 | 36.1 | **27.2** | 33.3 |
+
+At 4 threads, matched to the rayon pool, MKL read **27.2 ms against candle's
+29.6** — apparently an 8 % win.
+
+**That was one pair.** Interleaved, six pairs, threads matched on both sides:
+
+| | readings | median |
+|---|---|---:|
+| candle gemm | 30.1, 32.1, 38.3, 34.9, 33.7, 33.4 | **33.5** |
+| MKL | 29.0, 28.7, 36.9, 39.1, 34.3, 35.1 | **34.7** |
+
+Fully overlapping, and the box drifted upward through the run — both arms
+slower in the later reps. **MKL is within noise of candle's gemm crate on
+Diana's shapes.**
+
+### What that settles
+
+Swapping in a world-class C BLAS moves nothing. So the distance to ORT is
+**not sgemm quality**, and a pure-Rust GEMM project — the single most
+expensive item on the remaining list — would have been months spent on a term
+that is already competitive.
+
+The gap must therefore be in **how many times data is touched**, not how fast
+each matmul runs: operator fusion, a blocked NCHWc layout, and never
+materialising im2col at all. That is consistent with everything else measured
+here — 1,320 matmul calls per image, an im2col fill worth 10.5 %, and a
+matmul term that two independent implementations agree on.
+
+It is also consistent with tiling being refuted three times: tiling changes
+WHERE the data is touched without reducing HOW OFTEN.
+
+### The feature stays, opt-in and unusable as a product
+
+`--features mkl` is kept because it is the instrument that pruned the project
+and someone will want to re-run it when the surrounding stages move. It is not
+a shipping option: it is a C dependency in a pure-Rust toolkit, and it does not
+even run without `libiomp5md.dll` borrowed from a PyTorch install.

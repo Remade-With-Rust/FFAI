@@ -59,6 +59,18 @@ ffai-bench = { workspace = true }
 workspace = true
 
 [features]
+# DIAGNOSTIC, not a shipping default. Routes candle's matmul to Intel MKL.
+#
+# 52% of the pipeline is candle's GEMM running at ~50% of this box's peak, and
+# beating it by hand is refuted four times. This answers the question that
+# decides whether a pure-Rust GEMM effort is worth funding at all: if MKL
+# closes the gap to ORT, the matmul IS the gap; if it does not, something else
+# is, and a GEMM project would have been months spent on the wrong term.
+#
+# It is a C library, which is exactly what FFai exists not to depend on — so
+# this is opt-in, off by default, and the number it produces is evidence about
+# where to aim, not a result to ship.
+mkl = ["candle-core/mkl", "candle-nn/mkl"]
 # Emit per-decision telemetry for the Prometheus harvester (Stage 1).
 # OFF by default and zero-cost when off: the hooks compile to empty bodies
 # the optimizer deletes. Additive only — an instrumented engine must produce
