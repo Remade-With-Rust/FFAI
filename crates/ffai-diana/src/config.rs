@@ -25,12 +25,24 @@ pub struct ModelConfig {
     pub architecture: String,
     pub scale: String,
     pub task: String,
+    // --- detect-only, defaulted so a depth manifest loads -------------
+    //
+    // These describe a box head and a depth manifest has none. Defaulting
+    // rather than splitting the type keeps ONE manifest shape across tasks;
+    // `validate()` enforces that a detect manifest actually carries them, so
+    // the default cannot silently stand in for a missing field on the path
+    // that needs it.
     /// Number of classes.
+    #[serde(default)]
     pub nc: usize,
     /// 1 means DFL was removed and box channels are direct distances.
+    #[serde(default)]
     pub reg_max: usize,
+    #[serde(default)]
     pub end2end: bool,
+    #[serde(default)]
     pub max_det: usize,
+    #[serde(default)]
     pub strides: Vec<f32>,
     pub imgsz: usize,
     pub letterbox: String,
@@ -43,7 +55,26 @@ pub struct ModelConfig {
     pub output_sha256: String,
     pub tensor_count: usize,
     pub param_count: usize,
+    #[serde(default)]
     pub class_names: Vec<String>,
+
+    // --- depth-only ---------------------------------------------------
+    /// Working width of the depth head (256 at every released tier).
+    #[serde(default)]
+    pub head_channels: Option<usize>,
+    /// P3/P4/P5 channel counts the neck hands the head. Read from the
+    /// checkpoint at conversion rather than derived, so a scale rule that
+    /// changes upstream cannot silently mis-shape the head.
+    #[serde(default)]
+    pub proj_in_channels: Option<Vec<usize>>,
+    /// `depth^cal_a * exp(cal_b)` — learned, per-tier, scales every pixel.
+    #[serde(default)]
+    pub cal_a: Option<f32>,
+    #[serde(default)]
+    pub cal_b: Option<f32>,
+    /// Map stride relative to the letterboxed input (4).
+    #[serde(default)]
+    pub output_stride: Option<usize>,
 }
 
 impl ModelConfig {
@@ -72,8 +103,28 @@ impl ModelConfig {
                 self.conversion_map_version, SUPPORTED_MAP_VERSIONS
             ));
         }
-        if self.task != "detect" {
-            return bail(format!("task `{}` is not detect", self.task));
+        match self.task.as_str() {
+            "detect" => {
+                // A detect manifest must actually carry the box-head fields.
+                // They are `#[serde(default)]` so a DEPTH manifest can load,
+                // and this is what stops that default standing in silently
+                // for a field the detect path needs.
+                if self.nc == 0 || self.strides.is_empty() || self.class_names.is_empty() {
+                    return bail(
+                        "detect manifest is missing nc / strides / class_names —                          re-run tools/diana_convert.py"
+                            .into(),
+                    );
+                }
+            }
+            "depth" => {
+                if self.proj_in_channels.as_ref().is_none_or(|v| v.len() != 3) {
+                    return bail(
+                        "depth manifest needs proj_in_channels for P3/P4/P5 —                          re-run tools/diana_convert.py"
+                            .into(),
+                    );
+                }
+            }
+            other => return bail(format!("task `{other}` is not detect or depth")),
         }
         if !self.fused {
             return bail(
@@ -83,29 +134,34 @@ impl ModelConfig {
                     .into(),
             );
         }
-        if self.reg_max != 1 {
-            return bail(format!(
-                "reg_max={} implies a DFL head; this port implements direct (l,t,r,b) \
-                 regression, which is what reg_max=1 means",
-                self.reg_max
-            ));
-        }
-        if !self.end2end || self.inference_branch != "one2one" {
-            return bail(format!(
-                "expected an end2end one2one head (end2end={}, branch={}) — the one2many \
-                 branch is training-only and produces plausible but wrong detections",
-                self.end2end, self.inference_branch
-            ));
-        }
-        if self.strides.len() != 3 {
-            return bail(format!("expected 3 stride levels, found {}", self.strides.len()));
-        }
-        if self.class_names.len() != self.nc {
-            return bail(format!(
-                "manifest lists {} class names for nc={}",
-                self.class_names.len(),
-                self.nc
-            ));
+        // The rest describes a BOX head. A depth manifest has none of it,
+        // and asserting it there would reject a perfectly good file for
+        // lacking fields its task never defines.
+        if self.task == "detect" {
+            if self.reg_max != 1 {
+                return bail(format!(
+                    "reg_max={} implies a DFL head; this port implements direct (l,t,r,b) \
+                     regression, which is what reg_max=1 means",
+                    self.reg_max
+                ));
+            }
+            if !self.end2end || self.inference_branch != "one2one" {
+                return bail(format!(
+                    "expected an end2end one2one head (end2end={}, branch={}) — the one2many \
+                     branch is training-only and produces plausible but wrong detections",
+                    self.end2end, self.inference_branch
+                ));
+            }
+            if self.strides.len() != 3 {
+                return bail(format!("expected 3 stride levels, found {}", self.strides.len()));
+            }
+            if self.class_names.len() != self.nc {
+                return bail(format!(
+                    "manifest lists {} class names for nc={}",
+                    self.class_names.len(),
+                    self.nc
+                ));
+            }
         }
         Ok(())
     }
@@ -238,6 +294,11 @@ mod tests {
             tensor_count: 204,
             param_count: 2_408_932,
             class_names: vec!["a".into(), "b".into()],
+            head_channels: None,
+            proj_in_channels: None,
+            cal_a: None,
+            cal_b: None,
+            output_stride: None,
         }
     }
 

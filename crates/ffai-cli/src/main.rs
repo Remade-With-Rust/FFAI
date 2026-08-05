@@ -32,7 +32,9 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use ffai_core::engine::{AsrOptions, DetectOptions, OcrOptions, Task, TtsOptions, VlmOptions};
+use ffai_core::engine::{
+    AsrOptions, DepthOptions, DetectOptions, OcrOptions, Task, TtsOptions, VlmOptions,
+};
 use ffai_core::registry::EngineRegistry;
 
 #[derive(Parser)]
@@ -190,6 +192,22 @@ enum Cmd {
         #[arg(long)]
         classes: Vec<u32>,
         /// Write to a file; a `.jsonl` extension selects JSON lines
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Estimate per-pixel metric depth from one image (Diana)
+    Depth {
+        #[arg(short, long)]
+        input: PathBuf,
+        #[arg(long)]
+        engine: Option<String>,
+        /// Resize the map to the source image and undo the letterbox.
+        /// Off by default: the raw stride-4 map is what the model computed.
+        #[arg(long)]
+        full_res: bool,
+        /// Write the map. `.png` gives a 16-bit grayscale visualisation
+        /// (normalised, LOSSY — the metres are gone); `.bin` gives raw f32
+        /// metres, row-major, which is the one to use for anything numeric.
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -589,6 +607,62 @@ fn main() -> Result<()> {
                     println!("wrote {} ({} detections)", path.display(), out.detections.len());
                 }
                 None => println!("{body}"),
+            }
+        }
+        Cmd::Depth { input, engine, full_res, output } => {
+            let image = ffai_media::load_image(&input)?;
+            let eng = reg.depth(engine.as_deref())?;
+            let out = eng.depth(&image, &DepthOptions { full_resolution: full_res })?;
+            let (lo, hi) = out.range().unwrap_or((0.0, 0.0));
+            let finite = out.depth.iter().filter(|v| v.is_finite()).count();
+            println!(
+                "{} x {}  depth {:.2}-{:.2} m  ({} of {} pixels covered)",
+                out.width,
+                out.height,
+                lo,
+                hi,
+                finite,
+                out.depth.len()
+            );
+            match output.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                Some("png") => {
+                    // 16-bit grayscale, near = bright. NORMALISED, so the
+                    // metres do not survive — this is for looking at, and the
+                    // range is printed above so a reader can put them back.
+                    let span = (hi - lo).max(1e-6);
+                    let px: Vec<u16> = out
+                        .depth
+                        .iter()
+                        .map(|&d| {
+                            if d.is_finite() {
+                                (((hi - d) / span).clamp(0.0, 1.0) * 65535.0) as u16
+                            } else {
+                                0
+                            }
+                        })
+                        .collect();
+                    let path = output.as_ref().unwrap();
+                    ffai_media::save_gray16_png(path, &px, out.width, out.height)?;
+                    println!("wrote {} (16-bit grayscale, normalised {lo:.2}-{hi:.2} m)", path.display());
+                }
+                Some("bin") => {
+                    let path = output.as_ref().unwrap();
+                    let mut bytes = Vec::with_capacity(out.depth.len() * 4);
+                    for v in &out.depth {
+                        bytes.extend_from_slice(&v.to_le_bytes());
+                    }
+                    std::fs::write(path, &bytes)?;
+                    println!(
+                        "wrote {} (raw f32 metres, {} x {}, row-major)",
+                        path.display(),
+                        out.width,
+                        out.height
+                    );
+                }
+                Some(other) => anyhow::bail!(
+                    "unknown depth output extension `.{other}` — use .png (visualisation)                      or .bin (raw f32 metres)"
+                ),
+                None => {}
             }
         }
         Cmd::Caption { input, prompt, engine } => {

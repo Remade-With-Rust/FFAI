@@ -149,3 +149,57 @@ fn depth_matches_ultralytics() {
         want[worst_i]
     );
 }
+
+
+/// The ENGINE path: manifest resolution, letterbox, graph, and the depth map
+/// a caller actually receives.
+///
+/// The oracle above grades the graph from a pre-letterboxed tensor. This
+/// grades everything around it — and would catch a manifest that resolves to
+/// the wrong weights, a letterbox that disagrees with the reference, or a
+/// stride-4 map reported with the wrong dimensions.
+#[test]
+fn depth_engine_runs_end_to_end() {
+    use ffai_core::engine::{DepthEngine, DepthOptions};
+    use ffai_diana::depth_engine::Yolo26Depth;
+    use ffai_diana::image::Geometry;
+
+    if weights().is_none() {
+        eprintln!("SKIP depth_engine_runs_end_to_end: converted weights absent");
+        return;
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
+    let img = root.join("corpora/refs/fixtures/diana_photo_input.png");
+    if !img.exists() {
+        eprintln!("SKIP depth_engine_runs_end_to_end: fixture image absent");
+        return;
+    }
+    let image = ffai_media::load_image(&img).expect("load fixture");
+    let eng = Yolo26Depth::build("n", Geometry::Rect, root.join("models"));
+
+    let out = eng.depth(&image, &DepthOptions::default()).expect("depth");
+    assert_eq!(out.width * out.height, out.depth.len(), "map size disagrees with its dims");
+    let (lo, hi) = out.range().expect("finite range");
+    // Metric depth from the released weights: metres, positive, and bounded
+    // by the head's own clamp — exp(-4) to exp(5), 0.018 to 148 m.
+    assert!(lo > 0.0 && hi < 149.0, "depth out of the head's clamp range: {lo}..{hi}");
+    assert!(hi > lo, "degenerate depth range");
+    eprintln!("engine: {}x{} depth {lo:.2}-{hi:.2} m", out.width, out.height);
+
+    // Determinism — the same discipline the detect path is held to.
+    let again = eng.depth(&image, &DepthOptions::default()).expect("depth twice");
+    assert_eq!(out.depth, again.depth, "depth is not deterministic across runs");
+
+    // Full resolution maps back onto the source image.
+    let full = eng
+        .depth(&image, &DepthOptions { full_resolution: true })
+        .expect("full-res depth");
+    assert_eq!(full.width, image.width as usize);
+    assert_eq!(full.height, image.height as usize);
+    let covered = full.depth.iter().filter(|v| v.is_finite()).count();
+    assert!(
+        covered * 100 / full.depth.len() >= 99,
+        "full-res map covers only {}% of the source",
+        covered * 100 / full.depth.len()
+    );
+}

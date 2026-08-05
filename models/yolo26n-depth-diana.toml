@@ -1,0 +1,30 @@
+# YOLO26n-depth, converted for Diana's candle port.
+#
+# LICENSE: the WEIGHTS are AGPL-3.0 (Ultralytics), more restrictive than
+# FFai's MIT/Apache code license. That is why this manifest declares no
+# `hf_repo`: FFai will not fetch, host, or redistribute them. Fetch the
+# official checkpoint yourself and run the audited offline conversion, which
+# places the artifacts where this manifest resolves them:
+#
+#   .venv-diana/Scripts/python.exe tools/diana_convert.py --model yolo26n-depth
+#
+# Depth shares Diana's BACKBONE AND NECK with detect — the YAML is
+# byte-identical and only the final layer differs, Detect -> Depth — but it is
+# a DIFFERENT CHECKPOINT with differently-trained weights. Detection weights
+# cannot produce depth; there is no head to run.
+#
+# Conversion drops nothing (there is no one2many branch on a depth head) and
+# folds 89 conv+bn pairs, so 540 source tensors become 184 — 6,345,867
+# parameters, matching what PyTorch reports for the checkpoint.
+name = "yolo26n-depth-diana"
+task = "depth"
+description = "YOLO26n-depth (Ultralytics) converted to safetensors — fused, dense metric depth"
+license = "AGPL-3.0 (Ultralytics YOLO26 weights — NOT redistributed; user-converted)"
+
+[[files]]
+name = "yolo26n-depth-diana.safetensors"
+sha256 = "8355efd1fd1e1f45f6bfe5f62648ca2e5dfd547149805ed8dbd5a40a899fdd40"
+
+[[files]]
+name = "yolo26n-depth-diana.json"
+sha256 = "c84cf388647d55262986ff4ee71c4cc5f5bc9ae1b759ad024a5698b99624ad49"

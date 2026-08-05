@@ -406,3 +406,39 @@ mod png_oracle {
         eprintln!("rusty_png == upstream png on {checked} images across {dirs_seen} corpora");
     }
 }
+
+
+/// Write a 16-bit grayscale PNG.
+///
+/// Lives here rather than in a caller because this crate already owns the
+/// PNG dependency and the decode side, so encode belongs beside them.
+///
+/// Diana's depth maps are the motivating case: a `u16` per pixel carries
+/// enough precision for a normalised depth visualisation, where 8 bits
+/// visibly bands a smooth field. The METRES do not survive normalisation —
+/// anything numeric should take the raw f32 instead.
+///
+/// `pixels` is row-major, `width * height` samples. PNG stores 16-bit
+/// samples BIG-endian regardless of host order, which is the one detail
+/// easy to get wrong and impossible to see afterwards: a byte-swapped map
+/// still renders, as noise.
+pub fn save_gray16_png(path: &Path, pixels: &[u16], width: usize, height: usize) -> Result<()> {
+    if pixels.len() != width * height {
+        return Err(Error::Other(format!(
+            "save_gray16_png: {} pixels for a {width}x{height} image",
+            pixels.len()
+        )));
+    }
+    let file = std::fs::File::create(path)?;
+    let mut enc = rusty_png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
+    enc.set_color(rusty_png::ColorType::Grayscale);
+    enc.set_depth(rusty_png::BitDepth::Sixteen);
+    let mut w = enc.write_header().map_err(|e| Error::Other(format!("png header: {e}")))?;
+    let mut bytes = Vec::with_capacity(pixels.len() * 2);
+    for p in pixels {
+        bytes.extend_from_slice(&p.to_be_bytes());
+    }
+    w.write_image_data(&bytes).map_err(|e| Error::Other(format!("png write: {e}")))?;
+    w.finish().map_err(|e| Error::Other(format!("png finish: {e}")))?;
+    Ok(())
+}

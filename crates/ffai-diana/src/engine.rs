@@ -113,34 +113,46 @@ impl Default for Yolo26 {
     }
 }
 
-fn load(dir: &Path, tier: &str) -> Result<Model> {
-    let device = Device::Cpu;
-    let model_name = format!("yolo26{tier}-diana");
+/// Resolve a converted checkpoint: manifest plus weights path.
+///
+/// Shared by the detect and depth engines. Both need the same three things —
+/// find the manifest, refuse to fetch AGPL weights, check the declared scale
+/// against the tier asked for — and a second copy of that would be a second
+/// place for the AGPL refusal to rot.
+pub(crate) fn resolve_model(
+    dir: &Path,
+    model_name: &str,
+    tier: &str,
+) -> Result<(ModelConfig, PathBuf)> {
     let manifests = ffai_models::load_dir(dir)?;
     let manifest = manifests.iter().find(|m| m.name == model_name).ok_or_else(|| {
         Error::Model(format!("no model manifest named `{model_name}` in {}", dir.display()))
     })?;
     let resolved = manifest.fetch().map_err(|e| {
         Error::Model(format!(
-            "{e}\n  YOLO26 weights are AGPL-3.0 and are never fetched by FFai. Convert your \
-             own checkpoint:\n    .venv-diana/Scripts/python.exe tools/diana_convert.py \
-             --model yolo26n"
+            "{e}
+  YOLO26 weights are AGPL-3.0 and are never fetched by FFai. Convert your              own checkpoint:
+    .venv-diana/Scripts/python.exe tools/diana_convert.py              --model {model_name}"
         ))
     })?;
-
     let cfg = ModelConfig::load(resolved.file(&format!("{model_name}.json"))?)?;
     let weights = resolved.file(&format!("{model_name}.safetensors"))?.to_path_buf();
     // The manifest's own scale must match the tier we were asked for, or the
     // graph is built to different widths than the weights carry — which the
-    // strict load would catch, but with a shape error rather than the real
-    // reason.
+    // strict load would catch, but with a shape error rather than the reason.
     if cfg.scale != tier {
         return Err(Error::Model(format!(
-            "manifest `{model_name}` declares scale `{}` but this engine is tier `{tier}` — \
-             re-run tools/diana_convert.py --model yolo26{tier}",
+            "manifest `{model_name}` declares scale `{}` but this engine is tier `{tier}` —              re-run tools/diana_convert.py",
             cfg.scale
         )));
     }
+    Ok((cfg, weights))
+}
+
+fn load(dir: &Path, tier: &str) -> Result<Model> {
+    let device = Device::Cpu;
+    let model_name = format!("yolo26{tier}-diana");
+    let (cfg, weights) = resolve_model(dir, &model_name, tier)?;
     // SAFETY: the mapped file is owned by the model cache and is not
     // mutated while this process holds it.
     let vb = unsafe {
@@ -148,8 +160,6 @@ fn load(dir: &Path, tier: &str) -> Result<Model> {
     }
     .map_err(candle_err)?;
 
-    // Every width and repeat count comes from the checkpoint's own scale, so
-    // one code path builds n/s/m/l/x.
     let dims = cfg.dims()?;
     let backbone = Backbone::new(vb.clone(), dims).map_err(candle_err)?;
     let neck = Neck::new(vb.clone(), dims).map_err(candle_err)?;

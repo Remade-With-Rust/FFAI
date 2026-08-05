@@ -24,6 +24,10 @@ pub enum Task {
     /// `DetectEngine` trait and `DetectOutput` type land with the first
     /// engine at M-D1.
     Detect,
+    /// Monocular depth estimation (Diana). Shares Diana's backbone and neck
+    /// with [`Task::Detect`] — only the final head differs — but the output
+    /// is a dense metric map rather than boxes, so it is its own task.
+    Depth,
 }
 
 impl fmt::Display for Task {
@@ -34,6 +38,7 @@ impl fmt::Display for Task {
             Task::Ocr => "ocr",
             Task::Vlm => "vlm",
             Task::Detect => "detect",
+            Task::Depth => "depth",
         })
     }
 }
@@ -296,6 +301,70 @@ pub trait OcrEngine: Send + Sync {
 }
 
 /// Image → objects (Diana).
+/// What a depth engine returns: a dense map plus what is needed to place it
+/// back on the source image.
+#[derive(Debug, Clone)]
+pub struct DepthOutput {
+    /// Row-major depth, `height * width` values, in **metres**.
+    pub depth: Vec<f32>,
+    pub width: usize,
+    pub height: usize,
+    /// The letterbox that produced this map, when one was applied — the same
+    /// role it plays in [`DetectOutput`], and needed for the same reason: the
+    /// map is in letterboxed space and means nothing without it.
+    pub letterbox: Option<crate::types::Letterbox>,
+}
+
+impl DepthOutput {
+    /// Depth at a pixel of the map. `None` when out of range.
+    pub fn at(&self, x: usize, y: usize) -> Option<f32> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        self.depth.get(y * self.width + x).copied()
+    }
+
+    /// `(min, max)` over the map, for callers normalising it for display.
+    /// Returns `None` for an empty map rather than a nonsense range.
+    pub fn range(&self) -> Option<(f32, f32)> {
+        if self.depth.is_empty() {
+            return None;
+        }
+        let mut lo = f32::MAX;
+        let mut hi = f32::MIN;
+        for &v in &self.depth {
+            if v.is_finite() {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        (lo <= hi).then_some((lo, hi))
+    }
+}
+
+/// Options for a depth run.
+#[derive(Debug, Clone)]
+pub struct DepthOptions {
+    /// Resize the map to the SOURCE image's resolution and undo the
+    /// letterbox, instead of returning the raw network output at stride 4.
+    ///
+    /// Off by default: the raw map is what the model computed, and resizing
+    /// is a lossy convenience the caller may want to do differently.
+    pub full_resolution: bool,
+}
+
+impl Default for DepthOptions {
+    fn default() -> Self {
+        Self { full_resolution: false }
+    }
+}
+
+/// Monocular depth estimation.
+pub trait DepthEngine: Send + Sync {
+    fn info(&self) -> EngineInfo;
+    fn depth(&self, image: &ImageBuffer, opts: &DepthOptions) -> Result<DepthOutput>;
+}
+
 pub trait DetectEngine: Send + Sync {
     fn info(&self) -> EngineInfo;
     fn detect(&self, image: &ImageBuffer, opts: &DetectOptions) -> Result<DetectOutput>;

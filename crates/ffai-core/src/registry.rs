@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::engine::{
-    AsrEngine, DetectEngine, EngineInfo, OcrEngine, Task, TtsEngine, VlmEngine,
+    DepthEngine, AsrEngine, DetectEngine, EngineInfo, OcrEngine, Task, TtsEngine, VlmEngine,
 };
 use crate::error::{Error, Result};
 
@@ -21,6 +21,7 @@ pub struct EngineRegistry {
     ocr: BTreeMap<String, Arc<dyn OcrEngine>>,
     vlm: BTreeMap<String, Arc<dyn VlmEngine>>,
     detect: BTreeMap<String, Arc<dyn DetectEngine>>,
+    depth: BTreeMap<String, Arc<dyn DepthEngine>>,
     // The default per task is the FIRST engine registered (the reference
     // engine), not the alphabetically first.
     asr_default: Option<String>,
@@ -28,6 +29,7 @@ pub struct EngineRegistry {
     ocr_default: Option<String>,
     vlm_default: Option<String>,
     detect_default: Option<String>,
+    depth_default: Option<String>,
 }
 
 impl EngineRegistry {
@@ -59,6 +61,12 @@ impl EngineRegistry {
         self.vlm.insert(name, engine);
     }
 
+    pub fn register_depth(&mut self, engine: Arc<dyn DepthEngine>) {
+        let name = engine.info().name;
+        self.depth_default.get_or_insert_with(|| name.clone());
+        self.depth.insert(name, engine);
+    }
+
     pub fn register_detect(&mut self, engine: Arc<dyn DetectEngine>) {
         let name = engine.info().name;
         self.detect_default.get_or_insert_with(|| name.clone());
@@ -80,6 +88,10 @@ impl EngineRegistry {
 
     pub fn vlm(&self, name: Option<&str>) -> Result<Arc<dyn VlmEngine>> {
         resolve(&self.vlm, name, self.vlm_default.as_deref(), Task::Vlm)
+    }
+
+    pub fn depth(&self, name: Option<&str>) -> Result<Arc<dyn DepthEngine>> {
+        resolve(&self.depth, name, self.depth_default.as_deref(), Task::Depth)
     }
 
     pub fn detect(&self, name: Option<&str>) -> Result<Arc<dyn DetectEngine>> {

@@ -44,6 +44,7 @@ pub mod config;
 pub mod conv3x3;
 pub mod cpuop;
 pub mod cputime;
+pub mod depth_engine;
 pub mod depth_head;
 pub mod depth_ops;
 pub mod direct3x3;
@@ -89,6 +90,15 @@ pub fn register(reg: &mut EngineRegistry) {
         reg.register_detect(Arc::new(engine::Yolo26::build(
             tier,
             image::Geometry::Square,
+            "models",
+        )));
+        // Depth shares the backbone and neck but not the checkpoint, so it
+        // registers as its own engine per tier. Registration is lazy — the
+        // model loads on first use — so listing depth engines costs nothing
+        // for a user who only converted detect weights.
+        reg.register_depth(Arc::new(depth_engine::Yolo26Depth::build(
+            tier,
+            image::Geometry::Rect,
             "models",
         )));
     }
