@@ -2058,3 +2058,33 @@ ablation established: an instrument that disagrees with the pipeline by that
 margin is measuring something else, and one left in the tree will eventually
 be believed. The arithmetic-intensity table above survives because it needs
 no timer.
+
+
+### The gap is worse than 1.25x, and the harness hides it
+
+The speed gate compares against the FASTEST reference regardless of
+configuration, while the quality gate compares only against a MATCHED one.
+That asymmetry is defensible — you should have to beat the fastest thing in
+the field — but it means the headline ratio is not like-for-like, and here it
+flatters us:
+
+| | geometry | pixels per 640x428 frame |
+|---|---|---:|
+| ffai-diana | `640rect` | 286,720 |
+| ultralytics-yolo26n-rect | `640rect` | 286,720 |
+| **ort-yolo26n** | **`640sq`** | **409,600** |
+
+Rect is 70-75 % of square's pixel count across this corpus. **ORT processes
+MORE pixels per image and is still faster** — 28 ms on 100 % of the pixels
+against our 35 ms on ~72 %. Per pixel that is roughly **1.7x, not 1.25x.**
+
+Recorded because it goes against us. The 1.25x figure is the one the gate
+reads and the one to quote, but anyone reasoning about how much work is left
+should use the per-pixel number, or they will under-budget the layout project
+by a third.
+
+The reverse comparison is the fair one for a like-for-like claim and has not
+been run: `ffai-diana` in SQUARE geometry against `ort-yolo26n`. Diana
+supports it (`Geometry::Square`, the configuration the parity oracle pins), so
+this is a bench invocation rather than new code, and it should be run before
+anyone quotes a per-pixel figure derived by arithmetic instead of measured.
