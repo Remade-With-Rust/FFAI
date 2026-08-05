@@ -689,6 +689,10 @@ impl OcrEngine for CraftCrnn {
             lines.iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
         };
         let out_lines: Vec<OcrLine> = results.into_iter().flatten().collect();
+        // §8.106: opt-in body-text scope. Off by default — a filter that
+        // silently deletes output must be asked for, and a document-to-text
+        // user usually wants the table cells this drops.
+        let out_lines = crate::suppress::body_only(out_lines, w as f32, h as f32);
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.

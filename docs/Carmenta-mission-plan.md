@@ -5970,6 +5970,75 @@ region classifier used as an output FILTER, and its first measurement is how
 much of the 6.96 pp a cheap geometric one can reach before any model is
 considered.
 
+### 8.106 The body-text filter — 20 % of the prize, and why the Great Gate pattern does NOT transfer
+
+§8.105 priced suppression of unannotated regions at **6.96 pp** (18.88 % ->
+11.92 %). This asks how much a rule over RUNTIME features reaches. Thirteen
+features per line — geometry, recognised text, CTC confidence; nothing from the
+annotation but the label — fitted on TRAIN, judged once on holdout:
+
+| model | holdout | share of the prize |
+|---|---:|---:|
+| hand rule (`nchars <= 7`) | -0.57 pp | 8 % |
+| logistic regression | -1.00 pp | 14 % |
+| **decision tree, depth 3 — SHIPPED** | **-1.38 pp** | **20 %** |
+| gradient boosting, 200 trees | -2.16 pp | 31 % |
+
+The depth-3 tree keeps 64 % of the boosted model's win in **four comparisons**
+with no model artifact, and it is physically interpretable: narrow with few
+left-edge neighbours is a table cell or label; very narrow is a label; wide but
+in the top margin is a running header; wide but low-confidence is probably not
+text. Shipped as `suppress.rs`, **opt-in via `FFAI_BODY_ONLY=1`** — a filter that
+silently deletes output must be asked for, and a document-to-text user usually
+wants the table cells it drops.
+
+Not benchmark-fitting: Unlimited-OCR emits TYPED regions, so its harness filters
+to the scored classes by construction. Body-only is the like-for-like arm.
+
+**Why the gap exists.** The annotation's scope is defined by SEMANTIC ROLE — is
+this a paragraph, a caption, an affiliation? Role is a property of a BLOCK, not a
+line. An affiliation line and a body line are identical AS LINES; they differ
+only in which block they belong to. The line-level classifier is working on the
+wrong unit, which is exactly the diagnosis the Great Gate reached about per-cut
+features answering a per-page question.
+
+**So the Great Gate pattern was applied here — and it is REFUTED.** Its premise
+holds: grouping lines into column-aware contiguous runs (left edge first, THEN
+vertical pitch — sorting by y interleaves a two-column page as L,R,L,R and breaks
+every run, the same units-mismatch that voided §8.39) gives 1598 runs from 8683
+lines, and orphan-ness IS a block property:
+
+| | |
+|---|---:|
+| runs that are pure | **98 %** |
+| pure among runs of >= 3 lines | 92 % |
+| orphan characters in an all-orphan run | **84 %** |
+
+And deciding at run level is WORSE:
+
+| model | line level | run level |
+|---|---:|---:|
+| decision tree depth 3 | **-1.38 pp** | **+3.57 pp** |
+| gradient boosting | **-2.16 pp** | -1.95 pp |
+
+**The distinction is the DAMAGE MODEL, and it is the transferable lesson.** In
+the Great Gate one bad cut ruined an entire page — damage was SHARED, so
+requiring every proposed cut to be good was right. Here damage is PROPORTIONAL:
+dropping one line costs exactly one line. Aggregating to the block means a single
+wrong decision deletes up to 47 lines at once, which is why the shallow run-tree
+is catastrophic while the same depth at line level ships.
+
+> **Aggregate the decision when the damage is SHARED; decide per-item when the
+> damage is PROPORTIONAL.** The unit that is right for the PHENOMENON is not
+> automatically right for the DECISION.
+
+**The ceiling, stated.** 69 % of the prize is unreachable from these features.
+The orphans the rules miss carry FIVE TIMES the characters of the ones they
+catch, and sit at `same_left = 37`, `nn_gap = 0.88`, ordinary pitch — author
+affiliations and long captions geometrically identical to body text. They differ
+from a paragraph only in what they MEAN. Third independent arrival at the same
+wall, after §8.81 (text continuity) and §8.87 (merge vs masthead).
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
