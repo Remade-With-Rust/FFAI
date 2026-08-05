@@ -7120,6 +7120,75 @@ the mode of the width distribution rather than a quantile of all of it — is th
 next attempt, and it is the first one in twenty sections aimed at a population
 instead of a page.
 
+### 8.126 The 29 pages that carry the gap are TWO problems, and abstention is refused
+
+Under the shipped filter the holdout page-CER distribution is not a long tail
+with one monster in it — the median page reads **13.86 %** and a quarter of the
+corpus is already under 5 %:
+
+| band | pages | pp of macro | | band | pages | pp of macro |
+|---|---:|---:|---|---|---:|---:|
+| 0-5 % | 62 | 0.76 | | 30-50 % | 31 | 5.23 |
+| 5-10 % | 34 | 1.02 | | **50-100 %** | **24** | **6.94** |
+| 10-20 % | 52 | 3.27 | | **>100 %** | **5** | **5.75** |
+| 20-30 % | 28 | 2.89 | | | | |
+
+**The 29 pages above 50 % carry 12.68 pp of the 25.85 pp macro — more than the
+10.34 pp gap to Unlimited-OCR.** Exported in full as `worst29.xlsx` (pages /
+lines / by_class, 2 011 lines x 45 columns), with `shipped_drops` beside `orphan`
+so the filter's decision on every line sits next to whether it was right.
+
+**They are two different problems, not one.** Orphan characters as a share of the
+page's reference length splits them cleanly:
+
+* **13 pages are OVER-EMISSION** — `omni-0245` 802 %, `omni-0055` 217 %,
+  `omni-0213` 191 %, `omni-0039` 178 %. Suppression problems, and the §8.123
+  oracle fixes them.
+* **16 pages have almost nothing to suppress** — `omni-0265` 0 %, `omni-0085`
+  0 %, `omni-0160` 1 %, `omni-0257` 1 %, `omni-0005` 2 %, `omni-0003` 2 %. Their
+  CER is genuine recognition or ordering error, and **no suppression rule of any
+  kind can touch them.** More than half of the worst 29 pages are outside the
+  entire scope thesis.
+
+**A hypothesis the page table suggested, and the measurement refused.** On the
+second group the filter appears to be doing harm:
+
+| page | CER | orphan share | drops | **wrong** | median `w_p90` |
+|---|---:|---:|---:|---:|---:|
+| `omni-0265` | 71.8 % | 0 % | 19 | **19** | **0.111** |
+| `omni-0160` | 51.8 % | 1 % | 34 | **33** | **0.222** |
+| `omni-0237` | 72.7 % | 8 % | 14 | **14** | 0.588 |
+
+Nineteen annotated lines deleted and zero orphans caught; 33 of 34 drops wrong —
+and all with the low median `w_p90` that §8.125 identified as a contaminated
+normalisation. The obvious move is to ABSTAIN from the width branch when the page
+median says its reference is unreliable, which is §8.101's law that the gate
+which abstains is the one whose splits converge.
+
+**It loses on every population at every threshold.**
+
+| cut | pages | train | holdout | TAIL | BODY | corpus |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.25 | 28 | **+0.888** | **+0.353** | **+8.71** | +0.220 | **+0.488** |
+| 0.35 | 45 | +0.992 | +0.373 | +9.09 | +0.250 | +0.529 |
+
+So the per-page `wrong` counts were misleading. The width branch does destroy
+annotated text on those pages, and across the contaminated population it still
+catches far more junk than it loses. **The defect is not that it over-fires
+there; it is that it does not fire ENOUGH** — `omni-0245` is still at 773 % after
+it runs.
+
+That removes the conservative option. Less filtering is worse; the only live
+direction is a BETTER WIDTH REFERENCE — §8.125's diagnosis with an estimator
+robust enough not to be set by one outlier line, which is what sank the
+max-width attempt.
+
+**And the 16 non-suppression pages need naming as a separate campaign.** They are
+roughly half of the worst 29 and 100 % immune to everything §8.106-§8.126 has
+built. Until they are diagnosed, the suppression ceiling of 14.11 % (§8.123) is
+the floor of what this engine can reach, and it is already below Unlimited-OCR's
+15.51 % — but only if the other half of the problem does not grow while we work.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
