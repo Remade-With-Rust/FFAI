@@ -2355,3 +2355,52 @@ WHERE the data is touched without reducing HOW OFTEN.
 and someone will want to re-run it when the surrounding stages move. It is not
 a shipping option: it is a C dependency in a pure-Rust toolkit, and it does not
 even run without `libiomp5md.dll` borrowed from a PyTorch install.
+
+
+## The square question answered: linear, and the RECT number was the unfair one
+
+Asked whether 2.89x at square against 1.25x at rect was a content-adaptive
+effect. It is not. It is the rect comparison that was wrong.
+
+Paired, alternating, one process, min-of-N:
+
+| | ms | |
+|---|---:|---|
+| rect | 62.3 | |
+| square | 89.0 | |
+| **ratio** | **1.41-1.43x** | square has **1.43x** the pixels |
+
+Exactly linear, and Ultralytics reads **1.38x** on the same pair. **Diana has
+no square-specific defect**, which also re-confirms the earlier retraction from
+a second, paired instrument.
+
+### So where did 1.25x come from
+
+**`ort-yolo26n` only runs square.** It has no rect export. So "Diana 35 ms vs
+ORT 28 ms = 1.25x" compared our REDUCED-work configuration against ORT's
+full-work one — rect is 70-75 % of square's pixels on this corpus.
+
+| comparison | fair? | ratio |
+|---|---|---:|
+| Diana rect vs ORT square | **no** — we do 30 % less work | 1.25x |
+| Diana square vs ORT square | **yes** | **2.89x** |
+| Diana rect vs Ultralytics rect | yes | 0.88x |
+| Diana square vs Ultralytics square | yes | 1.47x |
+
+**2.89x is the honest gap against ORT.** The 1.25x figure should not be
+repeated; it was never like-for-like, and the speed gate quoting it made the
+standing look closer than it is.
+
+Against Ultralytics both geometries are matched and both are real: ahead at
+rect, behind at square. That difference is worth its own descent and is NOT
+explained by scaling, since scaling is linear for both engines.
+
+### A harness bug worth recording
+
+`examples/geom_ab.rs` grew SOLO passes as a control, placed after the
+interleaved loop. They read **135 ms rect solo against 62 ms interleaved** —
+slower than the arms they were checking. An ordering confound: the machine
+degrades across a long run, which is exactly what the alternation cancels and
+what a trailing solo pass does not. Kept with a note rather than deleted,
+because "also measure it solo" is a natural instinct and the output looks
+authoritative until you notice solo is slower than paired.
