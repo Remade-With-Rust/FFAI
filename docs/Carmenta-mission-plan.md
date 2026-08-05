@@ -7189,6 +7189,84 @@ built. Until they are diagnosed, the suppression ceiling of 14.11 % (§8.123) is
 the floor of what this engine can reach, and it is already below Unlimited-OCR's
 15.51 % — but only if the other half of the problem does not grow while we work.
 
+### 8.127 The over-emission population, isolated — and why it is still not one thing
+
+§8.126 showed the worst 29 pages are two unrelated problems. This isolates the
+half suppression can actually reach: **18 pages of 236 whose orphan characters
+exceed 40 % of their reference length**, corpus-wide rather than from the worst
+list, since a page over-emitting 3x is a target whether or not it has crossed
+50 % CER. The threshold is not tuned — the orphan shares run
+`... 60, 55, 51 | 24, 11, 10 ...` and 40 % sits in the gap.
+
+| | |
+|---|---|
+| over-emission pages | **18 of 236** |
+| macro they carry | **9.23 pp of 25.85 pp — 36 %** |
+| orphan characters already caught | 7 767 |
+| **residual still emitted** | **21 746** |
+| **catch rate** | **26.3 %** |
+
+That 26.3 % independently reproduces §8.123's finding that the filter has taken
+26 % of the suppression prize — two instruments, one number.
+
+**And the 18 split AGAIN, on the §8.125 signal:**
+
+| class | pages | CER | catch | residual | median `w_p90` |
+|---|---:|---:|---:|---:|---:|
+| **academic_literature** | 10 | 76.8 % | **0.31** | **15 601 (72 %)** | **0.954** |
+| **book** | 6 | 204.3 % | **0.08** | 5 460 (25 %) | **0.424** |
+| magazine | 1 | 105.8 % | 0.16 | 572 | 0.090 |
+| PPT2PDF | 1 | 79.6 % | 0.43 | 113 | 0.233 |
+
+**72 % of all remaining residual is academic pages whose normalisation is
+HEALTHY** (median 0.954). §8.125's contaminated-`w_p90` theory explains the
+`book` pages and not the ones that carry the money.
+
+**A trap worth naming: this slice cannot score a rule.** 67.3 % of its lines are
+orphans against 12.6 % corpus-wide, so a rule reading precision 0.875 here is
+barely above base rate and may be destructive on the other 218 pages. Running the
+optimizer on it produces headline numbers of +26 pp macro that mean nothing. **The
+slice generates hypotheses; the corpus scores them.**
+
+**The hypothesis it generated, and its refutation.** The three largest academic
+residuals have `page_year_hits = 0` — §8.116's branch physically cannot fire:
+
+```
+omni-0039  '1.. Confavreux C, Vukusic S, Adeleine P. Early clinical predicto'
+           'amnestic process. Brain 2003;126.770-782.'
+omni-0048  'Centre, 15 July 1999. Available from URL: http:Ilwww.nbcc org au'
+omni-0025  'Received: July 21, 2015; revised: January 27, 2016; accepted: Fe'
+```
+
+Vancouver-style numbered references with the year embedded as `2003;126.770-782`,
+never parenthesised. `year_paren` was built for APA and is blind to them — 7 961
+characters on four pages. Scored on the FULL corpus:
+
+| rule | n | train | holdout | tail | body | **prec** |
+|---|---:|---:|---:|---:|---:|---:|
+| vancouver, ungated | 449 | -1.345 | -1.034 | +13.57 | -1.613 | **0.143** |
+| + page >= 4 | 307 | -1.037 | -0.572 | +10.96 | -1.029 | 0.176 |
+| + page >= 8 | 114 | -0.625 | +0.310 | +9.50 | -0.054 | **0.395** |
+
+**Refused.** Precision 0.14-0.40 — it destroys more annotated text than it
+removes — and train, holdout and body all go negative. The regex matches any
+numbered list item and any year followed by punctuation, both ordinary body text.
+(The sanity row confirms the instrument: `year_paren >= 4` scores exactly 0
+incremental, as it must, being already shipped.)
+
+**The deeper reason, and it is the finding.** The target pages do not share a
+syntax: `omni-0039` has 44 Vancouver hits, `omni-0048` has 3, `omni-0025` has 2.
+They are numbered references, a funding-and-URL block, and journal front-matter
+respectively. **"Academic over-emission" is not one population — it is reference
+lists, affiliations, received/revised/accepted dates, funding statements, and
+availability URLs, each with its own syntax and each too small to fit alone.**
+
+§8.114 concluded the corpus lacks the pages to tell a bibliography rule from
+three documents. This is the same wall one level down: even inside the 18 pages
+that suppression can reach, the residual fragments into five sub-populations of
+2-4 pages each. **No amount of text-pattern work will resolve that here, and the
+73 % of the prize still outstanding is not reachable by syntax.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
