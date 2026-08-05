@@ -6,6 +6,10 @@ quotes; copy it to that repo's root as README.md.
 
 Rule inherited from Mercury's page: every figure is a ledger line or it does not
 appear. Where a claim is qualified, the qualifier ships with it.
+
+The speed-analysis section was removed from the published page by hand; this
+file is kept in sync with what is actually live rather than with what it once
+said.
 -->
 
 # Diana
@@ -42,8 +46,13 @@ holdout, CPU only, yolo26n at 640 rect
 | ort-yolo26n (square only) | 0.6865 | 28 ms | 163 MiB |
 
 **mAP is identical to PyTorch to four decimals.** Latency is **rough parity
-with Ultralytics** — median **1.11x** over seven PAIRED runs, spanning
-0.82-1.32x. Memory is the unambiguous win: 0.4x Ultralytics, 0.75x ORT.
+with Ultralytics** — median **1.11×** across seven PAIRED runs (both numbers
+taken in the same run, so machine drift cancels), individual runs spanning
+0.82–1.32×. An earlier version of this page said "lower latency" on the
+strength of one favourable run; seven runs straddle 1.0.
+
+**Memory is the unambiguous win: 0.4× Ultralytics, 0.75× ONNX Runtime.**
+Model load is 68 ms.
 
 Beyond the aggregate: across all ten tier/geometry configurations mAP matches
 PyTorch to within 0.08 pp on a 450-image holdout, and at n, m, l and x **every
@@ -52,21 +61,18 @@ detections, boxes within 0.30 px.
 
 ## What it does not do yet
 
-**The speed gate FAILS against ONNX Runtime by 2.89x** at matched square
+**The speed gate FAILS against ONNX Runtime by 2.89×** at matched square
 geometry — 81 ms against 28 ms. ORT has no rect export, so comparing our rect
-against its square compares our REDUCED-work configuration against its
-full-work one; rect is 70-75 % of square's pixels on this corpus, and the
-1.25x that mismatch produces is not like-for-like. Diana is ahead of ORT on
-accuracy (0.7014 rect vs 0.6865).
+against its square puts our REDUCED-work configuration against its full-work
+one; rect is 70–75 % of square's pixels on this corpus, and the 1.25× that
+mismatch produces is not like-for-like. Diana is ahead of ORT on accuracy
+(0.7014 rect vs 0.6865).
 
-Against Ultralytics, at matched geometry both ways: **rough parity at rect
-(median 1.11x over seven paired runs, spanning 0.82-1.32x)** and **1.47x
-behind at square**. An earlier version of this page claimed "faster than
-Ultralytics" from one favourable run; the distribution straddles 1.0 and the
-median is behind.
+Against Ultralytics at matched geometry, both ways: **rough parity at rect**
+(median 1.11×, seven paired runs, 0.82–1.32×) and **1.47× behind at square**.
 
 **Footprint is the unambiguous win** — 121 MiB against ORT's 163 and
-Ultralytics' 310, gate passing at 0.75x.
+Ultralytics' 310, the gate passing at 0.75×.
 
 Detection is single-image; video ingest is not wired. Only COCO's 80 classes
 are exercised.
@@ -151,27 +157,6 @@ That is a trade: it buys the 1.66× and costs roughly 120 MiB of retained
 pages, because retention *is* the mechanism.
 
 ---
-
-## How the speed was found, including what did not work
-
-p50 went **85 ms → 41 ms** in one campaign. The four things that moved it were
-not the four anyone would guess:
-
-* **the allocator** — 1.64×, from 58,634 page faults per image;
-* **the thread pool** — 1.21× wall and 3.5× CPU; one image wants ~4 workers,
-  not 24, and candle keeps its own pool besides;
-* **preprocessing** — 5.7× alone; a serial bilinear resize was recomputing the
-  horizontal sample position for every column of every row;
-* **epilogue fusion** on both convolution paths — 12.5%; bias and SiLU in one
-  traversal instead of three.
-
-What did **not** work, each refuted with numbers: im2col tiling (**three
-times**, the last finally like-for-like at 30.2 % slower), direct convolution
-in four shapes including a hand-written AVX2 microkernel, elementwise traffic
-fusion, and — decisively — **Intel MKL**, which lands within noise of candle's
-pure-Rust GEMM on these shapes. That last one prunes the most expensive item
-on the roadmap: swapping in a world-class C BLAS moves nothing, so the
-remaining gap is not sgemm quality but how many times data is touched.
 
 The full campaign, every reverted experiment and every retracted number
 included:
