@@ -5551,6 +5551,58 @@ Two guards worth stating in the file itself: `omni-0069` must stay BLOCKED — a
 gate that starts fixing it has become §8.95's one-page rule again — and the
 regression pages `omni-0144` / `omni-0148` must stay byte-identical.
 
+### 8.99 Recognition: the decode is not the lever — the model is confidently wrong
+
+§8.97 put 94 % of runtime and §8.83 put 26.19 pp of error in recognition, which
+makes `rec_fwd` the obvious next target. But the profile locates the stage, not
+the CAUSE, and recognition error has three separable sources: the CROP it is
+handed, the MODEL, and the DECODE of the model's output. Aiming without
+separating them is §8.82's error — fourteen sections spent on the wrong quarter
+of the corpus.
+
+**The decode is the cheapest candidate and it is refuted.** `crnn.rs:116` is CTC
+GREEDY, no beam search, and the decode stage is 0.1 % of runtime — so there is
+ample budget. The line dumps already carry per-line CTC confidence (field 0), so
+the ceiling costs nothing to price. Over 24 421 holdout lines of >= 6 characters:
+
+| confidence | lines | % of characters | verbatim in reference |
+|---|---:|---:|---:|
+| <= 0.85 | 295 | **0.7 %** | ~0 % |
+| 0.85-0.95 | 1 050 | 3.0 % | 14 % |
+| 0.95-0.99 | 13 141 | 57.6 % | 38 % |
+| 0.99-1.01 | 9 935 | 38.7 % | 62 % |
+
+**99.3 % of characters come from lines the model rates above 0.85 — and under
+half of those appear verbatim in the reference.** The model is CONFIDENTLY WRONG,
+not uncertain.
+
+That refutes beam search before it is built. Beam search recovers cases where
+probability mass is SPREAD across candidates and greedy takes the wrong peak;
+here the mass sits on the wrong answer. And repairing every low-confidence line
+perfectly would touch 0.7 % of characters.
+
+**Instrument caveat.** "Verbatim in reference" is a proxy — a correct line can
+fail it on whitespace or a formatting boundary — so 47 % understates true
+accuracy. The relative picture is what the decision rests on and it is
+unambiguous: confidence does not separate right from wrong, and the confident
+bucket carries essentially all the text.
+
+**What remains, in order of what is now known:**
+
+* **DECODE — refuted here.**
+* **MODEL — PARSeq refuted at +7.17 pp (§8.89)**, so the alternative already in
+  the tree is worse. A third recognizer is a new dependency and a new corpus
+  question.
+* **CROP — untested.** The only source not yet separated. `UNCLIP_LINE` is at its
+  optimum (§8.60) but that is one knob; the open question is how much of the
+  26.19 pp survives when the recognizer is handed ORACLE crops from the
+  annotation polygons. That single measurement splits detection-quality from
+  recognizer-quality and decides whether the next build is a detector or a model.
+
+It needs a new example (recognize-from-given-boxes); nothing in the tree does it
+today. **That is the next measurement, and it should precede any recognition
+build.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
