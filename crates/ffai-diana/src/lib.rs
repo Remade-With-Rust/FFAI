@@ -44,6 +44,8 @@ pub mod config;
 pub mod conv3x3;
 pub mod cpuop;
 pub mod cputime;
+pub mod depth_head;
+pub mod depth_ops;
 pub mod direct3x3;
 pub mod direct3x3_avx2;
 pub mod dwconv;

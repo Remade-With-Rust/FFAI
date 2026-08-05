@@ -112,8 +112,17 @@ def main() -> None:
     sd = net.state_dict()
     src_total = len(sd)
 
+    # Which task is this checkpoint? Read it off the head, never off the
+    # filename — `-depth` is a naming convention and conventions get broken,
+    # whereas the module type is what the weights actually are.
+    task = "depth" if type(head).__name__ == "Depth" else "detect"
+
     # --- step 2: drop the training-only one2many head -------------------
-    dropped = [k for k in sd if ".cv2." in k or ".cv3." in k]
+    #
+    # Detect only. The Depth head has no one2many branch — there is nothing
+    # to drop, and matching `.cv2.`/`.cv3.` against it would silently delete
+    # real weights if the head ever grew a submodule with those names.
+    dropped = [] if task == "depth" else [k for k in sd if ".cv2." in k or ".cv3." in k]
     dropped = [k for k in dropped if k.startswith(f"model.{len(net.model) - 1}.")]
     dropped_params = int(sum(sd[k].numel() for k in dropped))
     kept = {k: v for k, v in sd.items() if k not in set(dropped)}
@@ -168,12 +177,7 @@ def main() -> None:
     manifest = {
         "architecture": "yolo26",
         "scale": net.yaml.get("scale"),
-        "task": "detect",
-        "nc": int(head.nc),
-        "reg_max": int(head.reg_max),
-        "end2end": bool(head.end2end),
-        "max_det": int(head.max_det),
-        "strides": [float(s) for s in head.stride],
+        "task": task,
         "imgsz": args.imgsz,
         "letterbox": "square-center-pad-114",
         "inference_branch": "one2one",
@@ -189,8 +193,41 @@ def main() -> None:
         "source_tensor_count": src_total,
         "dropped_one2many_tensors": len(dropped),
         "dropped_one2many_params": dropped_params,
-        "class_names": [net.names[i] for i in sorted(net.names)],
     }
+    if task == "detect":
+        manifest.update(
+            {
+                "nc": int(head.nc),
+                "reg_max": int(head.reg_max),
+                "end2end": bool(head.end2end),
+                "max_det": int(head.max_det),
+                "strides": [float(s) for s in head.stride],
+                "class_names": [net.names[i] for i in sorted(net.names)],
+            }
+        )
+    else:
+        # Depth carries its own scalars. `cal_a`/`cal_b` are LEARNED and
+        # per-tier — `depth^cal_a * exp(cal_b)` scales every pixel, so they
+        # belong in the manifest beside the weights, not in the engine.
+        #
+        # `refine_used` records that the head stores three refine stages and
+        # runs two: the reference loop is `range(nl - 2, -1, -1)`. The third
+        # is dead weight in every released checkpoint and is emitted anyway,
+        # so the manifest round-trips against the source.
+        proj_in = [int(m.conv.in_channels) for m in head.proj]
+        manifest.update(
+            {
+                "head_channels": int(head.proj[0].conv.out_channels),
+                "proj_in_channels": proj_in,
+                "cal_a": float(head.cal_a),
+                "cal_b": float(head.cal_b),
+                "logit_clamp": [-4.0, 5.0],
+                "output_stride": 4,
+                "output_units": "metres",
+                "refine_stages": len(head.refine),
+                "refine_used": len(head.refine) - 1,
+            }
+        )
     man_path = MODELS / f"{args.model}-diana.json"
     man_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
@@ -206,6 +243,7 @@ def main() -> None:
     print(f"placed in model cache: {dest}")
     print(f"  safetensors sha256  : {manifest['output_sha256']}")
     print(f"  source tensors      : {src_total}")
+    print(f"  task                : {task}")
     print(f"  dropped (one2many)  : {len(dropped)}  ({dropped_params:,} params)")
     print(f"  conv+bn folded      : {folded}")
     print(f"  passthrough         : {passthrough}")
