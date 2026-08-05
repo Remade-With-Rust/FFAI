@@ -601,6 +601,32 @@ tuning knob.
 | l | 1.65× | 1.70× | 1.83× |
 | x | 1.57× | 1.62× | 1.54× |
 
+### Watch it run against Ultralytics
+
+```
+python tools/diana_sbs_viewer.py --frames corpora/clips/mot17-09/img1     --weights yolo26n.pt        # your own AGPL checkpoint
+```
+
+Both engines on screen, fed the identical frames in the identical order, with
+per-frame latency, rolling frame rate, running medians, object counts and box
+agreement. `--live` puts the change gate in the loop and badges the frames it
+skips; `--video clip.mp4` extracts frames first; `--record out.mp4` saves the
+composed view.
+
+**The engines alternate and never run concurrently** — Diana's reply is read
+to completion before Ultralytics is called, so each has the whole machine
+while the other is idle. Run at the same time, each latency would be measuring
+the other. Both decode inside their own timed region. It is still a demo, not
+the benchmark: no min-of-N, no warm-up discipline, display in the loop, and
+[`bench/ledger.jsonl`](bench/ledger.jsonl) is what the claims trace to.
+
+It has already shown something the 640 corpus does not. At MOT17's 1080p the
+latency gap closes to parity — 1.12x ahead, 0.92x behind, 0.96x behind across
+three runs — against 0.70x ahead at 640. And Diana's tail is heavier: mean
+117.6 ms against a median of 51.0, where Ultralytics in the *same loop*, taking
+the same interruptions, sits at 59.8 against 46.9. A p50 hides that by
+construction.
+
 ### The same structure that loses latency wins throughput
 
 Latency is one question. A server asks a different one: given N images and a
