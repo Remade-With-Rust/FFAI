@@ -28,6 +28,10 @@ regex = { workspace = true }
 # neither a rasterizer nor a PNG encoder.
 fontdue = "0.9"
 png = "0.17"
+# `suppress_optimizer` only — the rule search reads harvested CSVs. The library
+# never parses a CSV and never takes an argument.
+clap = { workspace = true }
+csv = "1.3"
 
 [lints]
 workspace = true
