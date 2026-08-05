@@ -34,6 +34,7 @@ pub mod craft;
 pub mod crnn;
 pub mod engine;
 pub mod image;
+pub mod conv3x3;
 pub mod live;
 pub mod mobiledet;
 pub mod parseq;

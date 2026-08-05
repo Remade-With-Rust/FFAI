@@ -5678,6 +5678,73 @@ it is now the only speed lever left in the document path.
 Kept from this descent: `.rec_cnn` / `.rec_rnn` / `.rec_head` profile stages and
 `FFAI_REC_SERIAL`, which make the next attempt cheap to measure.
 
+### 8.101 SHIPPED: a register-tiled 3x3 conv — 1.95x on the stage, 1.18x end-to-end
+
+§8.100 named the mechanism and priced the fix at ~2.1x end-to-end. Built it.
+
+**The kernel.** `boxes`-free, im2col-free: read each input element from its
+natural position and accumulate into an output tile held in REGISTERS across the
+whole `c_in * 9` contraction. Shipped as `conv3x3.rs` — scalar oracle, AVX2
+twin, and a `CustomOp2` so candle hands back CPU storage with no marshalling
+(the skill's law: the same kernel measured 0.946x through copy-in/copy-out and
+1.144x zero-copy).
+
+**Five forms measured before one won** — the loop's SHAPE was the whole problem:
+
+| form | vs candle (single-thread microbench) |
+|---|---:|
+| direct, `Vec` allocated per output tile | 0.41x |
+| no allocation, CO-blocked, per-row AXPY | 0.57x |
+| register tile indexed by a RUNTIME channel counter | **0.21x** |
+| padded common stride, one long AXPY per tap | 0.67x |
+| AVX2, 4 channels x 16 columns in ymm | 1.20x |
+| **AVX2, 4 channels x 24 columns in ymm** | **1.65x** |
+
+Three transferable failures. A per-tile `Vec` costs more than the arithmetic
+(2048 allocations per conv5 call). **`dp[i].add(x)` with a runtime `i` is a
+POINTER GATHER and vetoes vectorization outright** — it was the slowest form of
+all, slower than the naive one. And an accumulator living in MEMORY pays a load
+AND a store per FMA, capping the loop at L1 port throughput (~28 GFLOP/s)
+against the two FMA units; only moving the tile into registers passed candle.
+The 16 -> 24 column widening lifted the ratio from 8 FMAs per 6 memory ops to
+12 per 7: **1.20x -> 1.65x from three registers.**
+
+**Per shape, single-threaded:**
+
+| shape | candle | ours | speedup | GFLOP/s |
+|---|---:|---:|---:|---:|
+| conv1 32->64 | 8.87 ms | 2.57 ms | **3.45x** | 83.1 |
+| conv3 128->128 | 11.40 | 5.49 | 2.08x | 77.4 |
+| conv5 256->256 | 15.08 | 12.43 | 1.21x | 68.3 |
+
+**Correctness, judged against an f64 reference** rather than against candle —
+both are f32 reassociations of the same 2304-term contraction, so "differs from
+candle" says nothing about which is right. Normalised by tensor scale: **ours
+9.2e-7..2.2e-6, candle 6.8e-7..1.5e-6.** Both at f32 epsilon, three orders
+inside the 1e-5 gate. `avx2_matches_scalar` covers every backbone shape plus
+widths that exercise the `< 24` tail.
+
+**The four gates, end to end:**
+
+| gate | result |
+|---|---|
+| correctness | **14/14 pages byte-identical** to the candle path; 11 unit tests pass |
+| quality | unchanged by construction (byte-identical output) |
+| **speed** | `.rec_cnn` CPU **76.20 -> 39.13 s (1.95x)**; total CPU 91.51 -> 53.70 (1.70x); wall **1.18x, 12/14 paired, z = +2.67** |
+| footprint | one padded input buffer per conv call; no model growth |
+
+**Why 1.95x on the stage becomes 1.18x on the clock, stated honestly.** The
+kernel reads the padded input `c_out/4` times — 64 passes for conv5 — trading
+candle's im2col WRITES for READS. Single-threaded that is a clear win; at 24
+threads it meets the same wall §8.100 measured (3.7x scaling on 16 cores), so
+cutting CPU work 1.70x converts to only 1.18x of clock. **The remaining headroom
+is contraction blocking, not the inner loop** — the inner loop is at 68-83
+GFLOP/s against ~112 peak.
+
+Guarded to exactly what it assumes — 3x3, stride 1, padding 1, dilation 1, one
+group, batch 1, f32, CPU — so the backbone's final 2x2 valid conv and every
+other caller take candle's path unchanged. `FFAI_CONV3X3=0` restores it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

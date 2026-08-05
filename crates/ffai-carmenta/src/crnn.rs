@@ -93,14 +93,14 @@ impl Crnn {
     /// (1, 1, 64, W) normalized crop -> per-timestep logits (T, num_class).
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let t0 = std::time::Instant::now();
-        let x = self.convs[0].forward(x)?.relu()?.max_pool2d_with_stride(2, 2)?;
-        let x = self.convs[1].forward(&x)?.relu()?.max_pool2d_with_stride(2, 2)?;
-        let x = self.convs[2].forward(&x)?.relu()?;
-        let x = self.convs[3].forward(&x)?.relu()?.max_pool2d_with_stride((2, 1), (2, 1))?;
-        let x = self.bns[0].forward_t(&self.convs[4].forward(&x)?, false)?.relu()?;
+        let x = crate::conv3x3::apply(x, &self.convs[0])?.relu()?.max_pool2d_with_stride(2, 2)?;
+        let x = crate::conv3x3::apply(&x, &self.convs[1])?.relu()?.max_pool2d_with_stride(2, 2)?;
+        let x = crate::conv3x3::apply(&x, &self.convs[2])?.relu()?;
+        let x = crate::conv3x3::apply(&x, &self.convs[3])?.relu()?.max_pool2d_with_stride((2, 1), (2, 1))?;
+        let x = self.bns[0].forward_t(&crate::conv3x3::apply(&x, &self.convs[4])?, false)?.relu()?;
         let x = self
             .bns[1]
-            .forward_t(&self.convs[5].forward(&x)?, false)?
+            .forward_t(&crate::conv3x3::apply(&x, &self.convs[5])?, false)?
             .relu()?
             .max_pool2d_with_stride((2, 1), (2, 1))?;
         let x = self.convs[6].forward(&x)?.relu()?; // (1, 256, H', W')
