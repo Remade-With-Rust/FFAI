@@ -7385,6 +7385,65 @@ measured:
    to and are §8.127's five sub-populations.
 3. **Region classification, last.** It is 9 %, and it was about to be first.
 
+### 8.131 THE BLOCK IS THE UNIT — 98 % pure, and it captures 96 % of the prize
+
+§8.129 priced "region classification" at 9 % of the over-emission residual and
+put it last. That was the right number for the wrong question: 9 % is what the
+FIGURE category is worth. This asks the prior question — **is the region even the
+right unit of decision?** — and the answer reframes everything since §8.106.
+
+Lines were grouped in 2D rather than by left edge: two lines join a block when
+they overlap horizontally AND sit within two line heights vertically, so a
+caption joins its plot and a chart's axis labels join each other despite sharing
+no left edge. §8.106's run grouping is left-edge-first, which is right for a
+prose column and wrong for a figure.
+
+| | |
+|---|---|
+| blocks | **4 789 over 316 pages — 15.2 per page, ~7.4 lines each** |
+| **characters in blocks >= 90 % one class** | **98.0 %** |
+| characters in mixed blocks | 2.0 % |
+
+Not a degenerate grouping — 7.4 lines per block is real aggregation, and the
+purity holds character-weighted, so it is not a count of tiny blocks.
+
+**And the ceiling:**
+
+| holdout, MACRO CER | |
+|---|---:|
+| keep everything | 30.25 % |
+| **perfect BLOCK classifier** | **14.82 %** |
+| perfect LINE oracle (§8.123) | 14.11 % |
+| | **blocks capture 96 % of the prize** |
+
+Train agrees: 21.61 % -> 14.18 % against a 13.99 % line oracle, **98 %**.
+
+**This explains twenty-five sections of failure.** §8.114's `year_paren`, §8.121's
+confidence density, §8.124's `rc = 200`, §8.127's Vancouver regex and §8.130's
+code detector all died the same way — a rule that worked on two pages and
+fragmented everywhere else. The diagnosis each time was "the corpus is too small
+to fit this population". **The real cause was the unit.** A line carries its
+width, its neighbours and its characters; that is not enough to tell a reference
+entry from a paragraph, which is why every line rule had to reach for syntax and
+every syntax fragmented. A BLOCK carries its size, aspect, line count, internal
+consistency, position, density and the whitespace around it — and a reference
+list, a figure, a code listing and a paragraph are each exactly one block.
+
+**What this does to the campaign's arithmetic.** The shipped filter has captured
+26 % of the suppression prize (§8.123, §8.127, twice measured). A block
+classifier's ceiling is 96 %. That is 25.85 % -> **~14.8 % macro**, past
+Unlimited-OCR's measured 15.51 %, on the statistic that decides — and it needs no
+new corpus, because 4 789 blocks is a fittable population where 18 pages was not.
+
+**The line-level work is not wasted and should not be reopened.** §8.117 and
+§8.122 proved those constants optimal under both objectives; §8.130's
+section-scope branch is at precision 1.000. They are the 26 %. What they cannot
+do is the other 70 %, and now the reason is measured rather than inferred.
+
+**Next: a block classifier.** The features are the ones a line never had, the
+label is already harvested, and the ceiling is 96 % rather than the 9 % this
+section was opened to explore.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
