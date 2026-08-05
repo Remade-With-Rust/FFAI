@@ -6533,6 +6533,72 @@ known precisely: pages dense in reference lists, legal boilerplate and funding
 statements, enough of them in TRAIN that a rule can be fitted, and enough
 distinct documents that no three of them can carry a result.
 
+### 8.117 The gates are at their optimum — and the sweep that said so was void first
+
+With §8.116 shipped, one more round on the constants: is a better value
+available for any of the nine thresholds the filter now carries?
+
+**The first answer was an artifact, and the tell was in the shape of the
+result.** A coordinate sweep over `suppress_wide.csv` reported that FOUR
+constants — `w_hi`, `rc`, `ng`, `w_lo` — moved not one character across their
+entire grid. Four inert parameters is not a plateau, it is a filter applied
+twice: wide.csv is `w_p90 > 0.198 AND y_rel > 0.0533`, an export taken AFTER the
+width branch, so sweeping the width branch on it could not do anything. Its own
+minima gave it away, sitting one ulp above the thresholds:
+
+```
+  w_p90   min 0.1981   (threshold 0.198)
+  y_rel   min 0.0534   (threshold 0.0533)
+```
+
+wide.csv holds 31 394 lines; the width branch actually keeps **32 123**. The 729
+missing are narrow lines the branch KEEPS — 236 of them orphans worth 1 398
+characters — so every residual figure computed on it was an undercount. This is
+the §8.113 failure in a new costume: a derived column trusted instead of
+rebuilt. The fix is to rebuild from `suppress_lines.csv`, the unfiltered 35 354
+line dump, recomputing `w_p90` from `w_rel` and the page p90 at index
+`((n-1)*9)/10`, and `run_chars` from the run id — and `net_gain_if_dropped` is
+`+chars` for an orphan and `-chars` otherwise, verified at 0 exceptions in
+31 394 rows before being relied on.
+
+**On the real population the shipped constants are a local optimum.** Baseline
++21 433 characters (train +4 790, holdout +16 643) — the void run had said
++7 074. Sweeping all nine, then 960 joint combinations over the five axes that
+showed any positive movement:
+
+| | result |
+|---|---|
+| single moves improving BOTH splits | **1**, `ng = 0.005`, worth **+28 chars** of 21 433 |
+| joint combinations improving BOTH splits | **1**, the same one |
+| best combination by total | −168 train / +383 holdout, **92 % of the delta on 3 pages** |
+
+0.13 % is not a change. **No gate moves.**
+
+**The rejected rows are the more useful half.** Several moves gain on holdout
+while losing on train — `rc = 80` (+168 / −71), `frl = 5` (+160 / −79),
+`w_hi = 0.15` (+123 / −130) — and every one of the top joint combinations does
+the same, at 92–105 % of the delta concentrated in three pages. Read on holdout
+alone, each is a shippable win. **Train is what refuses them**, which is the
+whole reason the split is spent on fitting rather than on more test pages.
+
+**Corrections to the record**, from the same rebuild:
+
+* §8.115's residual was computed on wide.csv and pre-dates §8.116. Corrected:
+  **1 294 orphan lines, 47 822 characters over 196 pages.** Concentration is
+  slightly gentler than reported — top 1 page 8.3 %, top 3 19.6 %, top 10
+  38.7 %, top 20 54.7 % — and the conclusion is unchanged: **half the remaining
+  prize is on about seventeen pages of 316.** The split is unchanged too, train
+  13.0 % against holdout 87.0 %.
+* §8.116 is confirmed on the full population: the bibliography branch is worth
+  **+6 178 characters on holdout and exactly +0 on train** (measured at +6 165
+  on the truncated export), and the `yh` plateau is re-confirmed — 4, 6 and 8
+  are identical, 3 costs -216 and 2 costs -620.
+
+That `+0 on train` is the honest label on the branch. It is not that the rule
+fails on train; it is that train contains no page with four citation-years on
+it. The corpus requirement in §8.115 is now a measured quantity rather than a
+suspicion.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
