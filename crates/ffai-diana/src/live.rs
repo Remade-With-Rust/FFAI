@@ -154,7 +154,13 @@ impl LiveStats {
 ///
 /// The cheap arm. One pass, no allocation, integer compares — it must stay
 /// far below the cost of the model or the gate pays for itself and nothing
-/// more. Returns 1.0 for a size or format change, which is not a "difference"
+/// more.
+///
+/// **Measured at 0.2 % of a detect — at 428x640.** This is O(pixels) and the
+/// figure does NOT transfer to larger frames by assumption: 1920x1080 is 7x
+/// the work. An attempt to verify it at 1080p on MOT17 was defeated by a box
+/// reading a 4.7x spread across eight ABBA runs, so at that resolution the
+/// cost is currently UNKNOWN rather than small. Returns 1.0 for a size or format change, which is not a "difference"
 /// so much as a different picture, and must never be gated.
 pub fn changed_fraction(prev: &ImageBuffer, cur: &ImageBuffer, delta: u8) -> f32 {
     if prev.width != cur.width || prev.height != cur.height || prev.format != cur.format {

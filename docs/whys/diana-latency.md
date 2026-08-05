@@ -2511,3 +2511,46 @@ about which arm it was.
 Straddles parity, and the spread is larger than the difference — the same
 condition that made the COCO ratio unquotable. **AP50 is deterministic and
 identical every run; wall time is not, and only the first is claimed.**
+
+
+### MOT17-13: the negative control, on a camera bolted to a moving bus
+
+The gate's whole thesis is that it helps a fixed camera and REFUSES on a
+moving one. MOT17-09 tested the first half. MOT17-13 — 750 frames, 11,642
+evaluated pedestrians, camera on a moving bus — tests the second.
+
+| arm | AP50 | frames gated |
+|---|---:|---:|
+| diana, gate off | **25.62 %** | — |
+| diana, LIVE gate on | **25.62 %** | **0 of 750** |
+| ultralytics yolo26n | **25.62 %** | — |
+
+**The gate fired on nothing, and cost 0.00 pp.** Its central claim holds on
+real footage, not just on the synthetic pan.
+
+**Accuracy parity again, identical to two decimals** on a sequence where both
+engines score 25.62 % — less than half MOT17-09's 62.35 %, because a moving
+camera at night is genuinely harder. Agreeing on an EASY sequence proves
+little; agreeing to two decimals on a hard one is the stronger evidence.
+
+### A figure I cannot currently verify
+
+This crate documents the gate's overhead as **0.2 % of a detect**, measured at
+428x640. MOT17 is 1920x1080 — **7x the pixels** — and the gate's diff is
+O(pixels), so the figure does not transfer by assumption.
+
+The bench runs suggested a 30 % cost (53.7 s vs 69.9 s), which would be a
+serious problem. It is not measurable on this box right now: eight ABBA runs
+of the same two arms read
+
+  gate ON   94.90  50.70  31.27  56.67
+  gate OFF 138.55  35.43  29.70  37.86
+
+— a **4.7x spread**, from 29.7 s to 138.6 s, after an afternoon of parallel
+downloads and repeated 750-frame benchmarks. The 53.7-vs-69.9 difference sits
+well inside that.
+
+**So: the 0.2 % figure stands as measured at 428x640 and is UNVERIFIED at
+1080p.** It should be re-measured on a quiet box before anyone relies on it
+for a high-resolution stream, and the crate docs should carry the resolution
+the number was taken at, which they currently do not.
