@@ -2445,3 +2445,69 @@ GEMM" — that has been measured as a dead end from two directions — but "issu
 fewer ops": operator fusion across conv boundaries, and a layout that lets
 them fuse. Its prize is bounded by the 46 % matmul term plus the 10.5 % im2col
 fill, and it is the only remaining item large enough to matter.
+
+
+---
+
+## MOT17-09: the first public-benchmark side-by-side, and what the LIVE gate costs
+
+Every LIVE number until now measured how much work the gate SKIPS. None
+measured what skipping costs, because a gated frame serves the previous
+frame's boxes and — without ground truth — a stale box and a fresh one look
+identical. The synthetic corpus could not price it by construction.
+
+**MOT17-09** can: a fixed camera, 525 annotated frames at 1920x1080, 5,325
+evaluated pedestrians, public and ungated. All three arms are fed the SAME
+extracted frames from disk, so neither engine pays for a decode the other does
+not.
+
+| arm | AP50 | recall | detections |
+|---|---:|---:|---:|
+| diana, gate off | **62.35 %** | 65.88 % | 4,630 |
+| diana, LIVE gate on | **62.35 %** | 65.88 % | 4,630 |
+| ultralytics yolo26n | **62.37 %** | 65.90 % | 4,638 |
+
+### Accuracy parity, on someone else's data
+
+**0.02 pp apart from Ultralytics, deterministic across every run.** Diana's
+oracle already showed per-pixel agreement with the reference; this shows the
+agreement survives all the way to a detection metric on a public dataset
+neither engine was tuned against.
+
+### The gate costs nothing here — and the reason matters
+
+The gate fired on **0 of 525 frames**. That is correct: MOT17-09 is a busy
+pedestrian scene, so every frame genuinely changes. The gate refusing to gate
+is the behaviour it should have, and it costs **0.00 pp**.
+
+What it costs when it is WRONG was measured by accident. The first run of this
+harness disabled gating with `--change-fraction 2.0`, reasoning that an
+impossible threshold turns the gate off. It does the opposite: nothing crosses
+2.0, so every frame counts as UNCHANGED and all of them gate. The arms ran
+swapped, and the accidental all-gated arm is the most useful number here:
+
+| | AP50 |
+|---|---:|
+| every frame detected | 62.35 % |
+| **507 of 525 frames gated** | **17.15 %** |
+
+**A gate that over-fires costs 45 percentage points.** That is the risk
+profile, and it says the threshold is not a tuning knob — it is a correctness
+boundary. It also retro-justifies the delta fix: a gate mis-tuned for its
+content does not degrade gracefully, it destroys the output.
+
+The bug was caught because each arm prints its own model-run count and the
+"ungated" arm reported 18 runs. An arm that reports what it did cannot lie
+about which arm it was.
+
+### Speed: no claim
+
+| run | diana | ultralytics | ratio |
+|---|---:|---:|---:|
+| 1 | 42.6 s | 56.4 s | 1.32x |
+| 2 | 43.3 s | 70.3 s | 1.62x |
+| 3 | 49.0 s | 45.9 s | 0.94x |
+
+Straddles parity, and the spread is larger than the difference — the same
+condition that made the COCO ratio unquotable. **AP50 is deterministic and
+identical every run; wall time is not, and only the first is claimed.**
