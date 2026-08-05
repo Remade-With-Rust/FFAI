@@ -5489,6 +5489,68 @@ threshold does not. A clean claim would need a third population.
 
 **Gap to Unlimited-OCR: 5.82 -> 5.54 pp.**
 
+### 8.97 Prometheus on the probability map: pruned at depth 2, 0.04 % of the workload
+
+Asked whether the Prometheus refinery could find better arithmetic in the DBNet
+probability-map postprocess. The symbolic-discovery skill's first rule is
+**profile first**, and the stage profile ends it before any discovery work.
+
+`FFAI_PROFILE=1`, `mobiledet-crnn`, two document pages:
+
+| stage | share | ms/call |
+|---|---:|---:|
+| **`rec_fwd`** (CRNN recognition) | **93.9 % / 95.7 %** | 1366 / 1145 |
+| `det_fwd` (DBNet forward) | 5.5 % / 3.8 % | 5889 / 4113 |
+| `rec_pre` | 0.3 % | 4.6 |
+| **`boxes`** (the postprocess in question) | **0.0 %** | **48 / 36** |
+
+**The whole target is 0.04 % of the workload.** Thresholding, the 8-connectivity
+component walk, `convex_hull`, `min_area_rect`, `box_score_fast` and the Vatti
+unclip together cost 36-48 ms against ~106 s. A PERFECT result — deleting the
+stage outright — buys 0.04 %. This is the skill's own law ("rank by ABSOLUTE
+cost") applied to its own candidate.
+
+**Instrument check (D6).** The profile reports 106 s where wall clock is 5.6 s
+per page, so these are thread-summed CPU seconds under rayon, inflating absolutes
+~19x. Shares are CPU-proportional and the verdict is unaffected — `boxes` is
+0.04 % either way — but the absolute seconds in that table are not wall time.
+
+**And the one candidate that passed the earlier screen is already at its
+optimum.** §8.60 identified `UNCLIP_LINE` as the best Prometheus target (fires on
+every box on every page, hand-set constant, feeds recognition directly) and
+ceiling-checked it first: 1.35 -> 21.18 %, **1.5 shipped -> 21.10 %**, 1.7 ->
+24.97 %. Flat below, cliff above; the reference's constant is the optimum.
+
+**Target-class verdict.** The skill's table routes by class: fitted heuristic ->
+symreg; expensive exact function -> algebraic rewrite; small LUT -> profile first.
+The postprocess contains no fitted heuristic without a closed form (the Vatti
+offset IS the closed form), and its expensive functions are 0.04 % of runtime.
+The 94 % is a **learned CRNN forward pass** — matmuls, not arithmetic a refinery
+can rediscover. `ffai-bench`'s own module docs already record this boundary: "the
+symbolic-discovery half of Prometheus ... does not apply to learned-model
+engines."
+
+**Pruned, with the reopen condition stated:** if recognition is ever moved off
+candle onto hand-written kernels, the transcendentals inside `rec_fwd` become a
+`codec-vectorize-kernel` target — not a Prometheus one.
+
+### 8.98 "The Great Gate" — a re-entrable checkpoint
+
+`crates/ffai-bench/examples/great_gate.rs` pins this state so a future session can
+re-enter it in one command. It is a checkpoint, not a scorer: it carries the
+shipped numbers, the four pages the gate MUST fix, the four it MUST NOT touch,
+the route-level error budget, and the reopen conditions — then verifies the named
+pages still exist in the corpus, because a pinned number is meaningless if the
+pages under it changed.
+
+The engine run is deliberately NOT inlined: it belongs to the harness
+(`.tools-bench/gate_fullcorpus.py`), and duplicating it here would let the
+checkpoint drift from what actually ships.
+
+Two guards worth stating in the file itself: `omni-0069` must stay BLOCKED — a
+gate that starts fixing it has become §8.95's one-page rule again — and the
+regression pages `omni-0144` / `omni-0148` must stay byte-identical.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
