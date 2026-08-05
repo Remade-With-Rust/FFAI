@@ -7054,6 +7054,72 @@ block of text is a PICTURE of text. It is the only lever left, its ceiling is
 measured rather than hoped for, and it is worth more than everything §8.106-§8.124
 delivered combined.
 
+### 8.125 The p90 normalisation INVERTS on junk-dominated pages — a population, and a bad first fix
+
+§8.124 left the question "what feature are we missing?" `omni-0245` was exported
+line by line with the orphan label, every shipped feature, and six candidates the
+harvest does not carry (markup density, code-syntax match, camelCase, vowel-less
+words, alphanumeric mixing, short-token fraction).
+
+**None of the new features separate anything.** On the tail pages every one scores
+exactly the majority-class baseline, 0.768. The signal is not missing from the
+columns.
+
+**And on `omni-0245` the feature that separates is one we already have — pointing
+the wrong way.**
+
+| | `w_p90` |
+|---|---:|
+| the 5 annotated prose lines | 3.83, 3.76, 3.85 (and 0.76, 0.73) |
+| the 132 orphan lines (median) | **0.206** |
+| best cut | **<= 2.87, accuracy 0.985** |
+
+`w_p90` is width over the page's own 90th-percentile width, and `suppress.rs`
+documents the assumption it rests on: *"body lines cluster at 0.97 — they ARE the
+p90"*. On this page 96 % of lines are screenshot text, so **the junk sets the p90
+and the genuine prose reads as 3.8x**. The shipped threshold is `w_p90 <= 0.198`;
+the orphan median is **0.206**. The junk sits 0.008 above the cutoff, takes the
+wide branch, and is kept unless it is in the top margin. That is the exact
+mechanism of the failure, and it is a normalisation defect, not a missing feature.
+
+**The defect is detectable, and it is a POPULATION.** Where the median line sits
+relative to the p90 says whether body text is the majority:
+
+| | pages | mean CER | share of macro |
+|---|---:|---:|---:|
+| median `w_p90` **< 0.60** | **72 (31 %)** | **50.5 %** | **15.41 pp of 33.70 — 46 %** |
+| median `w_p90` >= 0.60 | 164 | 26.3 % | |
+
+Seventy-two pages, nearly 2x worse than the rest, carrying almost half the macro
+error — the first signal in this campaign that is not a page list, and the
+`codec-content-adaptive-dispatch` shape exactly: a cheap page-level content
+measure that says which regime a page is in.
+
+**The first fix attempt is REFUSED.** Renormalising flagged pages by their MAX
+width instead of the p90 reads well in aggregate — holdout **-0.942 pp**, tail
+**-21.42 pp**, body -0.012, corpus -0.689, three times better than §8.124's
+`rc = 200` on every axis. Per page it does not hold up:
+
+| | |
+|---|---|
+| pages touched | 22 — **13 improve, 9 worsen** |
+| `omni-0245` alone | **67 %** of the total change |
+| top four pages | **100 %** of it |
+| worst regressions | `omni-0258` **+9.68**, `omni-0224` +5.78, `omni-0161` +4.11 |
+
+The same profile as §8.114's `year_paren` (14 improve / 12 worsen, collapsing on
+leave-one-out); removing the top four takes -0.689 pp to approximately zero.
+Refused on consistency — the bar does not move because this lever is more
+interesting than the last three.
+
+**Diagnosis and fix are separate, and only the fix failed.** The population is
+real, large and mechanistically explained. What is wrong is the ESTIMATOR: the
+maximum width is set by a single outlier line, which is precisely why it produced
+nine regressions. A robust replacement — a high percentile of the upper mode, or
+the mode of the width distribution rather than a quantile of all of it — is the
+next attempt, and it is the first one in twenty sections aimed at a population
+instead of a page.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
