@@ -6146,6 +6146,51 @@ column-aware run grouping (left edge first, then vertical pitch — sorting by `
 interleaves a two-column page and breaks every run, §8.106's bug, now guarded by
 a comment in the code).
 
+### 8.109 `w_rel` is confounded by column count — a better feature that does NOT convert
+
+`w_rel` (line width / PAGE width) carries 20-37 % of the suppressor's importance
+across every fit, so it was the obvious thing to improve. It is also plainly
+confounded: **a body line spans its COLUMN, not the page**, so it reads ~0.85 on
+a single-column page, ~0.45 on two columns and ~0.30 on three. The same physical
+line gets three different values.
+
+Re-normalising by the page's OWN 90th-percentile line width — the width of a
+full column line, whatever the layout — removes the confound:
+
+| normalisation | orphan median | body median | body below the orphan median |
+|---|---:|---:|---:|
+| `w_rel` (/ page width) | 0.039 | 0.231 | 1 % |
+| **`w_p90` (/ page p90 width)** | **0.085** | **0.969** | **0 %** |
+| / page median width | 0.467 | 1.001 | 6 % |
+| / widest line in its run | 1.000 | 0.955 | 100 % |
+
+Body lines cluster at **0.969** — they ARE the p90 width by construction — and
+orphans at 0.085 with **zero overlap**. `w_p90` then takes **62 %** of the
+boosted model's importance, against `run_chars` 12 %.
+
+**And it does not convert.**
+
+| | tree d4 | GBM 200 |
+|---|---:|---:|
+| `w_rel` | **-1.63 pp** | -2.18 pp |
+| `w_p90` | -1.59 pp | **-2.26 pp** |
+| both | -1.59 pp | -2.04 pp |
+
+The shipped shallow tree is unchanged (-1.59 vs -1.63, well inside nothing) and
+only the boosted model gains, by 0.08 pp. **Nothing shipped.**
+
+The reason is worth keeping: a depth-4 tree can find an equivalent split on the
+confounded feature anyway, because it splits per page-population rather than
+needing one global threshold. **A better-conditioned feature helps a model that
+must use ONE cutoff; it barely helps a model that can carve the space.** The
+normalisation matters for interpretability and for any future linear or
+threshold rule — it did not matter for the tree that ships.
+
+Also refuted here: normalising by the widest line in the line's own RUN, which
+is 100 % overlapping and useless — most runs are one line, so the feature is
+1.000 by construction. A normaliser drawn from the same unit it normalises
+carries no information.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
