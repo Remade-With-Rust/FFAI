@@ -2621,3 +2621,55 @@ The descent terminated at **depth 6, three times over** — which is where this
 skill says the answers keep being, and the third consecutive campaign in this
 document where it has been true. There is no function-level convolution gap to
 attack. The measurable difference is one we already hold.
+
+
+---
+
+## Cache pollution from the bench's pre-decoded corpus — REFUTED
+
+The bench pre-decodes every clip and holds them live through the timed loop;
+the reference decodes one frame and frees it. At 45 frames of 640x640x3 that
+is **53 MiB against this box's 32 MiB L3**, which looked like a clean
+explanation for a gap nothing else explained: one image repeated read far
+faster than forty-five different ones, while Ultralytics' two numbers agreed.
+
+`examples/workingset.rs` sweeps the working set with everything else held
+fixed — every image letterboxed to the same 640x640, so tensor shapes are
+identical at every K and the only variable is resident bytes:
+
+| K | resident | p50 |
+|---:|---:|---:|
+| 45 | 48.3 MiB | 143.8 ms |
+| 32 | 34.3 MiB | 145.3 ms |
+| 16 | 17.2 MiB | 147.4 ms |
+| 8 | 8.6 MiB | 145.1 ms |
+| 4 | 4.3 MiB | 144.2 ms |
+| 2 | 2.1 MiB | 146.2 ms |
+| 1 | 1.1 MiB | 140.2 ms |
+
+**Flat — 140.2 to 147.4, a 5 % range with no trend, across a 44x change in
+residency.** Holding the whole corpus costs nothing measurable. The
+hypothesis is dead, and the bench's pre-decode is not why our median sits
+above our best case.
+
+### Two defects in the probe, both found before the result was believed
+
+* **The first version held all 45 images in every arm** — it loaded them into
+  one vec and took K from it, so 48 MiB stayed resident throughout and the
+  working set never varied. The sweep was flat because there was no sweep.
+* **K=1 ran first** and absorbed warmup, reading 121 ms and making the
+  smallest working set look like the slowest. The fixed version sweeps
+  DESCENDING so K=1 lands last; it is still flat, which is now meaningful.
+
+### And a retraction it forced
+
+Chasing the ~140 ms level against a "45 ms at square" figure quoted earlier
+found that `examples/scaling.rs` **hardcodes `Geometry::Rect` and never reads
+`FFAI_SQUARE`**. The 45 ms was a RECT measurement — 30 % fewer pixels — so
+the claim built on it, that Diana beats Ultralytics on a single square image
+(45.0 vs 51.1 ms), is **withdrawn**. Against the rect number it belongs to,
+Diana 45.0 vs Ultralytics 38.67 is **1.16x BEHIND**, which agrees with the
+1.11x corpus median rather than contradicting it.
+
+The flag is now honoured. A flag read by one example and silently ignored by
+another is worse than no flag.

@@ -54,7 +54,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reps: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(7);
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()).unwrap();
     let img = ffai_media::load_image(&root.join("corpora/clips/diana-coco/coco-032.png"))?;
-    let engine = ffai_diana::engine::Yolo26::build(&tier, ffai_diana::image::Geometry::Rect, root.join("models"));
+    // `FFAI_SQUARE=1` selects square geometry. This example hardcoded Rect and
+    // silently ignored the flag, so a run intended as square measured rect —
+    // 30 % fewer pixels — and produced a "we beat Ultralytics at square" claim
+    // that had to be retracted. A flag that is read by one example and ignored
+    // by another is worse than no flag.
+    let geom = if std::env::var("FFAI_SQUARE").is_ok_and(|v| v == "1") {
+        ffai_diana::image::Geometry::Square
+    } else {
+        ffai_diana::image::Geometry::Rect
+    };
+    let engine = ffai_diana::engine::Yolo26::build(&tier, geom, root.join("models"));
     let opts = DetectOptions { confidence: 0.25, ..Default::default() };
     engine.detect(&img, &opts)?;
 

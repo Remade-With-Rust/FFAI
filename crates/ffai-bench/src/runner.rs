@@ -579,6 +579,32 @@ fn run_detect_engine(
         results.clear();
         per_image_secs.clear();
         for (clip, image) in &decoded {
+            // `FFAI_BENCH_JIT_DECODE=1` decodes each image inside the timed
+            // loop and drops it, instead of using the pre-decoded copy.
+            //
+            // The pre-decode looks like it FAVOURS us — it keeps our PNG
+            // reader out of the timed region while `predict(path)` pays for
+            // its own decode. But it also holds the WHOLE corpus resident:
+            // 45 frames at 640x640x3 is 53 MiB against this box's 32 MiB L3,
+            // so the model's weights and activations are evicted between
+            // every image. The reference's working set is one frame.
+            //
+            // That is a candidate explanation for the gap between our
+            // best case and our median: one image repeated reads 45 ms,
+            // forty-five different images read a p50 of 81, while
+            // Ultralytics reads 52.7 and 55 for the same pair.
+            let jit;
+            let image = if std::env::var("FFAI_BENCH_JIT_DECODE").is_ok_and(|v| v == "1") {
+                match load_image_resilient(&manifest.clip_path(clip)) {
+                    Ok(i) => {
+                        jit = i;
+                        &jit
+                    }
+                    Err(_) => image,
+                }
+            } else {
+                image
+            };
             let t = std::time::Instant::now();
             match det.detect(image, &opts) {
                 Ok(out) => {
