@@ -2232,3 +2232,64 @@ Diana is **2.89x** behind ORT and **1.47x** behind Ultralytics at matched
 square geometry, and **0.88x — ahead of Ultralytics** at matched rect. Both
 comparisons are matched-config and both are real; the geometry qualifier is
 the part that was missing, and it is the part that survives this retraction.
+
+
+---
+
+## The last two levers, both closed
+
+### Tiled im2col — refuted a third time, finally like-for-like
+
+Tiling is the nearest thing in the tree to implicit GEMM, so its two prior
+refutations were re-tested rather than trusted; both predate mimalloc, the
+epilogue fusion and the zero-fill removal.
+
+A third defect turned up in the comparison itself: `conv3x3_tiled` **declined
+fused calls**, so once the fusion shipped it served only the nine
+activation-free convolutions and silently gave up the 12.5 % the fusion is
+worth. It had never been compared like for like.
+
+Given the same fused epilogue, the answer did not change: **20/21 rounds,
+z = +4.15, 30.2 % SLOWER**, against a 6.0 % null spread the magnitude also
+clears. Five-tier oracle passes with tiling on and off, so it is a speed
+verdict, not a correctness one.
+
+### Thread width — re-swept, and the default is right
+
+The pool was set to 4 on a pipeline that has since moved four times (allocator,
+fusion, decode, im2col). Re-swept at min-of-60:
+
+| threads | 2 | 4 | 6 | 8 | 12 | 16 | 24 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ms | 39.8 | 28.9 | **26.8** | 33.9 | 32.8 | 33.4 | 37.3 |
+
+6 looked like a 7 % win, so it was ABBA'd at min-of-80, six pairs: **t=4
+median 29.6 ms, t=6 median 29.0 ms — 2 %, arms fully overlapping.** The single
+26.8-vs-28.9 pair was noise. No change made.
+
+The useful part is the shape: 2 threads is badly starved, 8 and above are
+worse than 4, and 4-6 is a plateau. One image does not have the parallelism to
+use this machine, which is the same conclusion the original sweep reached and
+it survives the four baseline moves since.
+
+## Where this leaves the speed gate
+
+Every cheap lever is now closed with a measurement:
+
+| lever | verdict |
+|---|---|
+| candle's matmul (46 % of the pipeline) | refuted 4x — direct conv in four shapes, AVX2 microkernel, transposed GEMM |
+| tiled im2col | refuted 3x, the last one like-for-like |
+| thread width | flat across 4-6, re-tested |
+| im2col zero-fill | TAKEN — 12.6-30.8 % |
+| decode | TAKEN — 4.6x |
+| epilogue fusion | TAKEN — 12.5 % |
+| preprocessing | TAKEN — 5.7x |
+| attention's doubled `v` | TAKEN — 27 % of that bucket |
+
+What remains is a **packed-panel implicit GEMM or an NCHWc layout**, both of
+which require a competitive hand-written GEMM — and this campaign has already
+established that the hand-written kernel loses to candle's by 1.111x even
+before packing is considered. That is a multi-week project with a real chance
+of not paying, and it should start from this document rather than from
+scratch.
