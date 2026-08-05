@@ -6399,6 +6399,64 @@ a language boundary, run the agreement check as a GATE, not as a curiosity.** Tw
 real defects in this campaign were found by exactly that comparison and by
 nothing else.
 
+### 8.114 The long-prose bucket is BIBLIOGRAPHIES — identified, and not shippable here
+
+37 % of what still escapes the filter is "long prose that looks like body":
+298 lines, 23 652 characters, 235 of them on `academic_literature` pages.
+Sampling them names the population immediately:
+
+```
+'Meinhart CD, Wereley ST, Santiago JG (1999) PIV measurements'
+'17. Tintore M, Rovira A, Martinez MJ, et al. Isolated demyelinat-'
+'Block; C R (1984). Is crime seasonal? Chicago: Illinois Criminal J'
+```
+
+**Reference lists, acknowledgements, funding statements, legal disclaimers.**
+Geometrically they are body text and always will be — `w_p90` 0.98 against
+0.998, `same_left` 28 against 34, long well-aligned runs. A bibliography and a
+paragraph differ only in what the words ARE.
+
+**So the features have to be textual, and they were tested.** A sheet with 16
+text-pattern columns was exported (`suppress_longprose.csv`, 3 693 rows) and
+rules proposed from it:
+
+| rule | train | holdout | holdout precision |
+|---|---:|---:|---:|
+| **`year_paren` alone** | **-0.05 pp** | **-0.61 pp** | 84 % |
+| year OR (initials AND caps>0.35) | **+0.24 pp** | -0.21 pp | 39 % |
+| score >= 5 | +0.10 pp | -0.47 pp | 49 % |
+| score >= 4 | +0.26 pp | -0.18 pp | 35 % |
+
+Everything using `initials` or `caps_word_frac` goes NEGATIVE on train — those
+features fire on titles and author lines that ARE annotated. Only `year_paren`
+survived both splits, and it is not a tuned threshold but a regex for a citation
+marker, which cannot overfit the way a numeric cutoff can.
+
+**And it is still refused, because the win is three pages.**
+
+| excluding | shipped | + `year_paren` | delta |
+|---|---:|---:|---:|
+| nothing (236 pages) | 17.22 % | 16.61 % | **-0.61 pp** |
+| `omni-0055` | 16.46 % | 16.27 % | -0.19 pp |
+| + `omni-0047` | 16.25 % | 16.16 % | -0.09 pp |
+| + `omni-0060` | 16.08 % | 16.07 % | **-0.01 pp** |
+
+Three pages of 236 carry the entire effect. The tells were there before the
+check: disjoint holdout halves disagreed 5x (-0.99 vs -0.21 pp), and of the 26
+pages it touches, 14 improve and 12 get worse. **§8.95's one-page rule, met a
+second time and caught by the same test.**
+
+**The blocker is the corpus, not the rule.** Train holds 24 of these lines
+against holdout's 298 — bibliographies occupy whole pages and appear on few of
+them, so an 80-page train split contains almost none. The mechanism is sound and
+the population is real; what is missing is enough pages carrying it to tell a
+rule from three documents. **That is a corpus fix, not a rule fix**, and it is
+the honest prerequisite before this bucket is attempted again.
+
+Recorded so the next attempt starts from the identification rather than
+rediscovering it: the target is bibliographies, the signal is citation syntax,
+and the test that must be passed is per-page stability, not aggregate net gain.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
