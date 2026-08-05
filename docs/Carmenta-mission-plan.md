@@ -6457,6 +6457,82 @@ Recorded so the next attempt starts from the identification rather than
 rediscovering it: the target is bibliographies, the signal is citation syntax,
 and the test that must be passed is per-page stability, not aggregate net gain.
 
+### 8.115 The suppression residual is a PAGE LIST, not a population — geometry is done
+
+§8.114 refuted `year_paren` after the fact, by discovering that three pages
+carried it. That is the expensive order. This asks the question FIRST, of the
+whole residual, before any further rule is proposed.
+
+Applying the shipped filter offline to all 31 394 lines leaves **1 233 orphan
+lines worth 53 002 characters** — the ~5.3 pp between the shipped 17.22 % and
+the oracle's 11.92 %. Where does it live?
+
+| top N pages | share of residual |
+|---:|---:|
+| 1 | 13.8 % |
+| 3 | 25.7 % |
+| 5 | 34.0 % |
+| **10** | **46.0 %** |
+| 20 | 60.2 % |
+| 40 | 75.7 % |
+| 174 (all) | 100 % |
+
+**Half the remaining prize is on ten pages of 316.** A rule fitted to any of it
+is fitted to a page list, and the leave-one-out test that killed `year_paren`
+will kill its successors for the same reason.
+
+And the split makes fitting impossible in the other direction too:
+
+| split | pages with residual | of | chars | share | chars/page |
+|---|---:|---:|---:|---:|---:|
+| train | 40 | 80 | 6 125 | 11.6 % | 77 |
+| holdout | 134 | 236 | 46 877 | 88.4 % | 199 |
+
+Holdout is 2.95x the pages but carries 7.7x the residual — **2.6x denser per
+page**. Train does not contain enough of the phenomenon to fit on, and holdout
+may be looked at once. This is the §8.114 blocker generalised from
+bibliographies to the entire remainder.
+
+**What the residual is** (net gain, so a bucket's value is money, not lines):
+
+| bucket | lines | chars | net gain | share |
+|---|---:|---:|---:|---:|
+| prose | 645 | 35 854 | 35 854 | 67.6 % |
+| bibliography | 133 | 9 095 | 9 095 | 17.2 % |
+| short fragment | 339 | 4 962 | 4 962 | 9.4 % |
+| numeric/table | 77 | 1 986 | 1 986 | 3.7 % |
+| ALL-CAPS heading | 15 | 557 | 557 | 1.1 % |
+| symbol/equation | 24 | 548 | 548 | 1.0 % |
+
+Sampling the prose bucket dissolves it into the same few things — reference
+CONTINUATION lines whose year-paren was on the entry's first line ("rosis
+incidence cohort with twenty-five years of follow-up. Brain"), publisher and
+legal boilerplate ("Copyright 2011 by John Wiley & Sons", "Informa Ltd
+Registered in England and Wales", "The authors have no conflicts of interest"),
+table notes, a little code, and a little garbled recognition. **Prose plus
+bibliography is 85 % of the residual and they are one phenomenon.** The
+mechanically nameable buckets — numeric, symbolic, all-caps, fragment — total
+15 %, and the four together are worth about 0.7 pp.
+
+**Two levers priced and refused on the spot:**
+
+* *low confidence*: `conf < 0.75` reaches 1 164 residual chars (2.2 %) and
+  destroys 765 annotated ones. Net +399 characters, 0.75 % of the residual.
+* *class routing*: the corpus carries exactly one class, `document_scan`, so
+  there is no per-class route to dispatch on. `codec-content-adaptive-dispatch`
+  needs a signal the corpus does not label.
+
+**Conclusion: geometric and textual suppression is finished on this corpus.**
+Not because the residual is small — 5.3 pp is the largest single item left —
+but because it is not a population any rule can be fitted to and validated
+against here. §8.113's filter captured what was distributed; what is left is
+concentrated, and concentration is indistinguishable from noise at n=316.
+
+**The next lever is the corpus, not the code.** The specific requirement is now
+known precisely: pages dense in reference lists, legal boilerplate and funding
+statements, enough of them in TRAIN that a rule can be fitted, and enough
+distinct documents that no three of them can carry a result.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
