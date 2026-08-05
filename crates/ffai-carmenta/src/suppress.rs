@@ -194,7 +194,13 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
     // like here, whatever the column count.
     let mut ws: Vec<f32> = boxes.iter().map(|b| b.2 / pw).collect();
     ws.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let p90 = ws[(ws.len() * 9) / 10 - usize::from(ws.len() * 9 % 10 == 0)].max(1e-6);
+    // `((n-1)*9)/10`, matching the index the thresholds were fitted against.
+    // The first form here was `(n*9)/10` with a divisibility fudge, which is
+    // off by one at n = 73, 137, 255 — ordinary page line counts — so the
+    // shipped filter measured widths against a different denominator than the
+    // fit did. It cost 0.35 pp and was caught only because the offline
+    // simulation and the engine disagreed (§8.113).
+    let p90 = ws[((ws.len() - 1) * 9) / 10].max(1e-6);
 
     let mut hs: Vec<f32> = boxes.iter().map(|b| b.3).collect();
     hs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

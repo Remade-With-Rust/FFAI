@@ -6358,6 +6358,47 @@ that found structure rather than a sample.
 Chosen over a five-feature scoring variant that scored -0.28 pp — one hundredth
 of a point for two more features and a threshold ladder.
 
+### 8.113 The offline/engine agreement check earned its keep: an off-by-one in `w_p90`
+
+§8.110 checked the offline simulation against the engine and got an exact match
+(-1.38 pp predicted, -1.38 pp measured) for the `w_rel` tree. The check was
+repeated for the `w_p90` tree and did NOT match:
+
+| | |
+|---|---:|
+| offline prediction | **-1.59 pp** |
+| engine measured | **-1.24 pp** |
+
+0.35 pp of disagreement, on a change whose whole justification was 0.04 pp of
+in-corpus difference. The cause is an off-by-one in the percentile index:
+
+```rust
+ws[(ws.len() * 9) / 10 - usize::from(ws.len() * 9 % 10 == 0)]   // WRONG
+ws[((ws.len() - 1) * 9) / 10]                                    // matches the fit
+```
+
+| page lines | fitted index | shipped index |
+|---:|---:|---:|
+| 20, 50, 90, 100 | 17, 44, 80, 89 | same |
+| **73** | **64** | **65** |
+| **137** | **122** | **123** |
+| **255** | **228** | **229** |
+
+They agree on many sizes and disagree on others — including 73, which is the line
+count of the page used for every spot check in this campaign. **The filter was
+measuring widths against a different denominator than the one its thresholds were
+fitted to**, and the error is invisible from either side alone: the Rust compiles
+and runs, the Python fits and scores, and only comparing them exposes it.
+
+**The general form.** A model fitted offline and reimplemented in the engine has
+TWO chances to be wrong — the arithmetic and the transcription — and unit tests
+catch neither, because both sides pass their own tests. §8.96 found the same
+class of defect from the other direction (`resp_med` computed after the split it
+gated, caught only when Rust disagreed with the probe). **Whenever a fit crosses
+a language boundary, run the agreement check as a GATE, not as a curiosity.** Two
+real defects in this campaign were found by exactly that comparison and by
+nothing else.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
