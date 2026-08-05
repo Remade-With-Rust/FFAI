@@ -463,13 +463,22 @@ impl Attention {
         let attn = candle_nn::ops::softmax(&attn, D::Minus1)?;
 
         // v @ attnᵀ  ->  (b, heads, head_dim, n)  ->  (b, c, h, w)
-        let out = v
-            .contiguous()?
+        //
+        // `v` is a NARROW of qkv, so it is not contiguous, and both consumers
+        // below need it to be: the matmul asks explicitly, and `reshape` on a
+        // non-contiguous view materialises one of its own. Written the
+        // obvious way that is two copies of the same tensor, one of them
+        // invisible because `reshape` does not look like an allocation.
+        //
+        // Made once, used twice. Same arithmetic, one fewer traversal of a
+        // buffer that is already hot.
+        let vc = v.contiguous()?;
+        let out = vc
             .matmul(&crate::profile::timed(|p| &p.attn_t, || {
                 crate::transpose::transpose_last2(&attn)
             })?)?
             .reshape((b, c, h, w))?;
-        let pe = self.pe.forward(&v.reshape((b, c, h, w))?)?;
+        let pe = self.pe.forward(&vc.reshape((b, c, h, w))?)?;
         self.proj.forward(&(out + pe)?)
     }
 }
