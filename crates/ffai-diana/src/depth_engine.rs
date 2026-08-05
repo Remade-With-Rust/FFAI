@@ -53,6 +53,47 @@ impl Yolo26Depth {
         &self.tier
     }
 
+    /// Build from weights and manifest already in memory — **no filesystem**.
+    ///
+    /// Same reason as [`crate::engine::Yolo26::from_bytes`]: a browser has no
+    /// filesystem, and an embedded target's weights live in flash rather than
+    /// on one. Validation is identical to the filesystem path — this is not
+    /// the lenient door.
+    pub fn from_bytes(
+        tier: &str,
+        geometry: Geometry,
+        safetensors: Vec<u8>,
+        manifest_json: &str,
+    ) -> Result<Self> {
+        let device = Device::Cpu;
+        let cfg: ModelConfig = serde_json::from_str(manifest_json)
+            .map_err(|e| Error::Model(format!("depth manifest json: {e}")))?;
+        cfg.validate()?;
+        if cfg.task != "depth" {
+            return Err(Error::Model(format!(
+                "manifest declares task `{}` — this engine needs depth weights",
+                cfg.task
+            )));
+        }
+        if cfg.scale != tier {
+            return Err(Error::Model(format!(
+                "manifest declares scale `{}` but this engine is tier `{tier}`",
+                cfg.scale
+            )));
+        }
+        let vb = VarBuilder::from_buffered_safetensors(safetensors, DType::F32, &device)
+            .map_err(candle_err)?;
+        let model = build(vb, cfg, device)?;
+        let cell = OnceLock::new();
+        let _ = cell.set(Ok(model));
+        Ok(Yolo26Depth {
+            manifest_dir: PathBuf::new(),
+            geometry,
+            tier: tier.to_string(),
+            model: cell,
+        })
+    }
+
     fn model(&self) -> Result<&Model> {
         self.model
             .get_or_init(|| {
@@ -84,6 +125,10 @@ fn load(manifest_dir: &std::path::Path, tier: &str) -> Result<Model> {
         VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&weights), DType::F32, &device)
             .map_err(candle_err)?
     };
+    build(vb, cfg, device)
+}
+
+fn build(vb: VarBuilder, cfg: ModelConfig, device: Device) -> Result<Model> {
     let dims = cfg.dims()?;
     let backbone = Backbone::new(vb.clone(), dims).map_err(candle_err)?;
     let neck = Neck::new(vb.clone(), dims).map_err(candle_err)?;

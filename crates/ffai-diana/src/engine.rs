@@ -59,6 +59,40 @@ impl Yolo26 {
         &self.tier
     }
 
+    /// Build from weights and manifest already in memory — **no filesystem**.
+    ///
+    /// [`Self::build`] resolves a manifest directory and mmaps a file, which
+    /// two real targets cannot do:
+    ///
+    /// * a **browser**, where `wasm32` has no filesystem at all — this is the
+    ///   API that stands between Diana compiling for wasm (it does) and
+    ///   running there (it cannot, yet);
+    /// * an **embedded** device that ships weights in flash or a blob
+    ///   appended to the binary, where there is a filesystem but nothing on
+    ///   it worth reading.
+    ///
+    /// `safetensors` is the converted weight file's bytes and `manifest_json`
+    /// the `-diana.json` beside it. Both are validated exactly as the
+    /// filesystem path validates them — a manifest whose scale disagrees with
+    /// `tier`, or that was produced by a different converter version, is
+    /// refused here too. The bytes path is not the lenient path.
+    pub fn from_bytes(
+        tier: &str,
+        geometry: Geometry,
+        safetensors: Vec<u8>,
+        manifest_json: &str,
+    ) -> Result<Self> {
+        let model = load_from_bytes(tier, safetensors, manifest_json)?;
+        let cell = OnceLock::new();
+        let _ = cell.set(Ok(model));
+        Ok(Yolo26 {
+            manifest_dir: PathBuf::new(),
+            geometry,
+            tier: tier.to_string(),
+            model: cell,
+        })
+    }
+
     /// The default engine: **rectangular** letterboxing, matching
     /// Ultralytics' own default.
     ///
@@ -149,6 +183,25 @@ pub(crate) fn resolve_model(
     Ok((cfg, weights))
 }
 
+/// The filesystem-free half of [`load`]. Both funnel into the same graph
+/// construction so the two entry points cannot drift apart in what they
+/// build — only in where the bytes came from.
+fn load_from_bytes(tier: &str, safetensors: Vec<u8>, manifest_json: &str) -> Result<Model> {
+    let device = Device::Cpu;
+    let cfg: ModelConfig = serde_json::from_str(manifest_json)
+        .map_err(|e| Error::Model(format!("depth/detect manifest json: {e}")))?;
+    cfg.validate()?;
+    if cfg.scale != tier {
+        return Err(Error::Model(format!(
+            "manifest declares scale `{}` but this engine is tier `{tier}`",
+            cfg.scale
+        )));
+    }
+    let vb = VarBuilder::from_buffered_safetensors(safetensors, DType::F32, &device)
+        .map_err(candle_err)?;
+    build_model(vb, cfg, device)
+}
+
 fn load(dir: &Path, tier: &str) -> Result<Model> {
     let device = Device::Cpu;
     let model_name = format!("yolo26{tier}-diana");
@@ -160,6 +213,10 @@ fn load(dir: &Path, tier: &str) -> Result<Model> {
     }
     .map_err(candle_err)?;
 
+    build_model(vb, cfg, device)
+}
+
+fn build_model(vb: VarBuilder, cfg: ModelConfig, device: Device) -> Result<Model> {
     let dims = cfg.dims()?;
     let backbone = Backbone::new(vb.clone(), dims).map_err(candle_err)?;
     let neck = Neck::new(vb.clone(), dims).map_err(candle_err)?;

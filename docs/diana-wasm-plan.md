@@ -128,7 +128,24 @@ With step 1 landed, `+simd128` alone buys candle's vectorised f32 kernels
 * **Prune first:** if the measured gain is under the harness's resolution on
   whatever wasm runtime is chosen, stop here and say so.
 
-### Step 3 — weights without a filesystem *(the real deployment blocker)*
+### Step 3 — weights without a filesystem — **DONE**
+
+`Yolo26::from_bytes` and `Yolo26Depth::from_bytes` take the converted
+safetensors and the manifest JSON directly, with no `std::fs` anywhere on the
+path. Validation is identical to the filesystem constructor — a manifest whose
+scale disagrees with the requested tier is refused, and the test asserts that
+— so the bytes path is not the lenient door.
+
+Gated by `from_bytes_matches_the_filesystem_path`: **byte-identical** depth
+maps from the two constructors, since they differ only in where the bytes came
+from. `cargo check --target wasm32-unknown-unknown` still passes.
+
+That leaves **threading** (step 4) as the only remaining runtime blocker for a
+browser, and it is a deployment constraint (cross-origin isolation) rather
+than code. The same API also serves embedded targets that ship weights in
+flash, which was the second reason to build it first.
+
+*Original scoping, kept:*
 
 `Yolo26::build(tier, geometry, manifest_dir)` reaches `ffai_models::load_dir`,
 which is `std::fs` against a filesystem a browser does not have. **This blocks

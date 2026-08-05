@@ -257,3 +257,55 @@ fn depth_matches_ultralytics_across_tiers() {
     }
     assert!(ran > 0, "no tier had both weights and an oracle; nothing was verified");
 }
+
+/// The from-bytes path must build the SAME engine as the filesystem path.
+///
+/// This is the API that stands between Diana compiling for wasm — it does —
+/// and running there, which it cannot while weights arrive through
+/// `std::fs`. It also serves embedded targets whose weights live in flash.
+///
+/// Byte-identical output is the gate, not "close": the two constructors
+/// differ only in where the bytes came from, so any difference is a bug in
+/// one of them.
+#[test]
+fn from_bytes_matches_the_filesystem_path() {
+    use ffai_core::engine::{DepthEngine, DepthOptions};
+    use ffai_diana::depth_engine::Yolo26Depth;
+    use ffai_diana::image::Geometry;
+
+    let Some(w) = weights() else {
+        eprintln!("SKIP from_bytes: converted weights absent");
+        return;
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
+    let img_path = root.join("corpora/refs/fixtures/diana_photo_input.png");
+    let manifest = root.join("models/yolo26n-depth-diana.json");
+    if !img_path.exists() || !manifest.exists() {
+        eprintln!("SKIP from_bytes: fixture or manifest absent");
+        return;
+    }
+    let image = ffai_media::load_image(&img_path).expect("fixture");
+
+    let disk = Yolo26Depth::build("n", Geometry::Rect, root.join("models"));
+    let want = disk.depth(&image, &DepthOptions::default()).expect("disk path");
+
+    let bytes = std::fs::read(&w).expect("safetensors");
+    let json = std::fs::read_to_string(&manifest).expect("manifest");
+    let mem = Yolo26Depth::from_bytes("n", Geometry::Rect, bytes, &json).expect("from_bytes");
+    let got = mem.depth(&image, &DepthOptions::default()).expect("bytes path");
+
+    assert_eq!(got.width, want.width);
+    assert_eq!(got.height, want.height);
+    for (i, (a, b)) in got.depth.iter().zip(&want.depth).enumerate() {
+        assert_eq!(a.to_bits(), b.to_bits(), "from_bytes diverged at {i}: {a} vs {b}");
+    }
+
+    // A manifest for the wrong tier must be refused, not silently loaded to
+    // whatever shapes happen to fit.
+    let bytes = std::fs::read(&w).expect("safetensors");
+    let json = std::fs::read_to_string(&manifest).expect("manifest");
+    assert!(
+        Yolo26Depth::from_bytes("x", Geometry::Rect, bytes, &json).is_err(),
+        "from_bytes accepted a tier that disagrees with the manifest"
+    );
+}
