@@ -2088,3 +2088,72 @@ been run: `ffai-diana` in SQUARE geometry against `ort-yolo26n`. Diana
 supports it (`Geometry::Square`, the configuration the parity oracle pins), so
 this is a bench invocation rather than new code, and it should be run before
 anyone quotes a per-pixel figure derived by arithmetic instead of measured.
+
+
+---
+
+## The matched-geometry run, which corrected the arithmetic and retracts a claim
+
+The previous section estimated the per-pixel gap at ~1.7x and said nobody
+should quote a figure derived by arithmetic when it can be measured. Measured
+(`ffai bench detect --engine yolo26n-square`, both sides at 640 square):
+
+| | p50 | mAP50 | rtf | steady |
+|---|---:|---:|---:|---:|
+| **ffai-diana** | **81 ms** | 0.6865 | 14.3 | **121 MiB** |
+| ultralytics-yolo26n | 55 ms | 0.6865 | 17.4 | 193 MiB |
+| ort-yolo26n | **28 ms** | 0.6865 | 34.6 | 162 MiB |
+
+**The estimate was 1.7x. The measurement is 2.89x.** The arithmetic assumed
+cost scales with pixel count and it does not.
+
+### What it retracts
+
+"Diana beats Ultralytics on latency" is **geometry-specific**, and that
+qualifier was missing:
+
+| comparison | result |
+|---|---|
+| rect vs rect (both `640rect`) | **0.88x — Diana faster** |
+| square vs square (both `640sq`) | **1.47x — Diana SLOWER** |
+
+Both are matched-config comparisons, so both are valid; the claim was true and
+under-qualified. mAP is identical to four decimals in both, so this is purely
+a speed statement.
+
+### The real finding: superlinear scaling
+
+Square has 1.43x rect's pixels on this corpus.
+
+| engine | rect | square | ratio |
+|---|---:|---:|---:|
+| ultralytics-yolo26n | 40 ms | 55 ms | **1.38x** |
+| **ffai-diana** | 35 ms | 81 ms | **2.31x** |
+
+Ultralytics scales **linearly** with the work. Diana scales **superlinearly** —
+2.31x the time for 1.43x the pixels. That is a **cache cliff**, not a constant
+factor, and it is new information that no amount of the profiling above would
+have surfaced, because every measurement in this document was taken at ONE
+input size.
+
+The mechanism is almost certainly im2col's working set. The size histogram
+earlier reported **0 % of rect's im2col traffic exceeding L3** — at square,
+every buffer is 1.43x larger and the largest bucket (8-16 MiB at rect) crosses
+into 11-23 MiB, which does not fit. The prize that probe called "bounded by
+the L2-L3 rows" is much larger at square than at rect.
+
+### What this changes about the plan
+
+The layout project (implicit GEMM / NCHWc) was scoped against rect's 3.7 ms
+fill. At square the same term is both bigger and falling off a cliff, so the
+scoping is wrong and generous. Before any of it:
+
+1. **Re-run the size histogram at square** to confirm the L3 crossing rather
+   than infer it — one probe, no new code.
+2. **Sweep input size** (480, 544, 640, 736) and find where the knee is. A
+   cliff has a location, and knowing it may point at a fix far cheaper than a
+   layout rewrite — a tile size, a blocking factor, a buffer reuse.
+
+This is the first measurement in the campaign taken at a DIFFERENT INPUT SIZE,
+and it invalidated a scoping estimate on its first run. Everything above was
+measured at 640 rect and should be re-read with that in mind.
