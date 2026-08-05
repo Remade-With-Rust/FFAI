@@ -6670,6 +6670,69 @@ one: run the CURRENT engine on the 43 mini pages and put a real number beside
 15.51 %. Until that exists, no statement about beating Unlimited-OCR is
 supportable in either direction.
 
+### 8.119 The campaign scores MICRO, the ledger scores MACRO — and we are 6.19 pp behind
+
+§8.118 withdrew every competitive claim and named the outstanding measurement:
+run the current engine on the 43 `carmenta-omnidoc-mini` pages, the only ones
+Unlimited-OCR has ever been harness-scored on. Done — and it produced a second,
+larger correction on the way.
+
+**The engine numbers, both statistics, one run.** All 43 mini pages turn out to
+be IN holdout, so the page sets are identical, not merely overlapping.
+
+| scope | arm | micro | **macro** |
+|---|---|---:|---:|
+| holdout, 236 pages | default | 18.60 % | **30.12 %** |
+| holdout, 236 pages | body-only | 16.28 % | **25.85 %** |
+| mini, 43 pages | default | 16.04 % | **22.72 %** |
+| mini, 43 pages | body-only | 14.97 % | **21.70 %** |
+
+Scored micro, body-only reads 14.97 % against Unlimited-OCR's 15.51 % and we are
+0.54 pp AHEAD. **That comparison is void.** `ffai-bench` aggregates a corpus with
+`summary.cer = mean(&cers)` — the MEAN OF PER-PAGE CER, page-weighted, macro.
+Every reference figure in the ledger is macro. On the harness's own statistic:
+
+| | macro CER |
+|---|---:|
+| Unlimited-OCR | **15.51 %** |
+| ours, default | 22.72 % (+7.21 pp) |
+| **ours, body-only** | **21.70 % (+6.19 pp)** |
+
+**We are 6.19 pp behind, not 0.54 pp ahead.**
+
+**And this is not one bad comparison — it is the root of §8.118.** Every headline
+this campaign has produced is micro: 18.88 %, 18.60 %, the 11.92 % oracle, the
+5.73 % ceiling, every pp of suppression prize. Every number in the ledger is
+macro. The two have been cross-referenced throughout as though they were the
+same quantity. That is why a 12.89 % of ours could sit beside a competitor's
+number for several sections without anyone noticing it was the wrong kind of
+number twice over — wrong provenance AND wrong statistic.
+
+**What the micro/macro gap itself says.** Ours is 18.60 % against 30.12 % on the
+same pages; Unlimited-OCR's macro is 15.51 %. A macro far above micro means the
+error is concentrated on SMALL pages: character-weighting lets a few thousand
+well-read characters on a dense page outvote a 200-character slide that was
+mangled, and page-weighting does not. It is the same population §8.118 found
+from the other side — `colorful_textbook`, `book` and PPT2PDF pages at 68-82 %
+CER are short pages, and each costs a full unit of macro.
+
+**This reprices the whole campaign.** The suppression prize was measured in
+micro, where it is worth 6.96 pp of an 18.88 % number. In macro — the statistic
+that decides the benchmark — the shipped filter is worth 4.27 pp of a 30.12 %
+number, and 6.19 pp still separates us from the reference. **Suppression was
+never going to close it, because suppression removes CHARACTERS and the metric
+counts PAGES.**
+
+**What survives, and it is not nothing.** The filter is a real win on BOTH
+statistics — -2.32 pp micro, -4.27 pp macro — and the §8.116 bibliography branch
+predicted -0.67 pp micro offline and measured -0.68 pp in the engine, which is
+the offline/engine reconciliation §8.113 exists to demand.
+
+**The next target follows directly and is no longer a guess.** Rank pages by
+their own CER, not by the characters they contribute, and fix the small ones.
+A page at 82 % CER costs the same as a page at 5 % under this metric, and we
+have a supply of them.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
