@@ -6885,6 +6885,59 @@ specific — nine pages, one dominant failure mode, and a class of content
 (embedded UI captures, code listings, terminal output) that the detector should
 never have handed to the recognizer.
 
+### 8.122 The constants are optimal on MACRO too — and the both-splits gate is vetoing the tail
+
+§8.117 swept the nine shipped constants and called them a local optimum. That
+sweep scored CHARACTERS, and §8.119/§8.120 then showed the two objectives pick
+different rules and flip signs outright. So "the constants are optimal" had never
+been tested for the statistic that decides. Gap closed:
+
+**Same nine constants, same grids, same both-splits discipline, scored on macro:
+ZERO candidates improve both splits.** Micro's sweep at least found one, worth
++28 characters of 21 433. Macro finds none. The gates are at an optimum under
+both objectives, and the filter is done being tuned.
+
+**But the tail/body split shows the gate is hiding something.** Reported per
+candidate: the change on the 9 pages over 100 % CER against the 227 others.
+
+| change | d train | d holdout | **d tail** | **d body** |
+|---|---:|---:|---:|---:|
+| `rc = 200` | -0.103 | +0.271 | **+7.027** | **+0.004** |
+| `w_lo = 0.198` | -0.246 | +0.074 | **+7.702** | -0.228 |
+| `fw = 0.8` | -1.868 | -1.980 | +8.625 | -2.401 |
+| `w_hi = 0.7` | -2.140 | -2.430 | +6.813 | -2.797 |
+
+`rc = 200` gains **+7.03 pp on the nine broken pages at a body cost of
++0.004 pp** — free, on the population that carries 8.77 pp of the corpus macro.
+It is rejected on one number: train, at -0.103.
+
+**And that rejection is probably structural rather than evidential.** The
+both-splits gate assumes the phenomenon a rule targets is present in both splits.
+For tail work that assumption has already failed once in this campaign: §8.116's
+bibliography branch reads **exactly +0 on train**, because train contains no page
+with four citation-years. If train likewise contains no page over 100 % CER, then
+EVERY tail lever reads as pure cost there and the gate vetoes all of them — not
+because they do not generalise, but because the split cannot see the population.
+
+**This is the discipline eating a real result, and it needs deciding rather than
+assuming.** The gate is why §8.114 and §8.121 were caught, so it is not
+negotiable in general; but a gate that structurally cannot pass a whole class of
+change is a gate that needs a stated exception, not a silent veto.
+
+**The measurement that settles it is running**: per-page CER for all 80 train
+pages, both modes, so the tail can be defined ON TRAIN. Three outcomes, all
+decisive —
+
+* **train has tail pages**: the gate works, judge `rc = 200` there, and ship or
+  refuse on the evidence;
+* **train has no tail pages**: the gate is inapplicable to tail work, and the
+  honest substitute is body-damage — a tail lever ships when `d body >= 0`, which
+  `rc = 200` satisfies at +0.004;
+* **train has tail pages and `rc = 200` hurts them**: refused, correctly, and the
+  §8.117 conclusion extends to macro without qualification.
+
+Recorded before the result so the criterion cannot be chosen to fit it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
