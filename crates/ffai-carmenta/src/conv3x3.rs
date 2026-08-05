@@ -52,7 +52,7 @@ use candle_nn::Conv2d;
 /// contiguous run: output element `(oy, ox)` reads
 /// `in_p[(oy+ky)*sw + (ox+kx)] = in_p[oy*sw + ox + (ky*sw + kx)]`. The extra
 /// third row is slack so the last tile's `+2*sw+2` lookahead stays in bounds.
-fn pad(inp: &[f32], c_in: usize, h: usize, w: usize) -> Vec<f32> {
+pub(crate) fn pad(inp: &[f32], c_in: usize, h: usize, w: usize) -> Vec<f32> {
     let sw = w + 2;
     let mut out = vec![0f32; c_in * (h + 3) * sw];
     for c in 0..c_in {
@@ -66,7 +66,7 @@ fn pad(inp: &[f32], c_in: usize, h: usize, w: usize) -> Vec<f32> {
 }
 
 /// Scalar oracle. Correct on every CPU; the AVX2 twin is checked against it.
-fn conv3x3_scalar(
+pub(crate) fn conv3x3_scalar(
     in_p: &[f32],
     w: &[f32],
     c_in: usize,
@@ -104,7 +104,7 @@ fn conv3x3_scalar(
 /// tail. Requires AVX2 + FMA, checked by the caller.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn conv3x3_avx2(
+pub(crate) unsafe fn conv3x3_avx2(
     in_p: &[f32],
     w: &[f32],
     c_in: usize,
@@ -119,6 +119,14 @@ unsafe fn conv3x3_avx2(
     let n = h * sw;
     let plane_p = (h + 3) * sw;
     let n_vec = n / 24 * 24;
+
+    // TILE BLOCKING WAS TRIED HERE AND IS NOT KEPT (§8.102). With `co0`
+    // outermost each of the `c_out/CO` channel blocks re-reads the whole input
+    // — 153 MB for the 256->256 layer — so hoisting a block of tiles above the
+    // channel loop to make each region resident looked like the obvious next
+    // win. Measured: neutral single-threaded (1.44x vs 1.43x) because the input
+    // fits L2 on one core anyway, and neutral on all cores too — 12/24 paired
+    // rounds, z = 0.00. The bandwidth story that motivated it was wrong.
 
     for co0 in (0..c_out).step_by(CO) {
         let co_n = CO.min(c_out - co0);

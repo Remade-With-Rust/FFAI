@@ -5730,7 +5730,7 @@ widths that exercise the `< 24` tail.
 |---|---|
 | correctness | **14/14 pages byte-identical** to the candle path; 11 unit tests pass |
 | quality | unchanged by construction (byte-identical output) |
-| **speed** | `.rec_cnn` CPU **76.20 -> 39.13 s (1.95x)**; total CPU 91.51 -> 53.70 (1.70x); wall **1.18x, 12/14 paired, z = +2.67** |
+| **speed** | wall **1.18x, 12/14 paired, z = +2.67** (see the CPU-number correction in §8.102) |
 | footprint | one padded input buffer per conv call; no model growth |
 
 **Why 1.95x on the stage becomes 1.18x on the clock, stated honestly.** The
@@ -5744,6 +5744,41 @@ GFLOP/s against ~112 peak.
 Guarded to exactly what it assumes — 3x3, stride 1, padding 1, dilation 1, one
 group, batch 1, f32, CPU — so the backbone's final 2x2 valid conv and every
 other caller take candle's path unchanged. `FFAI_CONV3X3=0` restores it.
+
+### 8.102 Contraction blocking refuted — and a correction to §8.101's CPU figure
+
+**The stage-CPU number in §8.101 was apples-to-oranges and is withdrawn.**
+`.rec_cnn` read 76.20 s for candle against 39.13 s for the kernel, quoted as
+"1.95x". But candle's `conv2d` parallelises INTERNALLY over im2col tiles, so its
+thread-summed CPU includes its own parallel overhead, while the kernel is serial
+inside. The two numbers measure different things. **The honest figure is the
+wall clock: 1.18x**, and that is what §8.101 now claims.
+
+**Contraction blocking, built on that wrong story, is refuted.** With `co0`
+outermost every one of the `c_out/CO` channel blocks re-reads the whole input —
+153 MB for the 256->256 layer — so hoisting a block of tiles above the channel
+loop, sized to keep each region L2-resident, should have cut DRAM traffic to
+~2.4 MB. Measured:
+
+| | result |
+|---|---|
+| single-threaded microbench | 1.44x -> **1.43x** (neutral) |
+| all cores, ABBA N=10 | 1.041x, 8/10, z = +1.90 — *under the bar* |
+| all cores, ABBA N=24, four pages | **0.992x, 12/24, z = 0.00** |
+
+Neutral single-threaded because the input fits L2 on one core regardless, and
+neutral on all cores too. **The bandwidth story was wrong**; the z = +1.90 at
+N=10 was the noise it looked like, and only extending to N=24 settled it.
+
+Reverted per revert-if-unproven. **The kernel itself is untouched and still
+ships** — re-confirmed after the revert at **1.107x, 11/12 paired, z = +2.89.**
+
+**Where the remaining headroom is not.** The inner loop runs at 68-83 GFLOP/s
+against ~112 single-core peak, so it is not the constraint. Neither is input
+traffic (this section). What is left is the machine's parallel scaling — §8.100
+measured 3.7x on 16 cores and neither a dedicated thread pool (§8.100) nor cache
+blocking (here) moved it. That is a scheduling/contention problem in how 73
+independent line recognitions share a hybrid 8P+8E CPU, not an arithmetic one.
 
 ## 9. Pure-Rust boundary and watchlist
 

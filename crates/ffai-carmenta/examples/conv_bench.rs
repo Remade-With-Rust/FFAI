@@ -22,7 +22,8 @@
 //!
 //! Usage: RAYON_NUM_THREADS=1 cargo run -p ffai-carmenta --release --example conv_bench
 
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
+use candle_nn::{Conv2d, Conv2dConfig};
 use std::time::Instant;
 
 /// The five 3x3 backbone shapes, as measured on a 362 px line:
@@ -35,190 +36,7 @@ const SHAPES: [(&str, usize, usize, usize, usize); 5] = [
     ("conv5 256->256", 256, 256, 8, 90),
 ];
 
-/// Direct 3x3 convolution, stride 1, padding 1, NCHW f32, batch 1.
-///
-/// The contraction (c_in, ky, kx) is the OUTER loop and a tile of the output —
-/// `CO` channels x `OXV` columns — stays live in the accumulator across all of
-/// it. That is the shape the Whisper kernels found: a dot product per output
-/// ends in a horizontal reduction that neither vectorizes nor pipelines,
-/// whereas broadcasting one weight and AXPY-ing a row of inputs into a held
-/// tile has no reduction anywhere.
-///
-/// Written to be auto-vectorizable: the inner loop over `ox` is contiguous in
-/// both the input read and the accumulator, with the weight loop-invariant.
-fn conv3x3_direct(
-    inp: &[f32],
-    w: &[f32],
-    bias: &[f32],
-    c_in: usize,
-    c_out: usize,
-    h: usize,
-    wd: usize,
-    out: &mut [f32],
-) {
-    // PAD BOTH SIDES TO A COMMON STRIDE, then every (ci, ky, kx) tap becomes ONE
-    // contiguous AXPY over the whole plane instead of `h` row-length ones.
-    //
-    // With input padded to (h+2) x (wd+2) and the accumulator carrying the same
-    // stride, output element (oy, ox) reads
-    //   in_p[(oy+ky)*(wd+2) + (ox+kx)] = in_p[oy*(wd+2)+ox + ky*(wd+2)+kx]
-    // — a FIXED offset for the whole plane. The two pad columns accumulate
-    // garbage and are dropped on write-back; 2 of 92 columns is 2 % extra work
-    // to buy an 8x longer inner loop.
-    //
-    // The two forms that lost first: allocating a Vec per tile (0.41x), and a
-    // register tile indexed by a runtime channel counter — `dp[i].add(x)` is a
-    // pointer gather, which vetoes vectorization outright (0.21x).
-    let sw = wd + 2;
-    let n = h * sw;
-    let mut in_p = vec![0f32; c_in * (h + 3) * sw];
-    for ci in 0..c_in {
-        for y in 0..h {
-            let src = ci * h * wd + y * wd;
-            let dst = ci * (h + 3) * sw + (y + 1) * sw + 1;
-            in_p[dst..dst + wd].copy_from_slice(&inp[src..src + wd]);
-        }
-    }
-
-    // CO-BLOCK so the padded input is streamed c_out/CO times, not c_out times.
-    // Without this, conv5 re-reads its whole 1 MB padded input once per output
-    // channel — 264 MB per call — and the kernel is bandwidth-bound before it is
-    // FMA-bound. Eight accumulator planes are 23 KB, comfortably L1-resident.
-    const CO: usize = 8;
-    let mut acc = vec![0f32; CO * n];
-    for co0 in (0..c_out).step_by(CO) {
-        let co_n = CO.min(c_out - co0);
-        for i in 0..co_n {
-            acc[i * n..(i + 1) * n].fill(bias[co0 + i]);
-        }
-        for ci in 0..c_in {
-            let base = ci * (h + 3) * sw;
-            for ky in 0..3usize {
-                for kx in 0..3usize {
-                    let off = base + ky * sw + kx;
-                    let src = &in_p[off..off + n];
-                    for i in 0..co_n {
-                        let a = w[((co0 + i) * c_in + ci) * 9 + ky * 3 + kx];
-                        let dst = &mut acc[i * n..(i + 1) * n];
-                        for (d, s) in dst.iter_mut().zip(src) {
-                            *d += a * s;
-                        }
-                    }
-                }
-            }
-        }
-        for i in 0..co_n {
-            for y in 0..h {
-                let dst = (co0 + i) * h * wd + y * wd;
-                let src = i * n + y * sw;
-                out[dst..dst + wd].copy_from_slice(&acc[src..src + wd]);
-            }
-        }
-    }
-}
-
-/// AVX2 twin: the accumulator TILE lives in registers across the whole
-/// contraction.
-///
-/// The scalar form above tops out at ~28 GFLOP/s because its accumulator is an
-/// array: every fused-multiply-add pays a load AND a store, so the loop is
-/// limited by L1 ports (2 loads + 1 store per cycle) rather than by the two FMA
-/// units. Holding 4 output channels x 16 columns in eight ymm registers across
-/// all `c_in * 9` contraction steps removes both — per step the kernel does
-/// 2 input loads + 4 weight broadcasts + 8 FMAs, FMA-bound at ~2 vector-FMAs
-/// per cycle.
-///
-/// This is the Whisper lesson applied: "hold an output tile in registers across
-/// the whole contraction ... 73 -> 331 GFLOP/s". The scalar form stays as the
-/// oracle and the non-AVX2 path.
-///
-/// # Safety
-/// `in_p` must be the `c_in` x (h+3) x (wd+2) zero-padded input, `out` must hold
-/// `c_out * h * wd`, `w` must hold `c_out * c_in * 9`, and `bias` `c_out`. Every
-/// vector load reads `tile + 16 + 2*sw + 2 <= plane_p`, which the padding
-/// guarantees; the `< 16` remainder takes the scalar tail.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,fma")]
-unsafe fn conv3x3_avx2(
-    in_p: &[f32],
-    w: &[f32],
-    bias: &[f32],
-    c_in: usize,
-    c_out: usize,
-    h: usize,
-    wd: usize,
-    out: &mut [f32],
-) {
-    use std::arch::x86_64::*;
-    const CO: usize = 4;
-    let sw = wd + 2;
-    let n = h * sw;
-    let plane_p = (h + 3) * sw;
-    // 24 columns per tile, not 16: twelve accumulators + three input vectors +
-    // one broadcast is sixteen ymm registers exactly, and it lifts the ratio
-    // from 8 FMAs per 6 memory ops to 12 per 7 — the broadcasts are what the
-    // narrower tile failed to amortise.
-    let n_vec = n / 24 * 24;
-
-    for co0 in (0..c_out).step_by(CO) {
-        let co_n = CO.min(c_out - co0);
-        for tile in (0..n_vec).step_by(24) {
-            let mut a: [[__m256; 3]; CO] = [[_mm256_setzero_ps(); 3]; CO];
-            for (i, ai) in a.iter_mut().enumerate().take(co_n) {
-                let b = _mm256_set1_ps(*bias.get_unchecked(co0 + i));
-                ai[0] = b;
-                ai[1] = b;
-                ai[2] = b;
-            }
-            for ci in 0..c_in {
-                let base = ci * plane_p + tile;
-                for tap in 0..9usize {
-                    let off = base + (tap / 3) * sw + (tap % 3);
-                    let ptr = in_p.as_ptr().add(off);
-                    let v0 = _mm256_loadu_ps(ptr);
-                    let v1 = _mm256_loadu_ps(ptr.add(8));
-                    let v2 = _mm256_loadu_ps(ptr.add(16));
-                    for (i, ai) in a.iter_mut().enumerate().take(co_n) {
-                        let wb =
-                            _mm256_set1_ps(*w.get_unchecked(((co0 + i) * c_in + ci) * 9 + tap));
-                        ai[0] = _mm256_fmadd_ps(wb, v0, ai[0]);
-                        ai[1] = _mm256_fmadd_ps(wb, v1, ai[1]);
-                        ai[2] = _mm256_fmadd_ps(wb, v2, ai[2]);
-                    }
-                }
-            }
-            let mut tmp = [0f32; 24];
-            for (i, ai) in a.iter().enumerate().take(co_n) {
-                _mm256_storeu_ps(tmp.as_mut_ptr(), ai[0]);
-                _mm256_storeu_ps(tmp.as_mut_ptr().add(8), ai[1]);
-                _mm256_storeu_ps(tmp.as_mut_ptr().add(16), ai[2]);
-                for (k, t) in tmp.iter().enumerate() {
-                    let pos = tile + k;
-                    let (y, x) = (pos / sw, pos % sw);
-                    if x < wd && y < h {
-                        *out.get_unchecked_mut((co0 + i) * h * wd + y * wd + x) = *t;
-                    }
-                }
-            }
-        }
-        for pos in n_vec..n {
-            let (y, x) = (pos / sw, pos % sw);
-            if x >= wd || y >= h {
-                continue;
-            }
-            for i in 0..co_n {
-                let mut acc = bias[co0 + i];
-                for ci in 0..c_in {
-                    for tap in 0..9usize {
-                        let off = ci * plane_p + pos + (tap / 3) * sw + (tap % 3);
-                        acc += w[((co0 + i) * c_in + ci) * 9 + tap] * in_p[off];
-                    }
-                }
-                out[(co0 + i) * h * wd + y * wd + x] = acc;
-            }
-        }
-    }
-}
+fn reps_done(_: &mut usize) -> bool { true }
 
 fn main() -> candle_core::Result<()> {
     let dev = Device::Cpu;
@@ -254,30 +72,28 @@ fn main() -> candle_core::Result<()> {
             }
         }
 
-        // Build the padded input once, outside the timed region — in the real
-        // engine it is built once per conv, not per repetition.
-        let sw = wd + 2;
-        let mut in_p = vec![0f32; ci * (h + 3) * sw];
-        for c in 0..ci {
-            for y in 0..h {
-                let src = c * h * wd + y * wd;
-                let dst = c * (h + 3) * sw + (y + 1) * sw + 1;
-                in_p[dst..dst + wd].copy_from_slice(&inp[src..src + wd]);
-            }
-        }
-        let mut mine = vec![0f32; co * h * wd];
+        // Call the SHIPPED kernel through its real entry point, so the bench
+        // measures what ships — including the CustomOp2 plumbing — rather than
+        // a private copy that can drift from it.
+        let conv = Conv2d::new(t_w.clone(), None, Conv2dConfig { padding: 1, ..Default::default() });
+        let mut mine;
         let mut best_d = f64::INFINITY;
-        let avx2 = std::arch::is_x86_feature_detected!("avx2")
-            && std::arch::is_x86_feature_detected!("fma");
-        for _ in 0..reps {
+        loop {
             let t = Instant::now();
-            if avx2 {
-                // SAFETY: shapes match the padded layout built above.
-                unsafe { conv3x3_avx2(&in_p, &wv, &bias, ci, co, h, wd, &mut mine) }
-            } else {
-                conv3x3_direct(&inp, &wv, &bias, ci, co, h, wd, &mut mine);
+            let o = ffai_carmenta::conv3x3::apply(&t_in, &conv)?;
+            let e = t.elapsed().as_secs_f64();
+            mine = o.flatten_all()?.to_vec1::<f32>()?;
+            best_d = best_d.min(e);
+            if best_d < f64::INFINITY && reps_done(&mut 0) {
+                break;
             }
+            break;
+        }
+        for _ in 1..reps {
+            let t = Instant::now();
+            let o = ffai_carmenta::conv3x3::apply(&t_in, &conv)?;
             best_d = best_d.min(t.elapsed().as_secs_f64());
+            drop(o);
         }
 
         // Correctness is judged against an f64 reference, not against candle:
