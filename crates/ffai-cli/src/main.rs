@@ -262,9 +262,20 @@ enum Cmd {
         /// run apples-to-apples, e.g. matching decode strategies.
         #[arg(long = "only")]
         only: Vec<String>,
-        /// Baseline the references only (useful before our engine is live)
+        /// Baseline the references only, skipping OUR engine (useful before
+        /// our engine is live). This is not "skip the references" — that is
+        /// `--engine-only`, and confusing the two costs an hour per run.
         #[arg(long)]
         baseline_only: bool,
+        /// Run OUR engine only, skipping every reference.
+        ///
+        /// The references are Python subprocesses over the whole corpus and
+        /// dominate a run; when the question is about our own engine — an A/B
+        /// of a flag, say — they are pure cost. There was no way to say this,
+        /// and `--baseline-only` reads like it means this but does the
+        /// opposite.
+        #[arg(long)]
+        engine_only: bool,
         /// Timed repetitions per clip (best-of-N)
         #[arg(long, default_value_t = 3)]
         runs: usize,
@@ -771,7 +782,7 @@ fn main() -> Result<()> {
             let caption = reg.vlm(engine.as_deref())?.describe_image(&image, &opts)?;
             println!("{caption}");
         }
-        Cmd::Bench { task, corpus, refs, engine, only, baseline_only, runs, ledger } => {
+        Cmd::Bench { task, corpus, refs, engine, only, baseline_only, engine_only, runs, ledger } => {
             let task = Task::from_str(&task).map_err(anyhow::Error::msg)?;
             if !matches!(task, Task::Asr | Task::Ocr | Task::Tts | Task::Detect) {
                 anyhow::bail!(
@@ -808,6 +819,7 @@ fn main() -> Result<()> {
             let cfg = ffai_bench::runner::BenchConfig {
                 engine,
                 skip_engine: baseline_only,
+                skip_references: engine_only,
                 corpus,
                 references,
                 runs,

@@ -59,6 +59,9 @@ pub struct BenchConfig {
     /// baseline references only.
     pub engine: Option<String>,
     pub skip_engine: bool,
+    /// Skip every REFERENCE and bench only our engine. The mirror of
+    /// [`Self::skip_engine`], and the one an A/B of our own flags needs.
+    pub skip_references: bool,
     pub corpus: PathBuf,
     pub references: Vec<ReferenceSpec>,
     /// Timed repetitions of the whole corpus run (best-of-N).
@@ -96,7 +99,7 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
         .sum();
 
     let mut references = Vec::new();
-    for spec in &cfg.references {
+    for spec in cfg.references.iter().filter(|_| !cfg.skip_references) {
         eprintln!("running reference `{}` over {} clips ...", spec.name, holdout.len());
         match run_reference(spec, &manifest, &holdout, &paths, media_secs, cfg.runs, Mode::English, None)
         {
@@ -190,7 +193,7 @@ pub fn run_ocr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     let pages = holdout.len() as f64;
 
     let mut references = Vec::new();
-    for spec in &cfg.references {
+    for spec in cfg.references.iter().filter(|_| !cfg.skip_references) {
         eprintln!("running reference `{}` over {} pages ...", spec.name, holdout.len());
         match run_reference(spec, &manifest, &holdout, &paths, pages, cfg.runs, Mode::Ocr, Some("page"))
         {
@@ -286,7 +289,7 @@ pub fn run_detect(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord
     let images = holdout.len() as f64;
 
     let mut references = Vec::new();
-    for spec in &cfg.references {
+    for spec in cfg.references.iter().filter(|_| !cfg.skip_references) {
         eprintln!("running reference `{}` over {} images ...", spec.name, holdout.len());
         match run_detect_reference(spec, &manifest, &holdout, &paths, images, cfg.runs) {
             Ok(summary) => references.push(summary),
@@ -579,8 +582,9 @@ fn run_detect_engine(
         results.clear();
         per_image_secs.clear();
         for (clip, image) in &decoded {
-            // `FFAI_BENCH_JIT_DECODE=1` decodes each image inside the timed
-            // loop and drops it, instead of using the pre-decoded copy.
+            // Decode each image inside the timed loop, as the reference does.
+            //
+            // `FFAI_BENCH_PREDECODE=1` restores the old behaviour for A/B.
             //
             // The pre-decode looks like it FAVOURS us — it keeps our PNG
             // reader out of the timed region while `predict(path)` pays for
@@ -589,12 +593,29 @@ fn run_detect_engine(
             // so the model's weights and activations are evicted between
             // every image. The reference's working set is one frame.
             //
-            // That is a candidate explanation for the gap between our
-            // best case and our median: one image repeated reads 45 ms,
-            // forty-five different images read a p50 of 81, while
-            // Ultralytics reads 52.7 and 55 for the same pair.
+            // MEASURED, ABBA, three reps: just-in-time is 11-17 % FASTER than
+            // pre-decoding, despite ADDING the decode to the timed region.
+            //
+            //   rep 1   pre 87.0 ms   jit 72.5 ms
+            //   rep 2   pre 102.0     jit 88.0
+            //   rep 3   pre 118.5     jit 105.5
+            //
+            // The mechanism is recency, not residency — and the distinction
+            // matters because a working-set sweep (examples/workingset.rs)
+            // showed holding 1 image versus 45 is FLAT. Total resident bytes
+            // do not matter; whether the ONE buffer being read was written
+            // recently does. Under JIT the decoder has just written it, so
+            // `detect` reads it out of L1/L2; under pre-decode it was written
+            // 45 images ago and must be fetched.
+            //
+            // Pre-decoding was chosen to keep our PNG reader out of the timed
+            // region while `predict(path)` pays for its own decode — which
+            // reads as generous to the reference. It was the opposite: the
+            // reference decoded each image just before using it and always
+            // got a hot buffer, while we always got a cold one. The harness
+            // was handicapping us by ~14 %.
             let jit;
-            let image = if std::env::var("FFAI_BENCH_JIT_DECODE").is_ok_and(|v| v == "1") {
+            let image = if !std::env::var("FFAI_BENCH_PREDECODE").is_ok_and(|v| v == "1") {
                 match load_image_resilient(&manifest.clip_path(clip)) {
                     Ok(i) => {
                         jit = i;
