@@ -28,7 +28,7 @@ impl Stage {
         Stage { nanos: AtomicU64::new(0), calls: AtomicU64::new(0) }
     }
 
-    fn add(&self, nanos: u64) {
+    pub(crate) fn add(&self, nanos: u64) {
         self.nanos.fetch_add(nanos, Ordering::Relaxed);
         self.calls.fetch_add(1, Ordering::Relaxed);
     }
@@ -56,6 +56,14 @@ pub struct Profile {
     pub rec_fwd: Stage,
     /// CTC decode (per line).
     pub decode: Stage,
+    /// Inside `rec_fwd`: the CRNN's 7-conv backbone (per line).
+    pub rec_cnn: Stage,
+    /// Inside `rec_fwd`: the two BiLSTMs — candle's `LSTM::seq`, which walks
+    /// timesteps SEQUENTIALLY at batch 1, so every gate matmul takes the
+    /// m=1 vector path. Split out to test that hypothesis (§8.100).
+    pub rec_rnn: Stage,
+    /// Inside `rec_fwd`: the final vocabulary projection (per line).
+    pub rec_head: Stage,
 }
 
 static PROFILE: Profile = Profile {
@@ -65,6 +73,9 @@ static PROFILE: Profile = Profile {
     rec_pre: Stage::new(),
     rec_fwd: Stage::new(),
     decode: Stage::new(),
+    rec_cnn: Stage::new(),
+    rec_rnn: Stage::new(),
+    rec_head: Stage::new(),
 };
 
 pub fn profile() -> &'static Profile {
@@ -88,15 +99,24 @@ pub fn timed<T>(stage: fn(&Profile) -> &Stage, f: impl FnOnce() -> T) -> T {
 
 impl Profile {
     pub fn report(&self) -> String {
-        let rows: [(&str, &Stage); 6] = [
+        let rows: [(&str, &Stage); 9] = [
             ("det_pre", &self.det_pre),
             ("det_fwd", &self.det_fwd),
             ("boxes", &self.boxes),
             ("rec_pre", &self.rec_pre),
             ("rec_fwd", &self.rec_fwd),
             ("decode", &self.decode),
+            ("  .rec_cnn", &self.rec_cnn),
+            ("  .rec_rnn", &self.rec_rnn),
+            ("  .rec_head", &self.rec_head),
         ];
-        let total: f64 = rows.iter().map(|(_, s)| s.secs()).sum();
+        // The `.rec_*` rows decompose rec_fwd and are already counted in it;
+        // summing them into the total would double-count the same nanoseconds.
+        let total: f64 = rows
+            .iter()
+            .filter(|(n, _)| !n.starts_with("  ."))
+            .map(|(_, s)| s.secs())
+            .sum();
         let mut out = String::from("\nOCR stage profile (FFAI_PROFILE=1)\n");
         out.push_str(&format!(
             "{:<10} {:>9} {:>7} {:>8} {:>10}\n",

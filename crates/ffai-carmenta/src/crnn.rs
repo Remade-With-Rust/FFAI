@@ -92,6 +92,7 @@ impl Crnn {
 
     /// (1, 1, 64, W) normalized crop -> per-timestep logits (T, num_class).
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let t0 = std::time::Instant::now();
         let x = self.convs[0].forward(x)?.relu()?.max_pool2d_with_stride(2, 2)?;
         let x = self.convs[1].forward(&x)?.relu()?.max_pool2d_with_stride(2, 2)?;
         let x = self.convs[2].forward(&x)?.relu()?;
@@ -107,9 +108,17 @@ impl Crnn {
         // AdaptiveAvgPool2d((None, 1)) after permute(0,3,1,2) == mean over
         // the height axis, sequence along width: (1, C, H, W) -> (1, W, C).
         let x = x.mean(2)?.transpose(1, 2)?.contiguous()?;
+        crate::profile::profile().rec_cnn.add(t0.elapsed().as_nanos() as u64);
+
+        let t1 = std::time::Instant::now();
         let x = self.rnn0.forward(&x)?;
         let x = self.rnn1.forward(&x)?;
-        x.apply(&self.prediction)?.squeeze(0)
+        crate::profile::profile().rec_rnn.add(t1.elapsed().as_nanos() as u64);
+
+        let t2 = std::time::Instant::now();
+        let out = x.apply(&self.prediction)?.squeeze(0);
+        crate::profile::profile().rec_head.add(t2.elapsed().as_nanos() as u64);
+        out
     }
 }
 

@@ -670,7 +670,20 @@ impl OcrEngine for CraftCrnn {
                     confidence,
                 }))
         };
-        let results: Vec<Option<OcrLine>> = if lines.len() >= 3 {
+        // FFAI_REC_SERIAL forces the serial path so the OUTER fan-out can be
+        // isolated from candle's INTERNAL tile parallelism (§8.100 D5). Both
+        // are rayon; measuring them apart is the only way to tell which one is
+        // actually delivering the speedup.
+        let serial = std::env::var("FFAI_REC_SERIAL").is_ok();
+        let results: Vec<Option<OcrLine>> = if lines.len() >= 3 && !serial {
+            // Three levels of rayon nest here — ours over lines, candle's over
+            // im2col tiles, and `gemm`, which candle hands
+            // `Parallelism::Rayon(num_cpus::get())` on EVERY matmul
+            // (`cpu_backend/mod.rs:1394`). Flattening it to ONE level via a
+            // dedicated pool + RAYON_NUM_THREADS=1 was built and measured:
+            // z = +1.50 over 16 ABBA-paired rounds, INSIDE a 17-27 % noise
+            // floor. Reverted per revert-if-unproven; §8.100 carries the
+            // numbers so it is not rebuilt.
             lines.par_iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
         } else {
             lines.iter().map(&recognize_line).collect::<Result<Vec<_>>>()?

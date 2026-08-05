@@ -5603,6 +5603,81 @@ It needs a new example (recognize-from-given-boxes); nothing in the tree does it
 today. **That is the next measurement, and it should precede any recognition
 build.**
 
+### 8.100 Six whys into `rec_fwd`: the mechanism is named, three fixes refuted
+
+§8.97 put 94 % of runtime in `rec_fwd`. Descending it produced a solid root cause
+and NO shipped speed win — three hypotheses died, one of them to the instrument.
+
+**D3 — the LSTM hypothesis, refuted.** `BiLstm::forward` calls candle's
+`LSTM::seq`, a sequential walk over T timesteps at batch 1, so every gate matmul
+takes the m=1 vector path — the trap this skill documents. Split the profile:
+
+| sub-stage | share of pipeline | ms/call |
+|---|---:|---:|
+| **`.rec_cnn`** | **84.2 %** | 1126 |
+| `.rec_rnn` | 11.6 % | 155 |
+| `.rec_head` | 0.0 % | 0.6 |
+
+**The conv backbone is 88 % of `rec_fwd`; the LSTM is 11.6 %.** A coherent story,
+measured wrong.
+
+**D4 — per-conv, on a 362 px line (2.28 GFLOP, 76.6 ms single-threaded):**
+
+| conv | MFLOP | im2col MB | tiles | GFLOP/s |
+|---|---:|---:|---:|---:|
+| conv0 | 13.3 | 0.83 | 46 | **2.5** |
+| conv3 | 424.7 | 6.64 | 3 | 24.9 |
+| conv5 | 849.3 | 6.64 | 2 | **41.6** |
+
+Cost is spread, not concentrated. Aggregate **29.7 GFLOP/s against ~112 single-core
+AVX2 peak — 26 %.** `conv0` at 2.5 GFLOP/s is overhead-bound (46 tiny tiles,
+`k_size` = 9); the deep convs reach 40 % of peak.
+
+**The mechanism (D5).** candle 0.9.2's `conv2d` is tiled im2col + gemm. Per tile
+it allocates and zeroes a fresh `k_size x 512` buffer — 4.7 MB for conv5 — fills
+it with a **scalar, strided** gather (`col_idx = patch_offset * tile_size +
+tile_idx`), gemms, then scatters back. im2col expands the input **9x** for a 3x3
+kernel: 28.5 MB written per line against 2.28 GFLOP, and our shapes yield only
+**2-3 tiles**, capping candle's internal parallelism.
+
+**Refuted fix 1 — the wrong input height.** At h=64 the stack ends at height 3,
+where the classic CRNN ends at 1, which looked like a 2x waste. But EasyOCR g2
+IS an h=64 model: `conv6` is a valid 2x2 taking 4->3 and `AdaptiveAvgPool2d`
+collapses it, and `tests/crnn_oracle.rs` reproduces the reference CTC ids exactly.
+Checked before changing anything.
+
+**Refuted fix 2 — nested parallelism.** THREE rayon levels nest here: ours over
+lines, candle's over tiles, and `gemm`, which candle hands
+`Parallelism::Rayon(num_cpus::get())` on EVERY matmul (`cpu_backend/mod.rs:1394`)
+— 24 concurrent line tasks each requesting 24 threads. Built the fix (dedicated
+pool + `RAYON_NUM_THREADS=1` so inner gemms go serial) and measured it ABBA-paired,
+16 rounds: **z = +1.50, 11/16 wins — inside a 17-27 % noise floor.** Reverted.
+
+**Refuted fix 3 — batching, pruned by COUNTING rather than building.** candle
+iterates `b_size x num_tiles`, so batch N gives N x the tiles of batch 1: im2col
+bytes per output pixel identical, gemm FLOPs identical. The only saving is the
+kernel re-flatten, 5.55 MB of 34 MB per line = **16 % of traffic** — against
+padding waste on widths running 58..1357. It cannot touch the dominant term.
+
+**D6 — the instrument lied, and it was mine.** The first scaling sweep read
+11.02 s for the shipped config; the same config later read 6.26 s. The sweep had
+been run **while this session's own background measurement jobs were still
+executing**, and I built a diagnosis on it. The clean re-run showed 46 %, 41 %
+and 116 % spread at 2/4/8 threads — unusable. Only the ABBA-paired form gave a
+verdict. **Establish the noise floor before the A/B, not after the confusing one.**
+
+Output determinism was verified separately and is clean: pooled, nested and
+serial threading all produce byte-identical text on three pages.
+
+**The ceiling, for whoever picks this up.** 166 GFLOP per page at 26 % of peak.
+A conv reaching 70 % would be 2.7x on a stage that is 84 % of runtime — about
+**2.1x end-to-end**. That is a `codec-vectorize-kernel` project (direct or
+non-materialising conv, avoiding the 9x im2col expansion), not a quick fix, and
+it is now the only speed lever left in the document path.
+
+Kept from this descent: `.rec_cnn` / `.rec_rnn` / `.rec_head` profile stages and
+`FFAI_REC_SERIAL`, which make the next attempt cheap to measure.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
