@@ -620,12 +620,41 @@ the other. Both decode inside their own timed region. It is still a demo, not
 the benchmark: no min-of-N, no warm-up discipline, display in the loop, and
 [`bench/ledger.jsonl`](bench/ledger.jsonl) is what the claims trace to.
 
-It has already shown something the 640 corpus does not. At MOT17's 1080p the
-latency gap closes to parity — 1.12x ahead, 0.92x behind, 0.96x behind across
-three runs — against 0.70x ahead at 640. And Diana's tail is heavier: mean
-117.6 ms against a median of 51.0, where Ultralytics in the *same loop*, taking
-the same interruptions, sits at 59.8 against 46.9. A p50 hides that by
-construction.
+It has already shown something the 640 corpus does not — though not what was
+first published here. Two observations taken from it, *"larger frames erase the
+advantage"* and *"Diana's latency tail is heavier"*, were both chased down and
+**both are refuted**; the descent is
+[docs/whys/diana-1080p-and-tail.md](docs/whys/diana-1080p-and-tail.md).
+
+**Frame size does not erode the advantage.** In rect mode a 1920x1080 frame
+letterboxes to 640x384 = 246 kpx, while a near-square COCO image letterboxes to
+608x640 = 389 kpx — a 1080p frame is **37 % LESS model work**, not more.
+Measured ABBA on CPU time, both engines in child processes, model load
+excluded, the ratio is **3.26x at 1080p and 3.25x at 640**: identical to three
+significant figures across a resolution change that moves model work by 37 %.
+The "parity" readings were wall-clock, on a box whose null arm — Diana against
+Diana, identical code — read a **10.4 % floor with 47 % within-arm spread**.
+They were never distinguishable from each other.
+
+That CPU ratio carries its own caveat, and it is the honest one: **3.25x less
+CPU at a wall ratio near 1.0 means Ultralytics converts more cores into the
+same wall clock.** The claim is "Diana does the work for a third of the CPU",
+not "Diana is 3.25x faster" — different products, one for a shared server and
+one for an idle laptop.
+
+**And the tail is ours only in the good direction.** The original figures came
+from running all of Diana and then all of Ultralytics, which puts machine drift
+between the blocks. Interleaved per frame, so both see the same machine within
+each frame, Diana's mean/p50 is **1.14 and 1.21** across two runs against
+Ultralytics' **1.79 and 3.33**, with 5-7 outliers to their 16. Diana has the
+lighter tail.
+
+Underneath it sat one real mechanism: Diana's slow frames carry **4,200 page
+faults against a normal 31**. `MIMALLOC_PURGE_DELAY=-1` removes them completely
+— faults go flat at 15 and halve overall — and it is **not shipped**, because
+it buys 0.3 % of latency for +9.6 MiB peak RSS against a footprint gate with
+1 MiB of headroom. Real mechanism, refuted lever, and the two are recorded
+separately.
 
 ### The same structure that loses latency wins throughput
 

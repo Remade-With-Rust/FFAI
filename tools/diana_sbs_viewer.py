@@ -29,9 +29,19 @@ two disagree the ledger wins. Three things are different here:
   the footer's `wall` is the real end-to-end rate including display.
 
 Both engines decode inside their own timed region — Diana in `--serve`,
-Ultralytics in `predict(path)` — so neither is handed a buffer the other paid
-for. That matters more than it sounds: the bench was pre-decoding for us and
-handicapping Diana by ~14 % until it was found.
+Ultralytics in `predict(path)`. That sentence was FALSE when this file was
+first written: `--serve` had `load_image` sitting above `Instant::now()`, so
+Diana's number excluded a decode that Ultralytics' included — 8.4 ms and 16 %
+of the frame at 1080p, handed to us for free. It is fixed, and `--serve` now
+reports `ms` / `detect_ms` / `decode_ms` split so neither half can hide again.
+The claim had been written from intent rather than from the code.
+
+The wall-clock numbers this viewer displays are also the WEAKER instrument.
+On a loaded box the null arm — Diana against Diana — reads a 10.4 % floor with
+up to 47 % within-arm spread, which is wider than most differences worth
+caring about. `tools/diana_cpu_ab.py` is the admissible comparison (ABBA, CPU
+time, both arms in child processes); this one is for watching, not deciding.
+See docs/whys/diana-1080p-and-tail.md.
 
 Keys: q quit · space pause · s save a screenshot · [ ] step while paused
 """

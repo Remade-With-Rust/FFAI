@@ -908,6 +908,15 @@ fn serve_stdin(
         // A frame that will not load is reported, not fatal: a viewer driving
         // a directory someone is still writing into should skip and continue,
         // not die on a half-written file.
+        //
+        // DECODE IS INSIDE THE TIMED REGION, and it has to be. The reference
+        // this gets compared against is `predict(path)`, which opens the file
+        // itself, so a `ms` that excluded our decode would be pricing our
+        // engine against their engine PLUS their decoder. That defect shipped
+        // here once: it read as parity at 1080p, where the JPEG is 2.1 MP and
+        // the decode is the single largest thing the comparison was hiding.
+        // Reported split so neither half can hide again.
+        let t_dec = std::time::Instant::now();
         let image = match ffai_media::load_image(std::path::Path::new(path)) {
             Ok(i) => i,
             Err(e) => {
@@ -916,6 +925,7 @@ fn serve_stdin(
                 continue;
             }
         };
+        let decode_ms = t_dec.elapsed().as_secs_f64() * 1e3;
 
         let t = std::time::Instant::now();
         let (found, gated) = match session.as_mut() {
@@ -949,10 +959,20 @@ fn serve_stdin(
             .join(",");
         writeln!(
             out,
-            "{{\"ms\":{ms:.2},\"gated\":{gated},\"n\":{},\"detections\":[{dets}]}}",
+            "{{\"ms\":{:.2},\"detect_ms\":{ms:.2},\"decode_ms\":{decode_ms:.2},\
+             \"gated\":{gated},\"n\":{},\"detections\":[{dets}]}}",
+            ms + decode_ms,
             found.detections.len()
         )?;
         out.flush()?;
+    }
+
+    // The stage report is the point of FFAI_PROFILE, and until now nothing
+    // called it —  had zero callers in the tree, so the
+    // instrument existed and had never once been read. stderr, so a driver
+    // parsing the JSONL on stdout is unaffected.
+    if ffai_diana::profile::is_enabled() {
+        eprintln!("{}", ffai_diana::profile::profile().report());
     }
     Ok(())
 }
