@@ -172,8 +172,76 @@ pub fn crnn_input(
     crnn_input_patch(&crop, cw, ch, device)
 }
 
+/// Is this crop LIGHT INK ON DARK PAPER — white text in a coloured pill, a
+/// reversed-out heading, a dark callout box?
+///
+/// Ink is the MINORITY of the pixels: a line of text covers far less area than
+/// the space around it. So split at the mean and ask which side is smaller —
+/// if the light pixels are the minority, they are the ink, and the crop is
+/// inverted relative to the printed-document convention the CRNN was trained
+/// on.
+///
+/// Mean rather than Otsu on purpose: this decides a binary flip, the two classes
+/// are far apart whenever the question is live, and the mean costs one pass
+/// where Otsu costs a histogram. §8.145 measured Otsu separability at 0.882 on
+/// exactly these crops — they are cleanly bimodal, which is what makes the cheap
+/// split safe.
+pub fn is_reversed(crop: &[f32]) -> bool {
+    if crop.is_empty() {
+        return false;
+    }
+    let mean = crop.iter().sum::<f32>() / crop.len() as f32;
+    let light = crop.iter().filter(|&&p| p >= mean).count();
+    light * 2 < crop.len()
+}
+
 /// The CRNN tensor for an already-extracted patch (straight or straightened).
 pub fn crnn_input_patch(crop: &[f32], cw: usize, ch: usize, device: &Device) -> Result<Tensor> {
+    // POLARITY (§8.146). The recognizer is trained on dark ink over light paper;
+    // a reversed heading is a different image to it, not a stylistic variant.
+    // §8.145 measured those crops at mean confidence 0.916 against 0.972
+    // upright on the coloured-heading pages, and 0.781 against 0.948 elsewhere,
+    // producing 'Let" $ Spell' for "Let's Spell" and single-letter garbage.
+    //
+    // Gated because it is a change to every crop's preprocessing and the gate is
+    // how it gets measured before it becomes the default — the same shape as
+    // FFAI_BODY_ONLY and FFAI_REC_LANG.
+    // CONTRAST (§8.146). Separability is not the same as dynamic range, and
+    // Otsu is scale-invariant so it cannot tell them apart: red-on-orange
+    // separates perfectly (eta 0.88) and still lands at ink 0.45 / paper 0.65,
+    // a mid-grey mush, where the training distribution is ink 0.1 / paper 0.9.
+    // §8.145 measured 6.2 % of crops on the coloured-heading pages below a 0.35
+    // span against 1.6 % elsewhere, and those crops read at 0.888 / 0.709 mean
+    // confidence against 0.975 / 0.959 for the rest.
+    //
+    // Stretching to the full range is a no-op on a crop that already spans it,
+    // so the gate covers both steps and neither needs its own threshold.
+    let norm = std::env::var("FFAI_CROP_NORM").as_deref() == Ok("1");
+    let owned: Vec<f32>;
+    let crop = if norm {
+        let flipped: Vec<f32> = if is_reversed(crop) {
+            crop.iter().map(|&p| 255.0 - p).collect()
+        } else {
+            crop.to_vec()
+        };
+        // Percentile anchors, not min/max: a single dust speck or blown
+        // highlight would otherwise set the whole scale.
+        let mut sorted = flipped.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let lo = sorted[sorted.len() / 50];
+        let hi = sorted[sorted.len() - 1 - sorted.len() / 50];
+        // A crop with no real range is blank or nearly so; stretching it would
+        // amplify sensor noise into glyph-shaped garbage. Leave it alone.
+        owned = if hi - lo > 24.0 {
+            let scale = 255.0 / (hi - lo);
+            flipped.iter().map(|&p| ((p - lo) * scale).clamp(0.0, 255.0)).collect()
+        } else {
+            flipped
+        };
+        &owned[..]
+    } else {
+        crop
+    };
     let out_w = ((cw as f32 * 64.0 / ch as f32).round() as usize).max(8);
     // Bicubic, not bilinear: recognition crops UPSCALE (~25 px lines to
     // h=64), and bilinear smears single-dot glyphs — measured as a
@@ -420,4 +488,22 @@ pub fn candle_err(e: candle_core::Error) -> Error {
 /// Bridge candle results into ffai results at the module boundary.
 pub fn ok<T>(r: CandleResult<T>) -> Result<T> {
     r.map_err(candle_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ink is the MINORITY of a text crop, so the smaller class is the ink.
+    #[test]
+    fn reversed_polarity_detection() {
+        let mut normal = vec![240.0f32; 100];
+        for v in normal.iter_mut().take(20) { *v = 20.0; }
+        assert!(!is_reversed(&normal));
+        let mut reversed = vec![20.0f32; 100];
+        for v in reversed.iter_mut().take(20) { *v = 240.0; }
+        assert!(is_reversed(&reversed));
+        assert!(!is_reversed(&[]));
+        assert!(!is_reversed(&[128.0; 10]));
+    }
 }
