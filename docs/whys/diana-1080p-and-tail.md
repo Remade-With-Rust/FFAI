@@ -871,3 +871,86 @@ direction — toward the hypothesis being pursued.
 The defence that worked every time was the same one: **a duplicate arm, or an
 identical-work pair, measured inside the same run.** Where that was present the
 error surfaced immediately; where it was absent the number survived for hours.
+
+---
+
+# Taking the prize: two bricks landed, one step left
+
+Decision taken to pursue the conversion despite the ~4 % pricing. Two contained
+pieces landed, both gated byte-identical, both needed by the conversion anyway.
+
+## Brick 1 — the transpose fused into the epilogue
+
+The NHWC convolution produces `[OHW, Cout]` and the graph wants `[Cout, OHW]`.
+Doing that as its own `t()?.contiguous()?` is a full pass over the activation
+that the epilogue is about to make regardless. `epilogue::apply_transposed`
+does both in one pass, blocked over pixel tiles so each `TILE * Cout` slab is
+L1-resident and the strided read is paid once rather than `Cout` times.
+
+| | wrap ratio | island TOTAL |
+|---|---:|---:|
+| separate transpose | 0.118x | 0.695x |
+| **fused** | **0.267x** | **0.755x** |
+
+Unit-tested against transpose-then-epilogue as an equality, not a tolerance.
+
+## Brick 2 — the weight transpose cached, found in the RESIDUE
+
+`Wt[K, Cout]` was rebuilt on every call. It never appeared in `im2col`, `gemm`
+or `wrap` — it showed up only as **0.046 s of the NHWC arm's total that no scope
+claimed**. `codec-measurement` §6: a residue no scope claims is the profiler
+asking where you did not look.
+
+Cached by candle's tensor id, which is unique and stable, with the cache holding
+a `Tensor` so the id cannot be recycled.
+
+| | unscoped residue gap | island TOTAL |
+|---|---:|---:|
+| per-call transpose | +0.046 s | 0.755x |
+| **cached** | **-0.001 s** | **0.805x** |
+
+The residue closing to zero is the confirmation the fix landed rather than moved.
+
+## Where the arm stands, on a quiet box (4-12 % spread)
+
+| stage | NCHW | NHWC | ratio |
+|---|---:|---:|---:|
+| TOTAL | 0.758 | 0.924 | 0.805x |
+| `>im2col` | 0.077 | 0.232 | **0.328x** |
+| `>gemm` | 0.209 | 0.170 | **1.196x** |
+| `>wrap` | 0.020 | 0.071 | 0.267x |
+
+Progression: **0.452 -> 0.919 -> 0.695 -> 0.755 -> 0.805x**.
+
+**im2col is now the entire remaining gap.** The GEMM win is stable at 1.196x
+across every quiet measurement, matching the original isolated 1.140x.
+
+## The remaining step, and its exact price
+
+| | | |
+|---|---:|---:|
+| island today | 0.924 s | 0.805x |
+| + NHWC-input im2col (0.81x) | 0.754 s | 1.005x |
+| + no transpose in the epilogue | 0.703 s | **1.078x** |
+| − NHWC channel plumbing (1.98x) | 0.730 s | **1.038x** |
+
+**Both remaining steps need the same thing: consecutive convolutions keeping the
+activation in NHWC.** That removes the transpose AND makes im2col read
+contiguously — which is why neither can be bought separately and why the island
+has a floor it cannot cross.
+
+Net for the full conversion: **~3.8 % of detect**, consistent with the earlier
+3-5 % once the loaded-box readings were discarded.
+
+## A shortcut that was tried and does not work
+
+candle is backed by `gemm`, which accepts arbitrary strides, so `col.t()` handed
+straight to `matmul` might have given the orientation with the fast NCHW im2col
+and no conversion at all. Measured on four real shapes: **0.35x, 0.53x, 0.70x,
+1.07x** — candle materialises it, and worse than doing it explicitly. Dead.
+
+## Status
+
+`FFAI_DIANA_NHWC=1` is **still OFF by default and still a net loss at 0.805x**.
+Nothing here changes the shipped path. What landed is two real bricks the
+conversion requires, each gated byte-identical, plus the exact remaining price.

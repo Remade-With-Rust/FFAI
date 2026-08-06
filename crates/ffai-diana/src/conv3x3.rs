@@ -307,6 +307,36 @@ pub fn nhwc_enabled() -> bool {
     }
 }
 
+
+/// `Wt[K, Cout]` cached per weight tensor, built once and reused.
+///
+/// It was transposed on EVERY call at first, which is defensible as an
+/// honest accounting of the arm but is not what a real NHWC engine would do -
+/// the weights are constant, so the transpose belongs at model load. It also
+/// hid: the cost sat outside every profile scope, and showed up only as 0.046 s
+/// of the NHWC arm's total that none of `im2col`, `gemm` or `wrap` accounted
+/// for. A residue that no scope claims is the profiler asking where you did not
+/// look (`codec-measurement` §6).
+///
+/// Keyed by candle's own tensor id, which is unique per tensor and stable for
+/// the model's lifetime. The entry holds a `Tensor`, so the cache keeps the
+/// weights alive and an id cannot be recycled underneath it.
+fn weight_t_cached(weight: &Tensor, c_out: usize, k: usize) -> Result<Tensor> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<candle_core::TensorId, Tensor>>> = Mutex::new(None);
+
+    let key = weight.id();
+    let mut g = CACHE.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    if let Some(t) = m.get(&key) {
+        return Ok(t.clone());
+    }
+    let t = weight.reshape((c_out, k))?.t()?.contiguous()?;
+    m.insert(key, t.clone());
+    Ok(t)
+}
+
 /// im2col producing `[OH*OW, Cin*9]` - the transpose of the shipped layout.
 ///
 /// The K index is `c*9 + ky*3 + kx`, matching the shipped `im2col` exactly, so
@@ -405,18 +435,17 @@ fn conv3x3_nhwc(
         .run(x)
     })?;
 
-    // The weight transpose is per-call here and would be once-at-load in a
-    // real NHWC engine; it is k*c_out floats, small beside the col matrix,
-    // and counted against this arm rather than excused.
-    let w_t = weight.reshape((c_out, k))?.t()?.contiguous()?;
+    let w_t = weight_t_cached(weight, c_out, k)?;
     let y_t = crate::profile::timed(|p| &p.gemm, || col.matmul(&w_t))?;
 
-    let y = crate::profile::timed(|p| &p.conv_wrap, || y_t.t()?.contiguous())?;
     let bias_v = match bias {
         Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
         None => None,
     };
-    let out = crate::epilogue::apply(y, bias_v, ohw, act)?;
+    // Transpose FUSED into the epilogue: one pass instead of two.
+    let out = crate::profile::timed(|p| &p.conv_wrap, || {
+        crate::epilogue::apply_transposed(y_t, bias_v, c_out, ohw, act)
+    })?;
     out.reshape((n, c_out, oh, ow))
 }
 
