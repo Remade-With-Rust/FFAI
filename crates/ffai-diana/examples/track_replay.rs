@@ -56,6 +56,9 @@ fn main() -> std::io::Result<()> {
     // as identity false-negatives while leaving MOTA nearly untouched.
     let min_hits: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(3);
     let max_age: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(30);
+    // 8th/9th: score fusion and the gate it needs re-swept alongside it.
+    let fuse_score: bool = a.next().map(|s| s == "1").unwrap_or(false);
+    let match_thresh: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.8);
     let mut tk = ByteTrack::new(TrackerConfig {
         track_thresh,
         new_track_thresh,
@@ -64,6 +67,8 @@ fn main() -> std::io::Result<()> {
         new_track_thresh_crowded: crowded_thresh,
         min_hits,
         max_age,
+        fuse_score,
+        match_thresh,
         ..Default::default()
     });
     let out = std::io::stdout();

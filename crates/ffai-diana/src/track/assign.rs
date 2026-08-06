@@ -41,6 +41,42 @@ pub fn cost_matrix(tracks: &[[f32; 4]], dets: &[[f32; 4]]) -> Vec<Vec<f32>> {
         .collect()
 }
 
+/// `1 - IoU * score` — the association cost with detection confidence folded
+/// in, which is what the reference tracker's `fuse_score` computes.
+///
+/// The argument for it: when two detections overlap one track similarly, pure
+/// IoU picks by geometry alone and is indifferent to the detector saying one of
+/// them is far more likely to be a real object. Folding the score in breaks
+/// that tie toward the confident box.
+///
+/// It is NOT free — it makes the `match_thresh` gate stricter, because the
+/// product is always ≤ the IoU. A fair test therefore has to re-sweep the
+/// threshold rather than compare at the value tuned for pure IoU, or it prices
+/// a gate change as an algorithm change.
+pub fn cost_matrix_fused(
+    tracks: &[[f32; 4]],
+    dets: &[[f32; 4]],
+    scores: &[f32],
+) -> Vec<Vec<f32>> {
+    tracks
+        .iter()
+        .map(|t| {
+            dets.iter()
+                .zip(scores.iter())
+                .map(|(d, s)| 1.0 - iou(*t, *d) * s)
+                .collect()
+        })
+        .collect()
+}
+
+/// Row/column swap, so the transposed solve gates on the transposed matrix.
+fn transpose(m: &[Vec<f32>]) -> Vec<Vec<f32>> {
+    if m.is_empty() {
+        return Vec::new();
+    }
+    (0..m[0].len()).map(|j| m.iter().map(|r| r[j]).collect()).collect()
+}
+
 /// Optimal one-to-one assignment minimising total cost, for a rectangular
 /// matrix. Returns `(row, col)` pairs whose cost is at most `max_cost`.
 ///
@@ -54,6 +90,27 @@ pub fn cost_matrix(tracks: &[[f32; 4]], dets: &[[f32; 4]]) -> Vec<Vec<f32>> {
 /// solver only chose because a cheaper one was taken elsewhere still tells you
 /// the cheaper one was taken.
 pub fn assign(cost: &[Vec<f32>], max_cost: f32) -> Vec<(usize, usize)> {
+    assign_gated(cost, cost, max_cost)
+}
+
+/// Assign on one cost matrix, ADMIT on another.
+///
+/// Exists because folding detection confidence into the cost changes two
+/// things at once, and they want separating. `1 - IoU * score` is a better
+/// RANKING — when two detections overlap a track equally, the one the detector
+/// believes in should win — but it is a worse GATE, because the product is
+/// always ≤ the IoU, so a fixed `max_cost` silently tightens by a factor of the
+/// score. Sweeping the threshold to compensate then prices a gate change as an
+/// algorithm change, and the measured response is correspondingly jumpy.
+///
+/// So: rank by `rank_cost`, admit by `gate_cost`. "Whose box is it" and "is it
+/// close enough to be anyone's" are different questions.
+pub fn assign_gated(
+    rank_cost: &[Vec<f32>],
+    gate_cost: &[Vec<f32>],
+    max_cost: f32,
+) -> Vec<(usize, usize)> {
+    let cost = rank_cost;
     let n = cost.len();
     if n == 0 {
         return Vec::new();
@@ -71,7 +128,10 @@ pub fn assign(cost: &[Vec<f32>], max_cost: f32) -> Vec<(usize, usize)> {
             .map(|j| (0..n).map(|i| cost[i][j]).collect())
             .collect();
         let mut out: Vec<(usize, usize)> =
-            assign(&t, max_cost).into_iter().map(|(a, b)| (b, a)).collect();
+            assign_gated(&t, &transpose(gate_cost), max_cost)
+                .into_iter()
+                .map(|(a, b)| (b, a))
+                .collect();
         out.sort_unstable();
         return out;
     }
@@ -138,7 +198,7 @@ pub fn assign(cost: &[Vec<f32>], max_cost: f32) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     for j in 1..=m {
         let i = p[j];
-        if i >= 1 && i <= n && cost[i - 1][j - 1] <= max_cost {
+        if i >= 1 && i <= n && gate_cost[i - 1][j - 1] <= max_cost {
             out.push((i - 1, j - 1));
         }
     }
@@ -149,6 +209,31 @@ pub fn assign(cost: &[Vec<f32>], max_cost: f32) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ranking and admission are genuinely separate matrices.
+    ///
+    /// The whole point of `assign_gated`: a pair too expensive to be ADMITTED
+    /// under the ranking cost must still be admitted if the GATE cost allows
+    /// it. Folding score into the cost made every pair look worse and silently
+    /// tightened the threshold — this is the test that stops that returning.
+    #[test]
+    fn gate_admits_what_the_ranking_cost_would_reject() {
+        let rank = vec![vec![0.9f32]];   // 1 - IoU*score, above max_cost
+        let gate = vec![vec![0.5f32]];   // 1 - IoU,       below max_cost
+        assert!(assign(&rank, 0.8).is_empty(), "ranking cost alone rejects it");
+        assert_eq!(assign_gated(&rank, &gate, 0.8), vec![(0, 0)], "gate should admit");
+    }
+
+    /// The transposed path (more tracks than detections) must gate on the
+    /// transposed GATE matrix, not on the ranking one.
+    #[test]
+    fn gate_survives_the_transpose_path() {
+        // 3 tracks, 1 detection -> rows > cols, so the transpose branch runs.
+        let rank = vec![vec![0.95f32], vec![0.90], vec![0.99]];
+        let gate = vec![vec![0.70f32], vec![0.10], vec![0.90]];
+        let got = assign_gated(&rank, &gate, 0.8);
+        assert_eq!(got, vec![(1, 0)], "track 1 is both best-ranked and inside the gate");
+    }
 
     #[test]
     fn iou_basics() {

@@ -94,6 +94,10 @@ pub struct TrackerConfig {
     /// 18.71). A knob that improves both metrics on every clip is not a
     /// trade, it is a filter that was priced twice.
     pub min_hits: u32,
+    /// Fold detection confidence into the association cost — the reference
+    /// tracker's `fuse_score`. EXPERIMENTAL, default off; see
+    /// [`assign::cost_matrix_fused`].
+    pub fuse_score: bool,
     /// Detections/frame at or below which `new_track_thresh` is used as-is.
     pub crowd_lo: f32,
     /// Detections/frame at or above which `new_track_thresh_crowded` is used.
@@ -120,8 +124,6 @@ impl Default for TrackerConfig {
             // 7/7. That asymmetry is the whole result.
             new_track_thresh: 0.7,
             match_thresh: 0.8,
-            max_age: 30,
-            min_hits: 1,
             // `max_age` was swept alongside it and PRUNED, not adopted.
             // Raising it to 60-70 is worth a further +0.67 IDF1 overall, but
             // regresses 02 (-0.26) and 09 (-0.22) while winning big on 04/10/11,
@@ -135,6 +137,29 @@ impl Default for TrackerConfig {
             //
             // So: recorded as an available +0.67 that needs a real signal, and
             // left at 30. Revisit with more sequences, not more search.
+            max_age: 30,
+            min_hits: 1,
+            // OFF, and the reason is one sequence. Ranking the first
+            // association by `1 - IoU * score` instead of `1 - IoU` — the
+            // reference's `fuse_score` — is worth +0.61 IDF1 overall (31.63 ->
+            // 32.24), +0.11 MOTA, and drops ID switches 435 -> 389:
+            //
+            //   02 +0.52  04 +1.18  05 +0.02  09 +0.00  10 -0.86  11 +1.77  13 +0.01
+            //
+            // Six sequences non-negative and one loser. Fusing into the GATE as
+            // well (the naive port) was much worse — it tightens the threshold
+            // by a factor of the score, and the resulting sweep swung 05/09/13
+            // by whole points in both directions. Separating the two, via
+            // `assign::assign_gated`, collapsed those to ~0.00 and left exactly
+            // one real regression. That separation is the finding here.
+            //
+            // Not shipped on, because a single loser cannot be dispatched
+            // honestly: ANY feature on which sequence 10 is extremal
+            // "separates" a 6-vs-1 table perfectly, and 10 is already extremal
+            // on detection churn (0.168, highest of the seven). MOT17-train has
+            // only these seven sequences, so the table cannot be grown today.
+            // Turn it on to re-measure when there is more footage.
+            fuse_score: false,
             // ADAPTIVE, and the sign-flip is what forced it. Raising
             // `new_track_thresh` to 0.7 helped MOTA on sparse sequences
             // (09 +5.97, 05 +3.24) and HURT it on the crowded ones
@@ -233,7 +258,20 @@ impl ByteTrack {
 
         let t_boxes: Vec<[f32; 4]> = unmatched_tracks.iter().map(|&i| self.tracks[i].xyxy()).collect();
         let d_boxes: Vec<[f32; 4]> = hi.iter().map(|&i| boxes[i]).collect();
-        let pairs = assign::assign(&assign::cost_matrix(&t_boxes, &d_boxes), self.cfg.match_thresh);
+        // Pass 1 only. The second pass is by construction low-confidence, so
+        // multiplying by a score that is always small would push every pair
+        // past the gate and disable the very recovery it exists for.
+        let gate = assign::cost_matrix(&t_boxes, &d_boxes);
+        let pairs = if self.cfg.fuse_score {
+            let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
+            let rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+            // Rank by confidence-weighted overlap, ADMIT by overlap. Fusing
+            // into the gate as well tightens it by a factor of the score,
+            // which is a different change wearing the same name.
+            assign::assign_gated(&rank, &gate, self.cfg.match_thresh)
+        } else {
+            assign::assign(&gate, self.cfg.match_thresh)
+        };
 
         let mut still_unmatched: Vec<usize> = unmatched_tracks.clone();
         for (ti, di) in &pairs {
