@@ -315,3 +315,161 @@ numbers above instead of a recommendation.
 - Nothing here was measured on a quiet box. Every number above is either a
   COUNT (immune) or a CPU-time ratio (5x tighter than wall, per §2), and the
   wall figures are reported only to show how far they moved.
+
+---
+
+# Orientation, broken open — and refuted at real shapes
+
+The synthetic sweep's 1.31-1.68x did not survive contact with the shapes the
+graph actually runs.
+
+## D5a — the island probe measured a copy nobody performs
+
+First conclusion: "a per-layer NHWC island is 100-200x underwater." **Wrong.**
+It transposed the COL MATRIX (460 MB). im2col *builds* the col matrix, so its
+layout is free to choose, and weights transpose once at load. The only thing
+that ever changes layout is the ACTIVATION, at `cout*H*W`. Re-measured: 1.245
+ms/img saving against 2.053 ms/img of activation transpose — **1.65x
+underwater, not 200x.** The conclusion survived; the mechanism was wrong.
+
+## D5b — the chain probe buried its own signal
+
+A 6-layer chain read 1.03x, and NET -0.068 ms once boundary transposes were
+counted. Its im2col was written for the probe rather than being the shipped
+kernel, and at 0.6-1.0 ms against the GEMM's 0.15-0.36 it DOMINATED the total.
+A probe whose scaffolding outweighs what it measures reports the scaffolding.
+
+Caught by its own data: two rows with IDENTICAL im2col work — same `cin,h,w`,
+and im2col does not depend on `cout` — read **1.715 and 11.649 ms**. That is
+also what all-of-A-then-all-of-B produces (§3); interleaving at min-of-31
+collapsed both totals 7x.
+
+## D5c — the verdict, with the floor measured INSIDE the probe
+
+GEMM only, real shapes, min-of-101, ABBA-interleaved. The last two rows are
+DUPLICATES of the first two under different labels, so the probe carries its
+own floor:
+
+| cin->cout | HxW | calls | M=cout | M=HW | speedup |
+|---|---|---:|---:|---:|---:|
+| 32->32 | 24x40 | 12 | 0.1236 | 0.0973 | 1.27x |
+| 16->16 | 48x80 | 5 | 0.1028 | 0.1245 | 0.83x |
+| 64->64 | 12x20 | 4 | 0.0705 | 0.0916 | 0.77x |
+| 64->16 | 48x80 | 1 | 0.2427 | 0.2449 | 0.99x |
+| 16->8 | 96x160 | 1 | 0.2059 | 0.1544 | 1.33x |
+| 128->16 | 24x40 | 1 | 0.1762 | 0.1442 | 1.22x |
+| 32->16 | 48x80 | 1 | 0.1860 | 0.1902 | 0.98x |
+| 16->32 | 48x80 | 1 | 0.2057 | 0.2576 | 0.80x |
+| **32->32 (dup)** | 24x40 | - | 0.1194 | 0.1138 | **1.05x** |
+| **16->16 (dup)** | 48x80 | - | 0.0730 | 0.0588 | **1.24x** |
+
+`16->16 48x80` reads **0.83x in one row and 1.24x in its identical twin**. The
+floor is ~±25 % and every per-shape number sits inside it.
+
+**Weighted by calls per image: 1.047x — inside the floor, and not a 4.7 % gain.**
+§3: any delta smaller than the spread is not a result.
+
+### Why the synthetic probe said 1.68x
+
+It held total FLOPs constant, forcing **N = 25,000-400,000**. Real feature maps
+are `H*W` = 3,840 at 48x80 and 960 at 24x40 — **10 to 400x smaller**. At
+synthetic sizes one dimension was genuinely huge, so which one was small
+mattered. At real sizes NCHW is M=cout(16-32) x N=HW(960-3,840) and NHWC is
+M=HW x N=cout: **both have a small dimension.** Swapping which one is small
+does not help a squat matrix. §18 is the rule this broke.
+
+## Verdict
+
+**NHWC / orientation: REFUTED at real shapes.** The whole-graph conversion —
+every conv, the epilogue, attention, the detect head, five tiers of oracle —
+would have been built for 1.047x inside a ±25 % floor. That prune is worth more
+than the probes cost.
+
+NOT refuted: the narrow-cout deficit itself. The +0.823 correlation with
+log2(cout) stands and candle's isolated M=8 vs M=512 gap of 6.3x stands. What
+is refuted is that ORIENTATION reaches it.
+
+## What is left, and it is one thing
+
+| approach | status | why |
+|---|---|---|
+| im2col fusion | refuted | 1x1 has no col matrix, same deficit |
+| direct convolution | refuted | 0.19x per-shape, worse as cout grows |
+| cache tiling | refuted | operand size correlates -0.048 |
+| NHWC / orientation | refuted | 1.047x at real shapes, inside a ±25 % floor |
+| MKL | refuted earlier | within noise of candle's GEMM |
+| thread width | refuted | 2.2x CPU for 1.16x wall |
+
+**Winograd F(2x2,3x3) is the one major technique untried.** Four multiplies per
+output instead of nine — a 2.25x arithmetic reduction — applying exactly to the
+3x3 stride-1 convolutions that are 22.9 % of detect. Real implementations net
+1.5-2x on those layers after transform overhead, so roughly **8-9 % of detect**.
+Its weakness is numerical rather than structural, so it arrives with a
+correctness gate the five-tier oracle already holds.
+
+Price it with an in-context probe on ONE layer before writing a transform. Every
+structural idea in the table above looked good until it was measured in context.
+
+## D5d — the aggregate was hiding a DISPATCH, and the table said so
+
+The 1.047x whole-probe ratio was reported as "orientation refuted". That was
+wrong, and the reason is the one `codec-content-adaptive-dispatch` names: **a
+mixed per-shape result is an UNFINISHED dispatch, not a verdict.** Averaging a
+2x win against a 0.6x loss reports neither.
+
+The objection that reopened it: the per-shape table "reads as an adaptive
+dispatch". It does. The duplicate-row check only proved that SOME rows were
+noise; it never established that ALL of them were.
+
+**The correct test is reproducibility, not size.** Each of 47 shapes measured in
+4 independent passes, arms ABBA-interleaved, min-of-25 per pass. A shape counts
+as dispatchable only if **every pass agrees on the sign**.
+
+| shape | pass 1-4 | prefers |
+|---|---|---|
+| 48->64 96x160 | 2.13 1.72 2.10 1.99 | **NHWC ~2x** |
+| 32->16 48x80 | 1.62 1.53 1.54 1.43 | NHWC ~1.5x |
+| 96->128 48x80 | 1.39 1.45 1.44 1.40 | NHWC ~1.4x |
+| 32->32 96x160 | 1.44 1.35 1.40 1.45 | NHWC ~1.4x |
+| 128->16 24x40 | 1.24 1.24 1.22 1.28 | NHWC |
+| 16->16 48x80 | 0.57 0.69 0.81 0.59 | **NCHW** |
+| 64->64 12x20 | 0.81 0.75 0.65 0.80 | NCHW |
+| 256->80 12x20 | 0.68 0.88 0.82 0.86 | NCHW |
+
+**28 of 47 shapes reproducible: 21 prefer NHWC, 7 prefer NCHW, 19 sign-flip.**
+
+**Prize of a perfect per-shape dispatch, weighted by calls per image: 1.173x on
+the GEMM = 4.39 % of detect.**
+
+### Why this dispatch is cheaper than the usual kind
+
+Every dimension is **static**. cin, cout, H and W are fixed once the tier and
+geometry are chosen, so the layout per layer is a constant decided at model
+load — not a runtime probe, not a heuristic on content, and with **zero
+per-call dispatch overhead**. The skill's warning about a runtime arm-selector
+in the hot loop (§15's corollary) does not apply.
+
+### What is NOT yet measured, and it decides the real number
+
+The 4.39 % assumes **zero transition cost**. It is an upper bound:
+
+* For a 3x3 conv, im2col builds the col matrix, so its layout is free — but the
+  INPUT activation's layout decides which im2col is cheap, and the OUTPUT
+  arrives in the corresponding layout.
+* For a 1x1 conv there is no col matrix at all: the activation IS the operand,
+  so changing its orientation means an actual transpose.
+* 21 shapes want NHWC and 7 want NCHW. **If they alternate, transposes eat the
+  win**; if they cluster into runs, they do not.
+
+The roofline aggregates by shape and therefore cannot answer this — it does not
+record layer ORDER. That is the next instrument, and the honest statement until
+it exists is: **4.39 % of detect is the ceiling, and the floor depends on how
+many layout transitions the real layer sequence forces.**
+
+### The correction worth keeping
+
+Two probes said "orientation is refuted" — the 1.03x chain and the 1.047x
+aggregate — and both were true as stated and wrong as generalised. The first
+buried its signal under a reimplemented im2col; the second averaged a real
+bimodal result. **A refutation built on an aggregate is only as good as the
+homogeneity of what it averaged**, and nothing had checked that.
