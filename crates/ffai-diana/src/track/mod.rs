@@ -74,6 +74,12 @@ pub struct TrackerConfig {
     pub max_age: u32,
     /// Matches required before a track is reported.
     pub min_hits: u32,
+    /// Detections/frame at or below which `new_track_thresh` is used as-is.
+    pub crowd_lo: f32,
+    /// Detections/frame at or above which `new_track_thresh_crowded` is used.
+    pub crowd_hi: f32,
+    /// The threshold a CROWDED scene gets. See [`ByteTrack::effective_new_thresh`].
+    pub new_track_thresh_crowded: f32,
 }
 
 impl Default for TrackerConfig {
@@ -85,10 +91,34 @@ impl Default for TrackerConfig {
         TrackerConfig {
             track_thresh: 0.5,
             low_thresh: 0.1,
-            new_track_thresh: 0.6,
+            // 0.7, not the reference's 0.6 — the one change a threshold sweep
+            // earned. Swept on MOT17 02/05/10 and confirmed on HELD-OUT
+            // 04/09/11/13: ID switches fall 38 % across all seven sequences
+            // (548 -> 339) and NOT ONE sequence got worse. The MOTA/IDF1 gains
+            // that looked real on the tune set did not survive holdout
+            // (MOTA -0.13 pp, IDF1 +0.23 pp); the ID-switch reduction did, on
+            // 7/7. That asymmetry is the whole result.
+            new_track_thresh: 0.7,
             match_thresh: 0.8,
             max_age: 30,
             min_hits: 3,
+            // ADAPTIVE, and the sign-flip is what forced it. Raising
+            // `new_track_thresh` to 0.7 helped MOTA on sparse sequences
+            // (09 +5.97, 05 +3.24) and HURT it on the crowded ones
+            // (04 -1.49, 10 -0.10). Detections-per-frame correlates -0.83 with
+            // the IDF1 change and -0.67 with the MOTA change across all seven.
+            //
+            // The mechanism is not subtle: in a crowd, most objects really are
+            // there and half-occluded, so a high bar for starting an identity
+            // rejects REAL people and drives FN up. In a sparse scene the same
+            // bar mostly rejects false positives.
+            //
+            // A fixed compromise would ship a regression to whoever runs
+            // crowded footage. The signal costs nothing — the tracker is
+            // already handed the detection count every frame.
+            crowd_lo: 15.0,
+            crowd_hi: 30.0,
+            new_track_thresh_crowded: 0.6,
         }
     }
 }
@@ -98,15 +128,44 @@ pub struct ByteTrack {
     tracks: Vec<Track>,
     next_id: u32,
     frame: u64,
+    /// Exponential moving average of detections per frame — the dispatch signal.
+    ///
+    /// A running mean rather than this frame's count: one crowded frame in a
+    /// quiet scene should not flip the threshold, and a tracker whose behaviour
+    /// oscillates frame to frame produces exactly the identity churn the
+    /// threshold exists to prevent.
+    density: f32,
 }
 
 impl ByteTrack {
     pub fn new(cfg: TrackerConfig) -> Self {
-        ByteTrack { cfg, tracks: Vec::new(), next_id: 1, frame: 0 }
+        ByteTrack { cfg, tracks: Vec::new(), next_id: 1, frame: 0, density: 0.0 }
     }
 
     pub fn frame_index(&self) -> u64 {
         self.frame
+    }
+
+    /// Smoothed detections per frame — the crowding signal.
+    pub fn density(&self) -> f32 {
+        self.density
+    }
+
+    /// `new_track_thresh`, ramped down as the scene gets crowded.
+    ///
+    /// Linear between `crowd_lo` and `crowd_hi`; flat outside. A ramp rather
+    /// than a step because a step at a fixed density makes two nearly-identical
+    /// scenes behave differently, and the underlying effect is gradual — the
+    /// correlation is continuous, not a cliff.
+    pub fn effective_new_thresh(&self) -> f32 {
+        let (lo, hi) = (self.cfg.crowd_lo, self.cfg.crowd_hi);
+        let t = if hi <= lo {
+            0.0
+        } else {
+            ((self.density - lo) / (hi - lo)).clamp(0.0, 1.0)
+        };
+        self.cfg.new_track_thresh
+            + t * (self.cfg.new_track_thresh_crowded - self.cfg.new_track_thresh)
     }
 
     /// One frame of detections in, the live tracks out.
@@ -116,6 +175,11 @@ impl ByteTrack {
     /// did not see would be inventing evidence.
     pub fn update(&mut self, boxes: &[[f32; 4]], scores: &[f32], classes: &[u32]) -> Vec<Track> {
         self.frame += 1;
+        // EMA over ~30 frames. Seeded with the first frame rather than 0 so a
+        // crowded scene is not treated as empty for its opening second.
+        let n = boxes.len() as f32;
+        self.density = if self.frame == 1 { n } else { self.density * 0.967 + n * 0.033 };
+        let new_thresh = self.effective_new_thresh();
 
         // Every track predicts forward, matched or not.
         for t in &mut self.tracks {
@@ -191,7 +255,7 @@ impl ByteTrack {
 
         // ---- new tracks from confident, unclaimed detections ----
         for &i in &hi {
-            if matched_dets[i] || scores[i] < self.cfg.new_track_thresh {
+            if matched_dets[i] || scores[i] < new_thresh {
                 continue;
             }
             let (s, p) = kalman::initiate(Xyah::from_xyxy(boxes[i]));
@@ -320,6 +384,34 @@ mod tests {
         for _ in 0..5 {
             assert!(t.update(&[], &[], &[]).is_empty());
         }
+    }
+
+    /// The crowding ramp must actually move, and in the right direction: a
+    /// crowded scene gets the LOWER bar, because there a high bar rejects real
+    /// people rather than false positives.
+    #[test]
+    fn crowding_lowers_the_new_track_threshold() {
+        let cfg = TrackerConfig::default();
+        let mut sparse = ByteTrack::new(cfg);
+        for _ in 0..60 {
+            sparse.update(&boxes_at(50.0), &[0.9], &[0]);
+        }
+        let mut crowded = ByteTrack::new(cfg);
+        let many: Vec<[f32; 4]> = (0..40).map(|k| [k as f32 * 30.0, 10.0, k as f32 * 30.0 + 20.0, 80.0]).collect();
+        let sc = vec![0.9f32; 40];
+        let cl = vec![0u32; 40];
+        for _ in 0..60 {
+            crowded.update(&many, &sc, &cl);
+        }
+        assert!(sparse.density() < cfg.crowd_lo, "sparse density {}", sparse.density());
+        assert!(crowded.density() > cfg.crowd_hi, "crowded density {}", crowded.density());
+        assert!(
+            crowded.effective_new_thresh() < sparse.effective_new_thresh(),
+            "crowded {} should be BELOW sparse {}",
+            crowded.effective_new_thresh(),
+            sparse.effective_new_thresh()
+        );
+        assert!((sparse.effective_new_thresh() - cfg.new_track_thresh).abs() < 1e-6);
     }
 
     /// Two objects crossing must not swap ids — the case Hungarian exists for.

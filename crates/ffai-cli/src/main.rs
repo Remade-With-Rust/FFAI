@@ -193,6 +193,16 @@ enum Cmd {
         /// inside the model, the same separation `LiveSession` keeps.
         #[arg(long)]
         track: bool,
+        /// ByteTrack: detections at or above this drive the FIRST association
+        /// pass; those below it (down to 0.1) drive the second.
+        #[arg(long, default_value_t = 0.5)]
+        track_thresh: f32,
+        /// ByteTrack: a NEW identity needs a detection at least this confident.
+        /// Deliberately higher than `--track-thresh` — recovering an existing
+        /// track from a weak box is cheap, starting a new one from it creates a
+        /// false trajectory that costs IDF1 for as long as it lives.
+        #[arg(long, default_value_t = 0.7)]
+        new_track_thresh: f32,
         /// Read frame paths from stdin, one per line, and write one timed JSON
         /// line per frame to stdout. `--input` is ignored.
         ///
@@ -615,6 +625,8 @@ fn main() -> Result<()> {
             live,
             serve,
             track,
+            track_thresh,
+            new_track_thresh,
             change_fraction,
             sample_every,
             pixel_delta,
@@ -636,8 +648,21 @@ fn main() -> Result<()> {
             // A video source streams; an image does not. Dispatch on the
             // extension, matching what Ultralytics' `predict(source=...)` does
             // with the same file.
+            let cfg = ffai_diana::track::TrackerConfig {
+                track_thresh,
+                new_track_thresh,
+                ..Default::default()
+            };
             if is_video(&input) {
-                return detect_video(eng, opts, &input, output.as_deref(), track);
+                return detect_video(eng, opts, &input, output.as_deref(), track, cfg);
+            }
+            // A DIRECTORY of frames tracks too. Scoring against MOT17 ground
+            // truth must not go through a re-encode: the GT boxes were drawn on
+            // the original JPEGs, and our own measurement put decoded-vs-source
+            // pixels at mean |diff| 0.66 — small, but enough to move a box
+            // sitting on the confidence threshold and contaminate a sweep.
+            if track && input.is_dir() {
+                return detect_dir_tracked(eng, opts, &input, output.as_deref(), cfg);
             }
 
             if live {
@@ -911,13 +936,12 @@ fn detect_video(
     path: &std::path::Path,
     output: Option<&std::path::Path>,
     track: bool,
+    cfg: ffai_diana::track::TrackerConfig,
 ) -> Result<()> {
     use std::io::Write;
 
     let names = eng.class_names().to_vec();
-    let mut tracker = track.then(|| {
-        ffai_diana::track::ByteTrack::new(ffai_diana::track::TrackerConfig::default())
-    });
+    let mut tracker = track.then(|| ffai_diana::track::ByteTrack::new(cfg));
     let stream = ffai_media::stream_frames(path, 0.0)?;
     let total = stream.frame_count_hint();
 
@@ -1039,6 +1063,77 @@ fn detect_video(
             writeln!(f, "{l}")?;
         }
         println!("wrote {} ({} detections)", p.display(), lines.len());
+    }
+    Ok(())
+}
+
+
+/// Track over a directory of frames, sorted by name.
+///
+/// Exists so a MOT17 sweep can score the ORIGINAL JPEGs. Routing a benchmark
+/// through an encode/decode round trip changes pixels by a small amount —
+/// measured at mean |diff| 0.66 of 255 against OpenCV — which is enough to flip
+/// a detection sitting on the threshold, and a threshold sweep is exactly the
+/// experiment that cannot afford that.
+fn detect_dir_tracked(
+    eng: std::sync::Arc<dyn DetectEngine>,
+    opts: DetectOptions,
+    dir: &std::path::Path,
+    output: Option<&std::path::Path>,
+    cfg: ffai_diana::track::TrackerConfig,
+) -> Result<()> {
+    use std::io::Write;
+
+    let mut frames: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading frame dir {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("png" | "jpg" | "jpeg")
+            )
+        })
+        .collect();
+    frames.sort();
+    if frames.is_empty() {
+        anyhow::bail!("no .png/.jpg frames in {}", dir.display());
+    }
+
+    let mut tk = ffai_diana::track::ByteTrack::new(cfg);
+    let mut lines = Vec::new();
+    for (i, f) in frames.iter().enumerate() {
+        let image = ffai_media::load_image(f)?;
+        let found = eng.detect(&image, &opts)?;
+        let bx: Vec<[f32; 4]> = found.detections.iter().map(|d| [d.x0, d.y0, d.x1, d.y1]).collect();
+        let sc: Vec<f32> = found.detections.iter().map(|d| d.confidence).collect();
+        let cl: Vec<u32> = found.detections.iter().map(|d| d.class_id).collect();
+        for t in tk.update(&bx, &sc, &cl) {
+            let bb = t.xyxy();
+            lines.push(format!(
+                "{},{},{:.1},{:.1},{:.1},{:.1},{:.3},-1,-1,-1",
+                i + 1,
+                t.id,
+                bb[0],
+                bb[1],
+                bb[2] - bb[0],
+                bb[3] - bb[1],
+                t.score
+            ));
+        }
+    }
+    match output {
+        Some(p) => {
+            let mut w = std::io::BufWriter::new(std::fs::File::create(p)?);
+            for l in &lines {
+                writeln!(w, "{l}")?;
+            }
+            println!("{} frames, {} tracked boxes -> {}", frames.len(), lines.len(), p.display());
+        }
+        None => {
+            for l in &lines {
+                println!("{l}");
+            }
+        }
     }
     Ok(())
 }
