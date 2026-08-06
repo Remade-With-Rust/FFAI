@@ -73,6 +73,26 @@ pub struct TrackerConfig {
     /// Frames a lost track survives before removal.
     pub max_age: u32,
     /// Matches required before a track is reported.
+    ///
+    /// **1, not the conventional 3** — measured. `min_hits` and
+    /// `new_track_thresh` are the same filter twice: both exist to stop a
+    /// false detection becoming a trajectory. With `new_track_thresh` at 0.7
+    /// the detection that starts a track is already confident, so withholding
+    /// it for two more frames rejects almost no false positives and throws
+    /// away the opening frames of real ones — and every withheld frame of a
+    /// real track is an identity false-negative straight off IDF1.
+    ///
+    /// Swept against MOT17, replaying cached detections so only the tracker
+    /// varies, IDF1 delta per sequence at `min_hits = 1`:
+    ///
+    /// | 02 | 04 | 05 | 09 | 10 | 11 | 13 |
+    /// |---|---|---|---|---|---|---|
+    /// | +0.13 | +0.09 | +0.68 | +0.20 | +0.29 | +0.38 | +0.34 |
+    ///
+    /// Positive on all seven — every tune sequence AND every holdout one —
+    /// for **IDF1 31.37 -> 31.63** overall, with MOTA also up (18.58 ->
+    /// 18.71). A knob that improves both metrics on every clip is not a
+    /// trade, it is a filter that was priced twice.
     pub min_hits: u32,
     /// Detections/frame at or below which `new_track_thresh` is used as-is.
     pub crowd_lo: f32,
@@ -101,7 +121,20 @@ impl Default for TrackerConfig {
             new_track_thresh: 0.7,
             match_thresh: 0.8,
             max_age: 30,
-            min_hits: 3,
+            min_hits: 1,
+            // `max_age` was swept alongside it and PRUNED, not adopted.
+            // Raising it to 60-70 is worth a further +0.67 IDF1 overall, but
+            // regresses 02 (-0.26) and 09 (-0.22) while winning big on 04/10/11,
+            // and the response is not even monotonic — 04 reads +0.09 at 30,
+            // -0.54 at 35-50, then +1.18 at 60. Three losers against three
+            // winners on seven clips is a truth table too small to fit a
+            // dispatch to: no candidate signal separated them (dets/frame
+            // +0.34, sequence length +0.54, box area -0.18, churn -0.29), and
+            // the groups OVERLAP on the best of those. A rule found here would
+            // be the default outcome of searching, not evidence.
+            //
+            // So: recorded as an available +0.67 that needs a real signal, and
+            // left at 30. Revisit with more sequences, not more search.
             // ADAPTIVE, and the sign-flip is what forced it. Raising
             // `new_track_thresh` to 0.7 helped MOTA on sparse sequences
             // (09 +5.97, 05 +3.24) and HURT it on the crowded ones
@@ -299,7 +332,8 @@ mod tests {
         vec![[x, 100.0, x + 40.0, 200.0]]
     }
 
-    /// A steadily-moving object keeps ONE id, and only appears after min_hits.
+    /// A steadily-moving object keeps ONE id, reported from the frame it is
+    /// first seen — `min_hits` is 1, so nothing is withheld.
     #[test]
     fn one_object_keeps_one_id() {
         let mut t = ByteTrack::new(TrackerConfig::default());
@@ -312,8 +346,23 @@ mod tests {
         }
         assert!(!ids.is_empty(), "never reported a track");
         assert!(ids.iter().all(|&i| i == ids[0]), "id switched: {ids:?}");
-        // min_hits = 3, so the first two frames report nothing.
-        assert_eq!(ids.len(), 8, "reported on {} frames, expected 8", ids.len());
+        assert_eq!(ids.len(), 10, "reported on {} frames, expected all 10", ids.len());
+    }
+
+    /// `min_hits` still WORKS when raised — the default moved, the mechanism
+    /// did not. Without this, dropping the default to 1 would leave the
+    /// confirmation path untested and free to rot.
+    #[test]
+    fn min_hits_withholds_a_track_until_confirmed() {
+        let cfg = TrackerConfig { min_hits: 3, ..Default::default() };
+        let mut t = ByteTrack::new(cfg);
+        let mut reported = 0;
+        for k in 0..10 {
+            if !t.update(&boxes_at(100.0 + 5.0 * k as f32), &[0.9], &[0]).is_empty() {
+                reported += 1;
+            }
+        }
+        assert_eq!(reported, 8, "min_hits=3 should withhold the first two frames");
     }
 
     /// THE ByteTrack test. An object goes to LOW confidence mid-sequence, the
@@ -379,10 +428,26 @@ mod tests {
     /// A single-frame false positive must never be reported.
     #[test]
     fn one_frame_blips_never_get_an_id() {
+        // HONEST CHANGE OF PROPERTY. At `min_hits = 3` this asserted a blip is
+        // never reported at all. At `min_hits = 1` it IS reported, for exactly
+        // the one frame it exists — and that is the trade we measured and took:
+        // suppressing the blip cost the first two frames of every REAL track,
+        // which is an identity false-negative on each, and on all seven MOT17
+        // sequences that cost more than the blips do. IDF1 and MOTA both rose.
+        //
+        // What must NOT change is that a blip cannot LINGER. An unconfirmed
+        // track dies the moment it misses, rather than being kept for
+        // `max_age`, so it can never accumulate frames it did not earn. That
+        // invariant is the one worth a test, so this is it.
         let mut t = ByteTrack::new(TrackerConfig::default());
-        assert!(t.update(&boxes_at(10.0), &[0.9], &[0]).is_empty());
-        for _ in 0..5 {
-            assert!(t.update(&[], &[], &[]).is_empty());
+        let first = t.update(&boxes_at(10.0), &[0.9], &[0]);
+        assert_eq!(first.len(), 1, "min_hits=1 reports on sight");
+        for k in 0..5 {
+            assert!(
+                t.update(&[], &[], &[]).is_empty(),
+                "a blip lingered into frame {}",
+                k + 2
+            );
         }
     }
 

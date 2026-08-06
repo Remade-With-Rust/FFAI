@@ -138,8 +138,14 @@ def score(gt, pred):
 
     mt = sum(1 for g, n in gt_count.items() if tracked.get(g, 0) / n >= 0.8)
     ml = sum(1 for g, n in gt_count.items() if tracked.get(g, 0) / n <= 0.2)
+    # The raw identity counts, not just the ratio. Pooling a metric across
+    # sequences has to sum the COUNTS and divide once: averaging seven
+    # per-sequence IDF1 percentages weights a 525-frame clip the same as a
+    # 1050-frame one, which silently changes what "overall IDF1" means
+    # depending on which sequences happen to be in the set.
     return dict(mota=mota, idf1=idf1, idsw=idsw, fp=fp, fn=fn, gt=n_gt,
-                mt=mt, ml=ml, traj=len(gt_count))
+                mt=mt, ml=ml, traj=len(gt_count),
+                idtp=idtp, idfp=idfp, idfn=idfn)
 
 
 def run(seq, engine, conf, out):

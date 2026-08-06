@@ -45,12 +45,25 @@ fn main() -> std::io::Result<()> {
     let crowd_lo: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1e9);
     let crowd_hi: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1e9);
     let crowded_thresh: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.6);
+    // 6th/7th sweep track SURVIVAL, which is the pair the IDF1 gap points at.
+    //
+    // Against Ultralytics on the same weights and frames we sit at MOTA 18.58
+    // vs 19.24 (level) but IDF1 30.48 vs 34.11 (behind) with 398 ID switches
+    // against their 808. Fewer switches AND worse IDF1 is not "more stable" —
+    // it is FEWER and SHORTER trajectories, because a track we never report
+    // cannot switch. `min_hits` withholds a track for its first N frames and
+    // `max_age` decides how long a lost one survives; both cost IDF1 directly
+    // as identity false-negatives while leaving MOTA nearly untouched.
+    let min_hits: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(3);
+    let max_age: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(30);
     let mut tk = ByteTrack::new(TrackerConfig {
         track_thresh,
         new_track_thresh,
         crowd_lo,
         crowd_hi,
         new_track_thresh_crowded: crowded_thresh,
+        min_hits,
+        max_age,
         ..Default::default()
     });
     let out = std::io::stdout();
