@@ -7797,6 +7797,63 @@ Three of the five were shipped by predicting a number and matching it; the two
 that were not (§8.121's confidence density, §8.124's `rc = 200`) were refused for
 being one page each.
 
+### 8.138 GROUND TRUTH — the filter is -9.68 pp macro, and the prediction landed at 0.007 pp
+
+§8.137 fixed a median mismatch that had the block branch running at part
+strength. This is the full re-measurement, 632 page-OCRs, with the prediction
+recorded before it started.
+
+| holdout, 236 pages | micro | MACRO |
+|---|---:|---:|
+| default (all text) | 18.60 % | 30.12 % |
+| body-only, pre-median-fix | 14.55 % | 22.42 % |
+| **body-only, GROUND TRUTH** | **14.39 %** | **20.44 %** |
+
+**Block branch total: -3.427 pp measured against -3.42 pp predicted — error
+0.007 pp.** The median fix alone was worth **-1.977 pp macro**: the branch had
+been delivering 42 % of its value since §8.136 shipped it.
+
+**The whole filter is 30.12 % -> 20.44 % macro, -9.68 pp**, across five branches:
+the §8.113 width tree, §8.112's isolated fragment, §8.116's gated bibliography,
+§8.130's section scope, §8.136's blocks.
+
+**And the comparison set did not move.**
+
+| 43-page mini subset | macro |
+|---|---:|
+| ours, default | 22.72 % |
+| ours, body-only | **21.33 %** |
+| Unlimited-OCR | 15.51 % |
+| **gap** | **+5.82 pp** — unchanged |
+
+Those 43 pages produced byte-identical output before and after the median fix, so
+the entire -1.977 pp landed outside them. That is the second time: §8.130's
+-1.98 pp did the same. **Two of the campaign's three largest wins are invisible
+on the only ground where both engines have been measured.**
+
+**What this run establishes, and what it does not.**
+
+* **Established:** the offline instrument is now trustworthy. A prediction made
+  from exact Levenshtein on refreshed dumps, against a port verified
+  character-identical on eight pages including the two that exposed the median
+  bug, came back inside 0.007 pp. That is the standard §8.116 and §8.130 set, met
+  a third time.
+* **Established:** the filter is worth 9.68 pp macro on holdout — nearly a third
+  of the starting error.
+* **NOT established:** any movement against Unlimited-OCR. The gap has closed
+  6.19 -> 5.82 pp all campaign, and 5.82 of that remains.
+
+**The honest reading of the discrepancy.** Holdout macro fell 9.68 pp while the
+mini subset fell 1.39 pp, so the filter's value is concentrated on pages the
+comparison set does not contain — reference lists, figure-dense academic pages,
+the screenshot page. Either the mini corpus is unrepresentative of the holdout, or
+the holdout gains are on page types Unlimited-OCR was never scored against. **Both
+readings say the same thing: the 43-page set is too small and too unlike the
+corpus to settle a competitive claim, and every comparison in this campaign has
+rested on it.** Scoring Unlimited-OCR on the full 236-page holdout is now the
+highest-value measurement available, and it costs one reference run rather than
+any new engineering.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
