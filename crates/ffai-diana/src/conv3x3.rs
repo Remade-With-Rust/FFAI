@@ -295,15 +295,40 @@ fn tiling_disabled() -> bool {
 /// this is close to parity while paying a transpose per layer, the transpose-
 /// free version wins by that transpose.
 pub fn nhwc_enabled() -> bool {
+    mode() == 1
+}
+
+/// The PAIR path only: convert where a RUN exists and leave every isolated
+/// convolution in NCHW.
+///
+/// This is the dispatch the measurements force. A lone convolution in NHWC pays
+/// a handicapped im2col and a transpose for one GEMM win and loses (0.805x
+/// measured over the whole graph). A PAIR amortises one transpose over two
+/// GEMMs and gets a contiguous gather on the second. So the unit of conversion
+/// is the run, not the layer, and the graph should convert exactly the runs it
+/// has.
+///
+/// `FFAI_DIANA_NHWC=pair` selects it; `=1` also turns on the isolated path, for
+/// A/B only.
+pub fn nhwc_pair_enabled() -> bool {
+    matches!(mode(), 1 | 2)
+}
+
+/// 0 = off, 1 = every 3x3 (island + pairs), 2 = pairs only.
+fn mode() -> u8 {
     use std::sync::atomic::{AtomicU8, Ordering};
     static C: AtomicU8 = AtomicU8::new(u8::MAX);
     match C.load(Ordering::Relaxed) {
         u8::MAX => {
-            let on = std::env::var("FFAI_DIANA_NHWC").is_ok_and(|v| v == "1");
-            C.store(on as u8, Ordering::Relaxed);
-            on
+            let m = match std::env::var("FFAI_DIANA_NHWC").as_deref() {
+                Ok("1") => 1,
+                Ok("pair") => 2,
+                _ => 0,
+            };
+            C.store(m, Ordering::Relaxed);
+            m
         }
-        v => v == 1,
+        v => v,
     }
 }
 
@@ -407,6 +432,139 @@ fn im2col_t(
         }
     });
     col
+}
+
+
+/// `Wnhwc[(ky*3+kx)*Cin + c, Cout]` - the weight reordered for a TAP-MAJOR K.
+///
+/// When im2col reads an NHWC activation the natural gather copies `Cin`
+/// CONTIGUOUS floats per (pixel, tap), which makes the K index tap-major:
+/// `(ky*3+kx)*Cin + c`. The shipped weight is channel-major (`c*9 + ky*3 + kx`),
+/// so one of the two must be permuted - and it must be the weight, because the
+/// weight is constant and the activation is not. Built once, cached, free at
+/// inference.
+fn weight_nhwc_cached(weight: &Tensor, c_out: usize, c_in: usize) -> Result<Tensor> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<candle_core::TensorId, Tensor>>> = Mutex::new(None);
+
+    let key = weight.id();
+    let mut g = CACHE.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    if let Some(t) = m.get(&key) {
+        return Ok(t.clone());
+    }
+    let k = c_in * 9;
+    let ws = weight.flatten_all()?.to_vec1::<f32>()?;
+    let mut out = vec![0.0f32; k * c_out];
+    for o in 0..c_out {
+        for c in 0..c_in {
+            for tap in 0..9usize {
+                out[(tap * c_in + c) * c_out + o] = ws[o * k + c * 9 + tap];
+            }
+        }
+    }
+    let t = Tensor::from_vec(out, (k, c_out), weight.device())?;
+    m.insert(key, t.clone());
+    Ok(t)
+}
+
+/// im2col from an NHWC activation `[H*W, Cin]` into `[OH*OW, 9*Cin]`.
+///
+/// This is the gather NHWC exists for: the `Cin` values of one (pixel, tap) are
+/// CONTIGUOUS in the source AND in the destination, so each inner step is a
+/// `copy_from_slice` of `Cin` floats rather than a strided walk. The NCHW-input
+/// version cannot do this at any loop order - which is exactly why a converted
+/// run wins and an island cannot.
+///
+/// K is tap-major to match [`weight_nhwc_cached`]. Stride 1, padding 1.
+fn im2col_from_nhwc(xs: &[f32], c_in: usize, h: usize, w: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    let k = c_in * 9;
+    let mut col = vec![0.0f32; h * w * k];
+    col.par_chunks_mut(w * k).enumerate().for_each(|(oy, dst)| {
+        for tap in 0..9usize {
+            let (ky, kx) = (tap / 3, tap % 3);
+            let sy = oy + ky;
+            if sy == 0 || sy > h {
+                continue;
+            }
+            let row = (sy - 1) * w * c_in;
+            let koff = tap * c_in;
+            for ox in 0..w {
+                let sx = ox + kx;
+                if sx == 0 || sx > w {
+                    continue;
+                }
+                let s = row + (sx - 1) * c_in;
+                let d = ox * k + koff;
+                dst[d..d + c_in].copy_from_slice(&xs[s..s + c_in]);
+            }
+        }
+    });
+    col
+}
+
+/// Two consecutive 3x3 stride-1 convolutions with the activation staying NHWC
+/// between them.
+///
+/// This is the RUN the whole NHWC campaign reduces to. The pair pays ONE entry
+/// im2col from NCHW (the handicapped one), ONE exit im2col from NHWC
+/// (contiguous - the point), TWO GEMMs in the winning orientation, and ONE
+/// transpose instead of two, fused into the exit epilogue.
+///
+/// The island paid two handicapped im2cols and two transposes for the same two
+/// GEMMs, which is why it had a floor at 0.805x it could not cross.
+pub fn conv3x3_pair_nhwc(
+    x: &Tensor,
+    w1: &Tensor,
+    b1: Option<&Tensor>,
+    act1: bool,
+    w2: &Tensor,
+    b2: Option<&Tensor>,
+    act2: bool,
+) -> Result<Tensor> {
+    let (n, c_in, h, w) = x.dims4()?;
+    let mid = w1.dim(0)?;
+    let c_out = w2.dim(0)?;
+    let hw = h * w;
+    let k1 = c_in * 9;
+
+    // entry: NCHW in, NHWC out, no transpose
+    let col1 = crate::profile::timed(|p| &p.im2col, || {
+        crate::cpuop::SliceOp::new("ffai-im2col3x3-t", move |xs, _| {
+            Ok((im2col_t(xs, c_in, h, w, h, w, 1), (hw, k1).into()))
+        })
+        .run(x)
+    })?;
+    let wt1 = weight_t_cached(w1, mid, k1)?;
+    let y1 = crate::profile::timed(|p| &p.gemm, || col1.matmul(&wt1))?;
+    let bias1 = match b1 {
+        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+        None => None,
+    };
+    let y1 = crate::profile::timed(|p| &p.conv_wrap, || {
+        crate::epilogue::apply_nhwc(y1, bias1, mid, act1)
+    })?;
+
+    // exit: NHWC in (contiguous gather), NCHW out
+    let k2 = mid * 9;
+    let col2 = crate::profile::timed(|p| &p.im2col, || {
+        crate::cpuop::SliceOp::new("ffai-im2col3x3-nhwc", move |xs, _| {
+            Ok((im2col_from_nhwc(xs, mid, h, w), (hw, k2).into()))
+        })
+        .run(&y1)
+    })?;
+    let wt2 = weight_nhwc_cached(w2, c_out, mid)?;
+    let y2 = crate::profile::timed(|p| &p.gemm, || col2.matmul(&wt2))?;
+    let bias2 = match b2 {
+        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+        None => None,
+    };
+    let out = crate::profile::timed(|p| &p.conv_wrap, || {
+        crate::epilogue::apply_transposed(y2, bias2, c_out, hw, act2)
+    })?;
+    out.reshape((n, c_out, h, w))
 }
 
 /// One 3x3 convolution with the GEMM in the NHWC orientation.

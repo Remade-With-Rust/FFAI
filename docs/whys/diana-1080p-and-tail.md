@@ -954,3 +954,89 @@ and no conversion at all. Measured on four real shapes: **0.35x, 0.53x, 0.70x,
 `FFAI_DIANA_NHWC=1` is **still OFF by default and still a net loss at 0.805x**.
 Nothing here changes the shipped path. What landed is two real bricks the
 conversion requires, each gated byte-identical, plus the exact remaining price.
+
+---
+
+# The run conversion, built and measured — and the architecture is too short
+
+The last step was built: `conv3x3_pair_nhwc` keeps the activation NHWC across
+two consecutive convolutions, so the pair pays **one** transpose instead of two
+and its second im2col gathers **contiguously** (`im2col_from_nhwc`
+`copy_from_slice`s `Cin` floats per (pixel, tap) instead of striding). The
+weight is permuted to a tap-major K once at load (`weight_nhwc_cached`).
+
+Wired into `Bottleneck`, which is the one place in this graph where both ends of
+a layout region are known statically. **Gate: 55 detections both arms, 0
+mismatches, 0.0000 px, conf delta 0.000000.**
+
+| mode | TOTAL | reps |
+|---|---:|---|
+| island + pairs (`=1`) | 0.810x | 0/6 |
+| **pairs only (`=pair`)** | **0.894x** | **0/8, z = -2.83** |
+
+Pairs-only is the honest dispatch — convert the runs, leave isolated
+convolutions alone — and it is **10.6 % slower**, consistently, on a 6 % box.
+
+## Why, in per-convolution costs
+
+Measured over 1,170 conv-calls:
+
+| | per conv |
+|---|---:|
+| im2col | 70.1 us |
+| gemm | 192.3 us |
+| epilogue | 17.9 us |
+
+| | |
+|---|---:|
+| saving per convolution INSIDE a run | **+38.2 us** |
+| ENTRY penalty — im2col from NCHW is ~3x | **-153.5 us** |
+| EXIT penalty — fused transpose vs plain epilogue | **-41.8 us** |
+
+**Break-even run length: 5.1 consecutive convolutions.**
+
+| run | net |
+|---|---:|
+| 2 (Bottleneck) | -118.9 us — LOSES |
+| 4 (C3k, both bottlenecks chained) | -42.6 us — LOSES |
+| 6 | +33.8 us — pays |
+
+## The verdict, and it is architectural
+
+**YOLO26 does not contain runs of 5 consecutive convolutions.** Every sequence
+is broken within two or three by a 1x1, a channel split, a concat or a residual
+add. `Bottleneck` gives 2; chaining across `C3k`'s two bottlenecks gives 4 at
+the absolute best. Both are under the bar.
+
+The entry cost is what kills it: producing `[OHW, K]` from an NCHW activation is
+~3x producing `[K, OHW]`, because the destination stride is wrong no matter the
+loop order (three orders were measured: 0.176x, 0.278x, 0.315x). A run pays that
+once, and needs five convolutions of +38 us to earn it back.
+
+**This is not a tuning failure and no longer-run heuristic rescues it.** The
+prize was real — the GEMM orientation is worth 1.196x and that held across every
+quiet measurement — but the cost of ENTERING the layout exceeds what this
+architecture's run lengths can repay.
+
+## What is kept, all off by default
+
+* `conv3x3_nhwc` (`=1`) and `conv3x3_pair_nhwc` (`=pair`), both gated
+  byte-identical, as the A/B arms and as a working NHWC implementation should a
+  future architecture with longer runs make it worth revisiting.
+* `epilogue::apply_transposed` — transpose fused into the epilogue, unit-tested
+  as an equality. Worth 0.695x -> 0.755x on the NHWC path.
+* `epilogue::apply_nhwc` — the NHWC-native bias+SiLU.
+* `weight_t_cached` / `weight_nhwc_cached` — both permutations hoisted to load.
+* `im2col_from_nhwc` — the contiguous gather, which is the piece that would
+  matter if the runs were ever long enough.
+
+**The shipped NCHW path is untouched and nothing has regressed.**
+
+## The number that should have been computed first
+
+Break-even run length is `(entry + exit) / per-conv-saving`. Every input to it
+was measurable before a single line of the pair path was written: the entry
+penalty from the three im2col variants, the exit penalty from the transpose
+probe, and the per-conv saving from the GEMM ratio. **It would have read 5.1
+against an architecture offering 2, and priced the whole conversion out in an
+afternoon** — `codec-measurement` §11, prune on arithmetic before building.

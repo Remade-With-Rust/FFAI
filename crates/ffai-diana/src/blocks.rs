@@ -186,6 +186,34 @@ impl ConvAct {
     }
 }
 
+
+impl ConvAct {
+    /// Eligible for the paired NHWC run: a dense 3x3, not depthwise, with the
+    /// fused epilogue actually in play. Every condition MIRRORS the dispatch in
+    /// `forward` rather than approximating it - a mismatch here is a wrong
+    /// graph, not a slow one.
+    pub(crate) fn nhwc_pairable(&self) -> bool {
+        self.kind == ConvKind::Dense3x3
+            && !self.depthwise
+            && self.act
+            && !silu_disabled()
+            && !fuse_disabled()
+            && !conv3x3_disabled()
+    }
+
+    pub(crate) fn w(&self) -> &candle_core::Tensor {
+        self.conv.weight()
+    }
+
+    pub(crate) fn b(&self) -> Option<&candle_core::Tensor> {
+        self.conv.bias()
+    }
+
+    pub(crate) fn act_on(&self) -> bool {
+        self.act
+    }
+}
+
 impl Module for ConvAct {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Info-tier scope: NESTED inside the stage buckets, so it is excluded
@@ -369,7 +397,31 @@ impl Bottleneck {
 
 impl Module for Bottleneck {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let y = self.cv2.forward(&self.cv1.forward(x)?)?;
+        // THE NHWC RUN. cv1 and cv2 are consecutive 3x3 convolutions with
+        // nothing between them, so this is the one place in the graph where
+        // both ends of a layout region are known statically. The activation
+        // stays NHWC across the pair: one transpose instead of two, and the
+        // second im2col gathers CONTIGUOUSLY instead of striding.
+        //
+        // Gated on `nhwc_pairable`, which mirrors ConvAct::forward's dispatch
+        // exactly - if either conv would have taken a different path, the pair
+        // must not claim it.
+        let y = if crate::conv3x3::nhwc_pair_enabled()
+            && self.cv1.nhwc_pairable()
+            && self.cv2.nhwc_pairable()
+        {
+            crate::conv3x3::conv3x3_pair_nhwc(
+                x,
+                self.cv1.w(),
+                self.cv1.b(),
+                self.cv1.act_on(),
+                self.cv2.w(),
+                self.cv2.b(),
+                self.cv2.act_on(),
+            )?
+        } else {
+            self.cv2.forward(&self.cv1.forward(x)?)?
+        };
         if self.add {
             x + y
         } else {
