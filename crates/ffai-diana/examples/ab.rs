@@ -34,7 +34,7 @@
 // the one set in ffai-cli. Without this the A/B measures a configuration we
 // no longer run.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use std::process::Command;
 

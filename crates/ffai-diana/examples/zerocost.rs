@@ -34,7 +34,7 @@
 // The shipped allocator. The first run of this probe used the system one,
 // and mimalloc changed the whole pipeline by 1.64x — so its numbers expired.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use std::time::Instant;
 

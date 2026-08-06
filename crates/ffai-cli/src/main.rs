@@ -24,8 +24,82 @@
 ///
 /// A library cannot set this; downstream users of the crates do not inherit
 /// it and must choose for themselves.
+///
+/// ## Why `rusty_alloc` and not `mimalloc`
+///
+/// `mimalloc` is a C library, which is the one thing FFai exists not to depend
+/// on — and it sat here anyway, because 1.64x is not a number you give up for
+/// a principle. `rusty_alloc` is the pure-Rust remake of the same design
+/// (mimalloc v2.4.5), so the principle no longer costs anything. Measured
+/// before switching, ABBA-interleaved with a NULL arm, `examples/alloc_ab.rs`:
+///
+/// | tier | mimalloc | rusty_alloc | peak RSS mi -> ra |
+/// |---|---|---|---|
+/// | n (N=31) | 38.18 ms | 37.37 ms | 77.5 -> 91.4 MB |
+/// | s (N=9) | 104.81 ms | 103.53 ms | 183.6 -> 152.7 MB |
+/// | m (N=9) | 247.66 ms | 249.92 ms | 299.3 -> 269.4 MB |
+///
+/// Pooling all 49 paired rounds rusty_alloc wins 33 at **z = +2.43**, against
+/// a null arm (mimalloc against itself) that wins 22 at z = -0.71. So: a real
+/// but small **~1.5 % faster**, and the honest claim is parity-or-better
+/// rather than a speed win.
+///
+/// Memory INVERTS with scale — ~14 MB more fixed arena, ~30 MB less retained
+/// once the model is big enough to matter. Above the n tier that is the better
+/// profile, and the n-tier regression is a constant, not growth.
+///
+/// Both arms produce bit-identical detections. Set `--features mimalloc` to
+/// switch back; the C library stays wired up as the oracle, exactly as the
+/// scalar twin of a SIMD kernel does.
+#[cfg(not(feature = "mimalloc"))]
+#[global_allocator]
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
+
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Background page reclaim — **OFF by default, because it measured as doing
+/// nothing.** Opt in with `FFAI_TRIM_MS=<ms>`.
+///
+/// Kept rather than deleted because `rusty_alloc` is under active work on
+/// exactly this, and a wired-up toggle makes re-testing one env var instead of
+/// one patch. This is a *measured-neutral* revert, not a measured-worse one.
+///
+/// The reason it is not on: `rusty_alloc` holds more resident memory than
+/// mimalloc on Diana's workload — 4 worker threads plus candle's 24, none of
+/// which ever exit, so freed pages are retained 28 ways. Calling
+/// `rusty_alloc::alloc::collect(false)` on a timer looked like it halved that.
+/// It did not. Three arms, ONE binary, trim the only variable, ABBA-rotated,
+/// N=5 at 1500 detect reps:
+///
+/// | arm | RSS median | RSS range | latency |
+/// |---|---|---|---|
+/// | mimalloc | 111.1 MB | 106.7–134.2 | 31.97 ms |
+/// | rusty_alloc, no trim | 195.8 MB | 92.2–403.3 | 30.63 ms |
+/// | rusty_alloc, trim 200 ms | 195.8 MB | 91.2–402.5 | 30.49 ms |
+///
+/// **0.1 MB reclaimed, 0 %.** The apparent "405.6 → 195.0 MB, halved for free"
+/// was one sample against another drawn from a distribution spanning
+/// 92–403 MB — a 4.4× run-to-run spread, against mimalloc's 1.26×. That
+/// variance, not the median, is the real difference between the two
+/// allocators here, and it is why every RSS number in this file carries its
+/// range.
+#[cfg(not(feature = "mimalloc"))]
+fn spawn_page_trimmer() {
+    let ms = std::env::var("FFAI_TRIM_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    if ms == 0 {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        rusty_alloc::alloc::collect(false);
+    });
+}
+
+/// mimalloc runs its own idle reclaim, so the trimmer has nothing to do.
+#[cfg(feature = "mimalloc")]
+fn spawn_page_trimmer() {}
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -364,6 +438,7 @@ fn match_candle_threads() {
 
 fn main() -> Result<()> {
     match_candle_threads();
+    spawn_page_trimmer();
     let cli = Cli::parse();
     let reg = build_registry();
 

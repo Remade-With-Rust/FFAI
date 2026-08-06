@@ -20,7 +20,7 @@
 // allocator that the campaign just showed costs 58,634 page faults per image
 // — i.e. it profiles a configuration we no longer ship.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use ffai_core::engine::{DetectEngine, DetectOptions};
 

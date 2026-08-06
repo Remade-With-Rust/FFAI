@@ -36,8 +36,26 @@ anyhow = { workspace = true }
 # A library cannot set a global allocator, so it is set here in the binary.
 # Downstream users of `ffai-diana` as a crate do NOT inherit it and should
 # make the same choice for themselves; the README says so.
-mimalloc = { version = "0.1", default-features = false }
+#
+# SUPERSEDED as the default by `rusty_alloc`, the pure-Rust remake of the same
+# design — measured at parity-or-better (z = +2.43 over 49 paired rounds) with
+# a better memory profile above the n tier. See the `#[global_allocator]` doc
+# comment in `src/main.rs` for the table.
+#
+# Kept, optional, as the oracle: `--features mimalloc` switches back, which is
+# what makes "our pure-Rust allocator matches the C one" a claim anyone can
+# re-measure rather than one they have to take on trust.
+mimalloc = { version = "0.1", default-features = false, optional = true }
+rusty_alloc-api = "0.1.0-alpha.1"
+# The core, for `alloc::collect` — see `spawn_page_trimmer` in main.rs.
+# Without it rusty_alloc's RSS does not bound on a rayon pool.
+rusty_alloc = "0.1.0-alpha.1"
 clap = { workspace = true }
+
+[features]
+# Swap the pure-Rust allocator back out for the C library it replaced.
+# Enabling this is a measurement tool, not a supported configuration.
+mimalloc = ["dep:mimalloc"]
 
 [lints]
 workspace = true

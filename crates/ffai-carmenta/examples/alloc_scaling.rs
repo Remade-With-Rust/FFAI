@@ -28,7 +28,7 @@
 // harness, once with the feature and once without. Here it is unconditional;
 // the system-allocator numbers come from the committed version.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use std::hint::black_box;
 use std::sync::atomic::{AtomicU64, Ordering};

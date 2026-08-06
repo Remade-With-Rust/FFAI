@@ -18,7 +18,7 @@
 // A measurement harness that differs from the product in its allocator is
 // measuring the wrong program.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use ffai_carmenta::engine::{CraftCrnn, DetStage, RecStage};
 use ffai_core::engine::{OcrEngine, OcrOptions};

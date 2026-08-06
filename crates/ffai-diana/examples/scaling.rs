@@ -17,36 +17,27 @@
 //! tail is scheduler noise and this box's clock drifts more than the effect.
 // The shipped allocator; examples do not inherit the binary's.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use ffai_core::engine::{DetectEngine, DetectOptions};
 use std::time::Instant;
 
-#[allow(unsafe_code)]
-unsafe extern "C" {
-    /// mimalloc's own reclaim. `force = false` returns pages the heaps no
-    /// longer need without disturbing what is in use.
-    fn mi_collect(force: bool);
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Optional trimmer: `FFAI_TRIM_MS=200` runs mi_collect on a background
-    // thread at that cadence. mimalloc keeps a per-thread heap and we run 4
-    // of our workers plus candle's 24, so freed pages are retained 28 ways —
-    // 174 MiB steady against 26.3 MiB actually live. `mi_collect` hands them
-    // back; the question is what that costs.
+    // Optional trimmer: `FFAI_TRIM_MS=200` runs the allocator's reclaim on a
+    // background thread at that cadence. Both allocators keep a per-thread
+    // heap and we run 4 of our workers plus candle's 24, so freed pages are
+    // retained 28 ways — 174 MiB steady against 26.3 MiB actually live.
+    // `collect` hands them back; the question is what that costs.
+    //
+    // Was `mi_collect` via an `extern "C"` declaration against mimalloc's
+    // static library. `rusty_alloc` exposes the same reclaim as a safe Rust
+    // function, so the `unsafe extern` block is gone entirely — which is the
+    // small, unglamorous form the pure-Rust argument usually takes.
     if let Ok(ms) = std::env::var("FFAI_TRIM_MS") {
         if let Ok(ms) = ms.parse::<u64>() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(ms));
-                // SAFETY: mi_collect is thread-safe, takes no references and
-                // returns nothing. libmimalloc-sys does not re-export it, so
-                // the symbol is declared here against the static library it
-                // already links.
-                #[allow(unsafe_code)]
-                unsafe {
-                    mi_collect(false)
-                };
+                rusty_alloc::alloc::collect(false);
             });
         }
     }

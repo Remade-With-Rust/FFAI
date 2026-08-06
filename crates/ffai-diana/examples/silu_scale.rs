@@ -35,7 +35,7 @@
 // Same allocator the binary ships, or this probe's ceiling is measured against
 // a configuration we no longer run.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use candle_core::{Device, Tensor};
 use std::time::Instant;

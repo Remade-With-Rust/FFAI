@@ -52,6 +52,15 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 # decision about shipping one.
 mimalloc = { version = "0.1", default-features = false }
 libmimalloc-sys = { version = "0.1", default-features = false }
+# The pure-Rust remake of the above. Evaluating it is the whole point of
+# `examples/alloc_ab.rs`: mimalloc is a C library, and it is also by a wide
+# margin the largest single effect in the Diana latency campaign (1.64x), so
+# it is simultaneously the dependency we most want to drop and the one that
+# costs the most to drop wrongly.
+rusty_alloc-api = "0.1.0-alpha.1"
+# The core, for `alloc::collect` — the reclaim `examples/scaling.rs` drives.
+# `rusty_alloc-api` deliberately exposes collect only per-`Heap`.
+rusty_alloc = "0.1.0-alpha.1"
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 
@@ -76,3 +85,9 @@ mkl = ["candle-core/mkl", "candle-nn/mkl"]
 # the optimizer deletes. Additive only — an instrumented engine must produce
 # byte-identical output, which the oracle and determinism tests enforce.
 prometheus-telemetry = []
+# Allocator arms for `examples/alloc_ab.rs`. Selecting one changes exactly one
+# type in one `#[global_allocator]` line and nothing else, so the two binaries
+# are otherwise identical — which is what makes the A/B a measurement of the
+# allocator rather than of two builds.
+alloc-rusty = []
+alloc-sys = []
