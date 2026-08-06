@@ -367,7 +367,7 @@ pub fn record_conv(shape: ConvShape, nanos: u64) {
 
 /// Ranked by total time, because that is the order in which work is worth
 /// doing. `GFLOP/s` is the column that says whether a row is a target.
-pub fn roofline_report() -> String {
+pub fn roofline_report(images: u64) -> String {
     let g = ROOFLINE.lock().unwrap();
     let Some(m) = g.as_ref() else {
         return "roofline: no data (set FFAI_DIANA_ROOFLINE=1)".into();
@@ -382,7 +382,12 @@ pub fn roofline_report() -> String {
         "\nper-layer roofline (FFAI_DIANA_ROOFLINE=1)\n\
          kind       cin->cout   in HxW     out HxW  calls   ms/img  share  GFLOP/s  AI(f/B)\n",
     );
-    let imgs = rows.iter().map(|(_, c, _)| *c).max().unwrap_or(1).max(1);
+    // The frame count comes from the CALLER. Deriving it from the max call
+    // count was wrong by exactly the number of times the busiest shape repeats
+    // within one image (12x here), and it announced itself as conv totalling
+    // 1.69 ms/img while im2col NESTED INSIDE IT read 2.774 — a parent cheaper
+    // than its child. Shares and GFLOP/s were unaffected; they never used it.
+    let imgs = images.max(1);
     for (s, calls, ns) in &rows {
         let secs = *ns as f64 / 1e9;
         let gflops = (s.flops() * *calls as f64 / 1e9) / secs.max(1e-12);
@@ -409,6 +414,91 @@ pub fn roofline_report() -> String {
         rows.len(),
         total_flops / 1e9 / imgs as f64,
         (total_flops / 1e9) / (total_ns as f64 / 1e9),
+    ));
+    out
+}
+
+// ---------------------------------------------------------------------------
+// SliceOp accounting — WRAPPER vs WORK, per op name
+//
+// `p.sliceop` times `apply_op1_no_bwd`, which CONTAINS the closure it is
+// dispatching to. So its 15.8 % nests im2col's 11.4 % and cannot be read as
+// "15.8 % of detect is plumbing" — that would double-count the arithmetic and
+// send someone to optimise a bucket that is mostly real work.
+//
+// This splits it. `total` is the wrapper as seen from `run()`; `work` is the
+// closure alone, timed inside `cpu_fwd`. The difference is what candle's
+// custom-op dispatch costs us per call: allocation of the output storage,
+// the Shape, the dyn dispatch, and whatever the tensor layer does around it.
+//
+// That difference is the only part that could be a win, because the closure is
+// the arithmetic and is not going anywhere.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static LAST_WORK_NS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub fn set_last_work_ns(n: u64) {
+    LAST_WORK_NS.with(|c| c.set(n));
+}
+
+pub fn take_last_work_ns() -> u64 {
+    LAST_WORK_NS.with(|c| c.replace(0))
+}
+
+/// name -> (calls, total nanos incl. wrapper, closure nanos)
+static SLICEOPS: Mutex<Option<HashMap<&'static str, (u64, u64, u64)>>> = Mutex::new(None);
+
+pub fn record_sliceop(name: &'static str, total_ns: u64, work_ns: u64) {
+    if !roofline_enabled() {
+        return;
+    }
+    let mut g = SLICEOPS.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    let e = m.entry(name).or_insert((0, 0, 0));
+    e.0 += 1;
+    e.1 += total_ns;
+    e.2 += work_ns;
+}
+
+pub fn sliceop_report(images: u64) -> String {
+    let g = SLICEOPS.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return "sliceop: no data (set FFAI_DIANA_ROOFLINE=1)".into();
+    };
+    let mut rows: Vec<(&&str, u64, u64, u64)> =
+        m.iter().map(|(n, (c, t, w))| (n, *c, *t, *w)).collect();
+    rows.sort_by_key(|(_, _, t, _)| std::cmp::Reverse(*t));
+    let imgs = images.max(1) as f64;
+
+    let mut out = String::from(
+        "\nSliceOp: wrapper vs work (FFAI_DIANA_ROOFLINE=1)\n\
+         op                        calls/img  total ms/img   work ms/img  WRAPPER ms/img  wrapper%\n",
+    );
+    let (mut tt, mut tw) = (0u64, 0u64);
+    for (name, calls, total, work) in &rows {
+        tt += *total;
+        tw += *work;
+        let over = total.saturating_sub(*work);
+        out.push_str(&format!(
+            "{:<26} {:>9.1} {:>13.3} {:>13.3} {:>15.3} {:>9.1}%\n",
+            name,
+            *calls as f64 / imgs,
+            *total as f64 / 1e6 / imgs,
+            *work as f64 / 1e6 / imgs,
+            over as f64 / 1e6 / imgs,
+            100.0 * over as f64 / (*total as f64).max(1.0),
+        ));
+    }
+    let over = tt.saturating_sub(tw);
+    out.push_str(&format!(
+        "\nTOTAL {:.3} ms/img, of which work {:.3} and WRAPPER {:.3} ({:.1}%)\n\
+         the wrapper is the only part that could be removed; the closure is the arithmetic\n",
+        tt as f64 / 1e6 / imgs,
+        tw as f64 / 1e6 / imgs,
+        over as f64 / 1e6 / imgs,
+        100.0 * over as f64 / (tt as f64).max(1.0),
     ));
     out
 }

@@ -72,6 +72,16 @@ where
         // image (one per convolution and one per activation), so if it costs
         // anything it costs it 2745 times, and it was previously folded into
         // whichever parent happened to call it.
+        if crate::profile::roofline_enabled() {
+            let t0 = std::time::Instant::now();
+            let r = x.apply_op1_no_bwd(self);
+            crate::profile::record_sliceop(
+                self.name,
+                t0.elapsed().as_nanos() as u64,
+                crate::profile::take_last_work_ns(),
+            );
+            return r;
+        }
         crate::profile::timed(|p| &p.sliceop, || x.apply_op1_no_bwd(self))
     }
 }
@@ -92,7 +102,11 @@ where
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         let xs = contiguous_f32(storage, layout)?;
+        let t0 = crate::profile::roofline_enabled().then(std::time::Instant::now);
         let (out, shape) = (self.f)(xs, layout)?;
+        if let Some(t0) = t0 {
+            crate::profile::set_last_work_ns(t0.elapsed().as_nanos() as u64);
+        }
         Ok((CpuStorage::F32(out), shape))
     }
 }

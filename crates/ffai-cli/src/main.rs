@@ -899,12 +899,14 @@ fn serve_stdin(
     out.flush()?;
 
     let stdin = std::io::stdin();
+    let mut n_frames: u64 = 0;
     for line in stdin.lock().lines() {
         let line = line?;
         let path = line.trim();
         if path.is_empty() {
             continue;
         }
+        n_frames += 1;
         // A frame that will not load is reported, not fatal: a viewer driving
         // a directory someone is still writing into should skip and continue,
         // not die on a half-written file.
@@ -975,7 +977,8 @@ fn serve_stdin(
         eprintln!("{}", ffai_diana::profile::profile().report());
     }
     if ffai_diana::profile::roofline_enabled() {
-        eprintln!("{}", ffai_diana::profile::roofline_report());
+        eprintln!("{}", ffai_diana::profile::roofline_report(n_frames));
+        eprintln!("{}", ffai_diana::profile::sliceop_report(n_frames));
     }
     Ok(())
 }
