@@ -273,7 +273,11 @@ anyone would guess:
 * **the allocator**, worth 1.64x. 58,634 page faults per image; the system
   allocator was returning memory to the OS and re-faulting nearly every byte;
 * **the thread pool**, worth 1.21x wall and 3.5x CPU — one image wants ~4
-  workers, not 24, and candle keeps its own pool besides;
+  workers, not 24, and candle keeps its own pool besides. **4 is the
+  latency-optimal width, not the only sensible one**: measured against it,
+  2 workers costs 1.35x wall and saves **15 % of the CPU**, and 1 worker costs
+  2.0x wall and saves **21 %**. A host packing many concurrent streams should
+  measure `FFAI_DIANA_THREADS=2`; a single latency-bound stream wants 4;
 * **preprocessing**, 5.7x on its own — a serial bilinear resize recomputing
   the horizontal sample position for every column of every row;
 * **epilogue fusion** on both convolution paths, 12.5 % — bias and SiLU in one

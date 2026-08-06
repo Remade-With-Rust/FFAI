@@ -306,6 +306,13 @@ deploying, and two runtime pieces are **not** done: weights load through
 `std::fs`, which a browser does not have, and `rayon` compiles for wasm yet
 needs atomics plus a threaded build to do anything.
 
+**Thread width is a latency/CPU trade, not a single right answer.** The default
+is 4 workers, which is latency-optimal for one image. Measured against it,
+`FFAI_DIANA_THREADS=2` costs 1.35× wall and saves **15 % of the CPU**; 1 worker
+costs 2.0× and saves **21 %**. A host packing many concurrent streams should
+measure 2; a single latency-bound stream wants 4. Going wider is strictly worse
+on both axes — 12 workers is 2.16× the CPU.
+
 **The allocator is not inherited.** The system allocator re-faults nearly every
 byte it hands back — 58,634 page faults per image — and costs **1.66×**. A
 library cannot set a global allocator, so an embedder opts in itself:

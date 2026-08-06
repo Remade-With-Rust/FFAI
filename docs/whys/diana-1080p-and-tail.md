@@ -1176,3 +1176,68 @@ every probe in this campaign until the last one, and the moment it appeared it
 overturned a verdict reached an hour earlier. A parallelism column belongs in
 every arm-vs-arm table by default, because two arms at different thread counts
 are not comparable and nothing else in the output says so.
+
+---
+
+# CPU audit: which levers decided on WALL are wins on CPU?
+
+Every refutation in this campaign was decided on wall time. The Winograd
+correction says that is half a measurement, so all of them were re-run with
+CPU-seconds and a cores-busy column. 4 ABBA reps each against the shipped
+default, 30 frames.
+
+| arm | wall ms/f | cpu ms/f | cores | wall x | **CPU x** | |
+|---|---:|---:|---:|---:|---:|---|
+| **SHIPPED DEFAULT** | 38.49 | 91.93 | 2.39 | 1.00 | 1.00 | |
+| epilogue out-of-place | 45.50 | 92.71 | 2.04 | 0.85 | 1.01 | no saving |
+| im2col tiling | 54.69 | 108.85 | 1.99 | 0.70 | **1.18** | worse on both |
+| direct convolution | 44.59 | 87.50 | 1.96 | 0.86 | **0.95** | real trade |
+| 2 threads | 51.78 | 77.86 | 1.50 | 0.74 | **0.85** | real trade |
+| 1 thread | 78.41 | 72.40 | 0.92 | 0.49 | **0.79** | real trade |
+
+## Two verdicts are confirmed rather than overturned
+
+* **Epilogue in-place** is the right default on BOTH axes: out-of-place is
+  0.85x wall for no CPU saving at all (1.01x). The counted work removal that
+  justified it — 81 SliceOps and 39.6 MiB/image — was real, and the CPU column
+  now says so where the clock never could.
+* **im2col tiling** is 0.70x wall AND 1.18x CPU. Refuted three times on wall,
+  and worse on the axis nobody had checked. That one is closed for good.
+
+## Three are genuine "less processing, not faster" trades
+
+**Thread width is the big one, and it was hiding in plain sight.** The campaign
+established that one image wants ~4 workers rather than 24, and later refuted
+per-LAYER width. Both are about going WIDER. Going NARROWER was never priced:
+
+| threads | wall | CPU |
+|---|---:|---:|
+| 1 | 0.49x | **0.79x** |
+| 2 | 0.74x | **0.85x** |
+| **4 (shipped)** | **1.00x** | **1.00x** |
+| 8 | — | 1.51x |
+| 12 | — | 2.16x |
+
+**2 threads is 15 % less CPU for 35 % more wall.** For a host packing many
+concurrent streams that is very likely the better setting, and it is the same
+phenomenon the throughput result already reports from the other end — the
+structure that loses latency wins throughput.
+
+**Direct convolution: 0.95x CPU at 0.86x wall.** Marginal, and it matches the
+kernel's own premise — it never builds the 9x-expanded operand, so it moves far
+less memory. The wall refutation stands; the CPU column says the traffic
+argument was right even though the clock was not.
+
+## What changes
+
+Nothing ships differently. `FFAI_DIANA_THREADS` already exposes the knob; what
+was wrong was the DOCUMENTATION, which called 4 optimal rather than naming the
+trade. A latency-bound single stream wants 4; a throughput-bound host packing
+streams should measure 2.
+
+## The audit is the transferable part
+
+**Every lever refuted on a stopwatch deserves one CPU-time re-run**, and it is
+cheap — five levers, one harness, minutes. Two of tonight's refutations got
+stronger, one got a caveat, and two settings turned out to be operating points
+rather than losers.
