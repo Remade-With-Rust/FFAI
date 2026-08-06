@@ -7916,6 +7916,69 @@ the route there is now measured rather than guessed — **72 small pages at
 suppress and fail on recognition or ordering instead. That is the next campaign,
 and it is not a suppression problem.
 
+### 8.140 The 2.68 pp gap, priced gate by gate — and one of them is a defect
+
+§8.139 settled the standing: we win micro by 4.33 pp, lose macro by 2.68 pp, at
+15.5x the speed on a CPU. The macro deficit is entirely SMALL PAGES — 72 pages
+under 1 500 reference characters at 34.19 % against their 28.32 %. This prices
+what closing it needs.
+
+**The arithmetic first.** Small pages at parity are worth
+`72/236 x 5.87 = 1.79 pp`; large pages at parity are worth
+`164/236 x 1.28 = 0.89 pp`. Together 2.68 pp, exactly the gap. **Two thirds of it
+is 72 pages.**
+
+**Where the small-page deficit sits, by class:**
+
+| class | n | ours | theirs | gap | worth |
+|---|---:|---:|---:|---:|---:|
+| **colorful_textbook** | 17 | 34.33 % | 13.19 % | **+21.14** | **1.52 pp** |
+| PPT2PDF | 20 | 26.18 % | 20.82 % | +5.35 | 0.45 pp |
+| magazine | 13 | 27.71 % | 21.01 % | +6.70 | 0.37 pp |
+| exam_paper | 4 | 38.50 % | 21.85 % | +16.65 | 0.28 pp |
+| book | 13 | 55.36 % | 59.46 % | **-4.11** | we win |
+| academic_literature | 5 | 24.08 % | 52.94 % | **-28.86** | we win |
+
+**One class is 57 % of the small-page prize.** `colorful_textbook` at +21.14 pp
+over 17 pages is worth 1.52 pp of corpus macro on its own — more than half the
+entire competitive gap, in one document type.
+
+**GATE 1 — an abstention gate, and it is a DEFECT not a feature.** The filter
+makes **20 of the 72 small pages WORSE than emitting everything**, costing
+0.42 pp of corpus macro:
+
+| page | class | default | body-only | theirs |
+|---|---|---:|---:|---:|
+| `omni-0035` | magazine | 4.3 % | **33.8 %** | 2.6 % |
+| `omni-0163` | colorful_textbook | 25.9 % | 36.2 % | 5.2 % |
+| `omni-0199` | book | 4.1 % | 12.5 % | 1.4 % |
+| `omni-0156` | colorful_textbook | 8.1 % | 15.2 % | 5.1 % |
+
+`omni-0035` goes from 4.3 % to 33.8 % — the filter deletes a page it should have
+left alone, and turns a page we were WINNING (4.3 vs their 2.6) into one we lose
+by 31 pp. **Every branch has a firing rule and none has a stopping rule.** A gate
+that refuses to suppress when it would remove too large a share of a short page
+recovers 0.42 pp and cannot cost anything, because it only ever declines to act.
+This is the cheapest 0.42 pp available and it is repairing damage we are doing.
+
+**GATE 2 — `colorful_textbook`, 1.52 pp.** The largest single item and not a
+suppression problem: §8.126 measured this class at **5.5 % orphan share** — there
+is almost nothing to suppress, so the error is recognition or reading order.
+§8.129 identified the same pages as figure-dense, where the annotated regions are
+captions and everything else is chart internals. Diagnosing one of these pages
+the way §8.128 diagnosed `omni-0039` is the next concrete step.
+
+**GATE 3 — the remaining 0.89 pp on large pages**, where we sit at 14.41 %
+against 13.13 %. No structure identified yet; it is the thinnest lead of the
+three.
+
+**What is NOT a gate.** Suppression is finished as a lever here. §8.117 and
+§8.122 proved the constants optimal under both objectives, §8.120's 39 111
+conjunctions found nothing distributed, the post-block residual search is
+exhausted (7 of 18 884 candidates, all at top3 ~100 %), and the classes where
+suppression still pays — `academic_literature` and `book` — are classes we
+already WIN by 28.86 and 4.11 pp.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
