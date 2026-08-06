@@ -61,6 +61,15 @@ struct Args {
     input: PathBuf,
 }
 
+/// Any extra numeric columns the input carries, by name. The two hardcoded
+/// feature families (line geometry, block geometry) cover the harvests this
+/// campaign built; a NEW gate is a new harvest, and a tool that can only search
+/// feature sets it was compiled against makes every new question a code change.
+///
+/// §8.142 hit this: a reading-order harvest has neither `w_p90` nor
+/// `area_frac`, so the optimizer loaded 316 rows and searched nothing.
+type Extras = std::collections::BTreeMap<String, f64>;
+
 /// One harvested line. Fields the current rule sets do not read are kept
 /// because they are what the NEXT rule set is built from — the harvest is
 /// expensive and the columns are already in the CSVs.
@@ -76,6 +85,9 @@ struct Row {
     macro_gain: f64,
     /// Needed only to count distinct pages, which is macro's denominator.
     page: String,
+    /// Columns the two known families do not name. Empty unless the input is a
+    /// harvest the tool has not been taught, which is when GENERIC mode runs.
+    extras: Extras,
     /// `train` / `holdout`. A rule is fitted on train and judged once on
     /// holdout; a rule whose splits disagree in SIGN is refused whatever its
     /// total (§8.114 — `year_paren` looked like a -0.61 pp win on holdout and
@@ -176,6 +188,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!();
 
     // Detect which feature family is present
+    if is_generic_input(&rows) {
+        let n_feat = rows.iter().flat_map(|r| r.extras.keys()).collect::<std::collections::BTreeSet<_>>().len();
+        println!("=== GENERIC harvest: {n_feat} numeric features the tool was not taught ===");
+        println!("    Thresholds are taken from the data's own quantiles, because a");
+        println!("    fixed grid cannot know what scale a new feature lives on.\n");
+        for depth in [2usize, 3, 4] {
+            run_search(&rows, depth);
+            println!();
+        }
+        return Ok(());
+    }
+
     if is_block_input(&rows) {
         println!("=== BLOCK unit (§8.131-§8.132) — 98 % of characters sit in blocks");
         println!("    that are >= 90 % one class, so a block decision loses almost");
@@ -389,11 +413,72 @@ struct Predicate {
     mask: Vec<u64>,
 }
 
+/// A harvest the tool was not taught: no line features, no block features, but
+/// numeric columns of its own.
+fn is_generic_input(rows: &[Row]) -> bool {
+    !rows.is_empty()
+        && !rows.iter().any(|r| r.w_p90 > 0.0 || r.run_lines > 0.0 || r.area_frac > 0.0)
+        && rows.iter().any(|r| !r.extras.is_empty())
+}
+
+/// Predicates over whatever the input carries, cut at DATA quantiles rather
+/// than at constants — a generic search cannot know what scale a new feature
+/// lives on, and a fixed grid would silently miss it entirely.
+fn generic_predicates(rows: &[Row]) -> Vec<Predicate> {
+    let names: Vec<String> = rows
+        .iter()
+        .flat_map(|r| r.extras.keys().cloned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let words = rows.len().div_ceil(64);
+    let mut out = Vec::new();
+    for (fi, name) in names.iter().enumerate() {
+        let mut vals: Vec<f64> = rows.iter().filter_map(|r| r.extras.get(name)).copied().collect();
+        if vals.len() < 8 {
+            continue;
+        }
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let q = |f: f64| vals[((vals.len() - 1) as f64 * f) as usize];
+        let mut cuts: Vec<f64> = [0.1, 0.25, 0.5, 0.75, 0.9].iter().map(|&f| q(f)).collect();
+        cuts.dedup();
+        for t in cuts {
+            for less in [true, false] {
+                let mut mask = vec![0u64; words];
+                let mut n = 0usize;
+                for (i, r) in rows.iter().enumerate() {
+                    let v = r.extras.get(name).copied().unwrap_or(f64::NAN);
+                    if v.is_nan() {
+                        continue;
+                    }
+                    if if less { v < t } else { v > t } {
+                        mask[i >> 6] |= 1u64 << (i & 63);
+                        n += 1;
+                    }
+                }
+                // A predicate matching nothing or everything cannot separate.
+                if n == 0 || n == rows.len() {
+                    continue;
+                }
+                out.push(Predicate {
+                    feature: fi,
+                    label: format!("{name}{}{t:.4}", if less { "<" } else { ">" }),
+                    mask,
+                });
+            }
+        }
+    }
+    out
+}
+
 fn is_block_input(rows: &[Row]) -> bool {
     rows.iter().any(|r| r.area_frac > 0.0)
 }
 
 fn build_predicates(rows: &[Row]) -> Vec<Predicate> {
+    if is_generic_input(rows) {
+        return generic_predicates(rows);
+    }
     type Get = fn(&Row) -> f64;
     // BLOCK features (§8.132). Thresholds bracket the measured medians —
     // orphan blocks sit at area_frac 0.001 against body's 0.029, and the
@@ -549,7 +634,7 @@ fn run_search(rows: &[Row], depth: usize) {
     // `shipped` transcribes the LINE filter, so in block mode nothing is
     // pre-dropped and every block is in play. Scoring blocks against a line
     // filter would double-count what the two units already share.
-    let block_mode = is_block_input(rows);
+    let block_mode = is_block_input(rows) || is_generic_input(rows);
     let mut keep = vec![0u64; words];
     for (i, r) in rows.iter().enumerate() {
         if block_mode || !shipped(r) {
@@ -1077,6 +1162,27 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
         "conf_cv", "word_len", "lh_rel", "x_rel", "y_rel", "left_rel"]
         .iter().map(|n| idx(n)).collect();
     let idx_split = idx("split");
+    // Everything numeric that is not already a named feature or a bookkeeping
+    // column. Sorted by name so a run is reproducible.
+    const KNOWN: &[&str] = &[
+        "orphan", "net_gain_if_dropped", "macro_gain", "page", "split", "chars",
+        "page_chars", "orphan_chars", "label", "text", "line", "run",
+        "w_p90", "run_chars", "run_lines", "same_left", "same_left_frac", "nchars",
+        "words", "digit", "alpha", "sym", "conf", "y_rel", "x_rel", "h_rel",
+        "year_paren", "page_year_hits", "et_al", "lead_num", "initials",
+        "journal_abbr", "doi_url", "page_range", "org_word", "ends_hyphen",
+        "semicolon_pct", "comma_pct", "period_pct", "digit_pct", "caps_word_frac",
+        "mean_word_len", "nn_gap", "area_frac", "w_med", "blk_w", "blk_h", "aspect",
+        "n_lines", "chars_per_line", "isolation", "w_cv", "left_cv", "h_cv",
+        "conf_cv", "word_len", "lh_rel", "left_rel", "doc_class", "shipped_drops",
+        "page_cer", "page_cer_body", "page_cer_default", "rule_A", "rule_B",
+        "rule_AB", "missed",
+    ];
+    let extra_cols: Vec<(String, usize)> = col
+        .iter()
+        .filter(|(k, _)| !KNOWN.contains(&k.as_str()))
+        .map(|(k, i)| (k.clone(), *i))
+        .collect();
     // Present only in `great_gate_full.csv`; older harvests score micro only.
     let idx_macro = idx("macro_gain");
     let idx_page_chars = idx("page_chars");
@@ -1170,6 +1276,12 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
             left_rel: get_f64(bf[16]),
             page: idx_page.and_then(|i| record.get(i)).unwrap_or("").to_string(),
             split: idx_split.and_then(|i| record.get(i)).unwrap_or("holdout").to_string(),
+            extras: extra_cols
+                .iter()
+                .filter_map(|(k, i)| {
+                    record.get(*i).and_then(|v| v.parse::<f64>().ok()).map(|v| (k.clone(), v))
+                })
+                .collect(),
             run_lines: get_f64(idx_run_lines),
             run_chars: get_f64(idx_run_chars),
             nn_gap: get_f64(idx_nn_gap),
