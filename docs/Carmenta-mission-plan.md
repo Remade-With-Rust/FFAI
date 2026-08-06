@@ -8047,6 +8047,66 @@ second is a model problem. **§8.86 concluded "our within-column ordering is
 already right; the entire gap is which region comes next" — this is that finding
 arriving on the pages where it costs the most.**
 
+### 8.142 There is NO gate here — half the remaining gap is CJK we cannot read
+
+Asked to find a new gate for the ordering problem, the honest answer is that the
+optimizer found one worth 0.2 pp and then a look at the pages made the question
+obsolete.
+
+**The tool was extended first, and that part stands.** The optimizer knew two
+hardcoded feature families and searched NOTHING on a reading-order harvest — 316
+rows loaded, zero predicates built, silently. Generic mode now keeps every
+numeric column an input carries and cuts each at the DATA's own quantiles, since
+a generic search cannot know what scale a new feature lives on. The reframing
+that made ordering fit at all: **"drop this line" becomes "switch this page's
+reading mode"**, so `orphan = 1` means y-major beats column-major and
+`net_gain_if_dropped` is the characters saved by switching — every gate the tool
+enforces then applies unchanged. That is `codec-content-adaptive-dispatch`'s
+shape: one engine, two strategies, routed per page by a cheap signal.
+
+**And the ceiling is 0.31 pp.** y-major beats column-major on **11 of 316 pages
+(3 %)**; always switching would cost 19.76 pp. The search returns +0.202 pp at
+`top3 ~100 %` — page lists. A real but tiny lever, recorded as such.
+
+**Then the renders answered the real question.** Reading the Gate 2 pages by eye:
+*"many of these are foreign characters like Chinese, or kids' booklets with
+images and text."* Measured:
+
+| population | pages | ours | theirs | gap |
+|---|---:|---:|---:|---:|
+| **>5 % CJK in the ground truth** | **7** | **50.58 %** | **16.17 %** | **+34.41** |
+| everything else | 229 | 19.52 % | 17.81 % | **+1.71** |
+
+| | pages | share of the 2.68 pp gap |
+|---|---:|---:|
+| CJK > 1 % | 11 | **+1.355 pp — 51 %** |
+| CJK > 5 % | 7 | +1.021 pp — 38 % |
+| CJK > 10 % | 3 | +0.715 pp — 27 % |
+
+**Eleven pages of 236 are half the competitive gap, and our engine is pinned to
+`en/printed`.** A CRNN with an English charset cannot emit a Chinese character;
+every one is a guaranteed substitution. `omni-0265` is 35.7 % CJK and reads
+82.6 % against their 4.6 %. No suppression branch, ordering rule, block
+classifier or abstention gate reaches this — it is not a decision we are getting
+wrong, it is an alphabet we do not have.
+
+**Excluding those 7 pages: 19.52 % against 17.81 % — a 1.71 pp gap.** That is the
+real, addressable distance between the engines, and it is 36 % smaller than the
+headline.
+
+**What this closes.** Three sections of gate-hunting on `colorful_textbook`
+(§8.140's Gate 2, §8.141's ordering split, this section's dispatch search) were
+chasing a class whose two worst pages — `omni-0079` at 13.3 % CJK and `omni-0080`
+at 17.6 % — are unreadable by construction. §8.141's finding that ordering is
+"half of Gate 2" is still true and still worth ~0.76 pp, but it was measured over
+a population that includes pages no ordering fix can help.
+
+**The lesson is the one this campaign keeps relearning from a different
+direction: look at the data before fitting to it.** §8.128 found the
+section-scope rule by rendering pages; §8.121 found the screenshot the same way;
+this found a language boundary that eleven sections of numbers had not. The
+tables cannot see an alphabet.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
