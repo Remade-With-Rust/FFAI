@@ -64,6 +64,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = BenchConfig {
         engine,
         skip_engine: baseline_only,
+        // `--engine-only` is the CLI's flag; this example always wants the
+        // references, so it opts out of skipping them explicitly rather than
+        // inheriting whatever the field's default becomes later.
+        skip_references: false,
         corpus,
         references,
         runs,
