@@ -57,8 +57,12 @@ fn main() -> std::io::Result<()> {
     let min_hits: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(3);
     let max_age: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(30);
     // 8th/9th: score fusion and the gate it needs re-swept alongside it.
-    let fuse_score: bool = a.next().map(|s| s == "1").unwrap_or(false);
+    let fuse_mode: u8 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let match_thresh: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.8);
+    // 10th: frames-absent after which a revival re-seeds the filter.
+    let reinit_after: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
+    // 11th: hold unconfirmed tracks out of the main passes (reference behaviour).
+    let deferred_unconfirmed: bool = a.next().map(|s| s == "1").unwrap_or(false);
     let mut tk = ByteTrack::new(TrackerConfig {
         track_thresh,
         new_track_thresh,
@@ -67,8 +71,10 @@ fn main() -> std::io::Result<()> {
         new_track_thresh_crowded: crowded_thresh,
         min_hits,
         max_age,
-        fuse_score,
+        fuse_mode,
         match_thresh,
+        reinit_after,
+        deferred_unconfirmed,
         ..Default::default()
     });
     let out = std::io::stdout();

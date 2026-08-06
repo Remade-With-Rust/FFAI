@@ -94,10 +94,17 @@ pub struct TrackerConfig {
     /// 18.71). A knob that improves both metrics on every clip is not a
     /// trade, it is a filter that was priced twice.
     pub min_hits: u32,
+    /// Hold UNCONFIRMED tracks out of the main association passes and give
+    /// them only the leftovers, in a third pass. See [`ByteTrack::update`].
+    pub deferred_unconfirmed: bool,
+    /// Frames of absence after which a revived track RE-INITIALISES its Kalman
+    /// state from the detection instead of merging into a stale prediction.
+    /// `u32::MAX` disables. See [`ByteTrack::apply`].
+    pub reinit_after: u32,
     /// Fold detection confidence into the association cost — the reference
     /// tracker's `fuse_score`. EXPERIMENTAL, default off; see
-    /// [`assign::cost_matrix_fused`].
-    pub fuse_score: bool,
+    /// [`assign::cost_matrix_fused`]. 0 = off, 1 = rank-only, 2 = rank + gate.
+    pub fuse_mode: u8,
     /// Detections/frame at or below which `new_track_thresh` is used as-is.
     pub crowd_lo: f32,
     /// Detections/frame at or above which `new_track_thresh_crowded` is used.
@@ -159,7 +166,43 @@ impl Default for TrackerConfig {
             // on detection churn (0.168, highest of the seven). MOT17-train has
             // only these seven sequences, so the table cannot be grown today.
             // Turn it on to re-measure when there is more footage.
-            fuse_score: false,
+            reinit_after: u32::MAX,
+            // BOTH ON, and together they are the largest tracking result in
+            // this campaign: IDF1 31.63 -> 32.82, MOTA 18.71 -> 18.92, ID
+            // switches 435 -> 375, with NO threshold touched.
+            //
+            // Found by asking a question the sweeps could not: we ran
+            // Ultralytics' OWN ByteTrack over OUR cached detections. It scored
+            // IDF1 34.09 against our 31.63 on identical boxes — so 2.46 pp of
+            // the 3.25 pp gap was the tracker, and it was worth fixing. The
+            // same run showed HOW: on the same detections it emitted 2.46x
+            // more trajectories and 1.29x more boxes, covering 34-96 % of GT
+            // boxes against our 24-75 %. IDF1 charges an identity
+            // false-negative for every GT box we never put an id on, so
+            // under-reporting caps it however good the identities are — which
+            // is why our ID switches were HALF theirs and our IDF1 still lost.
+            //
+            // Every earlier attempt to report more (lower `new_track_thresh`,
+            // lower `track_thresh`) made things worse, and `deferred_unconfirmed`
+            // is why: a brand-new track was competing in the main association
+            // on equal terms with one followed for a hundred frames, and could
+            // take its detection. More tracks meant more theft. Holding them
+            // out until a third pass removes that, and then it improves EVERY
+            // configuration measured (+0.58 to +2.33).
+            //
+            // Per sequence, IDF1 then MOTA:
+            //
+            //   02 -1.21 / +0.04    04 +1.88 / +0.16    05 +1.62 / +1.14
+            //   09 +0.11 / -0.13    10 -0.84 / +0.23    11 +6.62 / +0.41
+            //   13 -0.26 / +0.04
+            //
+            // Three sequences lose IDF1 and ALL THREE gain MOTA — they are not
+            // made worse, the tracker makes a different trade there. That is
+            // the reason this ships where `max_age` did not: `max_age` was a
+            // fitted constant whose losers lost on both metrics, this is a
+            // structural fix that nothing was tuned to.
+            deferred_unconfirmed: true,
+            fuse_mode: 1,
             // ADAPTIVE, and the sign-flip is what forced it. Raising
             // `new_track_thresh` to 0.7 helped MOTA on sparse sequences
             // (09 +5.97, 05 +3.24) and HURT it on the crowded ones
@@ -253,7 +296,27 @@ impl ByteTrack {
             .collect();
 
         // ---- pass 1: high-score detections against every track ----
-        let mut unmatched_tracks: Vec<usize> = (0..self.tracks.len()).collect();
+        // A track only just created has one observation, no velocity estimate
+        // worth the name, and a covariance that has not settled — yet in the
+        // shared pass it competes on equal terms with a track that has been
+        // followed for a hundred frames, and can TAKE that track's detection.
+        // The reference never lets that happen: unconfirmed tracks sit out the
+        // main passes and get only what is left over.
+        //
+        // This is what makes a low creation threshold survivable. Lowering
+        // `new_track_thresh` without it floods the first pass with speculative
+        // tracks that steal from established identities, which is exactly what
+        // our threshold sweeps measured and (correctly) rejected.
+        let deferred = self.cfg.deferred_unconfirmed;
+        let is_new = |t: &Track| t.state == TrackState::New;
+        let mut unmatched_tracks: Vec<usize> = (0..self.tracks.len())
+            .filter(|&i| !deferred || !is_new(&self.tracks[i]))
+            .collect();
+        let unconfirmed: Vec<usize> = if deferred {
+            (0..self.tracks.len()).filter(|&i| is_new(&self.tracks[i])).collect()
+        } else {
+            Vec::new()
+        };
         let mut matched_dets: Vec<bool> = vec![false; boxes.len()];
 
         let t_boxes: Vec<[f32; 4]> = unmatched_tracks.iter().map(|&i| self.tracks[i].xyxy()).collect();
@@ -262,15 +325,24 @@ impl ByteTrack {
         // multiplying by a score that is always small would push every pair
         // past the gate and disable the very recovery it exists for.
         let gate = assign::cost_matrix(&t_boxes, &d_boxes);
-        let pairs = if self.cfg.fuse_score {
-            let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
-            let rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
-            // Rank by confidence-weighted overlap, ADMIT by overlap. Fusing
-            // into the gate as well tightens it by a factor of the score,
-            // which is a different change wearing the same name.
-            assign::assign_gated(&rank, &gate, self.cfg.match_thresh)
-        } else {
-            assign::assign(&gate, self.cfg.match_thresh)
+        let pairs = match self.cfg.fuse_mode {
+            // Rank by confidence-weighted overlap, ADMIT by overlap.
+            1 => {
+                let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
+                let rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                assign::assign_gated(&rank, &gate, self.cfg.match_thresh)
+            }
+            // BOTH fused — the reference's literal behaviour. Gating on the
+            // fused cost is what makes a LOW `track_thresh` survivable: a 0.25
+            // detection carries cost >= 0.75 and so cannot claim a track on
+            // geometry alone. Decoupling the gate (mode 1) is better at a high
+            // threshold and worse at a low one, which is why both exist.
+            2 => {
+                let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
+                let rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                assign::assign(&rank, self.cfg.match_thresh)
+            }
+            _ => assign::assign(&gate, self.cfg.match_thresh),
         };
 
         let mut still_unmatched: Vec<usize> = unmatched_tracks.clone();
@@ -305,6 +377,38 @@ impl ByteTrack {
                 left.retain(|&x| x != track_idx);
             }
             unmatched_tracks = left;
+        }
+
+        // ---- pass 3: leftovers to the UNCONFIRMED tracks ----
+        //
+        // Whatever the confirmed tracks did not claim. An unconfirmed track
+        // that matches here is promoted by `apply`; one that does not is
+        // removed outright below, never kept for `max_age` — a speculative
+        // track has to be corroborated by the very next frame or it was noise.
+        let mut unconfirmed_matched: Vec<bool> = vec![false; unconfirmed.len()];
+        if !unconfirmed.is_empty() {
+            let rest: Vec<usize> = hi.iter().copied().filter(|&d| !matched_dets[d]).collect();
+            if !rest.is_empty() {
+                let t_boxes: Vec<[f32; 4]> =
+                    unconfirmed.iter().map(|&i| self.tracks[i].xyxy()).collect();
+                let d_boxes: Vec<[f32; 4]> = rest.iter().map(|&i| boxes[i]).collect();
+                let pairs =
+                    assign::assign(&assign::cost_matrix(&t_boxes, &d_boxes), self.cfg.match_thresh);
+                for (ti, di) in &pairs {
+                    let det = rest[*di];
+                    self.apply(unconfirmed[*ti], boxes[det], scores[det], classes[det]);
+                    matched_dets[det] = true;
+                    unconfirmed_matched[*ti] = true;
+                }
+            }
+        }
+        // An unmatched unconfirmed track is killed here rather than left to the
+        // `New`-dies-on-miss rule, because `apply` has already promoted the
+        // matched ones out of `New` and the survivors must not be swept with them.
+        for (k, &i) in unconfirmed.iter().enumerate() {
+            if !unconfirmed_matched[k] {
+                self.tracks[i].time_since_update = u32::MAX / 2;
+            }
         }
 
         // ---- lost / removed ----
@@ -352,8 +456,27 @@ impl ByteTrack {
     }
 
     fn apply(&mut self, idx: usize, b: [f32; 4], score: f32, class_id: u32) {
+        let reinit_after = self.cfg.reinit_after;
         let t = &mut self.tracks[idx];
-        kalman::update(&mut t.s, &mut t.p, Xyah::from_xyxy(b));
+        // A track absent for many frames comes back with a prediction that has
+        // coasted on constant velocity the whole time and a covariance grown
+        // by every one of those `predict` steps. Merging the detection INTO
+        // that places the revived box between where the object is and where a
+        // stale model guessed it would be — and that bad box is then what the
+        // next frame's IoU is computed against, so one poor revival degrades
+        // the whole remaining trajectory.
+        //
+        // The reference re-activates instead: state re-seeded from the
+        // detection, velocity unknown again. This is that, gated on how long
+        // the track was actually gone — a one-frame miss has a perfectly good
+        // prediction and re-seeding it would throw away real velocity.
+        if t.time_since_update > reinit_after {
+            let (ns, np) = kalman::initiate(Xyah::from_xyxy(b));
+            t.s = ns;
+            t.p = np;
+        } else {
+            kalman::update(&mut t.s, &mut t.p, Xyah::from_xyxy(b));
+        }
         t.time_since_update = 0;
         t.hits += 1;
         t.score = score;
@@ -401,6 +524,35 @@ mod tests {
             }
         }
         assert_eq!(reported, 8, "min_hits=3 should withhold the first two frames");
+    }
+
+    /// An unconfirmed track must not TAKE a detection from a confirmed one.
+    ///
+    /// This is the whole point of the deferred third pass, and it is what made
+    /// reporting more tracks safe. Without it, every new speculative track was
+    /// a competitor in the main association, so lowering the creation threshold
+    /// cost more in stolen identities than it gained in coverage.
+    #[test]
+    fn an_unconfirmed_track_cannot_steal_from_a_confirmed_one() {
+        let mut t = ByteTrack::new(TrackerConfig::default());
+        // Establish one track over several frames so it is firmly confirmed.
+        for k in 0..5 {
+            t.update(&boxes_at(100.0 + 5.0 * k as f32), &[0.9], &[0]);
+        }
+        let established = t.update(&boxes_at(125.0), &[0.9], &[0])[0].id;
+
+        // Now two overlapping detections: the object, plus a near-duplicate
+        // that will spawn an unconfirmed track.
+        let two = vec![[130.0, 100.0, 170.0, 200.0], [134.0, 100.0, 174.0, 200.0]];
+        t.update(&two, &[0.9, 0.9], &[0, 0]);
+        // Next frame only the original object is present. The established
+        // identity must still own it.
+        let out = t.update(&boxes_at(135.0), &[0.9], &[0]);
+        assert!(
+            out.iter().any(|x| x.id == established),
+            "the established id {established} lost its detection to a newcomer: {:?}",
+            out.iter().map(|x| x.id).collect::<Vec<_>>()
+        );
     }
 
     /// THE ByteTrack test. An object goes to LOW confidence mid-sequence, the
