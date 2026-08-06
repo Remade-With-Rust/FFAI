@@ -7594,6 +7594,79 @@ both-splits number is the result. §8.116 and §8.130 are the only two things th
 campaign has shipped, and both were validated by predicting a number before
 measuring it.
 
+### 8.134 CORRECTION to §8.133 — the block incremental test was broken, and it is +0.575 pp
+
+§8.133 reported the block rules collapsing 91 % when measured incrementally
+(+1.117 pp standalone -> +0.100 pp), and concluded the block frame was "a better
+description of what the line filter does, not a source of new gain". **That test
+was wrong, and wrong in the direction that killed the idea.**
+
+**The defect.** Blocks were built from ALL lines, then lines were filtered out of
+them — but the rules were scored against features computed on the ORIGINAL block.
+A ten-line block whose filter removes eight leaves a two-line fragment with
+entirely different width, height, area, aspect and line count. Every rule was
+tested against geometry that no longer described what it was deciding on. It also
+tried four hand-picked rules and never ran the exhaustive search.
+
+**Rebuilt honestly** — shipped filter applied per line FIRST, survivors regrouped
+into blocks, every feature recomputed on those blocks, and the page's `p90` and
+line height recomputed on the surviving population, because the page the filter
+leaves behind is the page the next rule sees. 2 861 residual blocks, oracle
++2.269 pp train / **+4.624 pp holdout**.
+
+| rule (incremental, corrected) | n | train | holdout | top3 | prec |
+|---|---:|---:|---:|---:|---:|
+| **A** `area_frac<0.004 & isolation>1.2 & aspect>6` | 199 | +0.232 | **+0.436** | 25 % | 0.688 |
+| **B** `blk_h<0.015 & isolation>1.2 & w_cv<0.2` | 336 | +0.412 | +0.359 | -21 % | 0.679 |
+| **A + B** | | **+0.433** | **+0.575** | | |
+
+**+0.575 pp, not +0.100 pp — the earlier figure was wrong by 5.7x.**
+
+`aspect > 6` is the feature that was missing: blocks more than six times wider
+than tall, i.e. single-line strips, which combined with isolation and tiny area
+are captions, labels and header bands sitting alone on the page.
+
+**And it is the most DISTRIBUTED result this campaign has produced:**
+
+| | pages touched | pages gaining | top-3 share |
+|---|---:|---:|---:|
+| A | **100** | 67 | 27 % |
+| B | **138** | 100 | 34 % |
+| `year_paren` (refused) | 3 | — | 100 % |
+| confidence density (refused) | 1 | — | 85 % |
+| `rc = 200` (refused) | 2 | — | 85 % |
+
+Every lever this campaign refused sat on one to three pages. This one touches a
+hundred and gains on two-thirds of them, passes both splits, and 1 188 of 18 884
+three-variable conjunctions pass the same gates — against ONE for the hand-picked
+set. **The block unit does produce generalising rules; §8.133 said otherwise on a
+broken instrument.**
+
+A+B+C+D scores higher on TRAIN (+0.560) and lower on holdout (+0.543) than A+B —
+the overfit signature, caught by the split. A+B is the pick.
+
+**Revised ledger:**
+
+| | |
+|---|---|
+| §8.130 section scope, shipped and validated | **-1.98 pp macro** |
+| block rules A+B, incremental, not yet in the engine | **-0.575 pp** |
+| residual block oracle still unreached | 4.62 pp |
+| gap on the 43-page comparison set | +6.19 pp |
+
+**What shipping A+B requires**, and it is not trivial: the engine has no 2D block
+grouping. `suppress.rs` groups by LEFT EDGE then vertical pitch (§8.106), which
+is right for prose columns and cannot form a figure's block. Union-find over
+horizontal-overlap-and-vertical-proximity has to land in Rust first, then the
+same end-to-end validation §8.130 passed.
+
+**The calibration note in §8.133 stands and now cuts both ways.** That section
+observed I had erred three times by reading a ceiling as an outcome. This is the
+opposite error — a broken instrument read as a refutation — and it is the more
+dangerous one, because §8.128's three-probe rule exists precisely for it: *"a
+wrong refute is permanent."* §8.133 refuted the block frame on ONE measurement,
+and the measurement was defective.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
