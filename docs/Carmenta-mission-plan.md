@@ -7854,6 +7854,68 @@ rested on it.** Scoring Unlimited-OCR on the full 236-page holdout is now the
 highest-value measurement available, and it costs one reference run rather than
 any new engineering.
 
+### 8.139 THE FULL SIDE-BY-SIDE — we win on characters, they win on pages
+
+Every competitive claim in this campaign has rested on 43 pages. §8.138 showed
+why that could not stand: the filter moved holdout macro 9.68 pp while that
+subset moved 1.39 pp. Both engines have now been scored on all 236 holdout pages,
+through one scoring path.
+
+**The first run was VOID and it flattered us by 26 pp.** Scored as it came back:
+Unlimited-OCR 38.80 % macro against our 20.44 %. **Our bug.** The model prints
+its decoded output during `infer()`, Windows defaults stdout to cp1252, and one
+`ş`, `☆`, `−` or `○` raises `UnicodeEncodeError` inside the model — the adapter
+caught it and recorded EMPTY TEXT, which scores exactly 100 % CER. It destroyed
+**59 of their 236 pages (25 %)**. The tell was arithmetic: five pages read
+*exactly* 100.0 %, which nothing but an empty hypothesis produces. Fixed in the
+adapter rather than the environment, because a reference that depends on how it
+is invoked to report honest numbers is not a reference.
+
+**The clean result:**
+
+| engine | micro CER | MACRO CER |
+|---|---:|---:|
+| Carmenta, default | 18.60 % | 30.12 % |
+| **Carmenta, `FFAI_BODY_ONLY`** | **14.39 %** | **20.44 %** |
+| **Unlimited-OCR** | **18.72 %** | **17.76 %** |
+| **gap** | **-4.33 (ours)** | **+2.68 (theirs)** |
+
+**A split decision. We win on characters by 4.33 pp; they win on pages by
+2.68 pp.** And the 43-page subset overstated the gap by more than double —
++5.82 pp against the true +2.68 pp — exactly the unrepresentativeness §8.138
+suspected.
+
+**Where each engine loses.**
+
+| | pages | ours | theirs | gap |
+|---|---:|---:|---:|---:|
+| under 1 500 reference chars | 72 | 34.19 % | 28.32 % | **+5.87** |
+| 1 500 chars and over | 164 | 14.41 % | 13.13 % | +1.28 |
+
+Our whole macro deficit is SMALL PAGES, which is §8.119's finding arriving from
+the competitive side: page-weighting makes a mangled 200-character slide cost
+exactly what a well-read 5 000-character journal page does.
+
+Their failure mode is the opposite and more violent: **8 pages exceed 100 % CER
+and carry 6.53 pp of their 17.76 pp macro — 37 % of their error on 3 % of the
+corpus.** `omni-0055` reads 225 % against our 6.3 %, `omni-0039` 177 % against
+2.9 %, `omni-0127` 163 % against 4.6 % on a 32 000-character newspaper page. A
+VLM that loses coherence emits far more text than exists; our worst failure is
+emitting a screenshot.
+
+**Speed, on the same 236 pages:** ours **5.88 s/page on CPU** against their
+**90.9 s/page on an RTX 4060** — **15.5x faster, CPU against GPU.** The earlier
+69.79 s/page figure was from the mini corpus; the full holdout is slower for them
+because it contains the dense pages they struggle with.
+
+**What this settles and what it does not.** It settles that Carmenta is
+competitive: 4.33 pp ahead on the character metric, 2.68 pp behind on the page
+metric, at 15.5x the speed on a CPU. It does not settle the macro question, and
+the route there is now measured rather than guessed — **72 small pages at
+34.19 %**, where §8.126 already found half the worst pages have almost nothing to
+suppress and fail on recognition or ordering instead. That is the next campaign,
+and it is not a suppression problem.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
