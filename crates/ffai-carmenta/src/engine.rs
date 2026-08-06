@@ -200,8 +200,17 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
     };
     let (crnn, parseq) = match rec {
         RecStage::Crnn => {
-            let f = find("crnn-english-g2")?.fetch()?;
-            let m = Crnn::new(load_vb(f.file("crnn.safetensors")?.to_path_buf())?)
+            // §8.143: `FFAI_REC_LANG=zh` swaps in `zh_sim_g2`, whose head is
+            // 6 719 classes against English's 97 and whose charset covers the
+            // same ASCII plus 6 614 CJK characters. Architecturally identical
+            // otherwise, so the same code path runs both. English is the
+            // default and remains the oracle.
+            let lang = crate::crnn::RecLang::from_env();
+            let f = find(lang.model_name())?.fetch()?;
+            let weights = f.file("crnn.safetensors")?.to_path_buf();
+            let charset = crate::crnn::charset_for(lang, weights.parent())
+                .map_err(image::candle_err)?;
+            let m = Crnn::new_with_charset(load_vb(weights)?, charset)
                 .map_err(image::candle_err)?;
             (Some(m), None)
         }
@@ -279,7 +288,7 @@ impl OcrEngine for CraftCrnn {
             })?;
             let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
                 .map_err(image::candle_err)?;
-            let (text, confidence) = crate::profile::timed(|p| &p.decode, || ctc_greedy(&logits))
+            let (text, confidence) = crate::profile::timed(|p| &p.decode, || crnn.decode(&logits))
                 .map_err(image::candle_err)?;
             let mut lines = Vec::new();
             if !text.is_empty() {
@@ -518,7 +527,7 @@ impl OcrEngine for CraftCrnn {
                         };
                         let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
                             .map_err(image::candle_err)?;
-                        crate::profile::timed(|p| &p.decode, || ctc_greedy(&logits))
+                        crate::profile::timed(|p| &p.decode, || crnn.decode(&logits))
                             .map_err(image::candle_err)?
                     }
                     RecStage::Parseq => {

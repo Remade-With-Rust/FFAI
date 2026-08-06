@@ -18,6 +18,10 @@ use candle_nn::rnn::{lstm, Direction, LSTMConfig, LSTM, RNN};
 use candle_nn::{batch_norm, conv2d, linear, BatchNorm, Conv2d, Conv2dConfig, Linear, Module, ModuleT, VarBuilder};
 
 /// Index i in CTC output = charset[i-1]; index 0 is the CTC blank.
+///
+/// This is the ENGLISH charset and the default. `FFAI_REC_LANG=zh` selects
+/// `zh_sim_g2` instead, whose 6 718-character set covers the same ASCII plus
+/// 6 614 CJK characters — see [`charset_for`] and §8.143.
 pub const CHARSET: &str = "0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ €ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 struct BiLstm {
@@ -60,7 +64,70 @@ impl BiLstm {
     }
 }
 
+/// Which recognizer the engine loads, chosen at runtime by `FFAI_REC_LANG`.
+///
+/// §8.142 measured 11 holdout pages of 236 as **51 % of the competitive gap**
+/// for one reason: they contain Chinese and a 96-class CTC head cannot emit a
+/// character it has no class for. The two checkpoints are architecturally
+/// identical — same 44 tensors, same names — and differ only in the head
+/// (97 vs 6 719), so the same code runs both.
+///
+/// **English is the default and stays the oracle.** A 6 719-class head is
+/// normally weaker on Latin than a 97-class specialist, and trading English CER
+/// for CJK coverage is a bad bargain until measured. Opt in, measure, and only
+/// then consider changing the default — the shape `--features mimalloc` and
+/// `FFAI_CONV3X3=0` already use here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecLang {
+    English,
+    ChineseSimplified,
+}
+
+impl RecLang {
+    /// `FFAI_REC_LANG=zh` (or `zh_sim`, `chinese`) selects the Chinese model.
+    /// Anything else, including unset, is English.
+    pub fn from_env() -> Self {
+        match std::env::var("FFAI_REC_LANG").as_deref() {
+            Ok("zh") | Ok("zh_sim") | Ok("chinese") => RecLang::ChineseSimplified,
+            _ => RecLang::English,
+        }
+    }
+
+    /// The model-registry name whose `crnn.safetensors` this variant loads.
+    pub fn model_name(self) -> &'static str {
+        match self {
+            RecLang::English => "crnn-english-g2",
+            RecLang::ChineseSimplified => "crnn-zh-sim-g2",
+        }
+    }
+}
+
+/// The charset a variant decodes with.
+///
+/// English is compiled in; Chinese is read from `charset.txt` beside the
+/// weights, because 6 718 characters is 20 KB of UTF-8 and a generated `const`
+/// that large is a merge hazard for no benefit. The file MUST have as many
+/// characters as the head has classes minus one — a mismatch shifts every
+/// decoded character, which is §8.113's failure in a form far harder to notice,
+/// so `Crnn::new_with_charset` refuses rather than decoding nonsense.
+pub fn charset_for(lang: RecLang, dir: Option<&std::path::Path>) -> Result<Vec<char>> {
+    match lang {
+        RecLang::English => Ok(CHARSET.chars().collect()),
+        RecLang::ChineseSimplified => {
+            let d = dir.ok_or_else(|| candle_core::Error::Msg(
+                "FFAI_REC_LANG=zh needs the model directory to read charset.txt".into()))?;
+            let f = d.join("charset.txt");
+            let txt = std::fs::read_to_string(&f).map_err(|e| candle_core::Error::Msg(
+                format!("FFAI_REC_LANG=zh: cannot read {}: {e}", f.display())))?;
+            Ok(txt.chars().filter(|c| *c != '\n' && *c != '\r').collect())
+        }
+    }
+}
+
 pub struct Crnn {
+    /// What index `i` in the CTC output means. Carried per instance rather than
+    /// read from a global, because the two models disagree about it.
+    charset: Vec<char>,
     convs: [Conv2d; 7],
     bns: [BatchNorm; 2],
     rnn0: BiLstm,
@@ -69,7 +136,17 @@ pub struct Crnn {
 }
 
 impl Crnn {
+    /// The English recognizer — the default and the oracle.
     pub fn new(vb: VarBuilder) -> Result<Self> {
+        Self::new_with_charset(vb, CHARSET.chars().collect())
+    }
+
+    /// Build with an explicit charset; the head is sized from it.
+    pub fn new_with_charset(vb: VarBuilder, charset: Vec<char>) -> Result<Self> {
+        if charset.is_empty() {
+            return Err(candle_core::Error::Msg("empty charset".into()));
+        }
+        let n_class = charset.len() + 1;
         let f = vb.pp("FeatureExtraction").pp("ConvNet");
         let p1 = Conv2dConfig { padding: 1, ..Default::default() };
         let seq = vb.pp("SequenceModeling");
@@ -86,8 +163,20 @@ impl Crnn {
             bns: [batch_norm(256, 1e-5, f.pp("12"))?, batch_norm(256, 1e-5, f.pp("15"))?],
             rnn0: BiLstm::new(&seq, "0", 256, 256, 256)?,
             rnn1: BiLstm::new(&seq, "1", 256, 256, 256)?,
-            prediction: linear(256, CHARSET.chars().count() + 1, vb.pp("Prediction"))?,
+            prediction: linear(256, n_class, vb.pp("Prediction"))?,
+            charset,
         })
+    }
+
+    /// CTC greedy decode against THIS model's charset.
+    pub fn decode(&self, logits: &Tensor) -> Result<(String, Option<f32>)> {
+        ctc_greedy_with(logits, &self.charset)
+    }
+
+    /// How many characters this instance can emit — 96 for English, 6 718 for
+    /// Chinese. Exposed so a caller can assert which model it actually got.
+    pub fn charset_len(&self) -> usize {
+        self.charset.len()
     }
 
     /// (1, 1, 64, W) normalized crop -> per-timestep logits (T, num_class).
@@ -126,6 +215,11 @@ impl Crnn {
 /// Returns (text, mean softmax probability of the kept steps).
 pub fn ctc_greedy(logits: &Tensor) -> Result<(String, Option<f32>)> {
     let charset: Vec<char> = CHARSET.chars().collect();
+    ctc_greedy_with(logits, &charset)
+}
+
+/// The same decode against an explicit charset.
+pub fn ctc_greedy_with(logits: &Tensor, charset: &[char]) -> Result<(String, Option<f32>)> {
     let probs = candle_nn::ops::softmax(logits, 1)?;
     let (t, _) = logits.dims2()?;
     let ids = probs.argmax(1)?.to_vec1::<u32>()?;
@@ -148,4 +242,31 @@ pub fn ctc_greedy(logits: &Tensor) -> Result<(String, Option<f32>)> {
         Some(confs.iter().sum::<f32>() / confs.len() as f32)
     };
     Ok((out, conf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The switch is OFF unless asked for, and only for the values documented.
+    #[test]
+    fn rec_lang_defaults_to_english() {
+        assert_eq!(RecLang::English.model_name(), "crnn-english-g2");
+        assert_eq!(RecLang::ChineseSimplified.model_name(), "crnn-zh-sim-g2");
+        let cs = charset_for(RecLang::English, None).unwrap();
+        assert_eq!(cs.len(), CHARSET.chars().count());
+        assert_eq!(cs.len(), 96);
+        // Chinese without a directory must ERROR, never silently fall back to
+        // the English charset — that would decode every CJK class as Latin.
+        assert!(charset_for(RecLang::ChineseSimplified, None).is_err());
+    }
+
+    /// A charset and a head that disagree shift EVERY decoded character, so the
+    /// constructor sizes the head FROM the charset rather than trusting both.
+    #[test]
+    fn empty_charset_is_refused() {
+        let dev = candle_core::Device::Cpu;
+        let vb = VarBuilder::zeros(candle_core::DType::F32, &dev);
+        assert!(Crnn::new_with_charset(vb, Vec::new()).is_err());
+    }
 }
