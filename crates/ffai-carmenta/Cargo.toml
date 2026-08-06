@@ -39,7 +39,7 @@ png = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 # Superseded as the default by the pure-Rust remake; see the allocator
 # doc comment in `ffai-cli/src/main.rs` for the measurement.
-rusty_alloc-api = "0.1.0-alpha.1"
+rusty_alloc-api = "0.3.0"
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 

@@ -46,10 +46,10 @@ anyhow = { workspace = true }
 # what makes "our pure-Rust allocator matches the C one" a claim anyone can
 # re-measure rather than one they have to take on trust.
 mimalloc = { version = "0.1", default-features = false, optional = true }
-rusty_alloc-api = "0.1.0-alpha.1"
+rusty_alloc-api = "0.3.0"
 # The core, for `alloc::collect` — see `spawn_page_trimmer` in main.rs.
 # Without it rusty_alloc's RSS does not bound on a rayon pool.
-rusty_alloc = "0.1.0-alpha.1"
+rusty_alloc = "0.3.0"
 clap = { workspace = true }
 
 [features]

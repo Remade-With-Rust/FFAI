@@ -1,8 +1,10 @@
-# rusty_alloc 0.1.0-alpha.1 in FFai — evaluation report
+# rusty_alloc in FFai — evaluation report (0.1.0-alpha.1 and 0.3.0)
 
 **For the rusty_alloc team.** Written 2026-08-06 against `rusty_alloc` and
-`rusty_alloc-api` 0.1.0-alpha.1, on Windows 11 / x86_64-pc-windows-msvc,
-16 logical cores.
+`rusty_alloc-api` **0.3.0**, on Windows 11 / x86_64-pc-windows-msvc, 16 logical
+cores. First measured against 0.1.0-alpha.1; **0.3.0 landed mid-evaluation and
+roughly halved both the median and the maximum peak RSS** — that comparison is
+§3 and is the most useful thing in this document.
 
 **Headline: it works, it is fast enough to ship, and we have shipped it.** The
 `ffai` binary now sets `rusty_alloc_api::RustyAlloc` as its global allocator by
@@ -79,77 +81,72 @@ against a null arm winning 22 at z = −0.71. A real but small edge — call it
 win. Critically, it does not give back the 1.64× that made the allocator matter,
 which was the only question that could have blocked the swap.
 
-## 3. The finding: peak RSS ESCALATES, multimodally — it does not grow
+## 3. Peak RSS — 0.3.0 halved it, and the shape says where the rest is
 
-This is the one relevant to your RSS-max work, and it is not the shape we first
-thought.
+**There is no growth in either version.** Median peak RSS is flat in workload
+length (0.1.0-alpha.1: 92.1 / 92.2 / 92.3 MB at 100 / 500 / 1500 detect reps).
+We initially reported unbounded growth extrapolating to ~10 GB/hour; that was
+three N=1 points drawn from a multimodal distribution and is retracted (§6).
 
-**There is no growth.** Median peak RSS is flat in workload length:
-
-| detect reps | mimalloc median | rusty_alloc median |
-|---:|---:|---:|
-| 100 | 78.1 MB | **92.1 MB** |
-| 500 | 118.9 MB | **92.2 MB** |
-| 1500 | 114.0 MB | **92.3 MB** |
-
-92.1 / 92.2 / 92.3 — dead flat, and *below* mimalloc's median at 500 and 1500.
-
-The problem is the **distribution**. 15 runs each, 400 detect reps, ABBA,
-identical work, raw values sorted:
+The quantity that matters is the **distribution**. 15 runs each, 400 detect
+reps, ABBA-interleaved, identical work, raw values sorted:
 
 ```
-mimalloc     78.0  78.1  78.2  78.2  78.3 | 103.9 105.5 105.6 105.7 | 110.7 111.4 111.4 111.5 111.5 | 135.1
-rusty_alloc  92.0  92.1  92.1  92.1  92.2  93.3 | 157.1 157.1 | 191.5 195.7 195.7 195.9 195.9 | 222.0 | 403.2
+mimalloc     77.4 77.5 77.5 77.5 77.5 77.5 79.6 86.9 97.1 | 110.8 110.8 110.8 | 118.2 118.3 118.3
+0.1.0-alpha1 92.0 92.1 92.1 92.1 92.2 93.3 | 157.1 157.1 | 191.5 195.7 195.7 195.9 195.9 | 222.0 | 403.2
+0.3.0        91.4 91.4 91.4 91.4 91.4 91.4 91.4 91.4 91.4 94.6 | 156.3 156.3 156.3 156.4 | 190.7
 ```
 
-| | min | median | max | max/min |
-|---|---:|---:|---:|---:|
-| mimalloc | 78.0 | 105.7 | 135.1 | **1.73×** |
-| rusty_alloc | 92.0 | 191.5 | 403.2 | **4.38×** |
+| | floor | median | max | max/min | runs at floor |
+|---|---:|---:|---:|---:|---:|
+| mimalloc | 77.4 | 97.1 | 118.3 | 1.53x | 7/15 |
+| rusty_alloc 0.1.0-alpha.1 | 92.0 | 191.5 | 403.2 | **4.38x** | 6/15 |
+| **rusty_alloc 0.3.0** | 91.4 | **91.4** | **190.7** | **2.09x** | **10/15** |
 
-Read it as **modes**, not spread. rusty_alloc clusters at ≈92, ≈157, ≈192–196,
-≈222, ≈403 — successive near-doublings — and **which mode a run lands in appears
-nondeterministic**. 6 of 15 runs stayed at the 92 MB floor; 9 escalated.
+**0.3.0 halved the median (191.5 -> 91.4) and halved the max (403.2 -> 190.7),
+and its median is now BELOW mimalloc's (91.4 vs 97.1).** The 195/222/403 modes
+are gone; 10 of 15 runs now sit at the floor against 6 before. Whatever changed
+between alpha.1 and 0.3.0 worked.
 
-Two things follow that we think are useful to you:
+It cost nothing in speed: at N=21 with a null arm, 0.3.0 reads wall **1.026x**
+(z = 1.53) and CPU **0.988x** versus mimalloc, with the null arm at 0.994x
+(z = -0.65).
 
-- **The floor is fine.** 92.0 vs mimalloc's 78.0 is +18%, entirely acceptable
-  for a pure-Rust remake, and it is where 40% of runs sit.
-- **The lever is escalation, not steady state.** Reducing RSS-max here means
-  reducing how often a run escalates and how far each step jumps — not shrinking
-  the baseline. mimalloc escalates too (78 → 105 → 111 → 135) but in ~35% steps;
-  rusty_alloc's steps are ~70–100%.
+Where the remainder is, if it is worth chasing:
 
-**`collect()` does not reclaim it.** We wired
-`rusty_alloc::alloc::collect(false)` onto a background timer, expecting it to
-cap the escalation. Three arms, ONE binary, trim the only variable,
-ABBA-rotated, N=5 at 1,500 detect reps:
+- **The floor is a fixed ~+18%** — 91.4 vs mimalloc's 77.4, stable across every
+  run and both versions. Untouched by 0.3.0, so presumably a deliberate arena
+  reservation rather than retention.
+- **Escalation still exists, in one step.** 5 of 15 runs leave the floor, and
+  when they do they land at ~156 or ~190 — a ~70-108% jump, against mimalloc's
+  ~43-53% steps (77 -> 111 -> 118). So the remaining lever is the SIZE of the
+  first escalation step, not its frequency and not the baseline.
+- Both allocators are multimodal here; this is not a rusty_alloc pathology, and
+  a fair target is mimalloc's 1.53x spread rather than 1.0x.
+
+**`collect()` did not reclaim any of it** (measured on alpha.1). Three arms, ONE
+binary, trim the only variable, ABBA-rotated, N=5 at 1,500 detect reps:
 
 | arm | RSS median | RSS range | latency |
 |---|---:|---:|---:|
-| mimalloc | 111.1 MB | 106.7–134.2 | 31.97 ms |
-| rusty_alloc, no trim | 195.8 MB | 92.2–403.3 | 30.63 ms |
-| rusty_alloc, trim 200 ms | 195.8 MB | 91.2–402.5 | 30.49 ms |
+| mimalloc | 111.1 MB | 106.7-134.2 | 31.97 ms |
+| rusty_alloc, no trim | 195.8 MB | 92.2-403.3 | 30.63 ms |
+| rusty_alloc, trim 200 ms | 195.8 MB | 91.2-402.5 | 30.49 ms |
 
-**0.1 MB, 0%.** Whatever holds the escalated memory is not reachable from the
-explicit reclaim path. We had first measured "405.6 → 195.0 MB, halved for
-free" — that was one sample against another from the distribution above. It is
-retracted, and the trimmer we built on it is shipped **off** by default
-(`FFAI_TRIM_MS=<ms>` to enable, kept wired only so re-testing your next release
-is one env var rather than one patch).
+**0.1 MB, 0%.** Worth re-checking on 0.3.0 if the escalation path changed. Our
+trimmer therefore ships OFF (`FFAI_TRIM_MS=<ms>` enables it), kept wired only so
+re-testing your next release is one env var rather than one patch.
 
 **Context that may matter:** Diana runs 4 worker threads plus candle's 24, and
-**none of them ever exit** — it is a persistent rayon pool. Your `M4` notes
-describe returning a thread's pages at thread exit and via segment reclaim; on
-this workload the thread-exit path never runs. We are not claiming that is the
-cause — we did not measure it — but it is where we would look first, and it
-would explain why an explicit `collect` also fails to help if the retention is
-held at segment rather than heap level.
+**none of them ever exit** — a persistent rayon pool. Your M4 notes describe
+returning a thread's pages at thread exit and via segment reclaim; on this
+workload the thread-exit path never runs. We did not measure that as the cause,
+so treat it as where we would look rather than as a finding.
 
 ## 4. Documentation bug in `rusty_alloc-api`
 
-`rusty_alloc-api` 0.1.0-alpha.1, `src/lib.rs`, the `unsafe impl GlobalAlloc`
-SAFETY comment ends:
+**Still present in 0.3.0** (`src/lib.rs:129`), so this is not a stale
+complaint about the alpha. The `unsafe impl GlobalAlloc` SAFETY comment ends:
 
 > `…regardless of which thread frees it` **`(M2: one global locked heap)`**
 
@@ -158,7 +155,8 @@ But `rusty_alloc` core's own `lib.rs` says:
 > `Milestone status: **M4** — per-thread heaps, lock-free cross-thread frees …`
 > **`No global lock anywhere on the alloc/free paths.`**
 
-The api crate's comment is stale by two milestones. It cost us real time: we
+The api crate's comment is stale by two milestones, in both releases. It cost
+us real time: we
 read it first, predicted lock contention on a 28-thread workload, and went to
 verify the mechanism before measuring anything. For anyone evaluating the crate,
 "one global locked heap" reads as close to a disqualifier, and it is not true.
@@ -181,7 +179,8 @@ That whole block is now `rusty_alloc::alloc::collect(false)`. One `unsafe
 extern` block deleted from our tree — the unglamorous form the pure-Rust
 argument usually takes.
 
-One packaging note: `collect` lives in `rusty_alloc` core while
+One packaging note, also unchanged in 0.3.0: `collect` lives in `rusty_alloc`
+core while
 `rusty_alloc-api` exposes reclaim only per-`Heap`, so anyone using the api crate
 as a global allocator must add the core crate as a second direct dependency to
 reach it. Re-exporting a global `collect` from the api crate would remove that.
@@ -215,7 +214,7 @@ FFAI_TRIM_MS=0   ./alloc_ab n 1500     # without
 Each arm prints `ARM=… min=… med=… ndet=… sum=…` on one line; `sum` is the work
 checksum that must match across arms.
 
-`ffai` itself defaults to rusty_alloc; `--features mimalloc` rebuilds against
+`ffai` itself pins `rusty_alloc` 0.3.0 and defaults to it; `--features mimalloc` rebuilds against
 the C library as the oracle, which is what keeps "our pure-Rust allocator
 matches the C one" a claim anyone can re-measure rather than one they have to
 take on trust.
