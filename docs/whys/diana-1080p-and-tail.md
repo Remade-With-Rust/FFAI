@@ -473,3 +473,68 @@ aggregate — and both were true as stated and wrong as generalised. The first
 buried its signal under a reimplemented im2col; the second averaged a real
 bimodal result. **A refutation built on an aggregate is only as good as the
 homogeneity of what it averaged**, and nothing had checked that.
+
+## D5e — solved over the real layer sequence, and the dispatch is not the win
+
+The 4.39 % per-shape figure assumed neighbours never disagree. The missing
+instrument was layer ORDER, which no aggregate keyed by shape can recover.
+`record_order` now emits the 88 dense convolutions in execution order, and the
+layout assignment becomes a shortest path over two states per layer — exact,
+not bounded.
+
+Three independent runs, min-of-15 per layer per run:
+
+| run | all-NCHW | all-NHWC | optimal | NHWC x | opt x | NHWC layers |
+|---|---:|---:|---:|---:|---:|---|
+| 1 | 20.409 | 18.559 | 18.005 | 1.100x | 1.134x | 56/88, 2 transitions |
+| 2 | 24.661 | 20.869 | 20.670 | 1.182x | 1.193x | 52/88, 7 transitions |
+| 3 | 22.532 | 19.761 | 19.348 | 1.140x | 1.165x | 60/88, 4 transitions |
+
+**Median: all-NHWC 1.140x, optimal 1.165x. Positive in all three runs.**
+
+* **all-NHWC, no dispatch at all: ~3.67 % of detect**
+* **optimal per-layer dispatch: ~4.21 % of detect**
+* **the dispatch is worth +0.55 pp over a single global layout**
+
+### The engineering conclusion inverts
+
+The finding began as "orientation is a per-shape dispatch". Solved over the real
+sequence it is **not**: a single global layout captures 87 % of the achievable
+win with **no per-layer logic, no transitions, and no dispatch table**. The
+optimum chooses NHWC for 52-60 of 88 layers, but forcing the remaining layers
+into NHWC too costs less than the transitions avoiding it would cost.
+
+That is the opposite of the usual dispatch lesson and it is only visible with
+order in hand. **Build the global layout; treat the dispatch as a later
+refinement worth half a point.**
+
+### What this number does NOT include
+
+GEMM only. A real conversion also moves im2col, the epilogue and the activation
+plumbing, and the chain probe's reimplemented `im2col_nhwc` was slightly SLOWER
+than its NCHW twin. Some of the 3.67 % will be given back. **Re-measure im2col
+and the epilogue in NHWC before committing to the refactor** — that is exactly
+the in-context check every structural idea in this campaign has failed.
+
+---
+
+# Retrospective: which past decisions were made on an AGGREGATE?
+
+Every A/B toggle in the tree is a decision that averaged over shapes. The
+orientation case shows what that can hide — a 2x win and a 0.6x loss reported
+as 1.047x. Ranked by the prior that the same thing happened:
+
+| toggle | what it decides | why it might be bimodal | prior |
+|---|---|---|---|
+| `FFAI_DIANA_NO_INPLACE` | epilogue fused in place | **Two A/B runs DISAGREED IN DIRECTION** (+5.5 % at 8 images, -2.8 % at 45). Kept on counters with no speed claim. Disagreement in sign is the exact signature of an averaged bimodal result. | **highest** |
+| `FFAI_DIANA_THREADS` | worker count | The sweep was WHOLE-GRAPH. Layers span 12x20 (960 px) to 192x320 (61,440 px) — a 64x range. A tiny layer at 12 threads pays barrier cost on almost no work; a large one wants every core. Per-LAYER width has never been tested. | **highest** |
+| `FFAI_DIANA_NESTED_PAR` | nested parallelism | Refuted at a 2.32x CPU tax measured across the whole graph. Might still pay for the handful of very large early layers. | medium |
+| `FFAI_DIANA_NO_DWCONV` | our depthwise vs candle grouped | 7 depthwise shapes at AI 2.2 f/B, spanning very different sizes. | medium |
+| `FFAI_DIANA_NO_PW` / `NO_CONV3` / `NO_S2` | our kernel vs candle per KIND | Already dispatched by kind, never within a kind. | medium |
+| `FFAI_DIANA_TILE` | im2col tiling | Refuted 3x on aggregate — but now has a MECHANISM (operand size correlates -0.048 with throughput), which is a reason to expect uniform failure rather than a hidden win. | low |
+| `FFAI_DIANA_DIRECT` | direct convolution | **Already re-tested per shape.** Wins only at cout=8, 1.14x, worth 0.05 ms/img. Dispatch exists and is negligible. **Closed.** | closed |
+| MKL | GEMM backend | "Within noise of candle's GEMM" was an aggregate, and two tuned GEMMs are exactly the kind of pair that trades wins by shape. Not currently wired. | medium-high |
+
+**The two to test next are the epilogue and per-layer thread width**, and the
+epilogue first because its own record already contains the tell: a direction
+disagreement that was correctly refused as a speed claim and never diagnosed.

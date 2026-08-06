@@ -349,6 +349,49 @@ impl ConvShape {
 
 static ROOFLINE: Mutex<Option<HashMap<ConvShape, (u64, u64)>>> = Mutex::new(None);
 
+/// Convolution shapes in EXECUTION ORDER for the first image.
+///
+/// The per-shape roofline can say which layout each shape prefers. It cannot
+/// say what that costs, because a layout choice is only free when the
+/// PREVIOUS layer left the activation in that layout. Order is the missing
+/// half, and no aggregate keyed by shape can recover it.
+static ORDER: Mutex<Option<Vec<ConvShape>>> = Mutex::new(None);
+
+pub fn record_order(shape: ConvShape) {
+    if !roofline_enabled() {
+        return;
+    }
+    let mut g = ORDER.lock().unwrap();
+    let v = g.get_or_insert_with(Vec::new);
+    // First image only: the sequence repeats, and recording every image would
+    // just concatenate copies of it.
+    if v.len() < 512 {
+        v.push(shape);
+    }
+}
+
+/// One line per convolution, in order, so a driver can solve the layout
+/// assignment over the real sequence instead of assuming one.
+pub fn order_report() -> String {
+    let g = ORDER.lock().unwrap();
+    let Some(v) = g.as_ref() else {
+        return String::new();
+    };
+    let mut out = String::from("
+conv execution order (first image)
+idx kind cin cout hin win hout wout
+");
+    for (i, s) in v.iter().enumerate() {
+        out.push_str(&format!(
+            "{i} {} {} {} {} {} {} {}
+",
+            s.kind.replace(' ', "_"),
+            s.cin, s.cout, s.hin, s.win, s.hout, s.wout
+        ));
+    }
+    out
+}
+
 pub fn roofline_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
     *E.get_or_init(|| std::env::var_os("FFAI_DIANA_ROOFLINE").is_some())

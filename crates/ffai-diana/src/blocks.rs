@@ -279,6 +279,22 @@ impl Module for ConvAct {
                         },
                         t0.elapsed().as_nanos() as u64,
                     );
+                    crate::profile::record_order(crate::profile::ConvShape {
+                        kind: if self.depthwise {
+                            "depthwise"
+                        } else {
+                            match self.kind {
+                                ConvKind::Stride2 => "3x3_s2",
+                                ConvKind::Pointwise => "1x1",
+                                ConvKind::Dense3x3 => "3x3_s1",
+                                _ => "other",
+                            }
+                        },
+                        cin: xd[1], cout: yd[1], hin: xd[2], win: xd[3],
+                        hout: yd[2], wout: yd[3],
+                        k: if self.kind == ConvKind::Pointwise { 1 } else { 3 },
+                        depthwise: self.depthwise,
+                    });
                 }
             }
             // `!pw_fused` because the 1x1 epilogue has ALREADY applied it.
