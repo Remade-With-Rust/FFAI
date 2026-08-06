@@ -94,6 +94,13 @@ pub struct TrackerConfig {
     /// 18.71). A knob that improves both metrics on every clip is not a
     /// trade, it is a filter that was priced twice.
     pub min_hits: u32,
+    /// Refuse to associate a detection with a track of a DIFFERENT class.
+    ///
+    /// On by default, and it is a correctness fix rather than a tuning knob:
+    /// without it a car can inherit a pedestrian's identity, because the cost
+    /// matrix was pure geometry and `apply` overwrites the track's class with
+    /// whatever it matched.
+    pub class_aware: bool,
     /// IoU gate for the unconfirmed third pass. The reference uses a TIGHTER
     /// bar here (0.7) than for confirmed tracks, on the reasoning that a
     /// speculative identity should need a better overlap to be corroborated
@@ -219,6 +226,7 @@ impl Default for TrackerConfig {
             // `match_thresh`'s value because a knob that changes nothing should
             // not also be a second number to explain. 0.6 is worse (-0.01,
             // 2 sub-clips regress).
+            class_aware: true,
             unconfirmed_thresh: 0.8,
             // TRUE, which is the OPPOSITE of the reference, and measured.
             //
@@ -357,12 +365,22 @@ impl ByteTrack {
         // Pass 1 only. The second pass is by construction low-confidence, so
         // multiplying by a score that is always small would push every pair
         // past the gate and disable the very recovery it exists for.
-        let gate = assign::cost_matrix(&t_boxes, &d_boxes);
+        let mut gate = assign::cost_matrix(&t_boxes, &d_boxes);
+        if self.cfg.class_aware {
+            let tc: Vec<u32> = unmatched_tracks.iter().map(|&i| self.tracks[i].class_id).collect();
+            let dc: Vec<u32> = hi.iter().map(|&i| classes[i]).collect();
+            assign::forbid_cross_class(&mut gate, &tc, &dc);
+        }
         let pairs = match self.cfg.fuse_mode {
             // Rank by confidence-weighted overlap, ADMIT by overlap.
             1 => {
                 let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
-                let rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                let mut rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                if self.cfg.class_aware {
+                    let tc: Vec<u32> = unmatched_tracks.iter().map(|&i| self.tracks[i].class_id).collect();
+                    let dc: Vec<u32> = hi.iter().map(|&i| classes[i]).collect();
+                    assign::forbid_cross_class(&mut rank, &tc, &dc);
+                }
                 assign::assign_gated(&rank, &gate, self.cfg.match_thresh)
             }
             // BOTH fused — the reference's literal behaviour. Gating on the
@@ -372,7 +390,12 @@ impl ByteTrack {
             // threshold and worse at a low one, which is why both exist.
             2 => {
                 let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
-                let rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                let mut rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                if self.cfg.class_aware {
+                    let tc: Vec<u32> = unmatched_tracks.iter().map(|&i| self.tracks[i].class_id).collect();
+                    let dc: Vec<u32> = hi.iter().map(|&i| classes[i]).collect();
+                    assign::forbid_cross_class(&mut rank, &tc, &dc);
+                }
                 assign::assign(&rank, self.cfg.match_thresh)
             }
             _ => assign::assign(&gate, self.cfg.match_thresh),
@@ -405,7 +428,13 @@ impl ByteTrack {
             // A LOOSER gate on the second pass: these boxes are already known to
             // be poor, and demanding the same IoU as a confident one would
             // discard exactly the occlusions this pass exists to recover.
-            let pairs = assign::assign(&assign::cost_matrix(&t_boxes, &d_boxes), 0.5);
+            let mut c2 = assign::cost_matrix(&t_boxes, &d_boxes);
+            if self.cfg.class_aware {
+                let tc: Vec<u32> = pass2.iter().map(|&i| self.tracks[i].class_id).collect();
+                let dc: Vec<u32> = lo.iter().map(|&i| classes[i]).collect();
+                assign::forbid_cross_class(&mut c2, &tc, &dc);
+            }
+            let pairs = assign::assign(&c2, 0.5);
             let mut left = unmatched_tracks.clone();
             for (ti, di) in &pairs {
                 let track_idx = pass2[*ti];
@@ -430,8 +459,13 @@ impl ByteTrack {
                 let t_boxes: Vec<[f32; 4]> =
                     unconfirmed.iter().map(|&i| self.tracks[i].xyxy()).collect();
                 let d_boxes: Vec<[f32; 4]> = rest.iter().map(|&i| boxes[i]).collect();
-                let pairs =
-                    assign::assign(&assign::cost_matrix(&t_boxes, &d_boxes), self.cfg.unconfirmed_thresh);
+                let mut c3 = assign::cost_matrix(&t_boxes, &d_boxes);
+                if self.cfg.class_aware {
+                    let tc: Vec<u32> = unconfirmed.iter().map(|&i| self.tracks[i].class_id).collect();
+                    let dc: Vec<u32> = rest.iter().map(|&i| classes[i]).collect();
+                    assign::forbid_cross_class(&mut c3, &tc, &dc);
+                }
+                let pairs = assign::assign(&c3, self.cfg.unconfirmed_thresh);
                 for (ti, di) in &pairs {
                     let det = rest[*di];
                     self.apply(unconfirmed[*ti], boxes[det], scores[det], classes[det]);
@@ -590,6 +624,31 @@ mod tests {
             out.iter().any(|x| x.id == established),
             "the established id {established} lost its detection to a newcomer: {:?}",
             out.iter().map(|x| x.id).collect::<Vec<_>>()
+        );
+    }
+
+    /// A car must not inherit a person's identity.
+    ///
+    /// The cost matrix was pure geometry and `apply` overwrites a track's
+    /// class with whatever matched it, so a different-class detection sitting
+    /// where a tracked object was could take the track and silently relabel
+    /// it. Not hypothetical: 36.8 % of our detections on MOT17-13 are cars,
+    /// buses and traffic lights.
+    #[test]
+    fn a_different_class_cannot_steal_a_track() {
+        let mut t = ByteTrack::new(TrackerConfig::default());
+        let mut person = 0;
+        for k in 0..4 {
+            if let Some(tr) = t.update(&boxes_at(100.0 + 5.0 * k as f32), &[0.9], &[0]).first() {
+                person = tr.id;
+            }
+        }
+        assert_ne!(person, 0, "no person track established");
+        // Same place, next frame, but class 2 (car). It must NOT take the id.
+        let out = t.update(&boxes_at(120.0), &[0.9], &[2]);
+        assert!(
+            out.iter().all(|x| x.id != person || x.class_id == 0),
+            "a class-2 detection captured the class-0 track"
         );
     }
 

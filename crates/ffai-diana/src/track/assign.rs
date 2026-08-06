@@ -69,6 +69,27 @@ pub fn cost_matrix_fused(
         .collect()
 }
 
+/// Raise the cost of every CROSS-CLASS pair beyond any usable gate.
+///
+/// The cost matrix was pure geometry, and `Track::class_id` was stored, then
+/// overwritten by whatever matched — so a car detection sitting where a person
+/// was could take that person's track and silently relabel it. On MOT17-13,
+/// 36.8 % of our detections are cars, buses and traffic lights, so this is not
+/// hypothetical.
+///
+/// A separate pass rather than a parameter on `cost_matrix` because the second
+/// association pass deliberately uses a different gate, and threading a class
+/// rule through both is how one of them ends up forgotten.
+pub fn forbid_cross_class(cost: &mut [Vec<f32>], track_cls: &[u32], det_cls: &[u32]) {
+    for (i, row) in cost.iter_mut().enumerate() {
+        for (j, c) in row.iter_mut().enumerate() {
+            if track_cls.get(i) != det_cls.get(j) {
+                *c = f32::MAX / 4.0;
+            }
+        }
+    }
+}
+
 /// Row/column swap, so the transposed solve gates on the transposed matrix.
 fn transpose(m: &[Vec<f32>]) -> Vec<Vec<f32>> {
     if m.is_empty() {

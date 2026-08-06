@@ -23,6 +23,26 @@ MOT conventions, matching the detection bench already in this repo: ground-truth
 rows with `conf=0` are ignored regions and dropped, and only `class=1`
 (pedestrian) is scored.
 
+**PASS `--classes 0` TO THE DETECTOR.** MOT17 ground truth is pedestrians only,
+and Diana is an 80-class COCO detector — so without the filter every car, bus
+and traffic light is scored as a predicted pedestrian and charged as a false
+positive. This campaign ran for multiple sessions without it. The contamination
+was 13.8-47.3 % of detections depending on the sequence, and removing it is
+worth **+1.54 pp IDF1 and +5.38 pp MOTA** overall:
+
+    MOT17-13, end to end       IDF1     MOTA       FP
+      no class filter         21.32    -6.22     2759
+      --classes 0             25.02   +16.28       99
+
+A NEGATIVE MOTA is the tell, and it sat in the results for weeks: MOTA is
+1 - (FN+FP+IDSW)/GT, so going below zero means more errors than ground-truth
+boxes. That is not a hard sequence, it is a broken comparison, and it should
+have been chased the first time it appeared (codec-measurement s7 — an
+impossible number is the instrument asking for help).
+
+The reference was always run as `model.track(..., classes=[0])`, so the two
+sides were never doing the same job.
+
 **No thresholds are tuned here.** The tracking plan's stop rule is that the
 first number must be honest, because a tracker has four knobs and fitting all of
 them to one corpus is trivial.
