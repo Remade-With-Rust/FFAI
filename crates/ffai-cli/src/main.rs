@@ -866,11 +866,16 @@ fn main() -> Result<()> {
 }
 
 
-/// Containers the streaming path accepts, matching `stream_frames`.
+/// Containers the streaming path accepts.
+///
+/// MUST stay in step with `stream_frames`' own dispatch table. It did not once:
+/// the library gained mkv/avi/ts while this still said mp4-only, so those files
+/// fell through to the IMAGE loader and were rejected with a message about PNG.
+/// A mismatch here is a wrong error, not a missing feature.
 fn is_video(p: &std::path::Path) -> bool {
     matches!(
         p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
-        Some("mp4" | "mov" | "m4v")
+        Some("mp4" | "mov" | "m4v" | "mkv" | "webm" | "mka" | "avi" | "ts" | "m2ts" | "mts")
     )
 }
 

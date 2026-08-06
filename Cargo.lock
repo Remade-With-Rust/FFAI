@@ -1249,7 +1249,10 @@ dependencies = [
  "rff-codec",
  "rff-core",
  "rff-format",
+ "rff-format-avi",
+ "rff-format-mkv",
  "rff-format-mp4",
+ "rff-format-ts",
  "rusty_h264",
  "rusty_jpeg",
  "rusty_png",
@@ -3411,10 +3414,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "rff-format-avi"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32f491a8f477182e847fccf2aa013258038054669f3e5d507a34f31cd245d7e2"
+dependencies = [
+ "rff-core",
+ "rff-format",
+]
+
+[[package]]
+name = "rff-format-mkv"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09833e51629110d55c72dee424656440ddac3d4549af136b174aabbf000ea1a8"
+dependencies = [
+ "rff-core",
+ "rff-format",
+]
+
+[[package]]
 name = "rff-format-mp4"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37d7b6217e17142e47d59229fd09904a8235f18327f1e1c4831363f8f3860403"
+dependencies = [
+ "rff-core",
+ "rff-format",
+]
+
+[[package]]
+name = "rff-format-ts"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56aacaafcba0f26a585542b420deacb3ea2e5d058f493d54390089802134592a"
 dependencies = [
  "rff-core",
  "rff-format",

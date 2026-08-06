@@ -69,7 +69,34 @@ fn fps_decimates() {
 /// A container we have not wired must say so, not fail obscurely.
 #[test]
 fn unwired_container_names_the_gap() {
-    let err = ffai_media::sample_frames(std::path::Path::new("clip.mkv"), 0.0).unwrap_err();
+    // `.mkv` USED to be the example here, and it is now wired — the assertion
+    // failing is what said so. Kept pointed at a container that is still
+    // genuinely absent (ASF/WMV has no published rff-format crate), because the
+    // thing under test is that an unsupported extension names the supported
+    // ones rather than failing blankly.
+    let err = ffai_media::sample_frames(std::path::Path::new("clip.wmv"), 0.0).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("MP4"), "unhelpful error: {msg}");
+    assert!(msg.contains("mp4"), "should list what IS supported: {msg}");
+    assert!(msg.contains("mkv"), "should list what IS supported: {msg}");
+}
+
+/// Every container we claim now decodes to the same frame count.
+///
+/// The MKV row is the one that matters: before the AVCC->Annex-B conversion it
+/// produced 164 packets, ZERO frames and zero errors — a silent short read
+/// indistinguishable from an empty video.
+#[test]
+fn every_wired_container_decodes() {
+    let root = std::path::Path::new("../../corpora/clips/entropy-ladder");
+    for (file, expect) in [("cavlc_akiyo.mp4", 164), ("akiyo.avi", 164),
+                           ("akiyo.ts", 164), ("akiyo.mkv", 164)] {
+        let p = root.join(file);
+        if !p.exists() {
+            continue; // generated corpus; skip when absent
+        }
+        let n = ffai_media::sample_frames(&p, 0.0)
+            .unwrap_or_else(|e| panic!("{file}: {e}"))
+            .len();
+        assert_eq!(n, expect, "{file} decoded {n} frames, expected {expect}");
+    }
 }

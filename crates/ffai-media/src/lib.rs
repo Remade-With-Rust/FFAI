@@ -8,6 +8,8 @@
 //! format every ASR/TTS engine needs on day one); everything else returns a
 //! clear "pending rff integration" error rather than silently failing.
 
+pub mod annexb;
+
 use std::path::Path;
 
 use ffai_core::error::{Error, Result};
@@ -259,6 +261,9 @@ fn decode_png(data: &[u8]) -> Result<ImageBuffer> {
 pub struct VideoStream {
     demux: Box<dyn rff_format::Demuxer>,
     dec: rusty_h264::Decoder,
+    /// `Some(n)` when the container hands us AVCC and every packet needs its
+    /// `n`-byte length prefixes rewritten as start codes; `None` for Annex-B.
+    nal_length_size: Option<usize>,
     vidx: usize,
     tb: rff_core::Rational,
     stride: usize,
@@ -306,7 +311,15 @@ impl Iterator for VideoStream {
             // which turned a decoder reporting itself clearly into a silent
             // short read — a standard x264 file yielded zero frames and no
             // diagnostic, indistinguishable from an empty video.
-            let frame = match self.dec.decode(&packet.data) {
+            // Rewrite AVCC to Annex-B when the container uses it. `to_annexb`
+            // returns None for anything that is not length-prefixed — including
+            // a packet that is already Annex-B — so a wrong guess passes the
+            // data through untouched rather than mangling it.
+            let converted = self
+                .nal_length_size
+                .and_then(|n| annexb::to_annexb(&packet.data, n));
+            let payload: &[u8] = converted.as_deref().unwrap_or(&packet.data);
+            let frame = match self.dec.decode(payload) {
                 Ok(f) => f,
                 Err(e) => {
                     self.done = true;
@@ -338,25 +351,38 @@ impl Iterator for VideoStream {
 pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
     use rff_format::FormatRegistry;
 
+    // Extension -> the name the demuxer REGISTERS UNDER, which is not the
+    // extension: `rff-format-mkv` registers as "matroska", `rff-format-ts` as
+    // "mpegts". Looking up by extension silently found nothing and reported
+    // "no demuxer found for input `mkv`" while the crate was linked and working.
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    if !matches!(ext.as_str(), "mp4" | "mov" | "m4v") {
-        return Err(Error::Media(format!(
-            "`{}`: only MP4/MOV is wired (H.264 inside). Other containers land \
-             as their rff-format-* crates publish.",
-            path.display()
-        )));
-    }
+    let demuxer_name = match ext.as_str() {
+        "mp4" | "mov" | "m4v" => "mp4",
+        "mkv" | "webm" | "mka" => "matroska",
+        "avi" => "avi",
+        "ts" | "m2ts" | "mts" => "mpegts",
+        other => {
+            return Err(Error::Media(format!(
+                "`.{other}`: no demuxer wired. Supported: mp4/mov/m4v, mkv/webm, \
+                 avi, ts/m2ts/mts. MPEG-PS and ASF land when their rff-format-* \
+                 crates publish — see docs/rff-gaps-for-ffai.md."
+            )))
+        }
+    };
 
     let file = std::fs::File::open(path)?;
     let mkerr = |e: rff_core::Error| Error::Media(format!("{}: {e}", path.display()));
     let mut formats = FormatRegistry::new();
     rff_format_mp4::register(&mut formats);
+    rff_format_mkv::register(&mut formats);
+    rff_format_avi::register(&mut formats);
+    rff_format_ts::register(&mut formats);
     let mut demux = formats
-        .open_demuxer("mp4", Box::new(std::io::BufReader::new(file)))
+        .open_demuxer(demuxer_name, Box::new(std::io::BufReader::new(file)))
         .map_err(mkerr)?;
     let streams = demux.read_header().map_err(mkerr)?;
 
@@ -367,9 +393,23 @@ pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
         .ok_or_else(|| Error::Media(format!("{}: no video stream", path.display())))?;
 
     let mut dec = rusty_h264::Decoder::new();
-    // MP4 carries SPS/PPS in the container's extradata, not inline.
-    if !vstream.extradata.is_empty() {
-        let _ = dec.decode(&vstream.extradata);
+    // Two container conventions, and getting this wrong is SILENT.
+    //
+    // `rff-format-mp4` hands back Annex-B with empty extradata. `rff-format-mkv`
+    // hands back AVCC (length-prefixed) with an `avcC` in extradata, which
+    // `rusty_h264` does not parse — measured at 164 packets, 0 frames, 0 errors.
+    // If this is an avcC, convert the parameter sets to Annex-B, feed them, and
+    // remember the length size so every packet can be rewritten too.
+    let avcc = annexb::parse_avcc(&vstream.extradata);
+    let nal_length_size = avcc.as_ref().map(|c| c.nal_length_size);
+    match &avcc {
+        Some(c) => {
+            let _ = dec.decode(&c.parameter_sets);
+        }
+        None if !vstream.extradata.is_empty() => {
+            let _ = dec.decode(&vstream.extradata);
+        }
+        None => {}
     }
 
     let tb = vstream.time_base;
@@ -384,6 +424,7 @@ pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
     Ok(VideoStream {
         demux,
         dec,
+        nal_length_size,
         vidx,
         tb,
         stride,
