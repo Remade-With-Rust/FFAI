@@ -538,3 +538,90 @@ as 1.047x. Ranked by the prior that the same thing happened:
 **The two to test next are the epilogue and per-layer thread width**, and the
 epilogue first because its own record already contains the tell: a direction
 disagreement that was correctly refused as a speed claim and never diagnosed.
+
+---
+
+# Hammering both dispatch candidates - and the content axis
+
+Both retrospective candidates tested per shape, in context, under the skill's
+governing rule: **a shape is dispatchable only if every independent rep agrees
+on the SIGN.** Both refuted, and so is the content axis.
+
+## Candidate 1 - epilogue in place vs out of place: REFUTED
+
+54 shapes, 4 ABBA reps, in context through the roofline.
+**Only 2 of 54 reproducible. 52 sign-flip.**
+
+| | ms/img | |
+|---|---:|---:|
+| all in-place (shipped) | 18.990 | - |
+| all out-of-place | 19.155 | 0.991x |
+| **per-shape dispatch** | **18.920** | **1.004x** |
+
+The "+5.5 % at 8 images, -2.8 % at 45" direction disagreement that made this the
+top candidate was **noise, not a hidden dispatch**. The original decision - keep
+on the counted work removal, make no speed claim - was correct, and is now
+correct for a measured reason rather than a cautious one.
+
+## Candidate 2 - per-layer thread width: REFUTED
+
+54 shapes, widths {1,2,4,8,12}, 3 reps. **Only 7 of 54 have a stable optimum**,
+and they disagree (2 want 1 thread, 3 want 4, 2 want 8).
+
+| all layers at | ms/img | vs shipped |
+|---|---:|---:|
+| 1 thread | 47.320 | 0.427x |
+| 2 threads | 29.990 | 0.674x |
+| **4 threads (shipped)** | **20.220** | **1.000x** |
+| 8 threads | 25.250 | 0.801x |
+| 12 threads | 48.790 | 0.414x |
+| per-layer dispatch | 20.140 | **1.004x** |
+
+A clean optimum at 4; the dispatch buys 0.4 %. The 64x work range across layers
+was a good reason to look and produced no signal.
+
+## The content axis - there is no surface to dispatch on
+
+A convolution graph has **static shapes and dense arithmetic**, so the only
+thing an image can change is the VALUES. Two ways that could have mattered:
+
+### Denormals: 0 in 80,640,000 values
+
+`silu.rs` claimed unbounded activations "almost certainly land in denormals,
+which are orders of magnitude slower on x86", offered to explain why ablating
+SiLU made the pipeline SLOWER (49.7 ms vs 45.1). It read like a finding and had
+never been checked.
+
+| | count | share |
+|---|---:|---:|
+| values | 80,640,000 | |
+| **subnormal** | **0** | **0.000000 %** |
+| exact zero | 4 | 0.00 % |
+
+**Zero. Not few.** Flush-to-zero would change nothing. Corrected in place: the
+anomaly is now **unexplained rather than explained**, which is worse than it
+looked, because a plausible story kept it feeling closed.
+
+### Detection count: correlation -0.009
+
+115 diverse COCO images, per-image latency as the median of 3 runs. Detections
+ranged 1 to 15. **correlation(detect_ms, detections) = -0.009.** Images with
+<=2 objects: 53.5 ms; with >=8 objects: 43.8 ms - busy images nominally FASTER,
+the signature of no relationship. The raw 4.63x p10-p90 spread is box noise, and
+the -0.009 is what proves it.
+
+**No content-adaptive dispatch is available in this engine** - the mechanism is
+absent rather than unfound: static shapes, dense arithmetic, no data-dependent
+branching, no denormals, and a head whose cost does not move with what it finds.
+
+## Where the campaign stands
+
+| lever | status |
+|---|---|
+| **global NHWC layout** | **LIVE - 1.140x median on the GEMM, ~3.67 % of detect, positive 3/3 runs** |
+| per-layer layout dispatch | +0.55 pp over global; a later refinement |
+| epilogue dispatch | refuted, 1.004x, 52/54 sign-flip |
+| thread-width dispatch | refuted, 1.004x, 7/54 stable |
+| content-adaptive anything | refuted - no mechanism exists |
+| denormals / flush-to-zero | refuted - 0 in 80.6M values |
+| Winograd F(2x2,3x3) | untried, ~8-9 % of detect, the largest remaining |

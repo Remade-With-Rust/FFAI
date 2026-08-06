@@ -162,6 +162,17 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
     // certainly lands in denormals, which are orders of magnitude slower on
     // x86.
     //
+    // THE DENORMAL EXPLANATION ABOVE IS REFUTED. It was a hypothesis that read
+    // like a finding, and it sat here unchecked. Censused with
+    // `FFAI_DIANA_ROOFLINE=1` over every activation the graph produces:
+    // **0 subnormals in 80,640,000 values** across 8 images, plus 4 exact
+    // zeros. Not "few" - none. Flush-to-zero would change nothing, and
+    // denormals cannot be why the ablation answered backwards.
+    //
+    // So the 49.7-vs-45.1 anomaly is UNEXPLAINED, not explained. That is the
+    // honest state and it is worse than it looked: the plausible story kept
+    // the question feeling closed for as long as nobody counted.
+    //
     // The ablation toggle was deleted rather than documented, because an
     // instrument that answers backwards is worse than no instrument. It also
     // means the profiler's 8.7 % share for this bucket has no independent

@@ -253,6 +253,11 @@ impl Module for ConvAct {
             } else {
                 self.conv.forward(x)?
             };
+            if crate::profile::roofline_enabled() {
+                if let Ok(v) = y.flatten_all().and_then(|f| f.to_vec1::<f32>()) {
+                    crate::profile::census(&v);
+                }
+            }
             if let Some(t0) = t_kernel {
                 let (xd, yd) = (x.dims(), y.dims());
                 if xd.len() == 4 && yd.len() == 4 {

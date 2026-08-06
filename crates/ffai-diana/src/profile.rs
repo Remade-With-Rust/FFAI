@@ -545,3 +545,75 @@ pub fn sliceop_report(images: u64) -> String {
     ));
     out
 }
+
+// ---------------------------------------------------------------------------
+// Denormal census — `FFAI_DIANA_ROOFLINE=1`
+//
+// `silu.rs` carries a HYPOTHESIS that has never been measured: replacing SiLU
+// with the identity made the pipeline SLOWER (49.7 ms against 45.1), and the
+// explanation offered was that unbounded activations land in denormals, which
+// are orders of magnitude slower on x86. That is plausible and it is the exact
+// shape of a story that is never checked because the toggle was deleted.
+//
+// Denormals are also the one genuinely CONTENT-dependent effect available in a
+// convolution graph: shapes are static, arithmetic is dense, and the only thing
+// an image can change is the VALUES. So if a content-adaptive dispatch exists
+// anywhere in this engine, this is where.
+//
+// A count settles it in one run and needs no quiet box: how many activation
+// values are subnormal, per image. Zero kills the hypothesis outright; a large
+// and image-varying count makes it a dispatch, and a large and constant count
+// makes it a global flush-to-zero flag.
+// ---------------------------------------------------------------------------
+
+static DENORM: (AtomicU64, AtomicU64, AtomicU64) =
+    (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
+
+/// Census one activation buffer: total values, subnormals, exact zeros.
+///
+/// Exact zeros are counted separately because they are FAST — they are not
+/// denormals and a flush-to-zero flag would not change them. Lumping them in
+/// would inflate the apparent prize by whatever fraction of a post-SiLU
+/// activation is hard zero, which is large.
+pub fn census(xs: &[f32]) {
+    if !roofline_enabled() {
+        return;
+    }
+    let mut sub = 0u64;
+    let mut zero = 0u64;
+    for &v in xs {
+        if v == 0.0 {
+            zero += 1;
+        } else if v.abs() < f32::MIN_POSITIVE {
+            sub += 1;
+        }
+    }
+    DENORM.0.fetch_add(xs.len() as u64, Ordering::Relaxed);
+    DENORM.1.fetch_add(sub, Ordering::Relaxed);
+    DENORM.2.fetch_add(zero, Ordering::Relaxed);
+}
+
+pub fn denorm_report(images: u64) -> String {
+    let (t, s, z) = (
+        DENORM.0.load(Ordering::Relaxed),
+        DENORM.1.load(Ordering::Relaxed),
+        DENORM.2.load(Ordering::Relaxed),
+    );
+    if t == 0 {
+        return String::new();
+    }
+    let imgs = images.max(1);
+    format!(
+        "\ndenormal census over {} images\n  \
+         values {:>14}  ({:.1}M/image)\n  \
+         SUBNORMAL {:>11}  ({:.6}%)  <- the only ones a flush-to-zero flag changes\n  \
+         exact zero {:>10}  ({:.2}%)  <- fast already, not denormals\n",
+        imgs,
+        t,
+        t as f64 / imgs as f64 / 1e6,
+        s,
+        100.0 * s as f64 / t as f64,
+        z,
+        100.0 * z as f64 / t as f64,
+    )
+}
