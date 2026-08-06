@@ -7979,6 +7979,74 @@ exhausted (7 of 18 884 candidates, all at top3 ~100 %), and the classes where
 suppression still pays — `academic_literature` and `book` — are classes we
 already WIN by 28.86 and 4.11 pp.
 
+### 8.141 Gate 1 REFUSED, Gate 2 diagnosed — it is reading order, half of it
+
+**GATE 1 — an abstention rule — is refused after three varied probes.**
+
+§8.140 found the filter makes 32 pages worse than emitting everything, costing
+0.537 pp, and proposed a stopping rule. Perfect abstention is worth 0.544 pp. No
+runtime signal reaches it:
+
+| probe | best result |
+|---|---|
+| short page AND high drop fraction | -0.015 pp (one page) |
+| blanket abstain on short pages | **+0.248 pp** (worse) |
+| short page AND low drop fraction | +0.010 pp (worse) |
+
+The reason is that the hypothesis was backwards. The hurt pages have LOWER drop
+fractions than the rest (median 0.063 against 0.026 gross, but 0.07 against 0.09
+among short pages) — the filter is not over-firing, the pages are simply SHORT:
+628 emitted characters against 3 698. On a 620-character page, deleting 40
+annotated characters costs 6.5 pp; on a 3 700-character page the same 40 cost 1.
+**And on short pages the filter HELPS more often than it hurts** — 24 hurt
+against 46 helped under 1 600 characters — so every threshold lands at roughly one
+right per one wrong. The 0.544 pp needs knowing the answer in advance.
+
+Three probes, varied by axis rather than by seed, which is what §8.128's rule
+demands of a refutation.
+
+**GATE 2 — `colorful_textbook`, 1.52 pp — is HALF READING ORDER.**
+
+Twenty pages were rendered with each line coloured by the filter's decision.
+`red` (orphan still emitted) is **zero on 14 of 20**, which confirms §8.126's
+5.5 % orphan share from a second direction: there is nothing to suppress here.
+
+`omni-0257` is the clean case — 0 red, 0 magenta, the filter does nothing, and we
+lose 59.5 % to 11.8 %. Comparing the text says why:
+
+```
+ours:    Lesson 1 / A Look, listen and repeat: / B) Let's role-play: /
+         ) Let's write. / ~ompuc--have / ~cmu ave / Shoping List / a knife / ...
+theirs:  Lesson 1 / A Look, listen and repeat. / Shopping List / a knife /
+         ... / paper / B Let's role-play. / Let's write. / Do you have ...
+```
+
+**We emit all three section headings first, then the handwriting, then the
+shopping list.** The Shopping List is a figure INSET, and the gutter-based column
+detection (§8.130) reads it as a COLUMN — so it is deferred to the end of the
+page instead of read inline after heading A. Recognition fails too
+(`~ompuc--have` for cursive "Do you have", `books [` for `books √`), but it is
+the smaller half.
+
+**Measured with §8.86's instrument — our lines re-emitted in ground-truth region
+order:**
+
+| | macro CER |
+|---|---:|
+| as-is | 29.78 % |
+| **oracle order** | **21.43 %** |
+| Unlimited-OCR | 13.19 % |
+
+**Ordering alone is 8.35 pp of the 16.59 pp class gap — exactly half.** Per page
+it reaches 37 pp (`omni-0079`), 33.6 (`omni-0257`), 31.7 (`omni-0164`).
+
+**So Gate 2 splits cleanly:** ~0.76 pp of corpus macro from reading order on
+figure-inset pages, ~0.76 pp from recognition of display type, cursive and
+symbols. The first is a layout problem in code we own and just rewrote; the
+second is a model problem. **§8.86 concluded "our within-column ordering is
+already right; the entire gap is which region comes next" — this is that finding
+arriving on the pages where it costs the most.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
