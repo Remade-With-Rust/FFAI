@@ -322,8 +322,29 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
         if packet.stream_index != vidx {
             continue;
         }
-        if dec.send_packet(&packet).is_err() {
-            continue;
+        // DO NOT SWALLOW THIS. It used to be `if ... .is_err() { continue; }`,
+        // which turned a decoder that was reporting itself clearly into a
+        // silent short read: a standard x264 file (High profile is x264's
+        // DEFAULT) produced **zero frames and no error**, and the caller had no
+        // way to tell that from an empty video.
+        //
+        // The decoder's own diagnostics are precise and worth surfacing
+        // verbatim — measured on the Xiph ladder, 2026-08-06:
+        //   High profile : "rusty_h264: unsupported coding tool: P_Skip
+        //                   without reference"   (0 of 164 frames)
+        //   CABAC        : "rusty_h264: bitstream truncated" (49 of 164)
+        //   CAVLC        : no errors, 164 of 164
+        //
+        // Failing loudly is the right default: a partial decode silently
+        // presented as a complete one is a wrong ANSWER, not a slow one, and
+        // every downstream metric computed on it inherits the truncation.
+        if let Err(e) = dec.send_packet(&packet) {
+            return Err(Error::Media(format!(
+                "{}: decode failed on packet {} after {} frame(s): {e}.                  The stream uses a coding tool this decoder does not support;                  re-encode with `-coder 0` (CAVLC) or use a different source.",
+                path.display(),
+                idx + 1,
+                out.len()
+            )));
         }
         while let Ok(rff_core::Frame::Video(v)) = dec.receive_frame() {
             if idx % stride == 0 {
