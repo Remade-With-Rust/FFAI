@@ -1,0 +1,21 @@
+[package]
+name = "ffai-py"
+description = "Python bindings for FFai — Diana detection and depth over numpy/PIL/torch arrays"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "ffai"
+crate-type = ["cdylib"]
+
+[dependencies]
+ffai-core = { workspace = true }
+ffai-diana = { workspace = true }
+ffai-media = { workspace = true }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+numpy = "0.23"
