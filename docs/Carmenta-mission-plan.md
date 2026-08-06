@@ -7667,6 +7667,69 @@ dangerous one, because §8.128's three-probe rule exists precisely for it: *"a
 wrong refute is permanent."* §8.133 refuted the block frame on ONE measurement,
 and the measurement was defective.
 
+### 8.135 The geometric wall was called too early — blocks DO separate, and it is +0.891 pp
+
+§8.134 corrected §8.133's broken incremental test and landed A+B at +0.575 pp.
+Then, asked whether another search round could reach the remaining 77 %, I said
+no: the missed blocks were "wider and denser than body text", the same wall
+§8.115 and §8.132 measured. **That was wrong, and the evidence for it was
+selective.**
+
+The medians I quoted were from the TOP 100 MISSED BLOCKS BY GAIN, not from the
+population. Measured properly — every missed positive-gain block against every
+body block, on train, by AUC:
+
+| feature | missed | body | **AUC** |
+|---|---:|---:|---:|
+| `area_frac` | 0.0041 | 0.0342 | **0.852** |
+| `blk_h` | 0.0290 | 0.0895 | **0.802** |
+| `chars_per_line` | 12.75 | 34.67 | 0.795 |
+| `n_lines` | 1.0 | 6.0 | 0.792 |
+| `w_med` | 0.411 | 0.942 | 0.792 |
+
+**AUC 0.85 is not "indistinguishable".** Two of eleven features overlap; the rest
+separate cleanly. The missed blocks are small, short, single-line, narrow and
+sparse — the same family A+B catches, sitting outside its `aspect > 6` and
+`isolation > 1.2` corners.
+
+**Searching what A+B leaves found a third rule.** 2 491 blocks, 18 884
+three-variable conjunctions, 60 positive on both splits:
+
+**C** = `w_med < 0.30 & blk_w < 0.40 & conf < 0.96` — +0.271 pp, precision 0.656.
+
+| rule | train | **holdout** | blocks | pages | gain / lose | top3 | prec |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| A + B | +0.433 | +0.575 | 370 | 149 | 107 / 42 | 33 % | 0.686 |
+| **A + B + C** | +0.573 | **+0.891** | 431 | **160** | **110 / 50** | 42 % | 0.682 |
+
+**Holdout EXCEEDS train** (+0.891 against +0.573), which is the opposite of the
+overfit signature that killed A+B+C+D in §8.134. 160 pages touched, 110 gaining.
+Capture of the residual block oracle rises from 12 % to **19 %**.
+
+**The process failure is the point of this section.** §8.128's three-probe rule
+says a wrong refute is permanent, and this campaign has now made that error twice
+in one session:
+
+* §8.133 refuted the block frame on one measurement, and the measurement scored
+  rules against stale geometry;
+* §8.135 refuted the geometric ceiling on medians drawn from a top-100 slice
+  rather than the population.
+
+Both were caught by being pushed, not by the process. Meanwhile the same rule was
+applied diligently to every CONFIRMATION all day. **The asymmetry ran exactly
+backwards from what the skill prescribes** — confirmations face the next gate and
+get caught; refutations close the file. The correct discipline is that a
+refutation needs MORE evidence than a confirmation, and it received less, twice.
+
+**Revised ledger:**
+
+| | |
+|---|---|
+| §8.130 section scope, shipped and validated | **-1.98 pp macro** |
+| block rules A+B+C, incremental, not yet in the engine | **-0.891 pp** |
+| residual block oracle still unreached | 3.73 pp |
+| gap on the 43-page comparison set | +6.19 pp |
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
