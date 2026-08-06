@@ -331,30 +331,45 @@ fn im2col_t(
     // padding is scattered one element at a time rather than in runs, so
     // inheriting it is the cheaper side of that trade.
     let mut col = vec![0.0f32; oh * ow * k];
-    // ONE OUTPUT PIXEL AT A TIME, writing its K values CONTIGUOUSLY.
+    // CHANNEL OUTER, PIXEL INNER, writing 3 contiguous floats per (c, ky).
     //
-    // The first version of this looped (c, ky, kx) outside and ox inside, so
-    // every write landed `k` floats from the last - a pure stride-k scatter.
-    // In context it measured 5.7x slower than the shipped NCHW im2col and
-    // swamped a GEMM win of 1.645x. The gather is inherently strided on the
-    // READ side while the input stays NCHW; there is no reason to be strided
-    // on the write side as well.
+    // Three shapes measured IN THE ENGINE, all on comparably quiet boxes:
+    //
+    //   v1  (c,ky,kx) outer, ox inner   im2col 0.176x   every write a lone f32
+    //   v2  ox outer, c inner           im2col 0.278x   contiguous writes, but
+    //                                                   each pixel touches cin
+    //                                                   planes = cin read
+    //                                                   streams at once
+    //   v3  c outer, ox inner  KEPT     im2col 0.314x   one plane streamed;
+    //                                                   3 contiguous floats per
+    //                                                   write at stride k, with
+    //                                                   the row's ow*k = 92 KB
+    //                                                   destination L2-resident
+    //
+    // v3 was briefly reverted on a comparison between a LOADED-box v2 run and a
+    // QUIET-box v3 run - the cross-run error this campaign exists to catch. On
+    // like boxes v3 wins on both im2col (0.314x vs 0.278x) and detect total
+    // (0.675x vs 0.646x).
+    //
+    // All three are handicapped identically by the NCHW input; in a converted
+    // NHWC run the gather reads `cin` CONTIGUOUS floats per (pixel, tap) and
+    // the question disappears.
     col.par_chunks_mut(ow * k).enumerate().for_each(|(oy, dst)| {
-        for ox in 0..ow {
-            let px = &mut dst[ox * k..(ox + 1) * k];
-            for c in 0..c_in {
-                let plane = &xs[c * hw..(c + 1) * hw];
-                for ky in 0..3usize {
-                    let sy = oy * stride + ky;
-                    if sy == 0 || sy > h {
-                        continue;
-                    }
-                    let src = &plane[(sy - 1) * w..sy * w];
-                    let base = c * 9 + ky * 3;
+        for c in 0..c_in {
+            let plane = &xs[c * hw..(c + 1) * hw];
+            for ky in 0..3usize {
+                let sy = oy * stride + ky;
+                if sy == 0 || sy > h {
+                    continue;
+                }
+                let src = &plane[(sy - 1) * w..sy * w];
+                let base = c * 9 + ky * 3;
+                for ox in 0..ow {
+                    let d = ox * k + base;
                     for kx in 0..3usize {
                         let sx = ox * stride + kx;
                         if sx != 0 && sx <= w {
-                            px[base + kx] = src[sx - 1];
+                            dst[d + kx] = src[sx - 1];
                         }
                     }
                 }

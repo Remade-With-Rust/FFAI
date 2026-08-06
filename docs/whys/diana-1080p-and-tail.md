@@ -795,3 +795,79 @@ measured isolated at 1.140x and in context at 1.385x.
   the island cannot show the win and no per-layer gate can rescue it.
 * **The correctness gate already exists** and is byte-identical, so the
   conversion has an oracle from the first line.
+
+---
+
+# Going after the prize — and finding it is a third of what was claimed
+
+## The im2col_t variants, all measured in the engine
+
+| variant | loop order | im2col ratio |
+|---|---|---:|
+| v1 | (c,ky,kx) outer, ox inner | 0.176x |
+| v2 | ox outer, c inner | 0.278x |
+| **v3 (kept)** | **c outer, ox inner** | **0.315x** |
+
+v3 streams one channel plane at a time and writes 3 contiguous floats per
+(pixel, channel, ky) at stride k, with the row's `ow*k` destination (92 KB)
+L2-resident.
+
+**v3 was briefly reverted on a bad comparison** — a LOADED-box v2 run (0.919x
+total) against a QUIET-box v3 run (0.675x total). Different boxes, opposite
+conclusion. That is precisely the cross-run error this campaign exists to catch,
+and it was made here after documenting it four times.
+
+## The GEMM ratio, once the box went quiet
+
+| box state | NCHW-arm spread | gemm ratio |
+|---|---:|---:|
+| loaded (NCHW total 2.5 s) | ~200 % | **1.645x, z=+2.12** |
+| quiet (NCHW total 0.77 s) | ~10 % | **1.104x** |
+| quiet | tight | 1.146x |
+| 12 % load | 62 % | 1.185x |
+
+**The isolated probe said 1.140x and was right all along.** The "confirmed in
+context at 1.645x with z=+2.12" reading was noise on a box whose own NCHW arm
+varied 3x between reps — and it happened to flatter the hypothesis, which is
+why it was believed. `codec-measurement` §16 warns that a cross-implementation
+ratio trends with N; this one trended with the neighbouring build.
+
+## The prize, honestly
+
+| | |
+|---|---:|
+| gemm, 27.4 % of detect at 1.10-1.19x | +2.6 to +4.3 % |
+| im2col, 9.9 % at 0.81x from an NHWC input | +1.9 % |
+| epilogue 1.37x and plumbing 1.98x slower | -1.5 % |
+| **NET** | **~3 to 5 % of detect** |
+
+**Not 9.6 %.** That figure used the loaded-box 1.385x. Every favourable NHWC
+number this campaign produced was taken on a busy box.
+
+## Verdict: do NOT do the conversion
+
+A whole-graph NHWC conversion touches every convolution, the epilogue, the
+attention blocks, the channel plumbing, the detect head, and the five-tier
+oracle across two geometries. **For ~4 % of detect that is a bad trade** — it is
+a large, correctness-dense refactor priced at roughly what a single good kernel
+brick returns, and the campaign has cheaper unspent options (Winograd at ~8-9 %).
+
+## What is kept
+
+* `conv3x3_nhwc` behind `FFAI_DIANA_NHWC=1`, **OFF by default**, with a
+  byte-identical correctness gate (41 detections, 0 mismatches, 0.0000 px). It
+  is the A/B arm and the foundation if the decision is ever revisited.
+* `im2col_t` at v3, the best of three measured variants.
+* The measured ratios for all four pieces, so nobody re-derives them.
+
+## The lesson worth more than the brick
+
+**Three separate NHWC numbers were reported as wins and all three shrank when
+re-measured**: 1.68x synthetic became 1.047x at real shapes; 1.047x-plus-a-
+dispatch became global-only; 1.645x in context became 1.10-1.19x on a quiet box.
+Each intermediate reading was taken honestly and each was wrong in the same
+direction — toward the hypothesis being pursued.
+
+The defence that worked every time was the same one: **a duplicate arm, or an
+identical-work pair, measured inside the same run.** Where that was present the
+error surfaced immediately; where it was absent the number survived for hours.
