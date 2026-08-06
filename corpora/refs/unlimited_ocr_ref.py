@@ -31,6 +31,7 @@ formatting we never asked our own engines to produce.
 import argparse
 import json
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -64,6 +65,21 @@ def strip_markup(md: str) -> str:
 
 
 def main():
+    # The model PRINTS its own decoded output during `infer`, and Windows
+    # defaults stdout to cp1252. One `ş`, `☆`, `−` or `○` on the page raises
+    # UnicodeEncodeError inside the model, the except below catches it, and the
+    # page is scored as EMPTY TEXT — i.e. 100 % CER.
+    #
+    # On the 236-page holdout that silently destroyed 59 of the reference's
+    # pages (25 %) and would have handed us a 26 pp win that did not exist. The
+    # reconfigure is here rather than in the caller's environment because a
+    # reference must not depend on how it is invoked to report honest numbers.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch", required=True)
     ap.add_argument("--model", default="baidu/Unlimited-OCR")
