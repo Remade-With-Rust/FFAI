@@ -200,6 +200,47 @@ behind on three, every one inside 0.1 pp.
 
 Reproduce with `tools/diana_mot_bench.py --all`.
 
+## The allocator knob, measured — and why it is not the default
+
+Diana's slow frames carry a page-fault spike: **~31 faults on a normal frame,
+4,200 on a slow one.** `MIMALLOC_PURGE_DELAY=-1` removes it completely — faults
+go flat and halve overall. mimalloc reads that variable itself, so it needs no
+code from us and no rebuild.
+
+It is **not the default**, and the reason is that the fault count does not
+convert into time:
+
+| | CPU ms/frame | wall ms/frame | steady RSS |
+|---|---:|---:|---:|
+| default | 130.2 | 66.7 | **182 MiB** |
+| `MIMALLOC_PURGE_DELAY=-1` | 125.9 | 68.9 | **239 MiB** |
+
+Same binary, ABBA-interleaved, 8 reps, work parity constant at 401 detections.
+**CPU 0.968x, wall 1.033x** — both inside this box's 10.4 % null-arm floor, and
+wall is marginally *worse*. The footprint number is not inside anything:
+**+57 MiB, +31 %**, measured by `ffai bench detect` — the same instrument the
+footprint gate scores, against ONNX Runtime's 161 MiB.
+
+So the trade is 57 MiB for nothing the clock can see. The faults are real work
+removed; they are **soft** faults against pages still resident in RAM, which is
+why removing thousands of them per frame is worth ~0.2 ms of a 60 ms frame.
+
+There is a sharper reason to leave it off. Those faults come from the OS
+trimming our working set, which happens **under system memory pressure** — so
+the setting does least when the machine is idle and safe, and most when the
+machine is already short of memory and retaining 57 MiB is the worst available
+response. It helps least where it is safe and most where it is dangerous.
+
+Turn it on if you have measured your own workload and want flat page behaviour:
+
+```
+MIMALLOC_PURGE_DELAY=-1 ffai detect -i frame.jpg
+```
+
+The full descent, including the two measurements that contradicted each other
+and how the contradiction was resolved:
+[docs/whys/diana-1080p-and-tail.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/whys/diana-1080p-and-tail.md).
+
 ## Five tiers from one graph
 
 `n`, `s`, `m`, `l`, `x` all run the **same tier-agnostic graph**. There is no

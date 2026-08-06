@@ -183,8 +183,37 @@ unknowns terminated.
   outliers 7 → 6. Sized: ~137 faults/frame removed at ~1.5 us each is **~0.2 ms
   of a 70 ms frame, 0.3 %** — correctly below what any clock here resolves
   (§15).
-- COST: **+9.6 MiB peak RSS (128.8 → 138.3), +37.8 MiB steady.** The footprint
-  gate passes by **1 MiB** (160 against ORT's 161).
+- COST: **+57 MiB steady (182 → 239)** on `ffai bench detect`, the instrument
+  the footprint gate scores, against ORT's 161 MiB. An earlier ad-hoc RSS
+  sampler said +9.6 MiB peak; it was not measuring steady state and is
+  superseded — see the re-measurement below.
+### Re-measured when shipping it as the default was proposed
+
+The first pass priced this on one interleaved run (0.3 %) and an ad-hoc RSS
+sampler. Both were re-done, and one of them was WRONG:
+
+- **The RSS sampler was incoherent.** A purge-delay sweep read steady RSS of
+  142.4 MiB at default against **91.5 MiB with purging disabled** — physically
+  impossible, since disabling purge can only retain more. A single-instant
+  `rss` reading on a box under memory pressure is not "steady RSS"; the OS is
+  trimming working sets underneath it. Replaced with `ffai bench detect`, the
+  instrument the footprint gate actually scores.
+- **The latency question was genuinely open.** One unpaired bench run read p50
+  57 -> 50 ms (-12 %), against the first pass's 0.3 %. Resolved with a
+  same-binary ABBA A/B, 8 reps, work parity constant at 401 detections:
+  **CPU 0.968x, wall 1.033x**, both inside the 10.4 % null-arm floor and wall
+  marginally WORSE. §12: same-binary deltas are the reliable evidence, and this
+  one says there is no latency effect.
+- **The cost, on the right instrument: 182 -> 239 MiB steady, +57 MiB, +31 %.**
+  Not +9.6 MiB as first measured.
+
+- SHARPER REASON, found while re-measuring: the faults come from the OS
+  trimming our working set, which happens under **system memory pressure**.
+  The setting therefore does least when the machine is idle and safe, and most
+  when the machine is already short of memory and retaining 57 MiB is the worst
+  available response. It helps least where it is safe and most where it is
+  dangerous.
+
 - VERDICT: **not shipped, and not shipped as a default specifically.** It buys
   0.3 % of latency and spends ten times the gate's entire headroom. It is
   mimalloc's own environment variable, so any embedder who wants flat page

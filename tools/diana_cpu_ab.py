@@ -45,13 +45,19 @@ FFAI = ROOT / "target" / "release" / ("ffai.exe" if sys.platform == "win32" else
 PY = Path(sys.executable)
 
 
-def spawn(kind, engine, weights, conf):
+def spawn(kind, engine, weights, conf, env_extra=None):
     if kind == "diana":
         cmd = [str(FFAI), "detect", "--serve", "--engine", engine, "--conf", str(conf)]
     else:
         cmd = [str(PY), str(ROOT / "tools" / "diana_ultra_serve.py"), weights, str(conf)]
+    import os
+    env = dict(os.environ)
+    for k in ("MIMALLOC_PURGE_DELAY",):
+        env.pop(k, None)
+    if env_extra:
+        env.update(env_extra)
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         text=True, bufsize=1, cwd=str(ROOT))
+                         text=True, bufsize=1, cwd=str(ROOT), env=env)
     hello = json.loads(p.stdout.readline())
     assert hello.get("ready"), hello
     return p
@@ -91,10 +97,11 @@ def measure(p, paths):
         n_det += r.get("n", 0)
         n_frames += 1
     wall = time.perf_counter() - w0
+    rss = ps.memory_info().rss / 1048576
     cpu = tree_cpu(ps) - c0
     assert cpu > 0, ("CPU time read as zero across a pass that plainly did work - "
                      "the instrument is watching the wrong process")
-    return cpu, wall, n_frames, n_det
+    return cpu, wall, n_frames, n_det, rss
 
 
 def close(p):
@@ -114,12 +121,23 @@ def main():
     ap.add_argument("--weights", default="corpora/cache/yolo26n.pt")
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--null", action="store_true", help="diana vs diana: the harness floor")
+    ap.add_argument("--env-b", default=None,
+                    help="KEY=VAL applied to the B arm only. Turns --null into a "
+                         "SAME-BINARY A/B of that setting, which codec-measurement "
+                         "§12 says is 'progress' evidence and far more reliable "
+                         "than any cross-implementation ratio.")
     args = ap.parse_args()
 
     paths = sorted(q for q in args.frames.iterdir()
                    if q.suffix.lower() in {".jpg", ".jpeg", ".png"})[: args.n]
     kinds = ("diana", "diana") if args.null else ("diana", "ultra")
+    env_b = None
+    if args.env_b:
+        k, v = args.env_b.split("=", 1)
+        env_b = {k: v}
     label = ("diana-A", "diana-B") if args.null else ("diana", "ultralytics")
+    if env_b:
+        label = ("baseline", f"{k}={v}")
 
     print(f"method: ABBA-interleaved, CPU time via GetProcessTimes, both arms in "
           f"child processes, model load excluded, {len(paths)} frames x {args.reps} reps")
@@ -132,13 +150,15 @@ def main():
     rows = {label[0]: [], label[1]: []}
     walls = {label[0]: [], label[1]: []}
     dets = {label[0]: set(), label[1]: set()}
+    rsss = {label[0]: [], label[1]: []}
 
     for rep in range(args.reps):
         order = [label[0], label[1]] if rep % 2 == 0 else [label[1], label[0]]
         for name in order:
-            cpu, wall, nf, nd = measure(procs[name], paths)
+            cpu, wall, nf, nd, rss = measure(procs[name], paths)
             rows[name].append(cpu / nf * 1000.0)
             walls[name].append(wall / nf * 1000.0)
+            rsss[name].append(rss)
             dets[name].add(nd)
         print(f"  rep {rep+1}  " + "   ".join(
             f"{n} cpu {rows[n][-1]:6.1f} wall {walls[n][-1]:6.1f}" for n in label))
