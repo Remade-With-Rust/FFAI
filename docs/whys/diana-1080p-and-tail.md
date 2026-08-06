@@ -1040,3 +1040,73 @@ penalty from the three im2col variants, the exit penalty from the transpose
 probe, and the per-conv saving from the GEMM ratio. **It would have read 5.1
 against an architecture offering 2, and priced the whole conversion out in an
 afternoon** — `codec-measurement` §11, prune on arithmetic before building.
+
+---
+
+# Winograd, priced before it was built — dead on arithmetic
+
+The largest remaining lever, given the treatment the NHWC campaign earned the
+hard way: **compute the break-even first.** Total cost, twenty minutes.
+
+## What F(2x2,3x3) changes, and what it does not
+
+It produces a 2x2 output tile from a 4x4 input tile with **16 element-wise
+multiplies instead of 36** — a 2.25x reduction. Those multiplies become 16
+independent GEMMs, one per position in the tile:
+
+| | current | Winograd |
+|---|---|---|
+| GEMMs per conv | 1 | **16** |
+| M | cout | cout — **unchanged** |
+| K | 9 * cin | **cin** (9x smaller) |
+| N | H*W | **H*W / 4** |
+
+**M does not change**, and M is the only axis that governs this graph's GEMM
+efficiency — the per-layer roofline found +0.823 correlation with log2(cout)
+and −0.048 with operand size. Winograd shrinks the two dimensions that were
+never the problem and leaves the one that is.
+
+## Measured on the real shapes
+
+| | 1 big GEMM | 16 small | ratio |
+|---|---:|---:|---:|
+| weighted per image | 5.022 ms | 5.015 ms | **1.00x** |
+
+**Exactly parity, from 2.25x fewer multiplies.** The whole arithmetic saving is
+consumed by the GEMMs being smaller. Transforms — input ~32 adds per (tile,cin),
+output ~24 per (tile,cout), priced generously at GEMM throughput, which is a
+LOWER bound for an elementwise memory-bound pass — add 0.154 ms.
+
+**NET −0.147 ms/img. Dead before a transform was written.**
+
+## And there is no dispatch either
+
+Four independent runs, sign-consistency required:
+
+| shape | calls | reps | verdict |
+|---|---:|---|---|
+| 32->32 24x40 | 12 | 1.52 0.70 1.09 1.17 | sign-flips |
+| 16->16 48x80 | 5 | 1.17 0.96 2.09 1.35 | sign-flips |
+| 64->64 12x20 | 4 | 0.72 0.81 0.69 0.75 | NCHW |
+| 16->8 96x160 | 1 | 0.52 0.46 0.43 0.47 | NCHW |
+| 128->16 24x40 | 1 | 0.74 0.72 0.80 0.83 | NCHW |
+
+**0 of 8 shapes reproducibly favour Winograd**; 5 always prefer the shipped
+path. Dispatch prize 1.000x.
+
+The two shapes that looked like winners on the first run are the two with the
+highest call counts — exactly the pattern that would have made this feel like a
+discovery. They sign-flip.
+
+## Why this was predictable, and the standing conclusion
+
+Winograd attacks the MULTIPLY COUNT. This graph is not multiply-bound at these
+shapes — it is bound by GEMM shape efficiency, which the roofline established
+and which every subsequent probe confirmed. A technique that trades multiplies
+for more, smaller GEMMs is pushing on the wrong axis, and one afternoon of
+measurement says so where a week of implementation would have said it louder.
+
+**Every structural lever this campaign identified is now closed with a
+mechanism**, and they all close for the same reason: the convolution GEMMs are
+small in M, M is fixed by the architecture, and nothing that leaves M alone
+reaches the problem.
