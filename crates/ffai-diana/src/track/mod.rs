@@ -94,6 +94,16 @@ pub struct TrackerConfig {
     /// 18.71). A knob that improves both metrics on every clip is not a
     /// trade, it is a filter that was priced twice.
     pub min_hits: u32,
+    /// IoU gate for the unconfirmed third pass. The reference uses a TIGHTER
+    /// bar here (0.7) than for confirmed tracks, on the reasoning that a
+    /// speculative identity should need a better overlap to be corroborated
+    /// than an established one needs to be continued.
+    pub unconfirmed_thresh: f32,
+    /// Offer the LOW-score second pass to `Lost` tracks as well as `Tracked`
+    /// ones. The reference does not: its second pass sees only tracks that
+    /// were matched in the previous frame, so a long-dead identity cannot be
+    /// resurrected by a 0.2-confidence box.
+    pub pass2_lost: bool,
     /// Hold UNCONFIRMED tracks out of the main association passes and give
     /// them only the leftovers, in a third pass. See [`ByteTrack::update`].
     pub deferred_unconfirmed: bool,
@@ -201,6 +211,29 @@ impl Default for TrackerConfig {
             // the reason this ships where `max_age` did not: `max_age` was a
             // fitted constant whose losers lost on both metrics, this is a
             // structural fix that nothing was tuned to.
+            // The reference uses a TIGHTER bar (0.7) for corroborating a
+            // speculative track than for continuing an established one. Swept
+            // over 21 MOT17 sub-clips it is EXACTLY neutral — IDF1 and MOTA
+            // unchanged to two decimals, ID switches identical at 325 — so the
+            // gate never binds between 0.7 and 0.8 on this corpus. Left at
+            // `match_thresh`'s value because a knob that changes nothing should
+            // not also be a second number to explain. 0.6 is worse (-0.01,
+            // 2 sub-clips regress).
+            unconfirmed_thresh: 0.8,
+            // TRUE, which is the OPPOSITE of the reference, and measured.
+            //
+            // ByteTrack's second pass sees only tracks matched in the previous
+            // frame, so a long-lost identity cannot be recovered by a
+            // low-confidence box. We offer it to `Lost` tracks too. Turning
+            // that off to match the reference costs **-0.39 IDF1 and -0.19
+            // MOTA over 21 sub-clips, with 15 of 21 worse** — the single most
+            // consistent negative measured in this campaign.
+            //
+            // It makes sense: a low-confidence box is exactly what a
+            // re-emerging occluded person looks like, and that is the case the
+            // second pass exists for. Restricting it to already-tracked
+            // objects throws away the recovery and keeps only the easy half.
+            pass2_lost: true,
             deferred_unconfirmed: true,
             fuse_mode: 1,
             // ADAPTIVE, and the sign-flip is what forced it. Raising
@@ -360,9 +393,14 @@ impl ByteTrack {
         // This is the algorithm. A box the detector scored 0.2 is usually a
         // person behind something, and matching it keeps the identity alive
         // instead of ending the track and starting a new one when they emerge.
-        if !unmatched_tracks.is_empty() && !lo.is_empty() {
+        let pass2: Vec<usize> = if self.cfg.pass2_lost {
+            unmatched_tracks.clone()
+        } else {
+            unmatched_tracks.iter().copied().filter(|&i| self.tracks[i].state != TrackState::Lost).collect()
+        };
+        if !pass2.is_empty() && !lo.is_empty() {
             let t_boxes: Vec<[f32; 4]> =
-                unmatched_tracks.iter().map(|&i| self.tracks[i].xyxy()).collect();
+                pass2.iter().map(|&i| self.tracks[i].xyxy()).collect();
             let d_boxes: Vec<[f32; 4]> = lo.iter().map(|&i| boxes[i]).collect();
             // A LOOSER gate on the second pass: these boxes are already known to
             // be poor, and demanding the same IoU as a confident one would
@@ -370,7 +408,7 @@ impl ByteTrack {
             let pairs = assign::assign(&assign::cost_matrix(&t_boxes, &d_boxes), 0.5);
             let mut left = unmatched_tracks.clone();
             for (ti, di) in &pairs {
-                let track_idx = unmatched_tracks[*ti];
+                let track_idx = pass2[*ti];
                 let det = lo[*di];
                 self.apply(track_idx, boxes[det], scores[det], classes[det]);
                 matched_dets[det] = true;
@@ -393,7 +431,7 @@ impl ByteTrack {
                     unconfirmed.iter().map(|&i| self.tracks[i].xyxy()).collect();
                 let d_boxes: Vec<[f32; 4]> = rest.iter().map(|&i| boxes[i]).collect();
                 let pairs =
-                    assign::assign(&assign::cost_matrix(&t_boxes, &d_boxes), self.cfg.match_thresh);
+                    assign::assign(&assign::cost_matrix(&t_boxes, &d_boxes), self.cfg.unconfirmed_thresh);
                 for (ti, di) in &pairs {
                     let det = rest[*di];
                     self.apply(unconfirmed[*ti], boxes[det], scores[det], classes[det]);

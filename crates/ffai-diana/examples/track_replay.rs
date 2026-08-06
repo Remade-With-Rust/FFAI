@@ -1,16 +1,23 @@
-//! Replay cached detections through ByteTrack at given thresholds.
+//! Replay cached detections through ByteTrack at a given configuration.
 //!
 //! ```text
-//! track_replay dets.txt 0.5 0.6 > tracks.txt
+//! track_replay dets.txt                              # shipped defaults
+//! track_replay dets.txt new_thresh=0.55 max_age=70   # override anything
 //! ```
 //!
-//! A threshold sweep re-runs the TRACKER, not the detector — the detections are
+//! A tracker sweep re-runs the TRACKER, not the detector — the detections are
 //! identical for every setting. Running the model 48 times to sweep 16 settings
 //! across 3 sequences would be ~28 minutes of recomputing the same boxes, and
 //! the cache makes the sweep effectively free.
 //!
 //! It also removes a confound: every arm of the sweep sees byte-identical
 //! detections, so a difference between arms cannot be the detector drifting.
+//!
+//! **Arguments are `key=value`, not positional.** They were positional, and by
+//! the twelfth slot a sweep was passing `... "1" "0.8" "4294967295" "1"` — four
+//! bare literals whose meaning lived only in the caller. One transposition
+//! there yields a plausible wrong number rather than an error, which is the
+//! most expensive kind of bug a measurement harness can have.
 //!
 //! Input is `frame,x0,y0,x1,y1,conf,class` per line; output is MOT-challenge
 //! order, the same as `ffai detect --track`.
@@ -19,14 +26,39 @@ use std::io::{BufRead, Write};
 
 fn main() -> std::io::Result<()> {
     let mut a = std::env::args().skip(1);
-    let path = a.next().expect("usage: track_replay <dets> <track_thresh> <new_thresh>");
-    let track_thresh: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.5);
-    let new_track_thresh: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.6);
+    let path = a.next().expect("usage: track_replay <dets> [key=value ...]");
 
-    let f = std::io::BufReader::new(std::fs::File::open(&path)?);
+    let mut cfg = TrackerConfig::default();
+    for kv in a {
+        let (k, v) =
+            kv.split_once('=').unwrap_or_else(|| panic!("expected key=value, got {kv:?}"));
+        let f = || v.parse::<f32>().unwrap_or_else(|_| panic!("bad f32 for {k}: {v:?}"));
+        let u = || v.parse::<u32>().unwrap_or_else(|_| panic!("bad u32 for {k}: {v:?}"));
+        match k {
+            "track_thresh" => cfg.track_thresh = f(),
+            "low_thresh" => cfg.low_thresh = f(),
+            "new_thresh" => cfg.new_track_thresh = f(),
+            "match_thresh" => cfg.match_thresh = f(),
+            "max_age" => cfg.max_age = u(),
+            "min_hits" => cfg.min_hits = u(),
+            // `crowd_lo=1e9` collapses the crowding ramp, which is how a sweep
+            // isolates a single threshold from the adaptive one.
+            "crowd_lo" => cfg.crowd_lo = f(),
+            "crowd_hi" => cfg.crowd_hi = f(),
+            "crowded_thresh" => cfg.new_track_thresh_crowded = f(),
+            "fuse_mode" => cfg.fuse_mode = u() as u8,
+            "reinit_after" => cfg.reinit_after = u(),
+            "defer" => cfg.deferred_unconfirmed = v == "1",
+            "unconfirmed_thresh" => cfg.unconfirmed_thresh = f(),
+            "pass2_lost" => cfg.pass2_lost = v == "1",
+            _ => panic!("unknown key {k:?}"),
+        }
+    }
+
+    let file = std::io::BufReader::new(std::fs::File::open(&path)?);
     let mut per_frame: std::collections::BTreeMap<u64, Vec<([f32; 4], f32, u32)>> =
         Default::default();
-    for line in f.lines() {
+    for line in file.lines() {
         let line = line?;
         let p: Vec<&str> = line.trim().split(',').collect();
         if p.len() < 7 {
@@ -40,43 +72,7 @@ fn main() -> std::io::Result<()> {
         ));
     }
 
-    // Optional 4th/5th args sweep the crowding ramp; default = adaptive off
-    // (lo == hi collapses the ramp to the sparse value).
-    let crowd_lo: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1e9);
-    let crowd_hi: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(1e9);
-    let crowded_thresh: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.6);
-    // 6th/7th sweep track SURVIVAL, which is the pair the IDF1 gap points at.
-    //
-    // Against Ultralytics on the same weights and frames we sit at MOTA 18.58
-    // vs 19.24 (level) but IDF1 30.48 vs 34.11 (behind) with 398 ID switches
-    // against their 808. Fewer switches AND worse IDF1 is not "more stable" —
-    // it is FEWER and SHORTER trajectories, because a track we never report
-    // cannot switch. `min_hits` withholds a track for its first N frames and
-    // `max_age` decides how long a lost one survives; both cost IDF1 directly
-    // as identity false-negatives while leaving MOTA nearly untouched.
-    let min_hits: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(3);
-    let max_age: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(30);
-    // 8th/9th: score fusion and the gate it needs re-swept alongside it.
-    let fuse_mode: u8 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let match_thresh: f32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(0.8);
-    // 10th: frames-absent after which a revival re-seeds the filter.
-    let reinit_after: u32 = a.next().and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
-    // 11th: hold unconfirmed tracks out of the main passes (reference behaviour).
-    let deferred_unconfirmed: bool = a.next().map(|s| s == "1").unwrap_or(false);
-    let mut tk = ByteTrack::new(TrackerConfig {
-        track_thresh,
-        new_track_thresh,
-        crowd_lo,
-        crowd_hi,
-        new_track_thresh_crowded: crowded_thresh,
-        min_hits,
-        max_age,
-        fuse_mode,
-        match_thresh,
-        reinit_after,
-        deferred_unconfirmed,
-        ..Default::default()
-    });
+    let mut tk = ByteTrack::new(cfg);
     let out = std::io::stdout();
     let mut w = std::io::BufWriter::new(out.lock());
     let last = per_frame.keys().copied().max().unwrap_or(0);
