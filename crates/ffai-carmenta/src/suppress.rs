@@ -275,6 +275,113 @@ fn has_year_paren(s: &str) -> bool {
     false
 }
 
+
+// ---------------------------------------------------------------------------
+// The BLOCK branch (§8.131-§8.135)
+// ---------------------------------------------------------------------------
+//
+// Everything above decides one LINE at a time. §8.131 measured that the wrong
+// unit: group the page in 2D and **98 % of characters sit in blocks that are
+// >= 90 % one class**, so a block-level decision loses almost nothing to a
+// line-level one — and a block carries features a line cannot have (its area,
+// aspect, isolation, and how consistent its lines are with each other).
+//
+// The grouping is deliberately NOT `run_stats_per_line`'s. That clusters by LEFT
+// EDGE and then splits on vertical pitch, which is right for a prose column and
+// cannot form a figure's block: a chart's title, axis labels and tick values
+// share no left edge. Here two lines join when they OVERLAP HORIZONTALLY and sit
+// within two line heights vertically, so a caption joins its plot.
+//
+// Blocks are formed from the lines the branches above KEEP, and the page's p90
+// and line height are recomputed on that surviving population — the page the
+// filter leaves behind is the page this branch sees. Getting that wrong is what
+// made §8.133 report a 91 % collapse: it scored rules against the geometry of
+// the ORIGINAL block, and a ten-line block whose filter removed eight is a
+// two-line fragment with entirely different width, height, area and aspect.
+
+/// Union-find over 2D adjacency. Returns one group of line indices per block.
+fn group_blocks(idx: &[usize], boxes: &[(f32, f32, f32, f32)], lh: f32) -> Vec<Vec<usize>> {
+    const V_GAP: f32 = 2.0;
+    const H_OVERLAP: f32 = 0.15;
+    let n = idx.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut Vec<usize>, mut a: usize) -> usize {
+        while p[a] != a {
+            p[a] = p[p[a]];
+            a = p[a];
+        }
+        a
+    }
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let (ax, ay, aw, ah) = boxes[idx[i]];
+            let (bx, by, bw, bh) = boxes[idx[j]];
+            let ov = (ax + aw).min(bx + bw) - ax.max(bx);
+            if ov < H_OVERLAP * aw.min(bw) {
+                continue;
+            }
+            if ((ay + ah / 2.0) - (by + bh / 2.0)).abs() / lh <= V_GAP {
+                let (ra, rb) = (find(&mut parent, i), find(&mut parent, j));
+                parent[ra] = rb;
+            }
+        }
+    }
+    let mut groups: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+    for i in 0..n {
+        let r = find(&mut parent, i);
+        groups.entry(r).or_default().push(idx[i]);
+    }
+    groups.into_values().collect()
+}
+
+/// The three rules, fitted on train and judged once on holdout at **+0.891 pp
+/// macro** — holdout ABOVE train (+0.573), which is the opposite of the overfit
+/// signature that refused a fourth rule. 431 blocks over **160 pages, 110 of
+/// them gaining**; every line-level lever this campaign refused sat on one to
+/// three pages.
+///
+/// What they are, physically: isolated single-line strips, thin isolated bands,
+/// and narrow low-confidence blocks — captions, labels, header strips, axis text.
+fn block_is_non_body(f: &BlockFeat) -> bool {
+    // A: an isolated strip more than six times wider than tall.
+    let strip = f.area_frac < 0.004 && f.isolation > 1.2 && f.aspect > 6.0;
+    // B: a thin isolated band whose lines agree on width.
+    let band = f.blk_h < 0.015 && f.isolation > 1.2 && f.w_cv < 0.2;
+    // C: a narrow block the recognizer was not sure about.
+    let narrow = f.w_med < 0.30 && f.blk_w < 0.40 && f.conf < 0.96;
+    strip || band || narrow
+}
+
+struct BlockFeat {
+    area_frac: f32,
+    aspect: f32,
+    isolation: f32,
+    blk_h: f32,
+    blk_w: f32,
+    w_cv: f32,
+    w_med: f32,
+    conf: f32,
+}
+
+/// Population standard deviation over mean — scale-free irregularity, and the
+/// population form because a block IS its lines, not a sample of them.
+fn cv(v: &[f32]) -> f32 {
+    if v.len() < 2 {
+        return 0.0;
+    }
+    let m = v.iter().sum::<f32>() / v.len() as f32;
+    if m == 0.0 {
+        return 0.0;
+    }
+    let var = v.iter().map(|x| (x - m) * (x - m)).sum::<f32>() / v.len() as f32;
+    var.sqrt() / m
+}
+
+fn median(v: &mut Vec<f32>) -> f32 {
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    v[v.len() / 2]
+}
+
 /// Group lines into contiguous runs: cluster by LEFT EDGE first, then split on
 /// vertical pitch.
 ///
@@ -420,6 +527,68 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
             })
         })
         .collect();
+    // ---- SECOND PASS: the block branch (§8.136) --------------------------
+    // Runs on the lines the branches above KEEP, with the page statistics
+    // recomputed on that surviving population.
+    let mut keep = keep;
+    let surv: Vec<usize> = (0..lines.len()).filter(|&i| keep[i]).collect();
+    if surv.len() >= 2 {
+        let mut hs2: Vec<f32> = surv.iter().map(|&i| boxes[i].3).collect();
+        let lh2 = median(&mut hs2).max(1.0);
+        let mut ws2: Vec<f32> = surv.iter().map(|&i| boxes[i].2 / pw).collect();
+        ws2.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p90_2 = ws2[((ws2.len() - 1) * 9) / 10].max(1e-6);
+
+        let blocks = group_blocks(&surv, &boxes, lh2);
+        let bb: Vec<(f32, f32, f32, f32)> = blocks
+            .iter()
+            .map(|g| {
+                let x0 = g.iter().map(|&i| boxes[i].0).fold(f32::INFINITY, f32::min);
+                let y0 = g.iter().map(|&i| boxes[i].1).fold(f32::INFINITY, f32::min);
+                let x1 = g.iter().map(|&i| boxes[i].0 + boxes[i].2).fold(f32::NEG_INFINITY, f32::max);
+                let y1 = g.iter().map(|&i| boxes[i].1 + boxes[i].3).fold(f32::NEG_INFINITY, f32::max);
+                (x0, y0, x1, y1)
+            })
+            .collect();
+
+        for (k, g) in blocks.iter().enumerate() {
+            let (x0, y0, x1, y1) = bb[k];
+            // Distance to the nearest OTHER block, in line heights: zero when
+            // they overlap on an axis, so a block inside a column reads ~0 and a
+            // caption stranded in whitespace reads high.
+            let isolation = bb
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != k)
+                .map(|(_, d)| {
+                    let dx = (x0 - d.2).max(d.0 - x1).max(0.0);
+                    let dy = (y0 - d.3).max(d.1 - y1).max(0.0);
+                    (dx * dx + dy * dy).sqrt() / lh2
+                })
+                .fold(f32::INFINITY, f32::min);
+            let mut wl: Vec<f32> = g.iter().map(|&i| boxes[i].2 / pw).collect();
+            let w_cv = cv(&wl);
+            let w_med = median(&mut wl) / p90_2;
+            let conf = g.iter().map(|&i| lines[i].confidence.unwrap_or(1.0)).sum::<f32>()
+                / g.len() as f32;
+            let f = BlockFeat {
+                area_frac: ((x1 - x0) * (y1 - y0)) / (pw * ph),
+                aspect: (x1 - x0) / (y1 - y0).max(1.0),
+                isolation: if isolation.is_finite() { isolation.min(40.0) } else { 40.0 },
+                blk_h: (y1 - y0) / ph,
+                blk_w: (x1 - x0) / pw,
+                w_cv,
+                w_med,
+                conf,
+            };
+            if block_is_non_body(&f) {
+                for &i in g {
+                    keep[i] = false;
+                }
+            }
+        }
+    }
+
     lines.into_iter().zip(keep).filter_map(|(l, k)| k.then_some(l)).collect()
 }
 
@@ -586,6 +755,75 @@ mod tests {
         // Body-shaped in every geometric respect — the point of the branch.
         assert!(is_non_body(&f(true)));
         assert!(!is_non_body(&f(false)));
+    }
+
+    /// 2D grouping (§8.136): a caption joins its plot, and two columns do not
+    /// join each other. This is what `run_stats_per_line` cannot do.
+    #[test]
+    fn blocks_group_in_2d() {
+        // One column of five stacked lines -> one block.
+        let col: Vec<(f32, f32, f32, f32)> =
+            (0..5).map(|i| (50.0, i as f32 * 20.0, 300.0, 14.0)).collect();
+        let idx: Vec<usize> = (0..5).collect();
+        assert_eq!(group_blocks(&idx, &col, 14.0).len(), 1);
+
+        // Two side-by-side columns that never overlap horizontally -> two blocks.
+        let mut two = col.clone();
+        two.extend((0..5).map(|i| (500.0, i as f32 * 20.0, 300.0, 14.0)));
+        let idx2: Vec<usize> = (0..10).collect();
+        assert_eq!(group_blocks(&idx2, &two, 14.0).len(), 2);
+
+        // A caption 1.5 line heights under a plot label, overlapping it
+        // horizontally, JOINS it — the case left-edge grouping gets wrong,
+        // because the two share no left edge.
+        let fig = vec![
+            (100.0, 0.0, 400.0, 14.0),   // a chart title
+            (260.0, 21.0, 80.0, 14.0),   // an axis label under it, indented
+        ];
+        assert_eq!(group_blocks(&[0, 1], &fig, 14.0).len(), 1);
+
+        // The same pair pushed far apart vertically stays separate.
+        let far = vec![(100.0, 0.0, 400.0, 14.0), (260.0, 300.0, 80.0, 14.0)];
+        assert_eq!(group_blocks(&[0, 1], &far, 14.0).len(), 2);
+    }
+
+    /// The three fitted block rules, each at a value the fit chose (§8.135).
+    #[test]
+    fn block_branch_rules() {
+        let base = BlockFeat {
+            area_frac: 0.05, aspect: 2.0, isolation: 0.5, blk_h: 0.10,
+            blk_w: 0.60, w_cv: 0.30, w_med: 0.95, conf: 0.99,
+        };
+        // A body paragraph: large, not isolated, full-column width.
+        assert!(!block_is_non_body(&base));
+        // A: an isolated strip six times wider than tall.
+        assert!(block_is_non_body(&BlockFeat {
+            area_frac: 0.002, isolation: 2.0, aspect: 8.0, ..base
+        }));
+        // ...but not if it sits inside a column.
+        assert!(!block_is_non_body(&BlockFeat {
+            area_frac: 0.002, isolation: 0.5, aspect: 8.0, ..base
+        }));
+        // B: a thin isolated band whose lines agree on width.
+        assert!(block_is_non_body(&BlockFeat {
+            blk_h: 0.010, isolation: 2.0, w_cv: 0.05, ..base
+        }));
+        // C: narrow and low-confidence.
+        assert!(block_is_non_body(&BlockFeat {
+            w_med: 0.20, blk_w: 0.30, conf: 0.90, ..base
+        }));
+        // ...and confidence alone is not enough on a full-width block.
+        assert!(!block_is_non_body(&BlockFeat { conf: 0.90, ..base }));
+    }
+
+    /// `cv` is the POPULATION form — a block IS its lines, not a sample of them.
+    #[test]
+    fn cv_is_population_form() {
+        assert_eq!(cv(&[]), 0.0);
+        assert_eq!(cv(&[5.0]), 0.0);
+        assert_eq!(cv(&[3.0, 3.0, 3.0]), 0.0);
+        // mean 2, population variance 1, so cv = 1/2.
+        assert!((cv(&[1.0, 3.0]) - 0.5).abs() < 1e-6);
     }
 
     /// Off by default: a filter that silently deletes output must be asked for.
