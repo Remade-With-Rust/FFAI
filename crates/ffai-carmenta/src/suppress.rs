@@ -377,9 +377,18 @@ fn cv(v: &[f32]) -> f32 {
     var.sqrt() / m
 }
 
+/// The TRUE median: the mean of the two middle values when the count is even.
+///
+/// Not `v[len/2]`. The block rules were fitted with Python's `statistics.median`,
+/// which averages, and taking the upper-middle instead silently changes `w_med`
+/// and the page's line height on every block with an even number of lines. It
+/// cost a 463 pp disagreement on `omni-0245` — which was first misdiagnosed as a
+/// stale dump (§8.136) before the dumps were refreshed and came back
+/// byte-identical (§8.137).
 fn median(v: &mut Vec<f32>) -> f32 {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    v[v.len() / 2]
+    let n = v.len();
+    if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
 }
 
 /// Group lines into contiguous runs: cluster by LEFT EDGE first, then split on
