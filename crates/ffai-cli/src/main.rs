@@ -980,6 +980,7 @@ fn serve_stdin(
         eprintln!("{}", ffai_diana::profile::roofline_report(n_frames));
         eprintln!("{}", ffai_diana::profile::sliceop_report(n_frames));
         eprintln!("{}", ffai_diana::profile::denorm_report(n_frames));
+        eprintln!("{}", ffai_diana::profile::plumb_report(n_frames));
     }
     Ok(())
 }

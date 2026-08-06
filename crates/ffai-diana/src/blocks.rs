@@ -414,7 +414,7 @@ impl Module for C3k {
             y = b.forward(&y)?;
         }
         let skip = self.cv2.forward(x)?;
-        self.cv3.forward(&Tensor::cat(&[&y, &skip], 1)?)
+        { let t = Tensor::cat(&[&y, &skip], 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv3.forward(&t) }
     }
 }
 
@@ -609,11 +609,12 @@ impl Module for C3k2 {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let y0 = self.cv1.forward(x)?;
         let mut parts = vec![y0.narrow(1, 0, self.c)?, y0.narrow(1, self.c, self.c)?];
+        crate::profile::record_plumb("narrow(channel)", y0.elem_count() as u64);
         for inner in &self.m {
             let next = inner.forward(parts.last().expect("cv1 gives two halves"))?;
             parts.push(next);
         }
-        self.cv2.forward(&Tensor::cat(&parts, 1)?)
+        { let t = Tensor::cat(&parts, 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t) }
     }
 }
 
@@ -660,7 +661,7 @@ impl Module for Sppf {
                 .pad_with_same(D::Minus2, pad, pad)?;
             ys.push(padded.max_pool2d_with_stride(self.k, 1)?);
         }
-        let y = self.cv2.forward(&Tensor::cat(&ys, 1)?)?;
+        let y = { let t = Tensor::cat(&ys, 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t)? };
         if self.add {
             &y + x
         } else {
@@ -697,11 +698,12 @@ impl Module for C2psa {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let y = self.cv1.forward(x)?;
         let a = y.narrow(1, 0, self.c)?;
+        crate::profile::record_plumb("narrow(channel)", y.elem_count() as u64);
         let mut b = y.narrow(1, self.c, self.c)?;
         for blk in &self.m {
             b = blk.forward(&b)?;
         }
-        self.cv2.forward(&Tensor::cat(&[&a, &b], 1)?)
+        { let t = Tensor::cat(&[&a, &b], 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t) }
     }
 }
 

@@ -625,3 +625,84 @@ branching, no denormals, and a head whose cost does not move with what it finds.
 | content-adaptive anything | refuted - no mechanism exists |
 | denormals / flush-to-zero | refuted - 0 in 80.6M values |
 | Winograd F(2x2,3x3) | untried, ~8-9 % of detect, the largest remaining |
+
+---
+
+# The three uncovered pieces, measured — NHWC still pays, at 5.2 %
+
+The global-NHWC figure covered convolution matmuls and nothing else. Three
+things change layout with it. All three are now measured, min-of-21, four real
+shapes each, both arms using the same code on the same element counts.
+
+| piece | NHWC/NCHW | direction | consistency |
+|---|---:|---|---|
+| **im2col** | **0.81x** | NHWC **FASTER** | 0.78-0.86 across 4 shapes |
+| epilogue (bias+SiLU) | 1.37x | NHWC slower | 1.12-1.51 |
+| channel plumbing | 1.98x | NHWC slower | see below |
+
+## im2col is FASTER in NHWC, and the chain probe was wrong about it
+
+The earlier chain probe reported `im2col_nhwc` slightly SLOWER. At min-of-21 it
+is faster on every shape. The mechanism is plain once measured: the NHWC gather
+copies a contiguous run of `cin` floats per (pixel, tap), while NCHW copies
+element by element with a stride. That was a block-wise measurement inside a
+probe whose scaffolding dominated, and it should not have been reported.
+
+## The epilogue is slower, exactly as predicted
+
+In NCHW one channel bias is a scalar broadcast over a contiguous run. In NHWC
+the bias VECTOR repeats along the fast axis. 1.37x, consistent across shapes.
+Small in absolute terms because the epilogue is ~1 ms/img.
+
+## Channel plumbing is the real structural risk, and `narrow` is the worst of it
+
+Counted in the real graph: **15 `cat(dim=1)` and 9 `narrow(dim=1)` per image
+over 16.3 MiB.**
+
+| shape | op | NCHW | NHWC | ratio |
+|---|---|---:|---:|---:|
+| 32c 48x80 | cat | 0.0123 | 0.0396 | 3.22x |
+| 32c 48x80 | **narrow** | **0.0008** | **0.0184** | **23x** |
+| 64c 96x160 | cat | 1.1234 | 1.3879 | 1.24x |
+| 64c 96x160 | **narrow** | **0.0008** | **0.7250** | **906x** |
+
+**In NCHW a channel slice is contiguous, so `narrow` is a free VIEW.** In NHWC
+the channel is the fastest axis, so the same call is a strided copy. A ratio of
+906x is what "free becomes a real copy" looks like, and no GEMM benchmark can
+ever show it.
+
+**It is also mitigable, which is why it is not fatal.** A `narrow` feeding a
+convolution never needs materialising — the convolution can read the sub-range
+directly, or the split can be folded into the weight indexing. The 906x is the
+cost of the naive translation, not of the layout.
+
+## The accounting, on real in-context shares
+
+The probe's own absolutes are NOT usable: its im2col arms are ~7.6x slower than
+the shipped kernel (21.997 ms against a measured 2.887), which would inflate
+im2col's weight by that factor. The ratios are the durable output; they are
+applied to shares measured in context.
+
+In-context, ms/image: detect 26.5, conv 20.77, gemm 16.9, im2col 2.887,
+epilogue+rest 0.98, plumbing 0.91.
+
+| | ms/img |
+|---|---:|
+| gemm, 1.140x faster on 16.9 ms | **+2.075** |
+| im2col, 0.81x faster on 2.89 ms | **+0.549** |
+| epilogue, 1.37x slower on 0.98 ms | -0.364 |
+| plumbing, 1.98x slower on 0.91 ms | -0.893 |
+| **NET** | **+1.367 ms/img = 5.2 % of detect** |
+
+**NHWC still pays, and by more than the GEMM-only estimate of 3.67 %** — im2col
+adds 2.1 pp, while the epilogue and plumbing take back 4.7 pp.
+
+## What would change this number
+
+* **The plumbing estimate is the weakest input.** Its in-context cost was never
+  separately profiled; 0.911 ms comes from this probe running candle's real
+  `cat`/`narrow` on real shapes, which is defensible but is not a measurement of
+  the shipped path. If the true figure is 2x higher, the net halves.
+* **Folding `narrow` into the consuming convolution is worth more than the
+  epilogue and plumbing losses combined**, and it is a change that helps NCHW
+  too. It should be measured before the layout work, not after.

@@ -617,3 +617,51 @@ pub fn denorm_report(images: u64) -> String {
         100.0 * z as f64 / t as f64,
     )
 }
+
+// ---------------------------------------------------------------------------
+// Plumbing census: channel concat / split, which a layout change re-prices
+//
+// In NCHW a channel is a contiguous plane, so `cat(dim=1)` and `narrow(dim=1)`
+// are block copies. In NHWC the channel is the FASTEST axis, so both become
+// strided interleaves. The NHWC GEMM win was measured on convolutions alone;
+// if the graph does enough channel plumbing, that is where it gets given back.
+//
+// Counted, not assumed: how many of each per image, over how many elements.
+// ---------------------------------------------------------------------------
+
+static PLUMB: Mutex<Option<HashMap<&'static str, (u64, u64)>>> = Mutex::new(None);
+
+pub fn record_plumb(kind: &'static str, elems: u64) {
+    if !roofline_enabled() {
+        return;
+    }
+    let mut g = PLUMB.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    let e = m.entry(kind).or_insert((0, 0));
+    e.0 += 1;
+    e.1 += elems;
+}
+
+pub fn plumb_report(images: u64) -> String {
+    let g = PLUMB.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return String::new();
+    };
+    let imgs = images.max(1) as f64;
+    let mut out = String::from(
+        "\nchannel plumbing per image (cheap in NCHW, strided in NHWC)\n\
+         op                calls/img      elements/img       MiB/img\n",
+    );
+    let mut rows: Vec<_> = m.iter().collect();
+    rows.sort_by_key(|(_, (_, e))| std::cmp::Reverse(*e));
+    for (k, (c, e)) in rows {
+        out.push_str(&format!(
+            "{:<18} {:>9.1} {:>17.0} {:>13.2}\n",
+            k,
+            *c as f64 / imgs,
+            *e as f64 / imgs,
+            *e as f64 * 4.0 / imgs / 1048576.0
+        ));
+    }
+    out
+}
