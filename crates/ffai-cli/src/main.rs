@@ -188,6 +188,11 @@ enum Cmd {
         /// surveillance, fixed mounts and screen capture.
         #[arg(long)]
         live: bool,
+        /// Follow objects across frames with ByteTrack, adding a stable id to
+        /// each detection. Tracking runs on the DETECTIONS and never reaches
+        /// inside the model, the same separation `LiveSession` keeps.
+        #[arg(long)]
+        track: bool,
         /// Read frame paths from stdin, one per line, and write one timed JSON
         /// line per frame to stdout. `--input` is ignored.
         ///
@@ -609,6 +614,7 @@ fn main() -> Result<()> {
             output,
             live,
             serve,
+            track,
             change_fraction,
             sample_every,
             pixel_delta,
@@ -631,7 +637,7 @@ fn main() -> Result<()> {
             // extension, matching what Ultralytics' `predict(source=...)` does
             // with the same file.
             if is_video(&input) {
-                return detect_video(eng, opts, &input, output.as_deref());
+                return detect_video(eng, opts, &input, output.as_deref(), track);
             }
 
             if live {
@@ -904,10 +910,14 @@ fn detect_video(
     opts: DetectOptions,
     path: &std::path::Path,
     output: Option<&std::path::Path>,
+    track: bool,
 ) -> Result<()> {
     use std::io::Write;
 
     let names = eng.class_names().to_vec();
+    let mut tracker = track.then(|| {
+        ffai_diana::track::ByteTrack::new(ffai_diana::track::TrackerConfig::default())
+    });
     let stream = ffai_media::stream_frames(path, 0.0)?;
     let total = stream.frame_count_hint();
 
@@ -978,7 +988,27 @@ fn detect_video(
             ),
         }
 
-        if output.is_some() {
+        // MOT-challenge column order (frame, id, x, y, w, h, conf, -1, -1, -1)
+        // so the output feeds a scorer directly rather than needing a converter.
+        if let Some(tk) = tracker.as_mut() {
+            let bx: Vec<[f32; 4]> =
+                found.detections.iter().map(|d| [d.x0, d.y0, d.x1, d.y1]).collect();
+            let sc: Vec<f32> = found.detections.iter().map(|d| d.confidence).collect();
+            let cl: Vec<u32> = found.detections.iter().map(|d| d.class_id).collect();
+            for t in tk.update(&bx, &sc, &cl) {
+                let bb = t.xyxy();
+                lines.push(format!(
+                    "{},{},{:.1},{:.1},{:.1},{:.1},{:.3},-1,-1,-1",
+                    i + 1,
+                    t.id,
+                    bb[0],
+                    bb[1],
+                    bb[2] - bb[0],
+                    bb[3] - bb[1],
+                    t.score
+                ));
+            }
+        } else if output.is_some() {
             for d in &found.detections {
                 lines.push(format!(
                     "{}\t{}\t{:.3}\t{:.0}\t{:.0}\t{:.0}\t{:.0}",
