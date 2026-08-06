@@ -242,19 +242,25 @@ fn decode_png(data: &[u8]) -> Result<ImageBuffer> {
 /// Sample frames from a video at `fps` frames/second (for Argus video
 /// understanding). Pending the rff demux/decode integration.
 pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
-    use rff_codec::{CodecParams, CodecRegistry};
     use rff_format::FormatRegistry;
 
-    // Mirrors what Ultralytics does with `cv2.VideoCapture`: demux the
-    // container, decode every video packet, hand each frame on in order.
-    // Matching it is a WORK-PARITY decision — if both engines are fed the
-    // same decoded pixels, neither pays for a decode the other does not,
-    // which is the asymmetry that voided a benchmark earlier in this project.
-    let mut formats = FormatRegistry::new();
-    rff_format_mp4::register(&mut formats);
-    let mut codecs = CodecRegistry::new();
-    rff_codec_h264::register(&mut codecs);
-
+    // Demux with rff, decode with `rusty_h264` DIRECTLY.
+    //
+    // This used to route through `rff-codec-h264`, whose 0.1.0 release pins
+    // `rusty_h264 ^0.2` — so no matter what was published upstream we resolved
+    // 0.2.1, six minor versions behind. The cost of that pin, measured
+    // 2026-08-06 on the same files:
+    //
+    //   | file                    | 0.2.1  | 0.8.0   |
+    //   |-------------------------|--------|---------|
+    //   | CAVLC                   | 164/164| 164/164 |
+    //   | CABAC                   |  49/164| 164/164 |
+    //   | x264 default (High)     |   0/164| 164/164 |
+    //   | 1080p decode, ms/frame  |  47.50 |   15.20 |
+    //
+    // x264's DEFAULT profile is High, so on 0.2.1 a normal MP4 decoded to
+    // nothing. Going direct fixes that and is 3.1x faster; the registry seam
+    // returns when `rff-codec-h264` relaxes its pin.
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -269,6 +275,8 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
 
     let file = std::fs::File::open(path)?;
     let mkerr = |e: rff_core::Error| Error::Media(format!("{}: {e}", path.display()));
+    let mut formats = FormatRegistry::new();
+    rff_format_mp4::register(&mut formats);
     let mut demux = formats
         .open_demuxer("mp4", Box::new(std::io::BufReader::new(file)))
         .map_err(mkerr)?;
@@ -280,31 +288,14 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
         .find(|(_, s)| s.media_type == rff_core::MediaType::Video)
         .ok_or_else(|| Error::Media(format!("{}: no video stream", path.display())))?;
 
-    let mut dec = codecs.find_decoder(vstream.codec_id).map_err(mkerr)?;
-    // The decoder needs SPS/PPS from the container: H.264 in MP4 carries them
-    // in `extradata`, not inline in the samples. Without this the first frames
-    // decode to nothing and the failure looks like an empty video.
-    dec.configure(&CodecParams {
-        codec_id: vstream.codec_id,
-        width: vstream.width,
-        height: vstream.height,
-        pixel_format: vstream.pixel_format,
-        sample_rate: 0,
-        channels: 0,
-        sample_format: None,
-        extradata: vstream.extradata.clone(),
-    })
-    .map_err(mkerr)?;
+    let mut dec = rusty_h264::Decoder::new();
+    // SPS/PPS live in the container's extradata for MP4, not inline.
+    if !vstream.extradata.is_empty() {
+        let _ = dec.decode(&vstream.extradata);
+    }
 
-    // `fps <= 0` keeps every frame. Otherwise decimate on the frame INDEX
-    // using the stream's own rate — a fixed stride, reproducible, and not
-    // dependent on wall clock.
-    let src_fps = if vstream.time_base.num > 0 {
-        vstream.time_base.den as f64 / vstream.time_base.num as f64
-    } else {
-        0.0
-    };
     let tb = vstream.time_base;
+    let src_fps = if tb.num > 0 { tb.den as f64 / tb.num as f64 } else { 0.0 };
     let stride = if fps > 0.0 && src_fps > 0.0 {
         (src_fps / fps).round().max(1.0) as usize
     } else {
@@ -313,6 +304,7 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
 
     let mut out = Vec::new();
     let mut idx = 0usize;
+    let mut pkts = 0usize;
     loop {
         let packet = match demux.read_packet() {
             Ok(p) => p,
@@ -322,43 +314,63 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
         if packet.stream_index != vidx {
             continue;
         }
-        // DO NOT SWALLOW THIS. It used to be `if ... .is_err() { continue; }`,
-        // which turned a decoder that was reporting itself clearly into a
-        // silent short read: a standard x264 file (High profile is x264's
-        // DEFAULT) produced **zero frames and no error**, and the caller had no
-        // way to tell that from an empty video.
-        //
-        // The decoder's own diagnostics are precise and worth surfacing
-        // verbatim — measured on the Xiph ladder, 2026-08-06:
-        //   High profile : "rusty_h264: unsupported coding tool: P_Skip
-        //                   without reference"   (0 of 164 frames)
-        //   CABAC        : "rusty_h264: bitstream truncated" (49 of 164)
-        //   CAVLC        : no errors, 164 of 164
-        //
-        // Failing loudly is the right default: a partial decode silently
-        // presented as a complete one is a wrong ANSWER, not a slow one, and
-        // every downstream metric computed on it inherits the truncation.
-        if let Err(e) = dec.send_packet(&packet) {
-            return Err(Error::Media(format!(
-                "{}: decode failed on packet {} after {} frame(s): {e}.                  The stream uses a coding tool this decoder does not support;                  re-encode with `-coder 0` (CAVLC) or use a different source.",
+        pkts += 1;
+        // DO NOT SWALLOW THIS. It was `if ... .is_err() { continue; }`, which
+        // turned a decoder reporting itself clearly into a silent short read:
+        // a standard x264 file produced zero frames and NO error, which no
+        // caller could distinguish from an empty video.
+        let frame = dec.decode(&packet.data).map_err(|e| {
+            Error::Media(format!(
+                "{}: decode failed on packet {} after {} frame(s): {e}",
                 path.display(),
-                idx + 1,
+                pkts,
                 out.len()
-            )));
-        }
-        while let Ok(rff_core::Frame::Video(v)) = dec.receive_frame() {
+            ))
+        })?;
+        if let Some(v) = frame {
             if idx % stride == 0 {
-                // Seconds, via the stream's own time base — a raw pts is in
-                // container ticks and means nothing to a caller.
-                let ts = v.pts.map_or(0.0, |p| {
-                    p as f64 * tb.num as f64 / tb.den.max(1) as f64
-                });
-                out.push(from_rff_frame(&v, ts)?);
+                let ts = packet
+                    .pts
+                    .map_or(0.0, |p| p as f64 * tb.num as f64 / tb.den.max(1) as f64);
+                out.push(from_rusty_frame(&v, ts)?);
             }
             idx += 1;
         }
     }
     Ok(out)
+}
+
+/// `rusty_h264`'s YUV420p frame to RGB8, the format every FFai engine consumes.
+///
+/// BT.601 limited range, matching OpenCV's `COLOR_YUV2RGB_I420` — so frames
+/// decoded here and frames extracted by the Python tooling agree, and a
+/// comparison between two engines is not secretly a comparison between two
+/// colour conversions.
+fn from_rusty_frame(v: &rusty_h264::YuvFrame, ts: f64) -> Result<VideoFrame> {
+    let (w, h) = (v.width, v.height);
+    let mut rgb = vec![0u8; w * h * 3];
+    let (ys, us, vs) = (w, w.div_ceil(2), w.div_ceil(2));
+    for row in 0..h {
+        for col in 0..w {
+            let y = v.y[row * ys + col] as f32;
+            let cu = v.u[(row / 2) * us + col / 2] as f32 - 128.0;
+            let cv = v.v[(row / 2) * vs + col / 2] as f32 - 128.0;
+            let yy = 1.164 * (y - 16.0);
+            let o = (row * w + col) * 3;
+            rgb[o] = (yy + 1.596 * cv).clamp(0.0, 255.0) as u8;
+            rgb[o + 1] = (yy - 0.813 * cv - 0.391 * cu).clamp(0.0, 255.0) as u8;
+            rgb[o + 2] = (yy + 2.018 * cu).clamp(0.0, 255.0) as u8;
+        }
+    }
+    Ok(VideoFrame {
+        image: ImageBuffer {
+            width: w as u32,
+            height: h as u32,
+            format: ffai_core::types::PixelFormat::Rgb8,
+            data: rgb,
+        },
+        timestamp: ts,
+    })
 }
 
 /// YUV420p to RGB8, the format every FFai engine consumes.

@@ -30,8 +30,8 @@ hound = { workspace = true }
 # The registry seam (`rff_codec::CodecRegistry`) is still the right home for
 # DEMUXERS and video codecs, where rff provides something nothing else does.
 # For a still-image decoder it bought an indirection and cost publication.
-rusty_png = "0.2"
-rusty_jpeg = "0.2"
+rusty_png = "0.3"
+rusty_jpeg = "0.3"
 # VIDEO INGEST, from crates.io rather than the git workspace.
 #
 # `sample_frames` was a stub waiting on "the rff backend". The backend is
@@ -44,7 +44,7 @@ rff-core = "0.1"
 rff-format = "0.1"
 rff-format-mp4 = "0.1"
 rff-codec = "0.1"
-rff-codec-h264 = "0.1"
+rusty_h264 = "0.8"
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.
