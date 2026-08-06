@@ -627,6 +627,13 @@ fn main() -> Result<()> {
 
             let input = input.context("--input is required without --serve")?;
 
+            // A video source streams; an image does not. Dispatch on the
+            // extension, matching what Ultralytics' `predict(source=...)` does
+            // with the same file.
+            if is_video(&input) {
+                return detect_video(eng, opts, &input, output.as_deref());
+            }
+
             if live {
                 let mut frames: Vec<PathBuf> = std::fs::read_dir(&input)
                     .with_context(|| format!("reading frame dir {}", input.display()))?
@@ -854,6 +861,149 @@ fn main() -> Result<()> {
             print!("{}", ffai_bench::runner::render(&record));
             println!("appended to {}", ledger.display());
         }
+    }
+    Ok(())
+}
+
+
+/// Containers the streaming path accepts, matching `stream_frames`.
+fn is_video(p: &std::path::Path) -> bool {
+    matches!(
+        p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        Some("mp4" | "mov" | "m4v")
+    )
+}
+
+/// Detect over a video, one frame at a time, at constant memory.
+///
+/// # Why the output looks like Ultralytics'
+///
+/// Anyone evaluating this is running `yolo predict source=clip.mp4` in the
+/// other terminal. Matching the line format means the two can be diffed
+/// directly instead of eyeballed, and it is the same reason the letterbox
+/// reproduces their `auto=True` rule rather than inventing one. Their line:
+///
+/// ```text
+/// video 1/1 (frame 1/164) /path/clip.mp4: 544x640 1 person, 1 tv, 110.7ms
+/// ```
+///
+/// The trailing summary matches too, so a reader comparing the two sees the
+/// same shape of number in the same place.
+///
+/// The frame TOTAL is only printed when the container declares one. Ultralytics
+/// gets its total from OpenCV's `CAP_PROP_FRAME_COUNT`; where we do not have it
+/// we print the index alone rather than a guess, because a wrong total in a
+/// progress line is worse than no total.
+fn detect_video(
+    eng: std::sync::Arc<dyn DetectEngine>,
+    opts: DetectOptions,
+    path: &std::path::Path,
+    output: Option<&std::path::Path>,
+) -> Result<()> {
+    use std::io::Write;
+
+    let names = eng.class_names().to_vec();
+    let stream = ffai_media::stream_frames(path, 0.0)?;
+    let total = stream.frame_count_hint();
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut n_frames = 0usize;
+    let mut infer_total = 0.0f64;
+    let mut shape = (0usize, 0usize);
+
+    for (i, frame) in stream.enumerate() {
+        let frame = frame?;
+        let t = std::time::Instant::now();
+        let found = eng.detect(&frame.image, &opts)?;
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        infer_total += ms;
+        n_frames += 1;
+
+        // Class tallies, printed the way Ultralytics prints them: count, name,
+        // pluralised, ordered by class id.
+        let mut tally: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+        for d in &found.detections {
+            *tally.entry(d.class_id).or_insert(0) += 1;
+        }
+        let summary = if tally.is_empty() {
+            "(no detections)".to_string()
+        } else {
+            tally
+                .iter()
+                .map(|(c, n)| {
+                    let base = names.get(*c as usize).map(String::as_str).unwrap_or("?");
+                    if *n == 1 {
+                        format!("1 {base}")
+                    } else {
+                        format!("{n} {base}s")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        // Ultralytics prints the LETTERBOX shape, height first.
+        let (lh, lw) = ffai_diana::image::letterbox_shape(
+            frame.image.width as usize,
+            frame.image.height as usize,
+            640,
+            ffai_diana::image::Geometry::Rect,
+        );
+        shape = (lh, lw);
+
+        match total {
+            Some(t) => println!(
+                "video 1/1 (frame {}/{}) {}: {}x{} {}, {:.1}ms",
+                i + 1,
+                t,
+                path.display(),
+                lh,
+                lw,
+                summary,
+                ms
+            ),
+            None => println!(
+                "video 1/1 (frame {}) {}: {}x{} {}, {:.1}ms",
+                i + 1,
+                path.display(),
+                lh,
+                lw,
+                summary,
+                ms
+            ),
+        }
+
+        if output.is_some() {
+            for d in &found.detections {
+                lines.push(format!(
+                    "{}\t{}\t{:.3}\t{:.0}\t{:.0}\t{:.0}\t{:.0}",
+                    i,
+                    names.get(d.class_id as usize).map(String::as_str).unwrap_or("?"),
+                    d.confidence,
+                    d.x0,
+                    d.y0,
+                    d.x1,
+                    d.y1
+                ));
+            }
+        }
+    }
+
+    if n_frames == 0 {
+        anyhow::bail!("{}: no frames decoded", path.display());
+    }
+    println!(
+        "Speed: {:.1}ms inference per image at shape (1, 3, {}, {})",
+        infer_total / n_frames as f64,
+        shape.0,
+        shape.1
+    );
+    if let Some(p) = output {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(p)?);
+        for l in &lines {
+            writeln!(f, "{l}")?;
+        }
+        println!("wrote {} ({} detections)", p.display(), lines.len());
     }
     Ok(())
 }

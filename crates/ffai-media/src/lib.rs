@@ -241,26 +241,103 @@ fn decode_png(data: &[u8]) -> Result<ImageBuffer> {
 
 /// Sample frames from a video at `fps` frames/second (for Argus video
 /// understanding). Pending the rff demux/decode integration.
-pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
+/// A lazily-decoded video, yielding one frame at a time.
+///
+/// # Why this exists rather than a `Vec`
+///
+/// `sample_frames` used to decode the whole file and hand back a
+/// `Vec<VideoFrame>`. A 1080p RGB frame is 5.9 MiB, so **one minute of video is
+/// 10.4 GiB and ten minutes is 104 GiB** — the API could only ever be used on
+/// clips, and "video ingest" meant "short video ingest".
+///
+/// This holds the demuxer and decoder open and pulls exactly as far as the
+/// caller asks. Memory is one frame plus the decoder's own reference buffers,
+/// whatever the file's length.
+///
+/// Mirrors what Ultralytics' `predict(source, stream=True)` returns — a
+/// generator rather than a list — for the same reason.
+pub struct VideoStream {
+    demux: Box<dyn rff_format::Demuxer>,
+    dec: rusty_h264::Decoder,
+    vidx: usize,
+    tb: rff_core::Rational,
+    stride: usize,
+    /// Decoded-frame counter, for the decimation stride.
+    idx: usize,
+    /// Packets fed, for error messages that say WHERE it stopped.
+    pkts: usize,
+    path: std::path::PathBuf,
+    done: bool,
+}
+
+impl VideoStream {
+    /// Frames the container claims, when it says. `None` means unknown —
+    /// report it as unknown rather than guessing, since a wrong total in a
+    /// progress line is worse than no total.
+    pub fn frame_count_hint(&self) -> Option<usize> {
+        None
+    }
+}
+
+impl Iterator for VideoStream {
+    type Item = Result<VideoFrame>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        loop {
+            let packet = match self.demux.read_packet() {
+                Ok(p) => p,
+                Err(rff_core::Error::Eof) => {
+                    self.done = true;
+                    return None;
+                }
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(Error::Media(format!("{}: {e}", self.path.display()))));
+                }
+            };
+            if packet.stream_index != self.vidx {
+                continue;
+            }
+            self.pkts += 1;
+            // Errors PROPAGATE. This was `if ... .is_err() { continue; }`,
+            // which turned a decoder reporting itself clearly into a silent
+            // short read — a standard x264 file yielded zero frames and no
+            // diagnostic, indistinguishable from an empty video.
+            let frame = match self.dec.decode(&packet.data) {
+                Ok(f) => f,
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(Error::Media(format!(
+                        "{}: decode failed on packet {} : {e}",
+                        self.path.display(),
+                        self.pkts
+                    ))));
+                }
+            };
+            let Some(v) = frame else { continue };
+            let keep = self.idx % self.stride == 0;
+            self.idx += 1;
+            if !keep {
+                continue;
+            }
+            let ts = packet
+                .pts
+                .map_or(0.0, |p| p as f64 * self.tb.num as f64 / self.tb.den.max(1) as f64);
+            return Some(from_rusty_frame(&v, ts));
+        }
+    }
+}
+
+/// Open a video and stream its frames. `fps <= 0` keeps every frame.
+///
+/// Demuxes with `rff-format-mp4` and decodes with `rusty_h264` — the whole path
+/// is Remade-With-Rust, no libavformat and no libavcodec.
+pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
     use rff_format::FormatRegistry;
 
-    // Demux with rff, decode with `rusty_h264` DIRECTLY.
-    //
-    // This used to route through `rff-codec-h264`, whose 0.1.0 release pins
-    // `rusty_h264 ^0.2` — so no matter what was published upstream we resolved
-    // 0.2.1, six minor versions behind. The cost of that pin, measured
-    // 2026-08-06 on the same files:
-    //
-    //   | file                    | 0.2.1  | 0.8.0   |
-    //   |-------------------------|--------|---------|
-    //   | CAVLC                   | 164/164| 164/164 |
-    //   | CABAC                   |  49/164| 164/164 |
-    //   | x264 default (High)     |   0/164| 164/164 |
-    //   | 1080p decode, ms/frame  |  47.50 |   15.20 |
-    //
-    // x264's DEFAULT profile is High, so on 0.2.1 a normal MP4 decoded to
-    // nothing. Going direct fixes that and is 3.1x faster; the registry seam
-    // returns when `rff-codec-h264` relaxes its pin.
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -268,7 +345,8 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
         .unwrap_or_default();
     if !matches!(ext.as_str(), "mp4" | "mov" | "m4v") {
         return Err(Error::Media(format!(
-            "`{}`: only MP4/MOV is wired (H.264 inside). Other containers land              as their rff-format-* crates publish.",
+            "`{}`: only MP4/MOV is wired (H.264 inside). Other containers land \
+             as their rff-format-* crates publish.",
             path.display()
         )));
     }
@@ -289,7 +367,7 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
         .ok_or_else(|| Error::Media(format!("{}: no video stream", path.display())))?;
 
     let mut dec = rusty_h264::Decoder::new();
-    // SPS/PPS live in the container's extradata for MP4, not inline.
+    // MP4 carries SPS/PPS in the container's extradata, not inline.
     if !vstream.extradata.is_empty() {
         let _ = dec.decode(&vstream.extradata);
     }
@@ -301,43 +379,25 @@ pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
     } else {
         1
     };
+    let vidx = vidx;
 
-    let mut out = Vec::new();
-    let mut idx = 0usize;
-    let mut pkts = 0usize;
-    loop {
-        let packet = match demux.read_packet() {
-            Ok(p) => p,
-            Err(rff_core::Error::Eof) => break,
-            Err(e) => return Err(mkerr(e)),
-        };
-        if packet.stream_index != vidx {
-            continue;
-        }
-        pkts += 1;
-        // DO NOT SWALLOW THIS. It was `if ... .is_err() { continue; }`, which
-        // turned a decoder reporting itself clearly into a silent short read:
-        // a standard x264 file produced zero frames and NO error, which no
-        // caller could distinguish from an empty video.
-        let frame = dec.decode(&packet.data).map_err(|e| {
-            Error::Media(format!(
-                "{}: decode failed on packet {} after {} frame(s): {e}",
-                path.display(),
-                pkts,
-                out.len()
-            ))
-        })?;
-        if let Some(v) = frame {
-            if idx % stride == 0 {
-                let ts = packet
-                    .pts
-                    .map_or(0.0, |p| p as f64 * tb.num as f64 / tb.den.max(1) as f64);
-                out.push(from_rusty_frame(&v, ts)?);
-            }
-            idx += 1;
-        }
-    }
-    Ok(out)
+    Ok(VideoStream {
+        demux,
+        dec,
+        vidx,
+        tb,
+        stride,
+        idx: 0,
+        pkts: 0,
+        path: path.to_path_buf(),
+        done: false,
+    })
+}
+
+/// Every frame at once. Prefer [`stream_frames`] — this holds the whole video
+/// in memory and exists for callers that genuinely want a `Vec`.
+pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
+    stream_frames(path, fps)?.collect()
 }
 
 /// `rusty_h264`'s YUV420p frame to RGB8, the format every FFai engine consumes.

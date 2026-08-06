@@ -43,7 +43,22 @@ pub const STRIDE: usize = 32;
 
 /// Letterbox `image` into a CHW f32 tensor in `[0, 1]`.
 ///
-/// Returns the tensor and the transform needed to map detections back.
+//// The letterbox output shape `(height, width)` for a source, WITHOUT resizing.
+///
+/// Shares its arithmetic with [`letterbox_with`] line for line, so the number a
+/// progress line prints cannot drift from the tensor the model actually sees.
+/// Ultralytics prints this shape height-first, and so does the CLI.
+pub fn letterbox_shape(w0: usize, h0: usize, size: usize, geometry: Geometry) -> (usize, usize) {
+    let scale = (size as f32 / w0 as f32).min(size as f32 / h0 as f32);
+    let nw = ((w0 as f32 * scale).round() as usize).max(1).min(size);
+    let nh = ((h0 as f32 * scale).round() as usize).max(1).min(size);
+    match geometry {
+        Geometry::Square => (size, size),
+        Geometry::Rect => (nh + (size - nh) % STRIDE, nw + (size - nw) % STRIDE),
+    }
+}
+
+// Returns the tensor and the transform needed to map detections back.
 pub fn letterbox(
     image: &ImageBuffer,
     size: usize,
