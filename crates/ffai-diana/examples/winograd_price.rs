@@ -52,6 +52,72 @@ fn main() -> Result<()> {
     let dev = Device::Cpu;
     const REPS: usize = 21;
 
+    // `--arm big|wino` runs ONE arm in a long loop and nothing else, so an
+    // external driver can read this process's CPU TIME for it.
+    //
+    // The question that needs CPU rather than wall: Winograd does ~2.25x fewer
+    // multiplies, so if wall is flat, is it at least burning less machine? Wall
+    // cannot answer that — two arms can take the same wall while one keeps more
+    // cores busy. Energy tracks CPU-seconds, so CPU-seconds is what decides
+    // whether "less arithmetic" is worth anything when it is not faster.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--arm") {
+        let arm = args[i + 1].clone();
+        let shapes = [(32usize, 32usize, 24usize, 40usize, 12usize),
+                      (16, 16, 48, 80, 5), (64, 64, 12, 20, 4), (64, 16, 48, 80, 1),
+                      (16, 8, 96, 160, 1), (128, 16, 24, 40, 1),
+                      (32, 16, 48, 80, 1), (16, 32, 48, 80, 1)];
+        let mut built = Vec::new();
+        for &(cin, cout, h, w, calls) in &shapes {
+            let (hw, k) = (h * w, 9 * cin);
+            built.push((
+                Tensor::rand(-0.5f32, 0.5f32, (cout, k), &dev)?,
+                Tensor::rand(-0.5f32, 0.5f32, (k, hw), &dev)?,
+                Tensor::rand(-0.5f32, 0.5f32, (16, cout, cin), &dev)?,
+                Tensor::rand(-0.5f32, 0.5f32, (16, cin, hw / 4), &dev)?,
+                calls,
+            ));
+        }
+        println!("ready");
+        for _ in 0..60 {
+            for (wn, col, gw, gv, calls) in &built {
+                for _ in 0..*calls {
+                    match arm.as_str() {
+                        "big" => {
+                            let c = wn.matmul(col)?;
+                            let _ = c.flatten_all()?.get(0)?.to_scalar::<f32>()?;
+                        }
+                        "wino" => {
+                            let c = gw.matmul(gv)?;
+                            let _ = c.flatten_all()?.get(0)?.to_scalar::<f32>()?;
+                        }
+                        // The 16 tile-position GEMMs are INDEPENDENT, so they
+                        // are embarrassingly parallel. candle's batched matmul
+                        // ran them at 1.74 cores busy against the big GEMM's
+                        // 11.61 - so the first comparison put a 12-thread arm
+                        // against a ~2-thread one and called the slower one
+                        // dead. This arm fans them out explicitly.
+                        _ => {
+                            use rayon::prelude::*;
+                            let outs: Vec<_> = (0..16usize)
+                                .into_par_iter()
+                                .map(|i| -> Result<f32> {
+                                    let a = gw.get(i)?;
+                                    let b = gv.get(i)?;
+                                    let c = a.matmul(&b)?;
+                                    c.flatten_all()?.get(0)?.to_scalar::<f32>()
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            std::hint::black_box(outs);
+                        }
+                    }
+                }
+            }
+        }
+        println!("done");
+        return Ok(());
+    }
+
     // (cin, cout, h, w, calls/img) - the 3x3 stride-1 shapes Winograd applies
     // to, from FFAI_DIANA_ROOFLINE=1 at 640x384.
     let shapes = [

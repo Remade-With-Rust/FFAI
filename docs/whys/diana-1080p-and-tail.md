@@ -1110,3 +1110,69 @@ measurement says so where a week of implementation would have said it louder.
 mechanism**, and they all close for the same reason: the convolution GEMMs are
 small in M, M is fixed by the architecture, and nothing that leaves M alone
 reaches the problem.
+
+## Winograd, RE-OPENED — the "dead" verdict compared a 12-thread arm to a 2-thread one
+
+The verdict above was reached on WALL time. Asked whether fewer multiplies is
+worth anything when it is not faster, the honest instrument is **CPU-seconds**,
+because that is what energy tracks. Measuring it broke the verdict.
+
+| arm | cpu s | wall s | **cores busy** |
+|---|---:|---:|---:|
+| 1 big GEMM | 4.33 | 0.347 | **12.4** |
+| Winograd, candle batched | 1.30 | 0.680 | **1.9** |
+
+**candle's batched matmul barely parallelises.** The 16 tile-position GEMMs are
+independent — embarrassingly parallel — and nothing was fanning them out. The
+first comparison therefore put a 12-thread arm against a ~2-thread one and
+called the slower one dead. That is a work-parity failure in spirit if not in
+letter, and the tell was sitting in a column that was never printed.
+
+### Fanned out over rayon, 6 ABBA reps
+
+| arm | wall (spread) | cpu (spread) |
+|---|---:|---:|
+| big GEMM | 0.347 (6 %) | 4.33 (18 %) |
+| **Winograd parallel** | **0.310 (25 %)** | **3.75 (36 %)** |
+| Winograd serial | 0.680 (10 %) | 1.30 (89 %) |
+
+**Parallel Winograd: 1.117x wall, faster in 5/6 reps, and 0.87x the CPU.**
+Better on both axes. `z = +1.63`, so it is a lead rather than a verdict — the
+25 % spread means this needs N >= 20 before anyone claims a number.
+
+### Two real operating points, and this is the interesting part
+
+| | wall | CPU |
+|---|---:|---:|
+| latency-optimised: parallel Winograd | **1.12x** | 0.87x |
+| CPU-lean: serial Winograd | 0.51x | **0.30x** |
+
+The serial form is exactly "less processing, not faster" — **a third of the
+CPU for half the speed.** For a shared server packing many streams that is a
+better trade than the fast one, and it sits directly on the positioning the
+CPU-time work established: Diana already does the job for ~a third of
+Ultralytics' CPU, and this would extend that on the 3x3 layers.
+
+**That is a genuine dispatch axis** — not by shape, but by what the deployment
+is optimising. It is the first one this campaign has found that survives its own
+measurement.
+
+### What is NOT established
+
+* **GEMM only.** No transforms, no kernel, nothing built. Transforms were priced
+  at ~3 % of GEMM time and are not in these numbers.
+* **z = +1.63 at 6 reps** with a 25 % spread. Tonight's repeated lesson is that
+  favourable numbers shrink on re-measurement; this one needs N >= 20.
+* **Sized against the whole engine it is small**: 3x3 stride-1 convolutions are
+  22.9 % of detect, so 1.12x on their GEMM is roughly 2-3 % of detect for the
+  latency arm.
+* The 0.30x CPU figure is the one worth chasing, and it is the one nobody would
+  have looked for while measuring wall.
+
+### The lesson, again and more expensively
+
+**"Cores busy" is CPU/wall and costs nothing to print.** It was absent from
+every probe in this campaign until the last one, and the moment it appeared it
+overturned a verdict reached an hour earlier. A parallelism column belongs in
+every arm-vs-arm table by default, because two arms at different thread counts
+are not comparable and nothing else in the output says so.
