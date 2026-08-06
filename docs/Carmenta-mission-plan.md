@@ -7730,6 +7730,73 @@ refutation needs MORE evidence than a confirmation, and it received less, twice.
 | residual block oracle still unreached | 3.73 pp |
 | gap on the 43-page comparison set | +6.19 pp |
 
+### 8.136 The block branch ships — and the campaign's first movement on the comparison set
+
+§8.131 measured the block as the right unit; §8.134 and §8.135 corrected two
+broken tests that had refuted it. This lands it in the engine.
+
+**What had to be built.** `run_stats_per_line` clusters by LEFT EDGE and splits
+on vertical pitch — right for a prose column, structurally unable to form a
+figure's block, because a chart's title, axis labels and tick values share no
+left edge. The branch needs 2D union-find: two lines join when they overlap
+horizontally by >= 15 % of the narrower AND sit within two line heights
+vertically, so a caption joins its plot.
+
+It runs as a SECOND PASS over the lines the four existing branches keep, with the
+page's `p90` and line height recomputed on that surviving population. Getting
+this wrong is exactly what made §8.133 report a 91 % collapse.
+
+| | |
+|---|---|
+| **A** `area_frac<0.004 & isolation>1.2 & aspect>6` | isolated single-line strips |
+| **B** `blk_h<0.015 & isolation>1.2 & w_cv<0.2` | thin isolated bands |
+| **C** `w_med<0.30 & blk_w<0.40 & conf<0.96` | narrow, low-confidence |
+
+**The port was verified before the measurement, not after.** The full filter was
+simulated in Python and compared character-for-character against the engine on 12
+pages: **delta +0 on every one** — identical, not "within tolerance". So a
+disagreement with the prediction could not be a botched port, which is the
+distinction §8.113 cost 0.35 pp to learn.
+
+**End to end:**
+
+| holdout, 236 pages | micro | MACRO |
+|---|---:|---:|
+| default | 18.60 % | 30.12 % |
+| body-only, pre-block | 15.06 % | 23.87 % |
+| **body-only, WITH block** | **14.55 %** | **22.42 %** |
+| block branch worth | -0.51 pp | **-1.45 pp** |
+
+**Predicted -0.891 pp, measured -1.453 pp — a 63 % miss, investigated before
+shipping rather than after.** Exact-Levenshtein offline gives train **-0.743 pp**
+against the engine's **-0.740 pp** (0.003 pp — exact), and holdout -3.422 pp
+against -1.453 pp. The entire holdout gap is ONE page: `omni-0245` reads 231.4 %
+offline and 694.9 % in the engine, and 463.5 / 236 = **1.96 pp**, which is the
+whole discrepancy. Excluding it, offline and engine agree to **0.19 pp** mean
+absolute error over 235 pages. The cause is the `h_sel3` dump being an older
+engine vintage; on a page emitting eight times its reference, a few differing
+detected lines regroup every block. The engine number is the real one, and the
+proxy under-predicting (§8.120) accounts for the rest.
+
+**And the comparison set moved for the first time.**
+
+| | macro |
+|---|---:|
+| ours, default | 22.72 % |
+| **ours, body-only** | **21.33 %** |
+| Unlimited-OCR | 15.51 % |
+| **gap** | **+5.82 pp** (was +6.19) |
+
+§8.130's -1.98 pp landed entirely outside those 43 pages. This is the first
+change all campaign that appears where both engines have actually been measured.
+
+**The filter's total, and what it took.** Holdout macro **30.12 % -> 22.42 %**,
+micro 18.60 % -> 14.55 %. Five branches: the §8.113 width tree, §8.112's
+isolated fragment, §8.116's gated bibliography, §8.130's section scope, and this.
+Three of the five were shipped by predicting a number and matching it; the two
+that were not (§8.121's confidence density, §8.124's `rc = 200`) were refused for
+being one page each.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
