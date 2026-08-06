@@ -215,6 +215,7 @@ impl Module for ConvAct {
             // `FFAI_DIANA_NO_DWCONV=1` restores candle's grouped path — the
             // A/B arm and the shipped fallback in one knob, so the oracle
             // comparison needs no rebuild.
+            let t_kernel = crate::profile::roofline_enabled().then(std::time::Instant::now);
             let y = if self.depthwise {
                 crate::profile::timed(|p| &p.conv_dw, || {
                     if dwconv_disabled() {
@@ -252,6 +253,34 @@ impl Module for ConvAct {
             } else {
                 self.conv.forward(x)?
             };
+            if let Some(t0) = t_kernel {
+                let (xd, yd) = (x.dims(), y.dims());
+                if xd.len() == 4 && yd.len() == 4 {
+                    crate::profile::record_conv(
+                        crate::profile::ConvShape {
+                            kind: if self.depthwise {
+                                "depthwise"
+                            } else {
+                                match self.kind {
+                                    ConvKind::Stride2 => "3x3 s2",
+                                    ConvKind::Pointwise => "1x1",
+                                    ConvKind::Dense3x3 => "3x3 s1",
+                                    _ => "other",
+                                }
+                            },
+                            cin: xd[1],
+                            cout: yd[1],
+                            hin: xd[2],
+                            win: xd[3],
+                            hout: yd[2],
+                            wout: yd[3],
+                            k: if self.kind == ConvKind::Pointwise { 1 } else { 3 },
+                            depthwise: self.depthwise,
+                        },
+                        t0.elapsed().as_nanos() as u64,
+                    );
+                }
+            }
             // `!pw_fused` because the 1x1 epilogue has ALREADY applied it.
             // Without this the activation runs twice — silu(silu(x)) — which
             // is not a shape error, not a panic, and not caught by any unit

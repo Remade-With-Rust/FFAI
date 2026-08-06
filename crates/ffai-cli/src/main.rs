@@ -974,5 +974,8 @@ fn serve_stdin(
     if ffai_diana::profile::is_enabled() {
         eprintln!("{}", ffai_diana::profile::profile().report());
     }
+    if ffai_diana::profile::roofline_enabled() {
+        eprintln!("{}", ffai_diana::profile::roofline_report());
+    }
     Ok(())
 }

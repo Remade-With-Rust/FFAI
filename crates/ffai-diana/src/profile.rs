@@ -279,3 +279,136 @@ impl Profile {
         out
     }
 }
+
+// ---------------------------------------------------------------------------
+// Per-layer roofline — `FFAI_DIANA_ROOFLINE=1`
+//
+// The stage buckets say "3x3 stride-2 is 22.3 % of detect in 7 calls per
+// image". They cannot say whether that is a lot, because a call's cost is only
+// interpretable against the work it does. 22.3 % of time for 22 % of the FLOPs
+// is proportional and uninteresting; 22.3 % for 10 % is a target.
+//
+// So this keys on the actual SHAPE — in and out channels, in and out spatial,
+// kernel, stride — accumulates calls and nanos per distinct shape, and divides
+// by the arithmetic that shape implies. What comes out is effective GFLOP/s per
+// layer, which is the number that ranks candidates rather than describing them.
+//
+// The FLOP count is the honest 2*K*K*Cin*Cout*Hout*Wout for dense convolution
+// and 2*K*K*Cin*Hout*Wout for depthwise — multiply-add counted as two, no
+// credit for anything an implementation might skip. It is a lower bound on
+// useful work, so effective GFLOP/s is an UNDER-estimate of efficiency and a
+// layer that looks bad here is at worst as bad as it looks.
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+pub struct ConvShape {
+    pub kind: &'static str,
+    pub cin: usize,
+    pub cout: usize,
+    pub hin: usize,
+    pub win: usize,
+    pub hout: usize,
+    pub wout: usize,
+    pub k: usize,
+    pub depthwise: bool,
+}
+
+impl ConvShape {
+    /// Multiply-adds counted as two flops. Depthwise does one filter per
+    /// channel rather than Cin x Cout, which is exactly why it is cheap and
+    /// why counting it like a dense conv would make it look 64x more
+    /// efficient than it is.
+    fn flops(&self) -> f64 {
+        let spatial = (self.hout * self.wout) as f64;
+        let taps = (self.k * self.k) as f64;
+        if self.depthwise {
+            2.0 * taps * self.cin as f64 * spatial
+        } else {
+            2.0 * taps * self.cin as f64 * self.cout as f64 * spatial
+        }
+    }
+
+    /// Bytes that must move at minimum: read the input, write the output,
+    /// read the weights once. Used for arithmetic intensity, which is what
+    /// says whether a slow layer is starved or just badly scheduled.
+    fn bytes(&self) -> f64 {
+        let f32b = 4.0;
+        let w = if self.depthwise {
+            (self.k * self.k * self.cin) as f64
+        } else {
+            (self.k * self.k * self.cin * self.cout) as f64
+        };
+        f32b * ((self.cin * self.hin * self.win) as f64
+            + (self.cout * self.hout * self.wout) as f64
+            + w)
+    }
+}
+
+static ROOFLINE: Mutex<Option<HashMap<ConvShape, (u64, u64)>>> = Mutex::new(None);
+
+pub fn roofline_enabled() -> bool {
+    static E: OnceLock<bool> = OnceLock::new();
+    *E.get_or_init(|| std::env::var_os("FFAI_DIANA_ROOFLINE").is_some())
+}
+
+pub fn record_conv(shape: ConvShape, nanos: u64) {
+    if !roofline_enabled() {
+        return;
+    }
+    let mut g = ROOFLINE.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    let e = m.entry(shape).or_insert((0, 0));
+    e.0 += 1;
+    e.1 += nanos;
+}
+
+/// Ranked by total time, because that is the order in which work is worth
+/// doing. `GFLOP/s` is the column that says whether a row is a target.
+pub fn roofline_report() -> String {
+    let g = ROOFLINE.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return "roofline: no data (set FFAI_DIANA_ROOFLINE=1)".into();
+    };
+    let mut rows: Vec<(&ConvShape, u64, u64)> = m.iter().map(|(s, (c, n))| (s, *c, *n)).collect();
+    rows.sort_by_key(|(_, _, n)| std::cmp::Reverse(*n));
+
+    let total_ns: u64 = rows.iter().map(|(_, _, n)| *n).sum();
+    let total_flops: f64 = rows.iter().map(|(s, c, _)| s.flops() * *c as f64).sum();
+
+    let mut out = String::from(
+        "\nper-layer roofline (FFAI_DIANA_ROOFLINE=1)\n\
+         kind       cin->cout   in HxW     out HxW  calls   ms/img  share  GFLOP/s  AI(f/B)\n",
+    );
+    let imgs = rows.iter().map(|(_, c, _)| *c).max().unwrap_or(1).max(1);
+    for (s, calls, ns) in &rows {
+        let secs = *ns as f64 / 1e9;
+        let gflops = (s.flops() * *calls as f64 / 1e9) / secs.max(1e-12);
+        let ai = s.flops() / s.bytes();
+        out.push_str(&format!(
+            "{:<9} {:>4}->{:<5} {:>5}x{:<5} {:>5}x{:<5} {:>5} {:>8.2} {:>5.1}% {:>8.1} {:>8.1}\n",
+            s.kind,
+            s.cin,
+            s.cout,
+            s.hin,
+            s.win,
+            s.hout,
+            s.wout,
+            calls,
+            secs * 1000.0 / (imgs as f64),
+            100.0 * *ns as f64 / total_ns as f64,
+            gflops,
+            ai,
+        ));
+    }
+    out.push_str(&format!(
+        "\ntotal {:.2} ms/img over {} distinct shapes; {:.2} GFLOP/img; aggregate {:.1} GFLOP/s\n",
+        total_ns as f64 / 1e6 / imgs as f64,
+        rows.len(),
+        total_flops / 1e9 / imgs as f64,
+        (total_flops / 1e9) / (total_ns as f64 / 1e9),
+    ));
+    out
+}
