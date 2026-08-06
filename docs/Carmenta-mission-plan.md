@@ -7518,6 +7518,82 @@ document, none of which look different from a paragraph. That is where the
 remaining prize is, and geometry has now been measured to a dead end twice: once
 per line (§8.115) and once per block (here).
 
+### 8.133 Both extensions fail their first honest test — today was 2 pp, not 6
+
+§8.130 shipped at -1.98 pp against -1.995 pp predicted. Two extensions looked
+like they would carry it further, and I said explicitly that they would decide
+whether the day was worth 2 pp or the remaining 6.19 pp. Both were measured.
+Both failed.
+
+**1. The structural family has ONE member.**
+
+Rather than guess which section headings mark unannotated content — "Abstract" is
+body text on most corpora, "Acknowledgements" is not, and which is which is a
+fact about THIS benchmark's annotation policy — every heading-shaped line was
+found and the text following it, in gutter-column reading order up to the next
+heading, was scored.
+
+| heading | pages | orphan share of the text after it |
+|---|---:|---:|
+| **references** | 3 | **0.81** |
+| abstract | 7 | **0.00** |
+| introduction | 7 | 0.02 |
+| background | 4 | **0.00** |
+| conclusions | 3 | **0.00** |
+
+Of 2 216 distinct heading strings only 16 appear on three or more pages, and
+**"References" is the only one whose content is unannotated.** The reason is
+obvious in hindsight and worth stating: the benchmark annotates the DOCUMENT
+BODY, and abstract, introduction, background and conclusions ARE the body. The
+reference list is the only section outside the scope, so there is exactly one
+heading to find. §8.130 did not open a family; it closed a special case.
+
+**2. The block rules collapse 91 % when measured incrementally.**
+
+§8.132's block rules read +1.117 pp macro standalone at top3 12 %, which I called
+the cleanest lever of the campaign. Standalone is not shippable — the small
+isolated blocks a block rule catches are what §8.112's fragment branch already
+drops. Rebuilding the blocks with the shipped filter applied per line first:
+
+| rule | standalone | **incremental (holdout)** |
+|---|---:|---:|
+| `w_med<0.3 & blk_w<0.25 & blk_h<0.09` | +1.117 | **+0.100** |
+| `area<0.01 & w_med<0.3 & blk_w<0.4` | +1.111 | **+0.137** |
+| `area_frac < 0.004` | +0.987 | **-0.206** |
+
+2 053 of 4 789 blocks were already removed entirely by the line filter. **The
+block frame is a better DESCRIPTION of what the line filter does, not a source of
+new gain.** The block oracle on what survives is +4.505 pp and these rules reach
+2 % of it — consistent with §8.132's control, which found the features cap at
+18 % even fitted on the test set.
+
+**The honest ledger for the day:**
+
+| | |
+|---|---|
+| §8.130 section scope, validated end-to-end | **-1.98 pp macro** |
+| block rules, incremental | +0.10 pp |
+| structural family beyond references | **none** |
+| gap on the 43-page comparison set | **+6.19 pp, unchanged** |
+
+**What was actually learned, which is not nothing.** The unit was wrong for
+twenty-five sections and now that is measured (98 % block purity, §8.131).
+Geometry is a dead end at BOTH granularities, per line (§8.115) and per block
+(§8.132), with the mechanism named: the blocks carrying half the value are wider
+and denser than body text. And the one thing that beat geometry did so by using
+document structure rather than shape — it just turns out this corpus contains
+exactly one usable instance of that.
+
+**And a calibration note, because it is the useful part.** Within three hours I
+called §8.131 a 96 % capture (withdrawn in §8.132), put region classification
+last at 9 % (mis-framed), and called the block rules the cleanest lever of the
+campaign (+1.117 standalone, +0.100 incremental). Every error ran the same
+direction: **reading a ceiling as an outcome.** The oracle, the standalone
+figure and the AUC are all upper bounds; the incremental, end-to-end,
+both-splits number is the result. §8.116 and §8.130 are the only two things this
+campaign has shipped, and both were validated by predicting a number before
+measuring it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
