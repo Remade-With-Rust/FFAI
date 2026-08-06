@@ -279,6 +279,132 @@ fn tiling_disabled() -> bool {
     }
 }
 
+
+/// `FFAI_DIANA_NHWC=1` routes 3x3 convolutions through the transposed GEMM.
+///
+/// Every NHWC number this campaign has is ISOLATED - synthetic tensors inside
+/// an example. `codec-measurement` §11 requires one probe at the level above
+/// the change, and this campaign's history is that isolated numbers mislead in
+/// BOTH directions. This is that probe: the same convolution, in the engine,
+/// on the real graph.
+///
+/// It carries a deliberate handicap. A true NHWC graph never transposes,
+/// because the previous layer already left the activation in that layout. Here
+/// the surrounding graph is still NCHW, so this arm pays a transpose of its
+/// OUTPUT that the real design would not. It is therefore a LOWER BOUND: if
+/// this is close to parity while paying a transpose per layer, the transpose-
+/// free version wins by that transpose.
+pub fn nhwc_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static C: AtomicU8 = AtomicU8::new(u8::MAX);
+    match C.load(Ordering::Relaxed) {
+        u8::MAX => {
+            let on = std::env::var("FFAI_DIANA_NHWC").is_ok_and(|v| v == "1");
+            C.store(on as u8, Ordering::Relaxed);
+            on
+        }
+        v => v == 1,
+    }
+}
+
+/// im2col producing `[OH*OW, Cin*9]` - the transpose of the shipped layout.
+///
+/// The K index is `c*9 + ky*3 + kx`, matching the shipped `im2col` exactly, so
+/// the weight matrix transposes directly with no re-ordering. Getting that
+/// wrong is a wrong graph rather than a slow one, which is why the gate below
+/// compares against the NCHW path element by element.
+fn im2col_t(
+    xs: &[f32],
+    c_in: usize,
+    h: usize,
+    w: usize,
+    oh: usize,
+    ow: usize,
+    stride: usize,
+) -> Vec<f32> {
+    use rayon::prelude::*;
+    let k = c_in * 9;
+    let hw = h * w;
+    // Pre-zeroed, so only the in-bounds taps are written; the padding is
+    // inherited. That is the opposite of the shipped NCHW im2col, which writes
+    // its padding explicitly because it allocates uninitialised - here the
+    // padding is scattered one element at a time rather than in runs, so
+    // inheriting it is the cheaper side of that trade.
+    let mut col = vec![0.0f32; oh * ow * k];
+    // ONE OUTPUT PIXEL AT A TIME, writing its K values CONTIGUOUSLY.
+    //
+    // The first version of this looped (c, ky, kx) outside and ox inside, so
+    // every write landed `k` floats from the last - a pure stride-k scatter.
+    // In context it measured 5.7x slower than the shipped NCHW im2col and
+    // swamped a GEMM win of 1.645x. The gather is inherently strided on the
+    // READ side while the input stays NCHW; there is no reason to be strided
+    // on the write side as well.
+    col.par_chunks_mut(ow * k).enumerate().for_each(|(oy, dst)| {
+        for ox in 0..ow {
+            let px = &mut dst[ox * k..(ox + 1) * k];
+            for c in 0..c_in {
+                let plane = &xs[c * hw..(c + 1) * hw];
+                for ky in 0..3usize {
+                    let sy = oy * stride + ky;
+                    if sy == 0 || sy > h {
+                        continue;
+                    }
+                    let src = &plane[(sy - 1) * w..sy * w];
+                    let base = c * 9 + ky * 3;
+                    for kx in 0..3usize {
+                        let sx = ox * stride + kx;
+                        if sx != 0 && sx <= w {
+                            px[base + kx] = src[sx - 1];
+                        }
+                    }
+                }
+            }
+        }
+    });
+    col
+}
+
+/// One 3x3 convolution with the GEMM in the NHWC orientation.
+///
+/// `col_t[OHW, K] @ w_t[K, Cout]` gives `[OHW, Cout]`, which is transposed back
+/// to `[Cout, OHW]` so the rest of the (still NCHW) graph is unchanged. That
+/// final transpose is the handicap described on `nhwc_enabled`.
+fn conv3x3_nhwc(
+    x: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    stride: usize,
+    act: bool,
+) -> Result<Tensor> {
+    let (n, c_in, h, w) = x.dims4()?;
+    let c_out = weight.dim(0)?;
+    let oh = (h + 2 - 3) / stride + 1;
+    let ow = (w + 2 - 3) / stride + 1;
+    let ohw = oh * ow;
+    let k = c_in * 9;
+
+    let col = crate::profile::timed(|p| &p.im2col, || {
+        crate::cpuop::SliceOp::new("ffai-im2col3x3-t", move |xs, _| {
+            Ok((im2col_t(xs, c_in, h, w, oh, ow, stride), (ohw, k).into()))
+        })
+        .run(x)
+    })?;
+
+    // The weight transpose is per-call here and would be once-at-load in a
+    // real NHWC engine; it is k*c_out floats, small beside the col matrix,
+    // and counted against this arm rather than excused.
+    let w_t = weight.reshape((c_out, k))?.t()?.contiguous()?;
+    let y_t = crate::profile::timed(|p| &p.gemm, || col.matmul(&w_t))?;
+
+    let y = crate::profile::timed(|p| &p.conv_wrap, || y_t.t()?.contiguous())?;
+    let bias_v = match bias {
+        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+        None => None,
+    };
+    let out = crate::epilogue::apply(y, bias_v, ohw, act)?;
+    out.reshape((n, c_out, oh, ow))
+}
+
 pub fn conv3x3_strided(
     x: &Tensor,
     weight: &Tensor,
@@ -301,6 +427,9 @@ pub fn conv3x3_strided(
         if let Some(y) = crate::direct3x3::conv3x3_direct(x, weight, bias)? {
             return Ok(y);
         }
+    }
+    if nhwc_enabled() {
+        return conv3x3_nhwc(x, weight, bias, stride, act);
     }
     if !tiling_disabled() {
         return conv3x3_tiled(x, weight, bias, stride, act);

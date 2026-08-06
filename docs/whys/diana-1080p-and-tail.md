@@ -706,3 +706,92 @@ adds 2.1 pp, while the epilogue and plumbing take back 4.7 pp.
 * **Folding `narrow` into the consuming convolution is worth more than the
   epilogue and plumbing losses combined**, and it is a change that helps NCHW
   too. It should be measured before the layout work, not after.
+
+---
+
+# In-engine NHWC: the win is CONFIRMED and it is NOT a dispatch
+
+Every NHWC number until now was ISOLATED - synthetic tensors inside an example.
+`crate::conv3x3::conv3x3_nhwc` puts it in the engine behind `FFAI_DIANA_NHWC=1`:
+`im2col_t` produces `[OHW, Cin*9]`, the GEMM runs `col @ Wt`, and the result is
+transposed back so the surrounding NCHW graph is untouched.
+
+**Correctness gate: 41 detections both arms, 0 mismatches, worst box delta
+0.0000 px.** Identical output, so every timing below is work-parity by
+construction.
+
+## The GEMM win is real, and LARGER in context than isolated
+
+8 ABBA reps, 30 frames each, in the engine:
+
+| | |
+|---|---|
+| ratios | 2.57 1.61 0.56 1.15 1.23 1.67 2.13 1.77 |
+| median | **1.645x** |
+| paired | **7/8 reps, z = +2.12** |
+
+The isolated probe said 1.140x. **In context it is 1.385-1.645x.** For once an
+isolated number UNDERSTATED the effect, which is the other half of the warning
+in §6 and the reason it says both directions.
+
+## My first `im2col_t` was the bottleneck, not NHWC
+
+The island first measured **0.452x overall** - 2.2x slower. The cause was mine:
+the gather looped `(c, ky, kx)` outside and `ox` inside, so every write landed
+`k` floats from the last, a pure stride-k scatter. Rewritten to emit one output
+pixel's K values contiguously:
+
+| stage | before | after |
+|---|---:|---:|
+| detect TOTAL | 0.452x | **0.919x** |
+| `>im2col` | 0.176x | 0.450x |
+| `>gemm` | 0.715x | **1.385x** |
+
+**The island is now at parity while still paying two handicaps a converted run
+does not pay**: `im2col_t` gathers from an NCHW input (inherently strided on the
+read side), and every conv output is transposed back.
+
+## There is NO per-shape dispatch: 0 of 21 shapes
+
+Per-shape, 3x3 convolutions, 4 ABBA reps, requiring all four to agree:
+
+**0 shapes always prefer NHWC. 14 always prefer NCHW. 7 sign-flip.**
+
+| | ms/img over these shapes |
+|---|---:|
+| all-NCHW (shipped) | 30.355 |
+| all-NHWC island | 57.370 (0.529x) |
+| **per-shape dispatch** | **30.355 (1.000x)** |
+
+The island's two handicaps exceed the GEMM win on **every** shape, so there is
+nothing to gate on. This is the same conclusion the layer-order DP reached -
+**global layout, not dispatch** - now confirmed with a working implementation
+and a correctness gate rather than a projection.
+
+## The projected prize for a converted run
+
+From in-context shares (detect 2.537 s, gemm 0.800 = 31.5 %, im2col 0.317 =
+12.5 %):
+
+| | |
+|---|---:|
+| gemm at the in-context 1.385x | +8.8 % |
+| im2col at 0.81x from an NHWC input | +2.4 % |
+| transpose - vanishes in a run | 0.0 % |
+| epilogue 1.37x and plumbing 1.98x slower | -1.5 % |
+| **NET** | **~9.6 % of detect** |
+
+Up from the earlier 5.2 %, and the reason is precisely that the GEMM ratio was
+measured isolated at 1.140x and in context at 1.385x.
+
+## What ships and what does not
+
+* **Ships now:** nothing. The island is at parity and its per-shape dispatch is
+  1.000x. `FFAI_DIANA_NHWC=1` stays OFF by default, gated, as the A/B arm and
+  the foundation for the conversion.
+* **The work that pays** is converting a RUN of consecutive convolutions so the
+  activation stays NHWC across them - which removes the transpose AND makes
+  `im2col_t` read contiguously. Both handicaps disappear together; that is why
+  the island cannot show the win and no per-layer gate can rescue it.
+* **The correctness gate already exists** and is byte-identical, so the
+  conversion has an oracle from the first line.
