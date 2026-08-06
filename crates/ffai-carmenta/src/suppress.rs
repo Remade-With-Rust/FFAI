@@ -88,6 +88,11 @@ struct Feat {
     /// This line carries the syntax of a reference-list entry: a parenthesised
     /// four-digit year, `(1999)` or `(2011a)`.
     year_paren: bool,
+    /// This line follows a "References" heading in READING ORDER (§8.130).
+    /// Style-independent by construction: it catches numbered and parenthesised
+    /// references identically, which is what §8.127 proved no syntax rule could
+    /// do — the three worst pages share no citation format at all.
+    after_refs: bool,
     /// How many lines on the PAGE carry it. Load-bearing, and the whole reason
     /// this branch is safe: a bibliography is a BLOCK, so the pages that own one
     /// show 8+ hits, while an in-text citation ("as shown by Smith (2019)")
@@ -146,7 +151,90 @@ fn is_non_body(f: &Feat) -> bool {
     // on a bounded-risk argument, not a validated one.
     let bibliography = f.year_paren && f.page_year_hits >= 4;
 
-    by_width || isolated_fragment || bibliography
+    // THE SECTION-SCOPE branch (§8.130). Everything after a references heading
+    // is outside the document body whatever citation style it uses. Found by
+    // RENDERING the failing pages rather than by searching features: on
+    // `omni-0039` the heading is annotated and all 76 lines after it are not.
+    //
+    // Measured incrementally on the corpus at precision 1.000 over 218 lines and
+    // six pages, +1.995 pp holdout macro, and — alone among every candidate this
+    // campaign tested — it improves the ordinary pages too (+0.436 pp body).
+    by_width || isolated_fragment || bibliography || f.after_refs
+}
+
+/// Column index per line, by GUTTER rather than by left edge (§8.130).
+///
+/// A left edge cannot tell an indent from a column. Clustering `x` split
+/// `omni-0055`'s indented numbered notes into a phantom column that sorted after
+/// the real one, which swept 40 annotated lines in with its references.
+///
+/// A column boundary is a vertical band of the page that no line crosses, so the
+/// occupancy is built from each line's FULL EXTENT and the empty bands are the
+/// gutters. Nearly-empty rather than exactly empty: a running header spans the
+/// middle of `omni-0055`, and one crossing line is enough to make a strict test
+/// report a single column.
+fn column_of(boxes: &[(f32, f32, f32, f32)], pw: f32) -> Vec<usize> {
+    const BINS: usize = 400;
+    const MIN_GUTTER: f32 = 0.015;
+    const SPAN_TOL: f32 = 0.03;
+    if boxes.is_empty() {
+        return Vec::new();
+    }
+    let mut occ = [0usize; BINS];
+    for &(x, _, w, _) in boxes {
+        let a = ((BINS as f32 * x / pw) as isize).clamp(0, BINS as isize - 1) as usize;
+        let b = ((BINS as f32 * (x + w) / pw) as isize).clamp(0, BINS as isize - 1) as usize;
+        for o in occ.iter_mut().take(b + 1).skip(a) {
+            *o += 1;
+        }
+    }
+    let lo = occ.iter().position(|&v| v > 0).unwrap_or(0);
+    let hi = occ.iter().rposition(|&v| v > 0).unwrap_or(BINS - 1);
+    let thresh = ((SPAN_TOL * boxes.len() as f32) as usize).max(1);
+
+    let mut gutters: Vec<f32> = Vec::new();
+    let mut i = lo;
+    while i <= hi {
+        if occ[i] <= thresh {
+            let mut j = i;
+            while j <= hi && occ[j] <= thresh {
+                j += 1;
+            }
+            if (j - i) as f32 / BINS as f32 >= MIN_GUTTER {
+                gutters.push((i + j) as f32 / 2.0 / BINS as f32);
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    boxes
+        .iter()
+        .map(|&(x, _, w, _)| {
+            let c = (x + w / 2.0) / pw;
+            gutters.iter().filter(|&&g| c > g).count()
+        })
+        .collect()
+}
+
+/// Is this line a heading that ends the document body?
+///
+/// Matched on the WHOLE line, trimmed of trailing punctuation — a paragraph
+/// mentioning "references" must not fire it.
+fn is_refs_heading(s: &str) -> bool {
+    let t: String = s
+        .trim()
+        .trim_end_matches([':', '.', ' '])
+        .to_ascii_lowercase();
+    matches!(
+        t.as_str(),
+        "references"
+            | "reference list"
+            | "bibliography"
+            | "works cited"
+            | "literature cited"
+            | "citations"
+    )
 }
 
 /// `(` `19|20` `dd` optional lowercase suffix `)` — citation-year syntax.
@@ -280,6 +368,33 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
     let years: Vec<bool> = lines.iter().map(|l| has_year_paren(&l.text)).collect();
     let page_year_hits = years.iter().filter(|&&y| y).count();
 
+    // Section scope: order the page by column then by `y`, find a references
+    // heading, and mark everything after it (§8.130).
+    let cols = column_of(&boxes, pw);
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by(|&a, &b| {
+        (cols[a], boxes[a].1)
+            .partial_cmp(&(cols[b], boxes[b].1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut after_refs = vec![false; lines.len()];
+    if let Some(pos) = order.iter().position(|&i| is_refs_heading(&lines[i].text)) {
+        let head = order[pos];
+        let n_cols = cols.iter().collect::<std::collections::HashSet<_>>().len();
+        // ABSTAIN when the layout contradicts the detection: a section heading
+        // in a genuinely single-column page starts at the left margin, so one
+        // sitting mid-page means there are columns we did not find and ordering
+        // by `y` would interleave them. `omni-0060` is exactly this — heading at
+        // x = 841 of 1653 with one column reported — and marking it cost 34
+        // annotated lines. Abstaining costs that page's references; guessing
+        // costs another page's body (§8.101).
+        if !(n_cols == 1 && boxes[head].0 > 0.25 * pw) {
+            for &i in &order[pos + 1..] {
+                after_refs[i] = true;
+            }
+        }
+    }
+
     let keep: Vec<bool> = (0..lines.len())
         .map(|i| {
             let (x, y, w, h) = boxes[i];
@@ -300,6 +415,7 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
                 nn_gap: if nn.is_finite() { nn / lh } else { 20.0 },
                 conf: lines[i].confidence.unwrap_or(1.0),
                 year_paren: years[i],
+                after_refs: after_refs[i],
                 page_year_hits,
             })
         })
@@ -315,19 +431,19 @@ mod tests {
     #[test]
     fn tree_branches() {
         // small block, narrow, isolated -> label or table cell
-        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, page_year_hits: 0 }));
+        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, after_refs: false, page_year_hits: 0 }));
         // small block, narrow, but tight against a neighbour -> body
-        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.005, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, page_year_hits: 0 }));
+        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.10, y_rel: 0.5, nn_gap: 0.005, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, after_refs: false, page_year_hits: 0 }));
         // small block, wide, top margin -> running header
-        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, page_year_hits: 0 }));
+        assert!(is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, after_refs: false, page_year_hits: 0 }));
         // small block, wide, mid-page, confident -> body
-        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, page_year_hits: 0 }));
+        assert!(!is_non_body(&Feat { run_chars: 20.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, after_refs: false, page_year_hits: 0 }));
         // large block, low confidence, mid-sized -> non-body
-        assert!(is_non_body(&Feat { run_chars: 100.0, w_p90: 0.05, y_rel: 0.5, nn_gap: 0.5, conf: 0.5, run_lines: 40, same_left: 50, year_paren: false, page_year_hits: 0 }));
+        assert!(is_non_body(&Feat { run_chars: 100.0, w_p90: 0.05, y_rel: 0.5, nn_gap: 0.5, conf: 0.5, run_lines: 40, same_left: 50, year_paren: false, after_refs: false, page_year_hits: 0 }));
         // genuinely long prose, even at low confidence -> body
-        assert!(!is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.5, run_lines: 40, same_left: 50, year_paren: false, page_year_hits: 0 }));
+        assert!(!is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.5, nn_gap: 0.5, conf: 0.5, run_lines: 40, same_left: 50, year_paren: false, after_refs: false, page_year_hits: 0 }));
         // large, confident, top margin -> running header
-        assert!(is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, page_year_hits: 0 }));
+        assert!(is_non_body(&Feat { run_chars: 900.0, w_p90: 0.9, y_rel: 0.02, nn_gap: 0.5, conf: 0.99, run_lines: 40, same_left: 50, year_paren: false, after_refs: false, page_year_hits: 0 }));
     }
 
     /// The isolated-fragment branch (§8.112): a mid-width line the width rules
@@ -344,6 +460,7 @@ mod tests {
             run_lines,
             same_left,
             year_paren: false,
+            after_refs: false,
             page_year_hits: 0,
         };
         // three-line block, mid width, almost nothing shares its left edge
@@ -401,6 +518,7 @@ mod tests {
             run_lines: 40,
             same_left: 34,
             year_paren,
+            after_refs: false,
             page_year_hits,
         };
         // A reference entry on a page dense with them.
@@ -413,6 +531,61 @@ mod tests {
         // Body text on a bibliography page is untouched — the line must carry
         // the syntax itself, the page count alone is never enough.
         assert!(!is_non_body(&bib(false, 40)));
+    }
+
+    /// Gutter columns (§8.130): a left EDGE cannot tell an indent from a column.
+    #[test]
+    fn columns_by_gutter() {
+        // Two columns of width 400 with a 200px gutter, on a 1000px page.
+        let mut b: Vec<(f32, f32, f32, f32)> = Vec::new();
+        for i in 0..10 {
+            b.push((50.0, i as f32 * 20.0, 350.0, 15.0));
+            b.push((600.0, i as f32 * 20.0, 350.0, 15.0));
+        }
+        let c = column_of(&b, 1000.0);
+        assert_eq!(c.iter().filter(|&&v| v == 0).count(), 10);
+        assert_eq!(c.iter().filter(|&&v| v == 1).count(), 10);
+
+        // An INDENT inside one column must not become a column. Same left block,
+        // every other line pushed right by 40px — no gutter is created.
+        let mut d: Vec<(f32, f32, f32, f32)> = Vec::new();
+        for i in 0..10 {
+            let x = if i % 2 == 0 { 50.0 } else { 90.0 };
+            d.push((x, i as f32 * 20.0, 350.0, 15.0));
+        }
+        assert_eq!(column_of(&d, 1000.0).iter().collect::<std::collections::HashSet<_>>().len(), 1);
+
+        // ONE spanning line (a running header) must not fill the gutter.
+        let mut e = b.clone();
+        e.push((50.0, -30.0, 900.0, 15.0));
+        let ce = column_of(&e, 1000.0);
+        assert_eq!(ce.iter().collect::<std::collections::HashSet<_>>().len(), 2);
+    }
+
+    /// The heading matcher fires on a heading and not on prose mentioning one.
+    #[test]
+    fn refs_heading_syntax() {
+        for s in ["References", "REFERENCES", "  references  ", "Bibliography",
+                  "Works Cited", "References:", "Reference List", "Literature Cited"] {
+            assert!(is_refs_heading(s), "should match: {s}");
+        }
+        for s in ["See the references at the end", "References to prior work are",
+                  "Reference", "", "1. References and notes on the method"] {
+            assert!(!is_refs_heading(s), "should NOT match: {s}");
+        }
+    }
+
+    /// The section-scope branch, and the ABSTENTION that makes it safe.
+    #[test]
+    fn after_refs_branch() {
+        let f = |after_refs| Feat {
+            run_chars: 1600.0, w_p90: 0.98, y_rel: 0.5, nn_gap: 0.9, conf: 0.99,
+            run_lines: 40, same_left: 34, year_paren: false, after_refs,
+            page_year_hits: 0,
+        };
+        // Body-shaped in every geometric respect — the point of the branch.
+        assert!(is_non_body(&f(true)));
+        assert!(!is_non_body(&f(false)));
     }
 
     /// Off by default: a filter that silently deletes output must be asked for.
