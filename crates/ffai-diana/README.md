@@ -81,6 +81,88 @@ only this correctness one, which is the stronger statement anyway: a
 ground-truth metric would grade Ultralytics' weights, while this grades the
 port.
 
+## Faster than Ultralytics, measured the hard way
+
+**1.069x on 1080p frames — Diana faster in 25 of 32 paired runs, z = +3.18.**
+Solo passes, ABBA-alternated at the pass level, both engines decoding their own
+JPEGs, median of 60 frames per pass. The ratio was watched as N grew, because a
+cross-implementation number that is still moving has not been measured yet:
+
+| N | median | paired |
+|---:|---:|---|
+| 8 | 1.035x | 5/8, z = +0.71 |
+| 16 | 1.045x | 11/16, z = +1.50 |
+| 24 | 1.070x | 18/24, z = +2.45 |
+| **32** | **1.069x** | **25/32, z = +3.18** |
+
+Stable from N=24. At 640 on the COCO holdout the same comparison reads
+**0.70x and 0.58x** across two paired runs — ahead by more, on smaller frames.
+
+### The harness shape is a bigger variable than the engines
+
+Five arrangements, **identical work**, only the order and co-residency changed:
+
+| arrangement | ratio | vs solo |
+|---|---:|---:|
+| **solo, ABBA** | **1.077x** | 1.00x |
+| alternating per frame | 1.031x | 0.96x |
+| block-wise (all A then all B) | 1.417x | **1.31x** |
+| other engine resident but idle | 1.284x | 1.19x |
+| frames shuffled | 1.405x | **1.30x** |
+
+**A 31 % swing from arrangement alone**, against a ~7 % effect. Two of those
+arrangements flatter Diana badly — block-wise most of all, which is exactly the
+shape `codec-measurement` §3 forbids. Only **solo** reproduces across runs
+(1.069x at N=32, 1.077x at N=5), so that is the only one quoted here.
+
+**Memory stays the unambiguous win: 0.4x Ultralytics, 0.75x ONNX Runtime.** And
+on CPU-seconds rather than wall, Diana does the same work for roughly **a third
+of the machine** — the figure that matters on a host packing many streams.
+
+## The codec stack is ours, and it is not a toy
+
+Diana's pipeline decodes with Remade-With-Rust codecs end to end — no libjpeg,
+no libpng, no libavcodec, no OpenCV:
+
+| format | crate | measured |
+|---|---|---|
+| JPEG | `rusty_jpeg` 0.3.2 | **7.05 ms** at 1080p — **1.14x** libjpeg-turbo's 6.18 |
+| PNG | `rusty_png` 0.3.2 | gated against upstream `png`, byte-identical |
+| H.264 | `rusty_h264` 0.8.0 | **22.72 ms/frame** at 1080p, full-file decode |
+
+A pure-Rust JPEG decoder within 14 % of libjpeg-turbo is the number worth
+pausing on — that is a C library with two decades of hand-written SIMD in it.
+
+**H.264 went from unusable to working in one version bump.** The 0.2.1 the
+dependency graph was pinned to could not decode x264's DEFAULT profile at all —
+0 of 164 frames, silently, because CABAC entropy decoding was broken:
+
+| | rusty_h264 0.2.1 | **0.8.0** |
+|---|---:|---:|
+| CAVLC | 164/164 | 164/164 |
+| CABAC | 49/164 | **164/164** |
+| x264 default (High) | **0/164** | **164/164** |
+| 1080p decode | 47.50 ms | **22.72 ms** |
+
+## Video ingest: the decoder is ready, the API is not
+
+Stated plainly because it is the difference between a demo and a deployment.
+
+**What works:** `ffai_media::sample_frames` demuxes MP4 with `rff-format-mp4`
+and decodes with `rusty_h264` 0.8, handling everything x264 emits by default.
+Decode errors propagate with the packet index and the decoder's own message —
+they used to be discarded, which turned a normal file into zero frames and no
+diagnostic.
+
+**What does not:** it returns `Vec<VideoFrame>` — **every frame in memory at
+once**. One minute of 1080p is 10.4 GiB; ten minutes is 104 GiB. There is also
+no CLI path (`ffai detect` takes an image or a directory of frames), and it has
+only been exercised against MP4/H.264 from x264.
+
+**So: not deployable for streaming video yet.** It needs an iterator API that
+yields frames as it decodes, and a CLI verb to drive it. The decoding half of
+that work is done and measured; the plumbing half is not.
+
 ## Video in, not just stills
 
 `ffai_media::sample_frames` decodes H.264/MP4 through the pure-Rust `rff`

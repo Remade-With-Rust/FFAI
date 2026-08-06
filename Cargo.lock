@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "candle-core",
  "candle-nn",

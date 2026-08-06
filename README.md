@@ -42,7 +42,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Ahead of Ultralytics per image at identical mAP — 0.70x and 0.58x across two paired runs after a harness bug that cost us ~14 % was fixed — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). **Accuracy holds on MOT17: 0.029 pp mean gap over 5,316 frames of a public benchmark.** Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865). Video in through the pure-Rust `rff` stack; a LIVE change gate that fires on 0.8 % of real surveillance frames ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Ahead of Ultralytics per image at identical mAP — 1.069x on 1080p (25/32 paired runs, z = +3.18), and 0.70x/0.58x at 640 — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). **Accuracy holds on MOT17: 0.029 pp mean gap over 5,316 frames of a public benchmark.** Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865). Video in through the pure-Rust `rff` stack; a LIVE change gate that fires on 0.8 % of real surveillance frames ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -564,6 +564,51 @@ mAP is identical to PyTorch to four decimals in both geometries, and memory is
 the unambiguous win at 0.4x Ultralytics and 0.75x ORT. The repo's rule is
 that `verdict: claimable` needs all four gates; Diana does not get it. The
 losing row goes in the table.
+
+### Faster than Ultralytics, and the harness mattered more than the engines
+
+**1.069x on 1080p frames — Diana faster in 25 of 32 paired runs, z = +3.18.**
+Solo passes, ABBA-alternated, both engines decoding their own JPEGs. The ratio
+was tracked as N grew, because a cross-implementation number still moving has
+not been measured yet: 1.035x at N=8, 1.045x at 16, 1.070x at 24, 1.069x at 32 —
+stable from 24. At 640 on the COCO holdout the same comparison reads 0.70x and
+0.58x.
+
+Then five harness arrangements were run on **identical work**, changing only the
+order and co-residency:
+
+| arrangement | ratio | vs solo |
+|---|---:|---:|
+| **solo, ABBA** | **1.077x** | 1.00x |
+| alternating per frame | 1.031x | 0.96x |
+| block-wise (all A then all B) | 1.417x | **1.31x** |
+| other engine resident but idle | 1.284x | 1.19x |
+| frames shuffled | 1.405x | **1.30x** |
+
+**A 31 % swing from arrangement alone, against a ~7 % effect.** Two arrangements
+flatter Diana badly, block-wise most of all — the shape `codec-measurement` §3
+forbids. Only solo reproduces across runs, so it is the only one quoted.
+
+### The whole decode path is ours now
+
+| format | crate | measured at 1080p |
+|---|---|---|
+| JPEG | `rusty_jpeg` 0.3.2 | **7.05 ms — 1.14x libjpeg-turbo's 6.18** |
+| PNG | `rusty_png` 0.3.2 | gated byte-identical against upstream `png` |
+| H.264 | `rusty_h264` 0.8.0 | **22.72 ms/frame** |
+
+No libjpeg, no libpng, no libavcodec, no OpenCV. A pure-Rust JPEG decoder within
+14 % of a C library with two decades of hand-written SIMD is the number worth
+pausing on.
+
+**H.264 went from unusable to working in one version bump.** The pinned 0.2.1
+could not decode x264's DEFAULT profile at all — 0 of 164 frames, silently,
+because CABAC was broken. On 0.8.0 it is 164/164 and 2.09x faster.
+
+**Video ingest is not deployable yet, and that is worth stating plainly.**
+`sample_frames` returns every frame in memory at once — one minute of 1080p is
+10.4 GiB — and no CLI verb drives it. The decoding half is done and measured;
+the streaming API and the plumbing are not.
 
 ### Accuracy holds on a public benchmark, not just our corpus
 
