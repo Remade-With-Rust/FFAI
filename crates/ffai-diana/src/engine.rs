@@ -326,11 +326,20 @@ impl Yolo26 {
         detections.truncate(opts.max_detections);
 
             let mut output = DetectOutput { detections, letterbox: Some(lb) };
-            // The one2one head is NMS-free by construction, so suppression is
-            // opt-in and off by default — running it anyway would silently
-            // drop legitimately overlapping objects.
+            // The one2one head is NMS-free by construction, so PLAIN
+            // suppression stays opt-in — running it costs IDF1, because it
+            // drops legitimately overlapping objects along with the duplicates.
             if let Some(iou) = opts.iou {
                 output.suppress_overlaps(iou);
+            } else {
+                // But the construction does not hold in practice: measured
+                // against the reference on identical MOT17 frames we emit 1285
+                // intra-frame pairs above IoU 0.7 to their 855. The three-way
+                // gate drops the duplicates while sparing genuine overlap —
+                // IDF1 32.82 -> 33.28, MOTA 18.92 -> 19.24, ID switches
+                // 375 -> 239. Thresholds and the one sequence that pays for it
+                // are documented on `suppress_duplicates`.
+                output.suppress_duplicates(0.80, 0.88, 0.95);
             }
             Ok(output)
         })
