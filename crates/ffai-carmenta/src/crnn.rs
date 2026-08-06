@@ -223,7 +223,15 @@ pub fn ctc_greedy_with(logits: &Tensor, charset: &[char]) -> Result<(String, Opt
     let probs = candle_nn::ops::softmax(logits, 1)?;
     let (t, _) = logits.dims2()?;
     let ids = probs.argmax(1)?.to_vec1::<u32>()?;
-    let pv = probs.to_vec2::<f32>()?;
+    // The kept confidence is the probability OF THE ARGMAX, which is the row
+    // maximum — so take `max(1)`, a T-vector, instead of materialising the whole
+    // (T, n_class) matrix as a `Vec<Vec<f32>>` to read one number per row.
+    //
+    // With English's 97 classes that was merely wasteful. With `zh_sim_g2`'s
+    // 6 719 it is 69x worse and it showed: peak working set went 2 119 -> 2 854
+    // MB (+35 %) and two pages of a 236-page run died with an access violation
+    // and a stack-buffer overrun. Fixing it here helps BOTH models (§8.144).
+    let maxp = probs.max(1)?.to_vec1::<f32>()?;
 
     let mut out = String::new();
     let mut confs = Vec::new();
@@ -232,7 +240,7 @@ pub fn ctc_greedy_with(logits: &Tensor, charset: &[char]) -> Result<(String, Opt
         let id = ids[step];
         if id != 0 && id != prev {
             out.push(charset[id as usize - 1]);
-            confs.push(pv[step][id as usize]);
+            confs.push(maxp[step]);
         }
         prev = id;
     }
