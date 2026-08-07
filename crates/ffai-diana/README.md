@@ -6,7 +6,7 @@ Diana is [FFai](https://github.com/Remade-With-Rust/FFAI)'s detection component.
 
 ```toml
 [dependencies]
-ffai-diana = "0.6"
+ffai-diana = "0.7"
 ffai-core = "0.6"
 ffai-media = "0.6"
 ```
@@ -81,12 +81,17 @@ only this correctness one, which is the stronger statement anyway: a
 ground-truth metric would grade Ultralytics' weights, while this grades the
 port.
 
-## Faster than Ultralytics, measured the hard way
+## The harness moves the answer more than the engines do
 
-**1.069x on 1080p frames — Diana faster in 25 of 32 paired runs, z = +3.18.**
-Solo passes, ABBA-alternated at the pass level, both engines decoding their own
-JPEGs, median of 60 frames per pass. The ratio was watched as N grew, because a
-cross-implementation number that is still moving has not been measured yet:
+**Read "Speed depends on whether you own the machine" below for the headline.**
+This section is the evidence for why that headline is a CPU ratio and a pinned
+wall ratio rather than a bare one.
+
+The solo ABBA wall reading was **1.069x on 1080p, Diana ahead in 25 of 32
+paired runs at z = +3.18** — solo passes, ABBA-alternated at the pass level,
+both engines decoding their own JPEGs, median of 60 frames per pass. It was
+watched as N grew, because a cross-implementation number still moving has not
+been measured yet:
 
 | N | median | paired |
 |---:|---:|---|
@@ -115,9 +120,13 @@ arrangements flatter Diana badly — block-wise most of all, which is exactly th
 shape `codec-measurement` §3 forbids. Only **solo** reproduces across runs
 (1.069x at N=32, 1.077x at N=5), so that is the only one quoted here.
 
-**Memory stays the unambiguous win: 0.4x Ultralytics, 0.75x ONNX Runtime.** And
-on CPU-seconds rather than wall, Diana does the same work for roughly **a third
-of the machine** — the figure that matters on a host packing many streams.
+**Memory stays the unambiguous win: 0.4x Ultralytics, 0.75x ONNX Runtime.**
+
+The same lesson arrived again later from the other direction: alternating with
+Ultralytics costs Diana **+54 % on the median**, because it burns 314 ms of CPU
+per frame across every core while Diana uses ~2.4. Two independent arrivals at
+one conclusion — a wall ratio measured on a shared machine is a measurement of
+the machine.
 
 ## The codec stack is ours, and it is not a toy
 
@@ -144,24 +153,29 @@ dependency graph was pinned to could not decode x264's DEFAULT profile at all �
 | x264 default (High) | **0/164** | **164/164** |
 | 1080p decode | 47.50 ms | **22.72 ms** |
 
-## Video ingest: the decoder is ready, the API is not
+## Video ingest streams now
 
-Stated plainly because it is the difference between a demo and a deployment.
+Earlier versions of this page said the decoder was ready but the API was not,
+and named two blockers: `sample_frames` returned `Vec<VideoFrame>` — every
+frame in memory at once, 10.4 GiB for a minute of 1080p — and no CLI verb drove
+it. **Both are done.**
 
-**What works:** `ffai_media::sample_frames` demuxes MP4 with `rff-format-mp4`
-and decodes with `rusty_h264` 0.8, handling everything x264 emits by default.
-Decode errors propagate with the packet index and the decoder's own message —
-they used to be discarded, which turned a normal file into zero frames and no
-diagnostic.
+`ffai_media::stream_frames` returns a lazy `VideoStream` that yields frames as
+it decodes; `sample_frames` is now a `collect()` over it, so the convenient API
+and the deployable one share a decoder. A full 1080p clip through
+`ffai detect --track` peaks at **161 MiB** rather than growing without bound.
+The CLI takes a video directly, across ten containers — mp4, mov, m4v, mkv,
+webm, mka, avi, ts, m2ts, mts.
 
-**What does not:** it returns `Vec<VideoFrame>` — **every frame in memory at
-once**. One minute of 1080p is 10.4 GiB; ten minutes is 104 GiB. There is also
-no CLI path (`ffai detect` takes an image or a directory of frames), and it has
-only been exercised against MP4/H.264 from x264.
+```
+ffai detect --track --classes 0 -i clip.mp4 -o tracks.txt
+```
 
-**So: not deployable for streaming video yet.** It needs an iterator API that
-yields frames as it decodes, and a CLI verb to drive it. The decoding half of
-that work is done and measured; the plumbing half is not.
+Decode errors propagate with the packet index and the decoder's own message.
+They used to be discarded, which turned a normal file into zero frames and no
+diagnostic — and hid a real defect: `rusty_h264` 0.2.1 could not decode x264's
+DEFAULT profile at all, 0 of 164 frames, because CABAC was broken. On 0.8 it is
+164/164.
 
 ## Video in, not just stills
 
@@ -284,6 +298,30 @@ mimalloc itself, and mimalloc is no longer in the binary. Its replacement,
 keeping: page-trimming helps least when the machine is idle and safe, and most
 when it is already short of memory and retaining tens of MiB is the worst
 available response.
+
+## It runs in a browser
+
+```
+cargo build --release --target wasm32-unknown-unknown -p ffai-wasm
+```
+
+[`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles this crate's whole
+graph to WebAssembly — backbone, neck, the NMS-free head, letterbox and decode.
+**No ONNX Runtime Web, no TensorFlow.js, no JavaScript inference engine.**
+
+Verified against native on the same image, yolo26n, rect, conf 0.25: **13
+detections against 13, zero class mismatches, largest box difference
+0.000000.** The checksums differ in the ninth significant figure because native
+has AVX2 and wasm has no SIMD.
+
+**1.82 MB module, 18 ms model load, 257 ms detect** single-threaded, against
+~34 ms native with a thread pool. `rayon` is not a dependency of the wasm build
+at all — `crate::par` supplies the identical serial iterators, and dropping
+rayon entirely is what proves the shim complete, since a missed call site then
+fails to compile rather than panicking in a browser.
+
+Serial is also the arm that was already winning on CPU: the intra-image fan-out
+measures **363 ms/image at one thread against 844 at twenty-four**.
 
 ## Tracking: identity, not just boxes
 
