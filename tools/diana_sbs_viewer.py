@@ -200,11 +200,34 @@ def main():
     ap.add_argument("--engine", default="yolo26n", help="Diana engine name")
     ap.add_argument("--weights", default="yolo26n.pt", help="Ultralytics checkpoint (AGPL, yours)")
     ap.add_argument("--conf", type=float, default=0.25)
+    # Applied to BOTH engines or neither. Diana is an 80-class COCO detector and
+    # so is the reference, but this campaign's MOT17 numbers were scored against
+    # pedestrian-only ground truth while Diana was still emitting cars, buses
+    # and traffic lights — 13.8-47.3 % of detections depending on the sequence.
+    # Watching that side by side is the whole point of a viewer, so it is a flag
+    # rather than a default, and it goes to both sides at once.
+    ap.add_argument("--classes", type=int, nargs="*", default=None,
+                    help="restrict BOTH engines to these class ids, e.g. --classes 0 for people")
     ap.add_argument("--limit", type=int, default=0, help="stop after N frames")
     ap.add_argument("--height", type=int, default=520, help="pane height in pixels")
     ap.add_argument("--live", action="store_true", help="put Diana's change gate in the loop")
     ap.add_argument("--fps", type=float, default=0.0, help="cap playback to this rate")
     ap.add_argument("--record", type=Path, help="also write the composed view to this .mp4")
+    # Raised by DEFAULT. The spikes this viewer used to show were the SCHEDULER,
+    # not either engine. Measured over 200 frames, identical work, identical CPU
+    # time, only the priority class changed:
+    #
+    #   priority   p50     p99     max    cpu_s
+    #   Normal    64.0   384.2   408.1     29.5
+    #   High      64.7   100.5   113.4     30.0
+    #
+    # Same median, same CPU, a 3.8x better tail. On a box 56 % busy with
+    # editors, browsers and neighbouring cargo builds, a 64 ms frame loses its
+    # timeslice and lands at 400 ms — and a viewer that shows that is reporting
+    # the desktop, not the engine. Raised on BOTH sides or it is a thumb on the
+    # scale.
+    ap.add_argument("--no-priority", action="store_true",
+                    help="do NOT raise both engines to High (shows raw scheduler noise)")
     args = ap.parse_args()
 
     if not FFAI.exists():
@@ -223,9 +246,14 @@ def main():
 
     print(f"loading ultralytics {args.weights} ...")
     model = YOLO(args.weights)
-    model.predict(str(paths[0]), verbose=False, conf=args.conf)  # warm up outside the loop
+    ucls = args.classes if args.classes else None
+    model.predict(str(paths[0]), verbose=False, conf=args.conf, classes=ucls)  # warm up outside the loop
 
     cmd = [str(FFAI), "detect", "--serve", "--engine", args.engine, "--conf", str(args.conf)]
+    if args.classes:
+        # repeatable flag, not a space-separated list
+        for c in args.classes:
+            cmd += ["--classes", str(c)]
     if args.live:
         cmd.append("--live")
     print(f"starting diana: {' '.join(cmd)}")
@@ -234,6 +262,17 @@ def main():
     hello = json.loads(proc.stdout.readline())
     assert hello.get("ready"), hello
     print("diana ready (model load is outside every timed region)")
+
+    if not args.no_priority:
+        # BOTH sides, or the raise is a thumb on the scale. Ultralytics runs
+        # inside THIS process, so this process is the other arm.
+        try:
+            import psutil
+            psutil.Process().nice(psutil.HIGH_PRIORITY_CLASS)
+            psutil.Process(proc.pid).nice(psutil.HIGH_PRIORITY_CLASS)
+            print("both engines raised to High priority (--no-priority to disable)")
+        except Exception as e:
+            print(f"could not raise priority ({e}); tail will show scheduler noise")
 
     dh, uh = deque(maxlen=300), deque(maxlen=300)
     writer = None
@@ -265,7 +304,7 @@ def main():
 
         # --- Ultralytics, now that Diana is idle.
         t = time.perf_counter()
-        res = model.predict(str(p), verbose=False, conf=args.conf)[0]
+        res = model.predict(str(p), verbose=False, conf=args.conf, classes=ucls)[0]
         u_ms = (time.perf_counter() - t) * 1000.0
         names = res.names
         u_dets = []

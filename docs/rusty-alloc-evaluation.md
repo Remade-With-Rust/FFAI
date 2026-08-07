@@ -1,10 +1,21 @@
-# rusty_alloc in FFai — evaluation report (0.1.0-alpha.1 and 0.3.0)
+# rusty_alloc in FFai — evaluation report (0.1.0-alpha.1 through 0.3.2)
 
 **For the rusty_alloc team.** Written 2026-08-06 against `rusty_alloc` and
 `rusty_alloc-api` **0.3.0**, on Windows 11 / x86_64-pc-windows-msvc, 16 logical
 cores. First measured against 0.1.0-alpha.1; **0.3.0 landed mid-evaluation and
 roughly halved both the median and the maximum peak RSS** — that comparison is
 §3 and is the most useful thing in this document.
+
+**UPDATE 0.3.2 — the 0.3.1 segfault is FIXED.** The repro that killed 0.3.1
+6-of-6 (decoding five 1920x1080 JPEGs) now passes **0/8**, and the CLI over 50
+frames passes **0/8** where 0.3.1 failed 6/8. Detection output is bit-identical
+to the mimalloc build. We are pinned `=0.3.2`.
+
+Also measured on 0.3.2, and worth stating because we nearly reported the
+opposite: rusty_alloc does NOT have a worse latency tail than mimalloc. A
+sequential run said it did (p99 618 vs 204 ms); ABBA-interleaved over 4 rounds
+it reads p99 **409 vs 480 in rusty_alloc's favour**, and the difference was
+entirely which arm happened to run while a neighbouring build was hot.
 
 **Headline: it works, it is fast enough to ship, and we have shipped it.** The
 `ffai` binary now sets `rusty_alloc_api::RustyAlloc` as its global allocator by

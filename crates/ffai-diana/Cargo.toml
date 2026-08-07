@@ -57,10 +57,10 @@ libmimalloc-sys = { version = "0.1", default-features = false }
 # margin the largest single effect in the Diana latency campaign (1.64x), so
 # it is simultaneously the dependency we most want to drop and the one that
 # costs the most to drop wrongly.
-rusty_alloc-api = "=0.3.0"
+rusty_alloc-api = "=0.3.2"
 # The core, for `alloc::collect` — the reclaim `examples/scaling.rs` drives.
 # `rusty_alloc-api` deliberately exposes collect only per-`Heap`.
-rusty_alloc = "=0.3.0"
+rusty_alloc = "=0.3.2"
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 
