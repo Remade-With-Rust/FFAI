@@ -16,6 +16,18 @@ alternative, so removing it is one feature line upstream in candle rather
 than a redesign here. Stated at the top because a supply-chain claim that is
 wrong is worse than one that is qualified.
 
+**And one that went the other way.** The `ffai` binary's global allocator was
+`mimalloc` — a C library, and not an incidental one: it is the **largest single
+effect ever measured in this project**, 1.64x over the system allocator,
+because the system allocator re-faults nearly every byte it returns (58,634
+page faults per image). It was the C dependency we most wanted to drop and the
+one that cost the most to drop wrongly. It is now
+[`rusty_alloc`](https://crates.io/crates/rusty_alloc), the pure-Rust remake of
+the same design, measured before switching: **byte-identical detections on
+every workload, parity on speed** (49 paired rounds, z = +2.43, against a null
+arm at z = -0.71), and a peak-RSS median *below* mimalloc's. The C allocator is
+out of the hot path and the 1.64x stayed.
+
 Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 
 ```text
@@ -42,7 +54,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Ahead of Ultralytics per image at identical mAP — 1.069x on 1080p (25/32 paired runs, z = +3.18), and 0.70x/0.58x at 640 — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). **Accuracy holds on MOT17: 0.029 pp mean gap over 5,316 frames of a public benchmark.** Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865). Video in through the pure-Rust `rff` stack; a LIVE change gate that fires on 0.8 % of real surveillance frames ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Ahead of Ultralytics per image at identical mAP — 1.069x on 1080p (25/32 paired runs, z = +3.18), and 0.70x/0.58x at 640 — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). **Accuracy holds on MOT17: 0.029 pp mean gap over 5,316 frames of a public benchmark.** **Multi-object tracking live** — ByteTrack with no appearance model: **IDF1 35.93 % / MOTA 24.91 % against Ultralytics' 36.92 / 27.38 on the same weights and frames, with 218 ID switches to their 800**, ahead on three of seven sequences. Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865). Video in through the pure-Rust `rff` stack; a LIVE change gate that fires on 0.8 % of real surveillance frames ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -646,6 +658,43 @@ tuning knob.
 | l | 1.65× | 1.70× | 1.83× |
 | x | 1.57× | 1.62× | 1.54× |
 
+### Multi-object tracking, on the same benchmark
+
+Detection scores boxes. A tracker's job is the **identity** attached to them —
+swap every id in a sequence and AP50 does not move a point. So it is scored on
+the metrics that can see it, against Ultralytics' own ByteTrack, same weights,
+same frames, same confidence, same class filter, one scorer:
+
+| | IDF1 | MOTA | ID switches |
+|---|---:|---:|---:|
+| **Diana** (ByteTrack, pure Rust) | **35.93 %** | **24.91 %** | **218** |
+| Ultralytics ByteTrack | 36.92 % | 27.38 % | 800 |
+
+Behind by **0.98 pp of IDF1** overall, and ahead on three of seven sequences
+(09, 10, 11) plus four of seven on MOTA. **ID switches are 218 against 800** —
+a quarter of the reference's, which is the number a deployment feels, because
+every switch is an identity handed to the wrong object downstream.
+
+No appearance model, no ReID network, no second weight file: IoU, a Kalman
+filter and a rectangular Hungarian solve, so tracking adds no download and no
+licence.
+
+**Two corrections came out of measuring this, and both were ours.** The
+reference figure this page could have quoted (IDF1 34.88) came from an
+unverified earlier run that **understated Ultralytics**; it is regenerated and
+superseded. And Diana is an 80-class COCO detector while MOT17 ground truth is
+pedestrians only — every run before 2026-08-06 omitted `--classes 0`, so cars,
+buses and traffic lights were scored as predicted pedestrians. That was
+**13.8-47.3 % of detections** depending on the sequence, worth **1.54 pp IDF1
+and 5.38 pp MOTA**, and it had MOT17-13 reading a NEGATIVE MOTA for weeks — more
+errors than there are ground-truth boxes, which is not a hard sequence but a
+broken comparison. Pass `--classes 0`:
+
+```
+ffai detect --track --classes 0 -i corpora/clips/mot17-09/img1 -o out.txt --conf 0.1
+python tools/diana_mot_track_bench.py --seq mot17-09 --pred out.txt
+```
+
 ### Watch it run against Ultralytics
 
 ```
@@ -657,6 +706,14 @@ per-frame latency, rolling frame rate, running medians, object counts and box
 agreement. `--live` puts the change gate in the loop and badges the frames it
 skips; `--video clip.mp4` extracts frames first; `--record out.mp4` saves the
 composed view.
+
+**Each engine gets its own half of the cores, and both run at High priority.**
+Without that the viewer measures the scheduler: Ultralytics burns **314 ms of
+CPU per frame against Diana's 84.6**, so alternating with it costs Diana
+**+54 % on the median** and the same clip reads 0.79x instead of 1.43x. Priority
+alone moves p99 from 384 ms to 100 ms with the median and the CPU time
+unchanged. `--no-pin` and `--no-priority` show what contention does to a
+benchmark, which is worth seeing once.
 
 **The engines alternate and never run concurrently** — Diana's reply is read
 to completion before Ultralytics is called, so each has the whole machine
@@ -687,6 +744,25 @@ same wall clock.** The claim is "Diana does the work for a third of the CPU",
 not "Diana is 3.25x faster" — different products, one for a shared server and
 one for an idle laptop.
 
+**Which is exactly why the machine decides the headline.** Re-measured
+2026-08-06 with work parity checked (518 detections against 522), Diana is a
+**~2.4-core** workload against Ultralytics' **~7.9**: 84.6 ms of CPU per frame
+against 314.2, a **3.71x** ratio. On a dedicated box that mostly cancels and we
+are modestly ahead; on anything shared it does not:
+
+| conditions | Diana vs Ultralytics |
+|---|---|
+| separate processes, ABBA, CPU-timed | **1.147x** wall, **3.71x** less CPU |
+| each engine pinned to its own 12 cores | **1.30x** |
+| the headful viewer, same pinning | **1.43x** |
+| 16 competing CPU threads | **1.92x** |
+| **unpinned, sharing a machine** | **0.79x** — the one that misleads |
+
+Quiet-to-loaded degradation is **2.0x for Diana against 4.5x** for the
+reference, and the tail ratio under load is **1.89 against 5.45**. A laptop, an
+edge box or a server already running something is where the pure-Rust
+arithmetic shows up.
+
 **And the tail is ours only in the good direction.** The original figures came
 from running all of Diana and then all of Ultralytics, which puts machine drift
 between the blocks. Interleaved per frame, so both see the same machine within
@@ -695,7 +771,8 @@ Ultralytics' **1.79 and 3.33**, with 5-7 outliers to their 16. Diana has the
 lighter tail.
 
 Underneath it sat one real mechanism: Diana's slow frames carry **4,200 page
-faults against a normal 31**. `MIMALLOC_PURGE_DELAY=-1` removes them completely
+faults against a normal 31**. `MIMALLOC_PURGE_DELAY=-1` removed them completely
+(on the mimalloc build this predates; the allocator is now `rusty_alloc`)
 — faults go flat at 15 and halve overall — and it is **not shipped**, because
 it buys 0.3 % of latency for +9.6 MiB peak RSS against a footprint gate with
 1 MiB of headroom. Real mechanism, refuted lever, and the two are recorded

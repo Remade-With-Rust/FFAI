@@ -254,46 +254,83 @@ expects is an error, never a silent partial load. That rule caught a real
 bug — `model.6.m.0.m.0.cv1` built as 32→16 where the checkpoint has 32→32 —
 on its first run.
 
-## The allocator knob, measured — and why it is not the default
+## The allocator is pure Rust now, and that was the expensive one
 
-Diana's slow frames carry a page-fault spike: **~31 faults on a normal frame,
-4,200 on a slow one.** `MIMALLOC_PURGE_DELAY=-1` removes it completely — faults
-go flat and halve overall. mimalloc reads that variable itself, so it needs no
-code from us and no rebuild.
+The `ffai` binary's global allocator was **mimalloc** — a C library, and the
+single largest effect ever measured in this project: **1.64x** over the system
+allocator, because the system allocator re-faults nearly every byte it returns
+(**58,634 page faults per image**). It was simultaneously the C dependency we
+most wanted to remove and the one that cost the most to remove wrongly.
 
-It is **not the default**, and the reason is that the fault count does not
-convert into time:
+It is now [`rusty_alloc`](https://crates.io/crates/rusty_alloc), the pure-Rust
+remake of the same design. Measured before switching — not after:
 
-| | CPU ms/frame | wall ms/frame | steady RSS |
+* **Byte-identical detections on every workload**, verified by SHA-256 across
+  525- and 2100-frame runs, an H.264 video end to end, and 1,575 JPEG decodes.
+* **Parity on speed.** Pooling 49 paired ABBA rounds it wins 33 at **z = +2.43**
+  against a null arm winning 22 at z = -0.71 — a real but small ~1.5 %.
+* **Peak-RSS median below mimalloc's** (91.4 MB against 97.1).
+
+Pinned with `=`, deliberately: a caret requirement silently resolved to a
+version that shipped a probabilistic segfault, and an exact pin is what stops
+that reaching a release. The evaluation, including five findings that did not
+reproduce and were retracted, is
+[docs/rusty-alloc-evaluation.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/rusty-alloc-evaluation.md).
+
+**The old `MIMALLOC_PURGE_DELAY=-1` knob no longer applies** — it was read by
+mimalloc itself, and mimalloc is no longer in the binary. Its replacement,
+`FFAI_TRIM_MS`, exists and is **off**, because on clean measurement it reclaimed
+0.1 MB (0 %). The reasoning that kept the old knob off still holds and is worth
+keeping: page-trimming helps least when the machine is idle and safe, and most
+when it is already short of memory and retaining tens of MiB is the worst
+available response.
+
+## Tracking: identity, not just boxes
+
+AP50 cannot see a tracker — swap every id in a sequence and it does not move a
+point. Scored on the metrics that can, against Ultralytics' own ByteTrack with
+the same weights, frames, confidence and class filter, and one scorer:
+
+| | IDF1 | MOTA | ID switches |
 |---|---:|---:|---:|
-| default | 130.2 | 66.7 | **182 MiB** |
-| `MIMALLOC_PURGE_DELAY=-1` | 125.9 | 68.9 | **239 MiB** |
+| **Diana** | **35.93 %** | **24.91 %** | **218** |
+| Ultralytics ByteTrack | 36.92 % | 27.38 % | 800 |
 
-Same binary, ABBA-interleaved, 8 reps, work parity constant at 401 detections.
-**CPU 0.968x, wall 1.033x** — both inside this box's 10.4 % null-arm floor, and
-wall is marginally *worse*. The footprint number is not inside anything:
-**+57 MiB, +31 %**, measured by `ffai bench detect` — the same instrument the
-footprint gate scores, against ONNX Runtime's 161 MiB.
+Behind by 0.98 pp of IDF1, ahead on three of seven sequences and on four of
+seven for MOTA, with **a quarter of the ID switches**. No appearance model, no
+ReID network, no second weight file — IoU, a Kalman filter and a rectangular
+Hungarian solve, so tracking adds no download and no licence.
 
-So the trade is 57 MiB for nothing the clock can see. The faults are real work
-removed; they are **soft** faults against pages still resident in RAM, which is
-why removing thousands of them per frame is worth ~0.2 ms of a 60 ms frame.
-
-There is a sharper reason to leave it off. Those faults come from the OS
-trimming our working set, which happens **under system memory pressure** — so
-the setting does least when the machine is idle and safe, and most when the
-machine is already short of memory and retaining 57 MiB is the worst available
-response. It helps least where it is safe and most where it is dangerous.
-
-Turn it on if you have measured your own workload and want flat page behaviour:
-
-```
-MIMALLOC_PURGE_DELAY=-1 ffai detect -i frame.jpg
+```rust
+use ffai_diana::track::{ByteTrack, TrackerConfig};
+let mut tracker = ByteTrack::new(TrackerConfig::default());
+// per frame, from `found.detections`:
+// for t in tracker.update(&boxes, &scores, &classes) { /* t.id is stable */ }
 ```
 
-The full descent, including the two measurements that contradicted each other
-and how the contradiction was resolved:
-[docs/whys/diana-1080p-and-tail.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/whys/diana-1080p-and-tail.md).
+**Pass `--classes 0` when scoring MOT17.** Diana is an 80-class COCO detector
+and MOT17 ground truth is pedestrians only; without the filter, cars and buses
+are scored as predicted pedestrians. That was 13.8-47.3 % of detections
+depending on the sequence, worth **1.54 pp IDF1 and 5.38 pp MOTA**, and every
+run of ours before 2026-08-06 got it wrong.
+
+## Speed depends on whether you own the machine
+
+Diana is a **~2.4-core** workload; Ultralytics is a **~7.9-core** one — 84.6 ms
+of CPU per frame against 314.2, a **3.71x** ratio at work parity (518
+detections against 522). On a dedicated box that mostly cancels out. On a
+shared one it does not:
+
+| conditions | Diana vs Ultralytics |
+|---|---|
+| separate processes, ABBA, CPU-timed | **1.147x** wall, **3.71x** less CPU |
+| each engine pinned to its own 12 cores | **1.30x** |
+| 16 competing CPU threads | **1.92x** |
+| unpinned, sharing a machine | 0.79x — the reading that misleads |
+
+Quiet-to-loaded degradation is **2.0x for Diana against 4.5x**, and the tail
+ratio under load **1.89 against 5.45**. If you are deploying to a laptop, an
+edge device, or a server that is already busy, that is the row that matters.
 
 ## Status: `experimental`, honestly
 
