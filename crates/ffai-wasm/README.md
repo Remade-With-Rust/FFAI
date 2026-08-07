@@ -103,15 +103,32 @@ mimalloc remake that replaced the C allocator in our native binary at parity,
 and which already ships a wasm backend with a measured wasm-specific decision
 (no arena pre-reservation, since `memory.grow` is never returned to the host).
 
-`allocator()` reports which one the module was built with, so a
-dlmalloc-vs-rusty_alloc A/B in the browser is a one-line change and a number
-rather than an argument. **That measurement has not been taken yet** — the
-build exists so it can be.
+`allocator()` reports which one the module was built with. **The A/B has now
+been run.** Two modules differing in exactly one `#[global_allocator]` line,
+both loaded into one Node process and rotated per iteration, N=40, warm-up
+discarded, with a NULL arm (two detectors from the same module):
+
+| arm | min | median | p90 |
+|---|---:|---:|---:|
+| rusty_alloc | 170.3 ms | 184.0 ms | 190.3 ms |
+| dlmalloc | 171.7 ms | 185.2 ms | 193.5 ms |
+| **NULL** (rusty against itself) | 177.8 ms | 184.5 ms | 188.6 ms |
+
+**Parity.** rusty_alloc reads 1.007x with 26/40 paired wins at **z = 1.90**,
+against a null arm at 1.003x and z = -0.32 — a hair ahead, and short of the
+|z| > 2 the repo requires before calling anything a win. An earlier 24-iteration
+pass without the null arm read the OPPOSITE (dlmalloc 2.7 % ahead), which is
+what a difference inside the noise looks like and why the null arm is not
+optional.
+
+Matching dlmalloc — the wasm default, and a mature one — is the useful result
+for a young allocator. `--no-default-features` builds the dlmalloc arm if you
+want to re-run it.
 
 ## Status
 
 `experimental`. It loads, it detects, and it agrees with native to display
-precision. Not yet measured: the allocator A/B above, SIMD
+precision. Not yet measured: SIMD
 (`wasm32-unknown-unknown` supports 128-bit SIMD behind a target feature and
 Diana's kernels have never been built for it), and threads via
 `wasm-bindgen-rayon`, which would need SharedArrayBuffer and cross-origin

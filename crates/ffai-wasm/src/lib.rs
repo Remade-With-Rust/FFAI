@@ -41,6 +41,7 @@ use ffai_diana::image::Geometry;
 /// decision (no arena pre-reservation, because `memory.grow` is never returned
 /// to the host). Which of the two is faster HERE is an open measurement, and
 /// having this crate is what makes it answerable.
+#[cfg(feature = "rusty-alloc")]
 #[global_allocator]
 static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
@@ -132,7 +133,16 @@ impl Detector {
 /// Which allocator this module was built with, so a browser A/B can report it.
 #[wasm_bindgen]
 pub fn allocator() -> String {
-    format!("rusty_alloc {}", rusty_alloc_api::VERSION)
+    #[cfg(feature = "rusty-alloc")]
+    {
+        format!("rusty_alloc {}", rusty_alloc_api::VERSION)
+    }
+    // No `#[global_allocator]`, so this is whatever the target ships — dlmalloc
+    // on wasm32-unknown-unknown.
+    #[cfg(not(feature = "rusty-alloc"))]
+    {
+        "dlmalloc (target default)".to_string()
+    }
 }
 
 /// Route Rust panics to `console.error` instead of an opaque `unreachable`.
