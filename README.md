@@ -54,7 +54,7 @@ ffai models         # list model manifests, licenses, cache status
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
-| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Ahead of Ultralytics per image at identical mAP — 1.069x on 1080p (25/32 paired runs, z = +3.18), and 0.70x/0.58x at 640 — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). **Accuracy holds on MOT17: 0.029 pp mean gap over 5,316 frames of a public benchmark.** **Multi-object tracking live** — ByteTrack with no appearance model: **IDF1 35.93 % / MOTA 24.91 % against Ultralytics' 36.92 / 27.38 on the same weights and frames, with 218 ID switches to their 800**, ahead on three of seven sequences. Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865). Video in through the pure-Rust `rff` stack; a LIVE change gate that fires on 0.8 % of real surveillance frames ([Status](#status)) |
+| **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection live**: YOLO26 on candle from official Ultralytics `.pt` via an audited offline conversion, **all five tiers from one tier-agnostic graph**. **mAP matches PyTorch to within 0.08 pp across all ten tier/geometry configurations on a 450-image holdout**, exact at n and **every detection identical at n, m, l and x** — same count, classes and order across 724 detections, boxes within 0.30 px — at **1.6–5.6× less memory and up to 10× faster load**, byte-identical to itself at any thread count, JPEG and PNG in. **Ahead of Ultralytics per image at identical mAP — 1.069x on 1080p (25/32 paired runs, z = +3.18), and 0.70x/0.58x at 640 — on 121 MiB against 310 MiB** (yolo26n/640 rect, 45-image holdout). **Accuracy holds on MOT17: 0.029 pp mean gap over 5,316 frames of a public benchmark.** **Multi-object tracking live** — ByteTrack with no appearance model: **IDF1 35.93 % / MOTA 24.91 % against Ultralytics' 36.92 / 27.38 on the same weights and frames, with 218 ID switches to their 800**, ahead on three of seven sequences. Speed is the one failing gate: against **ONNX Runtime** it is **2.89× at matched square geometry**, which Diana beats on accuracy (0.7014 vs 0.6865). **Runs in a browser**: `ffai-wasm` compiles the whole graph to WebAssembly with no ONNX runtime, agreeing with native to display precision. Video in through the pure-Rust `rff` stack; a LIVE change gate that fires on 0.8 % of real surveillance frames ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
@@ -657,6 +657,51 @@ tuning knob.
 | m | 1.33× | 2.12× | 1.82× |
 | l | 1.65× | 1.70× | 1.83× |
 | x | 1.57× | 1.62× | 1.54× |
+
+### It runs in a browser — the whole graph, in WebAssembly
+
+```
+cargo build --release --target wasm32-unknown-unknown -p ffai-wasm
+```
+
+[`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles Diana to
+`wasm32-unknown-unknown`: backbone, neck, the NMS-free one2one head, letterbox
+and decode. **No ONNX Runtime Web, no TensorFlow.js, no JavaScript inference
+engine** — the same Rust that runs natively is the Rust that runs in the tab.
+
+Verified rather than merely built, on `coco-032.png`, yolo26n, rect, conf 0.25:
+
+| | native | wasm |
+|---|---:|---:|
+| detections | 13 | **13** |
+| class mismatches | — | **0** |
+| largest box/confidence difference | — | **0.000000** |
+| checksum over all boxes | 16094.598199 | 16094.598099 |
+
+The checksum differs in the ninth significant figure — **6.2 parts per
+billion** — because native uses AVX2 and wasm has no SIMD, so float addition
+reassociates. Every box and class is identical at display precision.
+
+**1.82 MB module · 18 ms model load · 257 ms detect**, single-threaded against
+~34 ms native with a pool. Most of that gap is threads: `wasm32-unknown-unknown`
+has none to spawn, so `rayon` is not a dependency of the wasm build **at all**
+and a serial shim supplies the same methods. Dropping rayon entirely is what
+proves the shim complete — a missed call site fails to compile instead of
+panicking in someone's browser, and two files had unguarded calls the
+hand-written serial path had missed.
+
+Serial is also the arm that was already winning on CPU: the intra-image fan-out
+measures **363 ms/image at one thread against 844 at twenty-four**.
+
+The cdylib is a binary, so it picks its own allocator, and wasm's Rust default
+is dlmalloc. Measured N=40, rotated, with a null arm: **`rusty_alloc` 1.007x at
+z = 1.90 against a null floor of 1.003x, z = -0.32 — parity.** An earlier pass
+without the null arm read the opposite; that is what a difference inside the
+noise looks like.
+
+Weights are never bundled — YOLO26 is AGPL-3.0, so the constructor takes
+safetensors bytes and manifest JSON, which is also all a browser can do.
+`crates/ffai-wasm/demo.html` is a working page.
 
 ### Multi-object tracking, on the same benchmark
 
