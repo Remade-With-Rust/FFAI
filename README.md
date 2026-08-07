@@ -482,16 +482,17 @@ number traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
 ### Diana: YOLO26 detection, from the official `.pt`, in pure Rust
 
-**Diana runs the real YOLO26 graph on candle — C3k2, SPPF, C2PSA, the
-NMS-free end-to-end head — built from official Ultralytics checkpoints by an
-audited offline conversion. No Python at inference. No weights in this
-repo:** they are AGPL-3.0 and stay the user's to fetch, convert and license.
+**The real YOLO26 graph on candle** — C3k2, SPPF, C2PSA, the NMS-free
+end-to-end head — built from official Ultralytics checkpoints by an audited
+offline conversion. No Python at inference. **No weights in this repo:** they
+are AGPL-3.0 and stay yours to fetch, convert and license.
 
 Standalone landing page:
 [Remade-With-Rust/diana](https://github.com/Remade-With-Rust/diana).
+Tracking and the browser build have their own sections below.
 
-**Embedding it pulls detection only.** Diana has no dependency on Mercury,
-Carmenta or Argus — they are siblings, not layers underneath:
+**Embedding it pulls detection only** — no dependency on Mercury, Carmenta or
+Argus:
 
 | build | transitive crates | compiles C? |
 |---|---:|---|
@@ -499,23 +500,20 @@ Carmenta or Argus — they are siblings, not layers underneath:
 | `ffai-diana` + `ffai-models/fetch` | 308 | yes — `onig_sys`, `aws-lc-sys` |
 | **`wasm32-unknown-unknown`** | **95** | **no** |
 
-The 170-crate gap on native is the Hugging Face downloader — `reqwest`,
-`hyper`, `rustls`, `aws-lc-sys` — which Diana never calls; its whole use of
-`ffai-models` is `load_dir`, reading TOML off disk. Off by default there.
+The 170-crate gap is the Hugging Face downloader, which Diana never calls —
+its whole use of `ffai-models` is `load_dir`, reading TOML off disk. Off by
+default.
 
-**The tree does compile C on native, and it is worth stating plainly because
-this README claimed otherwise for weeks.** `candle-core` takes `tokenizers` as
-a hard, non-optional dependency with `features = ["onig"]`, and `onig_sys`
-compiles Oniguruma. It is build-time only — the output is an ordinary binary
-with no runtime dependency — and it vanishes on wasm32, where candle
-target-gates that dependency out. `tokenizers` marks `onig` optional and ships
-a pure-Rust alternative, so the fix is one feature line upstream in candle.
+**The native tree does compile C, and it costs Diana nothing.** `candle-core`
+takes `tokenizers` with `features = ["onig"]`, so `onig_sys` compiles
+Oniguruma — but **Diana never references tokenizers**, and candle uses it in
+one file (`quantized/tokenizer.rs`) detection never enters. Link-time dead
+weight, not runtime cost. It is build-time only and vanishes on wasm32, where
+candle target-gates it out.
 
 Measured on a hash-pinned **450-image** COCO holdout, CPU only, every tier in
-both geometries, each graded only against the reference declaring the same
-configuration. mAP at conf 0.001 / 100 dets like the reference. Memory is
-steady working set with the harness's own pre-decoded image cache subtracted
-from both sides (ledger `bench-detect-1785550365` and the ten rows after it):
+both geometries, each graded against the reference declaring the same
+configuration (ledger `bench-detect-1785550365` onward):
 
 | Tier | Geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | Ultralytics MiB | leaner |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -531,63 +529,47 @@ from both sides (ledger `bench-detect-1785550365` and the ten rows after it):
 | x | square | 77.69 | 77.67 | +0.03 | **380** | 603 | 1.6× |
 
 **Worst deviation across all ten: 0.08 pp**, exact at n, and Diana reads
-*higher* than the reference in five of the ten. Memory is 1.6–5.6× leaner,
-the ratio narrowing as the model grows because the weights come to dominate
-what is left. The footprint gate passes on all ten.
+*higher* in five of the ten. Memory is 1.6–5.6× leaner, narrowing as weights
+come to dominate. The stronger statement sits under it — the *detections
+themselves* are identical, same count, classes and order, at four tiers:
+**n 131/131 (0.084 px), m 204/204 (0.300 px), l 187/187 (0.170 px), x 202/202
+(0.213 px)**.
 
-The stronger statement sits
-under it: the *detections themselves* are identical — same count, same
-classes, same order — at **four tiers**, not just the smallest:
+**On speed, measure the CPU, not the wall.** At work parity (518 detections
+against 522), Diana spends **84.6 ms of CPU per frame against Ultralytics'
+314.2 — 3.71× less** — because Diana is a ~2.4-core workload and Ultralytics is
+a ~7.9-core one. What the wall clock says therefore depends entirely on who
+owns the machine:
 
-| tier | detections | class agreement | max box delta |
-|---|---:|---|---:|
-| n | 131 | 131/131 | 0.084 px |
-| m | 204 | 204/204 | 0.300 px |
-| l | 187 | 187/187 | 0.170 px |
-| x | 202 | 202/202 | 0.213 px |
+| conditions | Diana vs Ultralytics |
+|---|---|
+| separate processes, ABBA, CPU-timed | **1.147×** wall, **3.71×** less CPU |
+| each engine pinned to its own 12 cores | **1.30×** |
+| 16 competing CPU threads | **1.92×** |
+| unpinned, sharing a machine | 0.79× — the reading that misleads |
 
-**The speed picture changed when the harness was fixed.** The bench
-pre-decoded the whole corpus before timing, which looks like it favours us —
-our reader sits outside the timed region while the reference pays for its
-decode inside it — and does the opposite. The reference decodes each image
-just before using it and reads a buffer its own decoder just wrote; ours was
-written 45 images ago and had to be fetched. **The harness was handicapping us
-by ~14 %.** ABBA, three reps: just-in-time decode is 11-17 % faster despite
-ADDING the decode to the timed region, and a working-set sweep shows holding 1
-image versus 45 is FLAT — the mechanism is recency, not residency. JIT is now
-the default.
+Quiet-to-loaded degradation is **2.0× for Diana against 4.5×**. Earlier
+editions quoted a single wall ratio — that was this table's top row measured
+under its bottom row's conditions.
 
-With that fixed, two clean paired runs at rect put Diana **ahead of
-Ultralytics**: 32 ms against 46 (0.70x) and 37 against 64 (0.58x). **That is
-two runs and is labelled as two runs** — a third read 382 ms on a box that had
-been benchmarking for hours (rtf 2.6 against 25-29) and is excluded as machine
-noise, stated here rather than buried in a median. Before the fix, seven
-paired runs read a median of 1.11x BEHIND, and a single favourable run had
-been quoted as "faster than Ultralytics" and retracted. The current reading is
-ahead; it is not yet a settled result.
-
-Against **ONNX Runtime** the gate still fails: **2.89x at matched square
-geometry**, measured under the old harness and not re-measured since, so it is
-an upper bound. ORT has no rect export, so the widely-quoted 1.25x compared
-our reduced-work rect against its full-work square — rect is 70-75 % of
-square's pixels.
-
-mAP is identical to PyTorch to four decimals in both geometries, and memory is
-the unambiguous win at 0.4x Ultralytics and 0.75x ORT. The repo's rule is
-that `verdict: claimable` needs all four gates; Diana does not get it. The
+Against **ONNX Runtime** the gate still fails: **2.89× at matched square
+geometry**, measured under the old harness and not re-measured, so it is an
+upper bound. ORT has no rect export, so the widely-quoted 1.25× compared our
+reduced-work rect against its full-work square — rect is 70-75 % of square's
+pixels. Diana beats it on accuracy (0.7014 vs 0.6865) and on memory (0.75×),
+but `verdict: claimable` needs all four gates and Diana does not get it. The
 losing row goes in the table.
 
-### Faster than Ultralytics, and the harness mattered more than the engines
+### The harness moves the answer more than the engines do
 
-**1.069x on 1080p frames — Diana faster in 25 of 32 paired runs, z = +3.18.**
-Solo passes, ABBA-alternated, both engines decoding their own JPEGs. The ratio
-was tracked as N grew, because a cross-implementation number still moving has
-not been measured yet: 1.035x at N=8, 1.045x at 16, 1.070x at 24, 1.069x at 32 —
-stable from 24. At 640 on the COCO holdout the same comparison reads 0.70x and
-0.58x.
+The wall-clock number above depends on arrangement more than on either
+implementation, and this is the evidence for saying so. The solo ABBA reading
+was **1.069x on 1080p, Diana ahead in 25 of 32 paired runs at z = +3.18**, and
+it was tracked as N grew because a cross-implementation ratio still moving has
+not been measured yet: 1.035x at N=8, 1.045x at 16, 1.070x at 24, 1.069x at 32.
 
-Then five harness arrangements were run on **identical work**, changing only the
-order and co-residency:
+Then five arrangements were run on **identical work**, changing only order and
+co-residency:
 
 | arrangement | ratio | vs solo |
 |---|---:|---:|
@@ -600,6 +582,12 @@ order and co-residency:
 **A 31 % swing from arrangement alone, against a ~7 % effect.** Two arrangements
 flatter Diana badly, block-wise most of all — the shape `codec-measurement` §3
 forbids. Only solo reproduces across runs, so it is the only one quoted.
+
+The same lesson arrived again from the other direction later: alternating with
+Ultralytics costs Diana **+54 % on the median**, because it burns 314 ms of CPU
+per frame across every core while Diana uses ~2.4. That is why the headline is
+now the CPU ratio and a pinned wall ratio, not a shared-machine one — see the
+table in the Diana section above.
 
 ### The whole decode path is ours now
 
