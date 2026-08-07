@@ -148,20 +148,19 @@ impl Default for TrackerConfig {
             // 7/7. That asymmetry is the whole result.
             new_track_thresh: 0.7,
             match_thresh: 0.8,
-            // `max_age` was swept alongside it and PRUNED, not adopted.
-            // Raising it to 60-70 is worth a further +0.67 IDF1 overall, but
-            // regresses 02 (-0.26) and 09 (-0.22) while winning big on 04/10/11,
-            // and the response is not even monotonic — 04 reads +0.09 at 30,
-            // -0.54 at 35-50, then +1.18 at 60. Three losers against three
-            // winners on seven clips is a truth table too small to fit a
-            // dispatch to: no candidate signal separated them (dets/frame
-            // +0.34, sequence length +0.54, box area -0.18, churn -0.29), and
-            // the groups OVERLAP on the best of those. A rule found here would
-            // be the default outcome of searching, not evidence.
+            // 70, not 30 — and the earlier decision to PRUNE this was made on
+            // contaminated data. That sweep ran against a detection set that
+            // was 13.8-47.3 % cars, buses and traffic lights (see the bench
+            // docstring); a longer memory kept those false tracks alive, so
+            // the knob looked mixed. On person-only detections it is worth
+            // **+1.04 IDF1 and +0.27 MOTA** with ID switches down 226 -> 218:
             //
-            // So: recorded as an available +0.67 that needs a real signal, and
-            // left at 30. Revisit with more sequences, not more search.
-            max_age: 30,
+            //   02 +0.27  04 +1.56  05 -0.14  09 -0.22  10 +0.72  11 +2.91  13 +0.13
+            //
+            // Two sequences give up ~0.2 against +1.56 and +2.91 elsewhere.
+            // Recorded rather than hidden, and 40 is the alternative if a
+            // deployment cannot accept them (+0.18, worst -0.04).
+            max_age: 70,
             min_hits: 1,
             // OFF, and the reason is one sequence. Ranking the first
             // association by `1 - IoU * score` instead of `1 - IoU` — the
@@ -242,7 +241,22 @@ impl Default for TrackerConfig {
             // second pass exists for. Restricting it to already-tracked
             // objects throws away the recovery and keeps only the easy half.
             pass2_lost: true,
-            deferred_unconfirmed: true,
+            // FALSE — and it is a SUBSTITUTE for the duplicate gate, not a
+            // rival. Measured on clean person-only detections:
+            //
+            //   duplicate gate OFF: defer=1 is worth +0.79 IDF1
+            //   duplicate gate ON : defer=1 COSTS 0.15 (35.94 -> 35.79)
+            //
+            // Both suppress the same thing — speculative tracks born from a
+            // box that should not have been there — so running both spends
+            // twice for one effect and then over-suppresses. The gate does it
+            // upstream and cheaper, so the gate wins and this stays off. The
+            // machinery and its test remain: with a detector that emits no
+            // duplicates, this is the one that should be on.
+            //
+            // Its original +1.19 was measured on detections that were up to
+            // 47 % non-person, where what it mostly deferred were CAR tracks.
+            deferred_unconfirmed: false,
             fuse_mode: 1,
             // ADAPTIVE, and the sign-flip is what forced it. Raising
             // `new_track_thresh` to 0.7 helped MOTA on sparse sequences

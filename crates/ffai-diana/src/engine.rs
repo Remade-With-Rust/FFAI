@@ -332,13 +332,18 @@ impl Yolo26 {
             if let Some(iou) = opts.iou {
                 output.suppress_overlaps(iou);
             } else {
-                // But the construction does not hold in practice: measured
-                // against the reference on identical MOT17 frames we emit 1285
-                // intra-frame pairs above IoU 0.7 to their 855. The three-way
-                // gate drops the duplicates while sparing genuine overlap —
-                // IDF1 32.82 -> 33.28, MOTA 18.92 -> 19.24, ID switches
-                // 375 -> 239. Thresholds and the one sequence that pays for it
-                // are documented on `suppress_duplicates`.
+                // ON, and the road to that answer is worth recording. It first
+                // measured +0.46 IDF1 on detections that were up to 47 % cars,
+                // so it was suspected of only removing person-overlapping-
+                // vehicle pairs. Re-tested on clean person-only detections it
+                // read 0.00 — and that reading was itself an artifact: the
+                // detections had been generated while this call was already
+                // enabled, so the A/B compared ONE gate against TWO, which is a
+                // no-op by construction.
+                //
+                // Regenerated ungated and re-run, it is worth **+0.95 IDF1 and
+                // +0.27 MOTA** with ID switches 348 -> 218. Twice nearly
+                // discarded by a stale input rather than by its own merits.
                 output.suppress_duplicates(0.80, 0.88, 0.95);
             }
             Ok(output)
