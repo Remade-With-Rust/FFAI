@@ -47,6 +47,7 @@ Keys: q quit · space pause · s save a screenshot · [ ] step while paused
 """
 
 import argparse
+import os
 import json
 import subprocess
 import sys
@@ -226,6 +227,20 @@ def main():
     # timeslice and lands at 400 ms — and a viewer that shows that is reporting
     # the desktop, not the engine. Raised on BOTH sides or it is a thumb on the
     # scale.
+    # Each arm on its own half of the machine. Without it the two engines
+    # CONTEND: Ultralytics burns 314 ms of CPU per frame across every core
+    # (against Diana's 84.6), so alternating with it costs Diana +54 % on the
+    # median and the viewer reports the scheduler again. Measured on the same
+    # 200 frames, each arm pinned to 12 of 24 cores — more than either can use,
+    # since Diana runs ~2.4 cores busy and Ultralytics ~7.9:
+    #
+    #   unpinned, alternating   diana 0.79x   (i.e. losing)
+    #   pinned 12/12            diana 1.30x   (i.e. winning)
+    #
+    # The separate-process CPU A/B agrees with the pinned figure (1.147x wall,
+    # 3.71x less CPU), which is what makes the unpinned one the outlier.
+    ap.add_argument("--no-pin", action="store_true",
+                    help="do NOT give each engine its own half of the cores")
     ap.add_argument("--no-priority", action="store_true",
                     help="do NOT raise both engines to High (shows raw scheduler noise)")
     args = ap.parse_args()
@@ -257,22 +272,36 @@ def main():
     if args.live:
         cmd.append("--live")
     print(f"starting diana: {' '.join(cmd)}")
+    denv = dict(os.environ)
+    if not args.no_pin:
+        try:
+            import psutil
+            denv["RAYON_NUM_THREADS"] = str(psutil.cpu_count() // 2)
+        except Exception:
+            pass
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            text=True, bufsize=1, cwd=str(ROOT))
+                            text=True, bufsize=1, cwd=str(ROOT), env=denv)
     hello = json.loads(proc.stdout.readline())
     assert hello.get("ready"), hello
     print("diana ready (model load is outside every timed region)")
 
-    if not args.no_priority:
-        # BOTH sides, or the raise is a thumb on the scale. Ultralytics runs
-        # inside THIS process, so this process is the other arm.
-        try:
-            import psutil
+    try:
+        import psutil
+        if not args.no_priority:
+            # BOTH sides, or the raise is a thumb on the scale. Ultralytics runs
+            # inside THIS process, so this process is the other arm.
             psutil.Process().nice(psutil.HIGH_PRIORITY_CLASS)
             psutil.Process(proc.pid).nice(psutil.HIGH_PRIORITY_CLASS)
             print("both engines raised to High priority (--no-priority to disable)")
-        except Exception as e:
-            print(f"could not raise priority ({e}); tail will show scheduler noise")
+        if not args.no_pin:
+            n = psutil.cpu_count()
+            lo, hi = list(range(0, n // 2)), list(range(n // 2, n))
+            psutil.Process(proc.pid).cpu_affinity(lo)   # diana
+            psutil.Process().cpu_affinity(hi)           # ultralytics, in-process
+            print(f"pinned: diana -> cores {lo[0]}-{lo[-1]}, ultralytics -> {hi[0]}-{hi[-1]} "
+                  f"(--no-pin to disable)")
+    except Exception as e:
+        print(f"could not set priority/affinity ({e}); numbers will include contention")
 
     dh, uh = deque(maxlen=300), deque(maxlen=300)
     writer = None
