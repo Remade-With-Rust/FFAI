@@ -399,9 +399,61 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("noselect") => xy_cut_pernode(lines, page_w, 0),
         Ok("cost") => xy_cut_cost(lines, page_w, 0),
         Ok("span") => xy_cut_span(lines, page_w, 0),
-        _ => order_by_selection(lines, page_w),
+        _ => {
+            let out = order_by_selection(lines, page_w);
+            // §8.156 SPARSE-PAGE GATE, default ON. `FFAI_ORDER_GATE=0` disables.
+            // Measured through the engine on 236 holdout pages, one binary and
+            // two env settings with the arms interleaved: macro 20.459 % ->
+            // 19.897 % (+0.562 pp, 95 % CI [+0.191, +1.009]), 9 pages better and
+            // 2 worse. MICRO moves only +0.069 pp — the pages this rescues are
+            // small, so character-weighting barely sees them. Macro decides here
+            // (§8.119, the metric `ffai-bench` reports), and the two losses are
+            // a CJK page we cannot read either way and a 344-character contents
+            // page where +3.5 pp is twelve characters.
+            if std::env::var("FFAI_ORDER_GATE").as_deref() != Ok("0")
+                && sparse_scatter(&out) > env_f32("FFAI_ORDER_GATE_T", ORDER_GATE_T)
+            {
+                return xy_cut(out, page_w, 0);
+            }
+            out
+        }
     }
 }
+
+/// Mean vertical step between consecutive emitted lines, over the ink extent.
+///
+/// §8.153 decomposed ordering cost into 1.90 pp of SELECTOR REGRET and 2.90 pp
+/// of POOL CEILING, and the split is not uniform: on SPARSE pages regret (0.90)
+/// exceeds ceiling (0.58), so a different strategy can help, while on dense
+/// pages ceiling (2.32) buries regret (1.00) and nothing in the pool does. This
+/// separates those populations — pages where it fires have a median of 18 lines
+/// and 0.159 coverage against 107 and 0.386 for the rest.
+///
+/// Deliberately normalised by the INK EXTENT rather than page height: the
+/// equivalent page-height form measures identically (holdout +0.493 pp either
+/// way, 45 of 52 pages shared) and `order_reading` is not given `page_h`.
+/// Changing a shipped signature for a gate that has not yet earned its default
+/// is the wrong order of operations.
+///
+/// Order-dependent by construction — it reads the sequence `order_by_selection`
+/// just produced, which is why the gate runs after it and not instead of it.
+fn sparse_scatter(ord: &[Vec<DetBox>]) -> f32 {
+    if ord.len() < 2 {
+        return 0.0;
+    }
+    let ys: Vec<f32> = ord.iter().map(|l| line_bbox(l).y0 as f32).collect();
+    let step: f32 =
+        ys.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (ys.len() - 1) as f32;
+    let top = ord.iter().map(|l| line_bbox(l).y0).min().unwrap_or(0) as f32;
+    let bot = ord.iter().map(|l| line_bbox(l).y1).max().unwrap_or(0) as f32;
+    step / (bot - top).max(1.0)
+}
+
+/// Fitted on the 79 TRAIN pages (+0.596 pp), judged once on 224 holdout
+/// (+0.493 pp, 95 % CI [+0.13, +0.94], 7 pages better and 2 worse, worst single
+/// page -3.5 pp). The same gate also wins with `cost` (+0.346) and `vtop`
+/// (+0.304), so it is not one lucky rule/strategy pairing.
+const ORDER_GATE_T: f32 = 0.0525;
 
 /// Cut only pages that HAVE column structure; read the rest top-to-bottom.
 ///

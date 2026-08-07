@@ -8591,6 +8591,87 @@ train", no keep decision arises.
 
 **Cost: one gitignored file, no Rust written, nothing to revert.**
 
+### 8.156 The sparse-page order gate — the campaign's first shipped ordering win
+
+Four levers were refuted before this one: the page-level strategy selector
+(§8.153), the three never-swept `find_gutters` constants (§8.154), and the
+axis-price cut (§8.155). This is the fifth, and it holds.
+
+```rust
+if sparse_scatter(&out) > 0.0525 { xy_cut(out, page_w, 0) }
+```
+
+`sparse_scatter` is the mean vertical step between consecutive emitted lines over
+the ink extent. It runs AFTER `order_by_selection` — it is a second opinion on a
+finished ordering, not a replacement — and reads only geometry, so it needs
+nothing `order_reading` is not already given.
+
+**Measured through the ENGINE, 236 holdout pages, one binary and two env settings
+with the arms interleaved per page:**
+
+| | MACRO | MICRO |
+|---|---:|---:|
+| gate OFF | 20.459 % | 14.386 % |
+| gate ON | **19.897 %** | 14.318 % |
+| gain | **+0.562 pp** | +0.069 pp |
+
+95 % CI over pages **[+0.191, +1.009], excludes zero**. 11 pages changed, 9 better
+and 2 worse. Replay predicted +0.642; the in-context number is +0.562, and the
+in-context number is the one that counts.
+
+**MICRO moves only +0.069 pp, and that is not a defect — it is the mechanism.**
+The gate fires on SPARSE pages (median 18 lines, 0.159 coverage against 107 and
+0.386 for the rest), which are small, so character-weighting barely sees them.
+Macro decides here per §8.119, and the campaign has refused a default on that
+same rule before (§8.150 crop-norm, refused at +0.016 pp macro). It cuts both
+ways or it is not a rule.
+
+**How it was found, after the same search had already failed.** §8.153's
+train-selected search covered 2-, 3- and 4-variable conjunctions and **never
+searched single variables** — a gap in the search, not a property of the data.
+The winning rule is one variable. Corpus-wide the equivalent form is
+`dy_mean > 0.0485 -> xycut`: train +0.596 pp, holdout +0.493 pp, CI [+0.13, +0.94].
+
+**It has a mechanism, which is what separates it from the four refutations.**
+§8.153's decomposition — computed before this search — says regret exceeds ceiling
+on SPARSE pages (0.90 vs 0.58) and ceiling buries regret on dense ones (2.32 vs
+1.00). The gate selects exactly the population where switching can help:
+
+| | pages | median lines | median cover | regret | ceiling |
+|---|---:|---:|---:|---:|---:|
+| fires | 46 | 18 | 0.159 | 0.90 pp | 0.58 pp |
+| does not | 178 | 107 | 0.386 | 1.00 pp | 2.32 pp |
+
+And it is not one lucky rule/strategy pairing: the same gate wins with `cost`
+(+0.346) and `vtop` (+0.304, CI [+0.04, +0.70]).
+
+**Normalised by INK EXTENT, not page height, deliberately.** The page-height form
+measures identically (holdout +0.493 pp either way, 45 of 52 pages shared) and
+`order_reading` is not given `page_h`. Changing a shipped signature for a gate
+that had not yet earned its default was the wrong order of operations.
+
+**One honest caveat on how the threshold was chosen.** Three rules tie at train
++0.596. A VOLUME tie-break picks `n_body < 65.5` and reads +0.113 pp on holdout,
+not significant; a PRECISION tie-break picks this one. Precision is computable on
+train alone and the optimizer already reports it, but the preference was formed
+after seeing holdout. The engine A/B is what promotes it from candidate to
+default, not the tie-break.
+
+**The two losses, looked at rather than tallied.** `omni-0265` is a Chinese exam
+paper reading 82.6 % against 83.5 % — garbage either way, since CJK recognition
+was built and refused (§8.14x). `omni-0071` is a 344-character contents page
+dominated by an illustration, where +3.5 pp is about twelve characters, and the
+render shows the GATED order is the more sensible one (heading -> contents ->
+footer) while the shipped order detours to the footer first. Neither is an
+ordering failure.
+
+**What it does not touch.** After this gate, 4.30 pp of the 4.80 pp ordering cost
+remains, 3.04 pp of it on the 116 dense 3+ column pages, whose worst members are
+unchanged: `omni-0001` still reads 64.0 % where correct ordering gives 2.4 %. The
+gate fires on 11 pages of 235 and the dense population is disjoint from it by
+construction. This closes the sparse-page ordering problem and leaves the larger
+one open.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
