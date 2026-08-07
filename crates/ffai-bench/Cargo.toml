@@ -4,7 +4,7 @@ description = "FFai's analyzer — one call to compare any engine against world 
 # the runner records a clip failure and continues instead of aborting the
 # whole corpus, and decode is wrapped so a panicking dependency costs one
 # page rather than the run.
-version = "0.6.2"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

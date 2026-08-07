@@ -17,13 +17,13 @@ authors = ["Remade With Rust"]
 [workspace.dependencies]
 # ---- internal crates ----
 ffai-core = { path = "crates/ffai-core", version = "0.6.4" }
-ffai-media = { path = "crates/ffai-media", version = "0.6.2" }
+ffai-media = { path = "crates/ffai-media", version = "0.6.3" }
 ffai-models = { path = "crates/ffai-models", version = "0.6.1" }
 ffai-mercury = { path = "crates/ffai-mercury", version = "0.7.0" }
 ffai-carmenta = { path = "crates/ffai-carmenta", version = "0.7.0" }
 ffai-diana = { path = "crates/ffai-diana", version = "0.7.0" }
 ffai-argus = { path = "crates/ffai-argus", version = "0.6.1" }
-ffai-bench = { path = "crates/ffai-bench", version = "0.6.2" }
+ffai-bench = { path = "crates/ffai-bench", version = "0.7.0" }
 
 # ---- tensor spine ----
 # Candle is FFai's PyTorch: every engine shares its Tensor/Device types so
