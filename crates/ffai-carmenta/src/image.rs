@@ -239,7 +239,21 @@ pub fn crnn_input_patch(crop: &[f32], cw: usize, ch: usize, device: &Device) -> 
     //
     // Stretching to the full range is a no-op on a crop that already spans it,
     // so the gate covers both steps and neither needs its own threshold.
-    let norm = std::env::var("FFAI_CROP_NORM").as_deref() == Ok("1");
+    // ON BY DEFAULT (§8.151). `FFAI_CROP_NORM=0` disables it, and the disabled
+    // path is byte-identical to the pre-§8.146 engine, so it stays the oracle.
+    //
+    // The corpus number is +0.016 pp macro — marginally the WRONG side — and it
+    // ships anyway on a judgement recorded rather than assumed: 15 pages improve
+    // and 4 worsen, and none of the four is a crop-norm failure. `omni-0085`
+    // recovers "brings us together" from `dn` and LOSES 9.3 pp because our
+    // emitted order is reversed; scored in ground-truth order the same page gains
+    // 18.7 pp and the corpus figure becomes -0.095 pp (§8.150).
+    //
+    // So this is a correctness fix whose measurement is gated by a different
+    // defect. Polarity inversion in particular is not a tuning choice — a
+    // reversed crop is a wrong image to a model trained on dark ink over light
+    // paper, whatever the aggregate says today.
+    let norm = std::env::var("FFAI_CROP_NORM").as_deref() != Ok("0");
     let owned: Vec<f32>;
     let crop = if norm {
         let flipped: Vec<f32> = if is_reversed(crop, cw, ch) {
