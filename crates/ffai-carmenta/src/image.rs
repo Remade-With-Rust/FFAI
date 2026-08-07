@@ -186,13 +186,36 @@ pub fn crnn_input(
 /// where Otsu costs a histogram. §8.145 measured Otsu separability at 0.882 on
 /// exactly these crops — they are cleanly bimodal, which is what makes the cheap
 /// split safe.
-pub fn is_reversed(crop: &[f32]) -> bool {
-    if crop.is_empty() {
+pub fn is_reversed(crop: &[f32], w: usize, h: usize) -> bool {
+    if crop.len() < w * h || w < 3 || h < 3 {
         return false;
     }
-    let mean = crop.iter().sum::<f32>() / crop.len() as f32;
-    let light = crop.iter().filter(|&&p| p >= mean).count();
-    light * 2 < crop.len()
+    // The BORDER is the background: a line box surrounds its text, so the top
+    // and bottom rows and the left and right columns are paper almost by
+    // construction. Compare that ring against the interior and the polarity
+    // falls out — dark ring with a lighter middle means light ink on dark paper.
+    //
+    // NOT a pixel majority, which was the first cut and was wrong: a tightly
+    // cropped BOLD heading is legitimately more than half ink, so the majority
+    // rule inverted ordinary dark-on-light text and destroyed it. §8.149 measured
+    // that at +0.397 pp on control pages from polarity alone — a step that cannot
+    // change how MUCH is read, only what, which is what proved it was misfiring
+    // rather than over-reaching.
+    let mut ring = 0.0f32;
+    let mut nring = 0usize;
+    for x in 0..w {
+        ring += crop[x] + crop[(h - 1) * w + x];
+        nring += 2;
+    }
+    for y in 1..h - 1 {
+        ring += crop[y * w] + crop[y * w + w - 1];
+        nring += 2;
+    }
+    let ring = ring / nring as f32;
+    let all = crop.iter().sum::<f32>() / crop.len() as f32;
+    // Require a real margin: a crop whose border and interior agree has no
+    // decidable polarity, and guessing on it is how the majority rule went wrong.
+    ring + 16.0 < all
 }
 
 /// The CRNN tensor for an already-extracted patch (straight or straightened).
@@ -219,7 +242,7 @@ pub fn crnn_input_patch(crop: &[f32], cw: usize, ch: usize, device: &Device) -> 
     let norm = std::env::var("FFAI_CROP_NORM").as_deref() == Ok("1");
     let owned: Vec<f32>;
     let crop = if norm {
-        let flipped: Vec<f32> = if is_reversed(crop) {
+        let flipped: Vec<f32> = if is_reversed(crop, cw, ch) {
             crop.iter().map(|&p| 255.0 - p).collect()
         } else {
             crop.to_vec()
@@ -230,10 +253,27 @@ pub fn crnn_input_patch(crop: &[f32], cw: usize, ch: usize, device: &Device) -> 
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let lo = sorted[sorted.len() / 50];
         let hi = sorted[sorted.len() - 1 - sorted.len() / 50];
-        // A crop with no real range is blank or nearly so; stretching it would
-        // amplify sensor noise into glyph-shaped garbage. Leave it alone.
-        owned = if hi - lo > 24.0 {
-            let scale = 255.0 / (hi - lo);
+        // Stretch ONLY a crop that is actually compressed (§8.149).
+        //
+        // The first cut stretched every crop, and a crop already spanning
+        // 10..250 still scales by 1.06 — so all 26 631 crops moved when the 6 %
+        // with a real problem were the target. §8.148 measured the cost of that:
+        // -0.573 pp on the pages it was aimed at, +0.184 pp everywhere else.
+        //
+        // `FFAI_CROP_NORM_SPAN` is the trigger, as a fraction of full range.
+        // Above it the crop is left EXACTLY alone, so the flag cannot perturb a
+        // page that never had a contrast problem.
+        //
+        // A crop with no real range is blank or nearly so; stretching that
+        // amplifies sensor noise into glyph-shaped garbage, hence the floor.
+        let trigger = std::env::var("FFAI_CROP_NORM_SPAN")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.35)
+            * 255.0;
+        let span = hi - lo;
+        owned = if span > 24.0 && span < trigger {
+            let scale = 255.0 / span;
             flipped.iter().map(|&p| ((p - lo) * scale).clamp(0.0, 255.0)).collect()
         } else {
             flipped
@@ -494,16 +534,30 @@ pub fn ok<T>(r: CandleResult<T>) -> Result<T> {
 mod tests {
     use super::*;
 
-    /// Ink is the MINORITY of a text crop, so the smaller class is the ink.
+    /// The BORDER is the background, not the pixel majority — the distinction
+    /// that cost +0.397 pp on control pages before it was found (§8.149).
     #[test]
     fn reversed_polarity_detection() {
+        // 10x10, light paper with a dark glyph in the middle.
         let mut normal = vec![240.0f32; 100];
-        for v in normal.iter_mut().take(20) { *v = 20.0; }
-        assert!(!is_reversed(&normal));
-        let mut reversed = vec![20.0f32; 100];
-        for v in reversed.iter_mut().take(20) { *v = 240.0; }
-        assert!(is_reversed(&reversed));
-        assert!(!is_reversed(&[]));
-        assert!(!is_reversed(&[128.0; 10]));
+        for y in 3..7 { for x in 3..7 { normal[y * 10 + x] = 20.0; } }
+        assert!(!is_reversed(&normal, 10, 10));
+
+        // The SAME polarity with MORE ink than paper — a bold glyph. A pixel
+        // majority calls this reversed and destroys it; the border does not.
+        let mut bold = vec![240.0f32; 100];
+        for y in 1..9 { for x in 1..9 { bold[y * 10 + x] = 20.0; } }
+        assert!(bold.iter().filter(|&&v| v < 128.0).count() * 2 > bold.len());
+        assert!(!is_reversed(&bold, 10, 10));
+
+        // Genuinely reversed: dark border, light glyph.
+        let mut rev = vec![20.0f32; 100];
+        for y in 3..7 { for x in 3..7 { rev[y * 10 + x] = 240.0; } }
+        assert!(is_reversed(&rev, 10, 10));
+
+        // Degenerate input must not panic or claim a polarity.
+        assert!(!is_reversed(&[], 0, 0));
+        assert!(!is_reversed(&[128.0; 100], 10, 10));
     }
+
 }
