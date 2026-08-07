@@ -601,6 +601,270 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
     lines.into_iter().zip(keep).filter_map(|(l, k)| k.then_some(l)).collect()
 }
 
+// ---------------------------------------------------------------------------
+// §8.157 — the axis-price reorder, for tall dense multi-column pages.
+//
+// §8.156 closed the SPARSE half of the ordering problem (+0.562 pp, engine
+// measured). 4.30 pp of the 4.80 pp remains, 3.04 pp of it on 116 dense 3+
+// column pages that gate is disjoint from by construction.
+//
+// §8.155 built a recursive cut whose axis decision is explicitly PRICED — a
+// gutter is wide in CHARACTERS, a band gap is tall in LINES — and refuted it as
+// a default: it never beats `order_by_selection` on either split, at any alpha.
+// But its failure is not uniform. It RESCUES 24 dense pages at a mean of
+// +16.6 pp and WRECKS 21 at -18.2 pp, and they cancel to +0.057 pp. Fired only
+// where it helps it is worth **+1.773 pp corpus macro**.
+//
+// So this is not a better ordering. It is a second ordering that is right on a
+// population the shipped one is wrong on, and the whole value is in the guard.
+//
+// WHY IT LIVES HERE AND NOT IN `order_reading`. The guard needs `body_frac`
+// (post-suppression) and the cut needs `med_cw = width / chars` (post-
+// recognition). Neither exists at `engine.rs:400` where ordering runs. §8.156's
+// gate is pure geometry and drops into `order_reading`; this one cannot.
+//
+// The guard's geometry is computed on the FULL line population, before
+// suppression deletes any of it — §8.153's D6a found gutters over 111 lines are
+// not gutters over 80, and that defect voided an entire measurement harness.
+
+/// Page statistics for the §8.157 guard, taken BEFORE suppression.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProbeStats {
+    n_col: usize,
+    cover: f32,
+    aspect: f32,
+    n_all: usize,
+}
+
+/// Column count by left-edge clustering; a column needs >= 4 lines, so a centred
+/// caption is not one. Coverage is text-box area over page area.
+pub fn probe_stats(lines: &[OcrLine], page_w: f32, page_h: f32) -> ProbeStats {
+    let (pw, ph) = (page_w.max(1.0), page_h.max(1.0));
+    let bx: Vec<(f32, f32, f32, f32)> = lines
+        .iter()
+        .filter_map(|l| l.bbox.as_ref().map(|b| (b.x, b.y, b.width, b.height)))
+        .collect();
+    if bx.is_empty() {
+        return ProbeStats::default();
+    }
+    let mut lefts: Vec<f32> = bx.iter().map(|b| b.0 / pw).collect();
+    lefts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let (mut n_col, mut run) = (0usize, 1usize);
+    for i in 1..lefts.len() {
+        if lefts[i] - lefts[i - 1] < 0.03 {
+            run += 1;
+        } else {
+            if run >= 4 {
+                n_col += 1;
+            }
+            run = 1;
+        }
+    }
+    if run >= 4 {
+        n_col += 1;
+    }
+    ProbeStats {
+        n_col,
+        cover: bx.iter().map(|b| b.2 * b.3).sum::<f32>() / (pw * ph),
+        aspect: ph / pw,
+        n_all: lines.len(),
+    }
+}
+
+/// Fitted on 44 train / judged on 224 holdout dense 3+ column pages: holdout
+/// +0.228 pp macro, 95 % CI [+0.059, +0.438], **7 rescues and 0 wrecks**.
+///
+/// The column condition is LOAD-BEARING, not scoping. Without it the rule fires
+/// on `omni-0063` — a tall dense TWO-column page the shipped order reads at
+/// 5.8 % — and takes it to 73.4 %, which alone flips the corpus result to
+/// -0.053 pp with a CI spanning zero.
+fn probe_gate_fires(st: &ProbeStats, n_body: usize) -> bool {
+    let body_frac = if st.n_all == 0 { 0.0 } else { n_body as f32 / st.n_all as f32 };
+    st.n_col >= 3 && st.cover >= 0.18 && st.aspect > 1.6 && body_frac > 0.85
+}
+
+/// Maximal interior sub-ranges of `[lo, hi)` that no interval covers.
+fn free_runs(mut iv: Vec<(f32, f32)>, lo: f32, hi: f32, min_w: f32) -> Vec<(f32, f32)> {
+    if iv.is_empty() {
+        return Vec::new();
+    }
+    iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let (mut out, mut cur) = (Vec::new(), lo);
+    for (a, b) in iv {
+        if a - cur >= min_w && a > lo {
+            out.push((cur, a));
+        }
+        cur = cur.max(b);
+    }
+    if hi - cur >= min_w && cur > lo {
+        out.push((cur, hi));
+    }
+    // Strictly interior: a run touching either edge is the margin, not a gutter.
+    out.retain(|r| r.0 > lo && r.1 < hi);
+    out
+}
+
+/// One line as the cut sees it: box, character count, and its index in the input.
+#[derive(Clone, Copy)]
+struct Item {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    chars: f32,
+    idx: usize,
+}
+
+const PROBE_SPAN_FRAC: f32 = 0.50;
+const PROBE_GUTTER_MIN: f32 = 0.015;
+const PROBE_HGAP_LINES: f32 = 0.8;
+/// The axis price. A vertical cut wins when the gutter, measured in CHARACTER
+/// widths, beats ALPHA times the band gap measured in LINE heights. Swept on
+/// train over 0, 0.5, 1, 2, 4, 8, 16, 64 and infinity; 4.0 was best (§8.155).
+const PROBE_ALPHA: f32 = 4.0;
+
+fn probe_cut(it: &[Item], bx: (f32, f32, f32, f32), depth: usize) -> Vec<usize> {
+    let by_y = |v: &[Item]| {
+        let mut s: Vec<Item> = v.to_vec();
+        s.sort_by(|a, b| (a.y, a.x).partial_cmp(&(b.y, b.x)).unwrap_or(std::cmp::Ordering::Equal));
+        s.into_iter().map(|i| i.idx).collect::<Vec<_>>()
+    };
+    if it.len() < 2 || depth >= 8 {
+        return by_y(it);
+    }
+    let (x0, y0, x1, y1) = bx;
+    let nw = (x1 - x0).max(1.0);
+    let med_h = median(&mut it.iter().map(|i| i.h).collect()).max(1.0);
+    let med_cw = median(&mut it.iter().map(|i| i.w / i.chars.max(1.0)).collect()).max(1.0);
+
+    // Vertical gutters. Spanning lines are excluded from the projection but not
+    // from the node — a headline legitimately crosses any gutter. Boxes are
+    // ERODED first: detection arrives unclipped by ~1.5x, enough to close a real
+    // gutter completely (see `boxes::find_gutters`).
+    let span_w = nw * PROBE_SPAN_FRAC;
+    let xs: Vec<(f32, f32)> = it
+        .iter()
+        .filter(|i| i.w < span_w)
+        .map(|i| {
+            let er = (i.h * 0.6).min(i.w * 0.25);
+            (i.x + er, i.x + i.w - er)
+        })
+        .collect();
+    let gut = free_runs(xs, x0, x1, (nw * PROBE_GUTTER_MIN).max(med_cw * 0.8));
+    let ys: Vec<(f32, f32)> = it.iter().map(|i| (i.y, i.y + i.h)).collect();
+    let hgap = free_runs(ys, y0, y1, med_h * PROBE_HGAP_LINES);
+
+    let best_g = gut.iter().map(|g| g.1 - g.0).fold(0.0f32, f32::max) / med_cw;
+    let best_h = hgap.iter().map(|g| g.1 - g.0).fold(0.0f32, f32::max) / med_h;
+
+    if best_g > 0.0 && (best_h == 0.0 || best_g > PROBE_ALPHA * best_h) {
+        let mut edges: Vec<f32> = gut.iter().map(|g| g.0 + (g.1 - g.0) / 2.0).collect();
+        edges.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut cols: Vec<Vec<Item>> = vec![Vec::new(); edges.len() + 1];
+        for i in it {
+            let c = i.x + i.w / 2.0;
+            cols[edges.iter().filter(|e| c > **e).count()].push(*i);
+        }
+        if cols.iter().filter(|c| !c.is_empty()).count() >= 2 {
+            let mut bounds = vec![x0];
+            bounds.extend(edges);
+            bounds.push(x1);
+            let mut out = Vec::new();
+            for (k, c) in cols.iter().enumerate() {
+                if !c.is_empty() {
+                    out.extend(probe_cut(c, (bounds[k], y0, bounds[k + 1], y1), depth + 1));
+                }
+            }
+            return out;
+        }
+    }
+    if best_h > 0.0 {
+        let e = hgap
+            .iter()
+            .max_by(|a, b| (a.1 - a.0).partial_cmp(&(b.1 - b.0)).unwrap_or(std::cmp::Ordering::Equal))
+            .copied()
+            .unwrap_or((0.0, 0.0));
+        let mid = e.0 + (e.1 - e.0) / 2.0;
+        let (top, bot): (Vec<Item>, Vec<Item>) =
+            it.iter().partition(|i| i.y + i.h / 2.0 < mid);
+        if !top.is_empty() && !bot.is_empty() {
+            let mut out = probe_cut(&top, (x0, y0, x1, mid), depth + 1);
+            out.extend(probe_cut(&bot, (x0, mid, x1, y1), depth + 1));
+            return out;
+        }
+    }
+    by_y(it)
+}
+
+/// Re-order body lines with the §8.157 axis-price cut, if the guard fires.
+///
+/// DEFAULT ON. `FFAI_ORDER_PROBE=0` disables.
+///
+/// Engine A/B over 236 holdout pages, one binary and two env settings with the
+/// arms interleaved, measured on top of the shipped §8.156 gate:
+///
+/// | | MACRO | MICRO |
+/// |---|---|---|
+/// | off | 19.897 % | 14.318 % |
+/// | on | **19.666 %** | **13.648 %** |
+/// | gain | +0.231 pp | +0.670 pp |
+///
+/// 95 % CI [+0.069, +0.436], excludes zero. 11 pages changed, 9 better, 2 worse.
+///
+/// MICRO moves nearly 3x macro — the mirror of §8.156, which fires on small pages
+/// and reads +0.562 macro against +0.069 micro. This one fires on LARGE dense
+/// pages, so character-weighting sees it and page-weighting barely does. The two
+/// gates cover opposite halves of the ordering problem: combined they are
+/// +0.793 pp macro and +0.738 pp micro.
+pub fn probe_reorder(
+    lines: Vec<OcrLine>,
+    st: &ProbeStats,
+    page_w: f32,
+    page_h: f32,
+) -> Vec<OcrLine> {
+    if std::env::var("FFAI_ORDER_PROBE").as_deref() == Ok("0") {
+        return lines;
+    }
+    probe_apply(lines, st, page_w, page_h)
+}
+
+/// The guard and the reorder, without the env check — so tests exercise the
+/// behaviour without mutating process env, which in Rust 2024 is `unsafe` and
+/// races every other test in the binary.
+fn probe_apply(
+    lines: Vec<OcrLine>,
+    st: &ProbeStats,
+    page_w: f32,
+    page_h: f32,
+) -> Vec<OcrLine> {
+    if lines.len() < 3 || !probe_gate_fires(st, lines.len()) {
+        return lines;
+    }
+    let it: Vec<Item> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, l)| {
+            l.bbox.as_ref().map(|b| Item {
+                x: b.x,
+                y: b.y,
+                w: b.width,
+                h: b.height,
+                chars: l.text.chars().count() as f32,
+                idx,
+            })
+        })
+        .collect();
+    if it.len() != lines.len() {
+        return lines; // a line without a box: cannot order what cannot be placed
+    }
+    let order = probe_cut(&it, (0.0, 0.0, page_w.max(1.0), page_h.max(1.0)), 0);
+    if order.len() != lines.len() {
+        return lines; // not a permutation — refuse rather than drop output
+    }
+    let mut slot: Vec<Option<OcrLine>> = lines.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slot[i].take()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,5 +1110,73 @@ mod tests {
         };
         let lines = vec![mk(5.0), mk(5.0), mk(900.0)];
         assert_eq!(body_only(lines, 1000.0, 1000.0).len(), 3);
+    }
+
+    /// THE COLUMN CONDITION IS LOAD-BEARING, NOT SCOPING (§8.157).
+    ///
+    /// `omni-0063` is a tall, dense, high-body-fraction TWO-column page that the
+    /// shipped order reads at 5.8 %. It satisfies every other clause of the
+    /// guard. Drop `n_col >= 3` and the probe fires on it and takes it to
+    /// 73.4 % — one page, and the corpus result flips from +0.228 pp with a CI
+    /// excluding zero to -0.053 pp with a CI spanning it.
+    #[test]
+    fn probe_guard_requires_three_columns() {
+        let omni_0063 = ProbeStats { n_col: 2, cover: 0.564, aspect: 2.0, n_all: 100 };
+        assert!(!probe_gate_fires(&omni_0063, 90), "must NOT fire on a 2-column page");
+        let three = ProbeStats { n_col: 3, ..omni_0063 };
+        assert!(probe_gate_fires(&three, 90), "must fire once there are 3 columns");
+    }
+
+    /// Every other clause must also be able to veto on its own.
+    #[test]
+    fn probe_guard_clauses_all_bite() {
+        let ok = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.8, n_all: 100 };
+        assert!(probe_gate_fires(&ok, 90));
+        assert!(!probe_gate_fires(&ProbeStats { cover: 0.17, ..ok }, 90), "sparse page");
+        assert!(!probe_gate_fires(&ProbeStats { aspect: 1.5, ..ok }, 90), "not tall enough");
+        assert!(!probe_gate_fires(&ok, 80), "body_frac 0.80 is under the 0.85 bar");
+    }
+
+    /// The reorder must be a PERMUTATION. A stage that silently drops a line
+    /// would read as an ordering win while deleting output — the failure mode
+    /// §8.153's harness hit twice.
+    #[test]
+    fn probe_reorder_keeps_every_line() {
+        let mk = |x: f32, y: f32, t: &str| OcrLine {
+            text: t.into(),
+            words: Vec::new(),
+            bbox: Some(ffai_core::types::BoundingBox { x, y, width: 200.0, height: 12.0 }),
+            confidence: Some(0.99),
+        };
+        // Two columns of five lines each, on a tall page.
+        let mut lines = Vec::new();
+        for i in 0..5 {
+            lines.push(mk(40.0, 100.0 + i as f32 * 20.0, "left"));
+            lines.push(mk(560.0, 100.0 + i as f32 * 20.0, "right"));
+        }
+        let n = lines.len();
+        let st = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.8, n_all: n };
+        let out = probe_apply(lines.clone(), &st, 800.0, 1600.0);
+        assert_eq!(out.len(), n, "reorder dropped or duplicated a line");
+        let mut got: Vec<&str> = out.iter().map(|l| l.text.as_str()).collect();
+        got.sort_unstable();
+        assert_eq!(got.iter().filter(|t| **t == "left").count(), 5);
+        assert_eq!(got.iter().filter(|t| **t == "right").count(), 5);
+    }
+
+    /// A page the guard rejects passes through byte-for-byte, whatever the
+    /// geometry looks like — the reorder must be inert outside its population.
+    #[test]
+    fn probe_reorder_inert_when_guard_rejects() {
+        let mk = |y: f32| OcrLine {
+            text: "x".into(),
+            words: Vec::new(),
+            bbox: Some(ffai_core::types::BoundingBox { x: 0.0, y, width: 100.0, height: 10.0 }),
+            confidence: Some(0.99),
+        };
+        let lines = vec![mk(300.0), mk(100.0), mk(200.0)];
+        let two_col = ProbeStats { n_col: 2, cover: 0.30, aspect: 1.8, n_all: 3 };
+        let out = probe_apply(lines, &two_col, 800.0, 1600.0);
+        assert_eq!(out[0].bbox.as_ref().unwrap().y, 300.0, "order must be untouched");
     }
 }

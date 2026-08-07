@@ -8672,6 +8672,79 @@ gate fires on 11 pages of 235 and the dense population is disjoint from it by
 construction. This closes the sparse-page ordering problem and leaves the larger
 one open.
 
+### 8.157 The axis-price reorder ships, guarded — and it is §8.156's mirror
+
+§8.155 refuted the axis-price cut as a DEFAULT: it never beats
+`order_by_selection` on either split, at any alpha. That refutation stands. What
+it missed is that the failure is not uniform — the cut RESCUES 24 dense pages at
+a mean of +16.6 pp and WRECKS 21 at -18.2 pp, and they cancel to +0.057 pp. All
+the value is in the guard, and the guard is the whole contribution here.
+
+```rust
+if n_col >= 3 && cover >= 0.18 && aspect > 1.6 && body_frac > 0.85 { axis_probe() }
+```
+
+**Engine A/B, 236 holdout pages, measured ON TOP of the shipped §8.156 gate:**
+
+| | MACRO | MICRO |
+|---|---:|---:|
+| off | 19.897 % | 14.318 % |
+| on | **19.666 %** | **13.648 %** |
+| gain | **+0.231 pp** | **+0.670 pp** |
+
+95 % CI [+0.069, +0.436], excludes zero. 11 pages changed, 9 better, 2 worse.
+Predicted +0.228 from the prototype; measured +0.231.
+
+**The two gates are mirrors, and that is the point.**
+
+| | fires on | MACRO | MICRO |
+|---|---|---:|---:|
+| §8.156 | sparse pages, median 18 lines | **+0.562** | +0.069 |
+| §8.157 | dense 3+ column, median 159 lines | +0.231 | **+0.670** |
+| combined | | **+0.793** | **+0.738** |
+
+§8.156 rescues small pages that character-weighting barely sees; §8.157 rescues
+large ones that page-weighting barely sees. Either alone looks like a partial
+result on one metric. Together they are symmetric, which is a much stronger
+signal than either number.
+
+**THE COLUMN CONDITION IS LOAD-BEARING, NOT SCOPING.** Proposed without it, the
+rule fires on `omni-0063` — a tall, dense, high-body-fraction TWO-column page the
+shipped order reads at 5.8 % — and takes it to 73.4 %. That single page flips the
+corpus result from +0.249 pp with a CI excluding zero to **-0.053 pp with a CI
+spanning it**. A lib test pins it, along with a clause-by-clause check that none
+of the other three has gone inert the way `FFAI_MARGIN` did in §8.154.
+
+**Why it is a new STAGE and not a second gate inside `order_reading`.** The guard
+needs `body_frac` (post-suppression) and the cut needs `med_cw = width / chars`
+(post-recognition). Neither exists at `engine.rs:400` where ordering runs. So it
+sits between `body_only` and emit — and the guard's GEOMETRY is computed before
+`body_only`, because §8.153's D6a established that gutters over 111 lines are not
+gutters over 80, a mistake that voided an entire harness.
+
+**Parity was checked, not assumed.** The Rust port reproduces the Python
+prototype on all 12 firing pages to **0.00 pp**. `order_probe`'s docstring records
+a reimplementation that matched the shipped order on 2 pages of 12; a port that
+silently differs from what was measured is worthless. Re-checked again after a
+later refactor split the env test from the logic: 6/6 unchanged.
+
+**How it was found, and the honest caveat.** The rule came from an external
+analysis of the §8.155 data. Two earlier proposals from that source were oracle
+gates — one scored against `best_of_10` (which contains the baseline, so every
+gate shows zero hurts and filename parity scores +1.39 pp), one keyed on
+`default_cer` and `cost` (both need the reference text). This one is on legal
+runtime inputs. But it fires on 3 TRAIN pages, and ranking single features by
+train gain puts `wide_frac`, `h_med`, `w_med`, `col_max_frac`, `h_cv` and
+`y_back_big` ahead of `aspect`, which does not appear — so holdout participated
+in selecting it. The engine A/B is what promotes it, not the search.
+
+**Remaining.** 4.30 pp of ordering cost stood before this; 3.04 pp of it on the
+116 dense 3+ column pages. This takes the reachable part of that population and
+leaves the rest: the probe still WRECKS 21 dense pages the guard correctly keeps
+it away from, and nothing yet separates those from the ones it rescues — page
+features top out at AUC 0.623, and every intrinsic sequence score picks worse
+than not switching at all.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

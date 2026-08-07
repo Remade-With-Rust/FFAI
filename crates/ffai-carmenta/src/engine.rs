@@ -701,7 +701,13 @@ impl OcrEngine for CraftCrnn {
         // §8.106: opt-in body-text scope. Off by default — a filter that
         // silently deletes output must be asked for, and a document-to-text
         // user usually wants the table cells this drops.
+        // §8.157: the guard's geometry comes from the FULL population, before
+        // suppression deletes any of it — gutters over 111 lines are not gutters
+        // over 80, and that mistake voided a whole harness in §8.153.
+        let probe_stats = crate::suppress::probe_stats(&out_lines, w as f32, h as f32);
         let out_lines = crate::suppress::body_only(out_lines, w as f32, h as f32);
+        let out_lines =
+            crate::suppress::probe_reorder(out_lines, &probe_stats, w as f32, h as f32);
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.
