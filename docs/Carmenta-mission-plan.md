@@ -8199,6 +8199,67 @@ fix reads `Let's Spell` where the shipped engine reads `Let" $ Spell`. That the
 corpus-wide number came out flat does not make the diagnosis wrong — it makes it
 narrow, which is what the 2.7 % ceiling said before the run started.
 
+### 8.150 Crop-norm WINS — and our reading order is eating it
+
+§8.149 fixed two defects (a pixel-majority polarity test that destroyed bold
+text; a stretch applied to every crop) and predicted -0.05 to -0.07 pp on the
+full corpus. Measured **+0.016 pp** — neutral, and marginally the wrong side.
+
+| | MACRO |
+|---|---:|
+| baseline | 20.443 % |
+| §8.148 always-stretch, majority polarity | 20.582 % (+0.139) |
+| **§8.149 span<0.35, border polarity** | **20.459 % (+0.016)** |
+
+15 pages improve, 4 worsen, 217 are untouched. **And none of the four losses is a
+crop-norm failure.**
+
+```
+omni-0085   REF:  PHOENIX CONSULTING # Our Previous Experience
+                  Asiacell brings us together 78
+            off:  Our Asiacell dn Previous Experience PHOENUX CONSULTING
+            on:   Our Asiacell brlngs Us topether Previous Experience PHOENUX CONSULTING
+```
+
+**Crop normalisation RECOVERED "brings us together", previously read as `dn`.**
+Our emitted order is reversed against the reference, so inserting correct text
+into a scrambled sequence RAISES edit distance. The other loss, `omni-0197`, is a
+CJK page — garbage either way, now slightly longer garbage.
+
+**Re-scored with §8.86's oracle ordering, the sign flips:**
+
+| | crop-norm net over 236 pages |
+|---|---:|
+| as emitted | **+0.016 pp** |
+| **oracle order** | **-0.095 pp** |
+
+| `omni-0085` | off | on |
+|---|---:|---:|
+| as emitted | 66.7 % | **76.0 %** |
+| **oracle order** | 52.0 % | **33.3 %** |
+
+**An 18.7 pp win on that page, converted into a 9.3 pp loss by our own sequence
+bug.**
+
+**What this changes.** Reading order was priced at ~0.76 pp of corpus macro
+(§8.141) as a defect in its own right. It is also a TAX ON EVERY RECOGNITION
+IMPROVEMENT: a fix that reads more text correctly is penalised in proportion to
+how badly the page is ordered. That reprices it — it is not one lever among
+several, it is the one gating the others.
+
+**Crop-norm stays opt-in** because macro decides and macro reads +0.016 pp today.
+But it is recorded as a WIN WAITING ON A DEPENDENCY, not a refusal: the fix is
+sound, its mechanism is understood, and the measurement that rejects it is
+measuring something else. When ordering lands, this turns on without further
+work.
+
+**And the process note.** §8.148 read the same +0.139 pp as "normalisation helps
+accuracy and hurts volume" — a coherent story, confirmed by emission counts, and
+INCOMPLETE. The volume mechanism is real on `omni-0245`; it is not what happened
+on `omni-0085`, where volume rose and accuracy rose with it. Two pages, two
+different mechanisms, one aggregate number. **The aggregate cannot tell you which
+you have, and the per-page diff can.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
