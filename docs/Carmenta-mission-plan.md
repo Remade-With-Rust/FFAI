@@ -8260,6 +8260,267 @@ on `omni-0085`, where volume rose and accuracy rose with it. Two pages, two
 different mechanisms, one aggregate number. **The aggregate cannot tell you which
 you have, and the per-page diff can.**
 
+### 8.152 Reading order, priced across the whole holdout — 5.00 pp, and it is WORSE on big pages
+
+§8.150 found `omni-0085` recovering "brings us together" and LOSING 9.3 pp,
+because inserting correct text into a scrambled sequence raises edit distance.
+This prices the whole population: every holdout page re-scored with its emitted
+lines re-sorted into ground-truth region order, so the difference isolates
+SEQUENCE from recognition. Same characters, same recognizer, only the order.
+
+| | as emitted | oracle order | ordering costs |
+|---|---:|---:|---:|
+| MACRO (page-weighted) | 20.46 % | 15.46 % | **5.00 pp** |
+| MICRO (char-weighted) | 14.39 % | 8.64 % | **5.74 pp** |
+
+**The obvious objection is wrong.** `omni-0085`'s spectacular +42.7 pp is thirty
+characters on a 75-character slide, so the first suspicion was that macro's
+page-weighting had manufactured the number out of tiny pages. It had not. Under
+MICRO — where a 75-char slide cannot outvote a 12,000-char newspaper — the cost
+is LARGER, and 2.45 pp of the 5.00 sits on the 89 pages over 4,000 characters at
+6.49 pp each. Reading order is a large-page defect.
+
+| chars | pages | mean cost | share of 5.00 |
+|---|---:|---:|---:|
+| 0–500 | 32 | 8.01 pp | 1.09 pp |
+| 500–1,500 | 40 | 3.27 pp | 0.55 pp |
+| 1,500–4,000 | 75 | 2.87 pp | 0.91 pp |
+| **4,000+** | **89** | **6.49 pp** | **2.45 pp** |
+
+45 of 224 pages cost more than 5 pp each and carry **4.76 pp of the 4.80** —
+concentrated, but a genuine population, not a page list.
+
+**The renders name the failure.** `.tools-bench/render_order.py` draws each page
+twice, our order beside the truth, boxes joined by a path running blue→red along
+the sequence. Three of the four worst are multi-column pages read with the
+columns INTERLEAVED, and in correct order all three land at 2–4 %:
+
+| page | layout | as emitted | correct order |
+|---|---|---:|---:|
+| `omni-0001` | 2-col academic paper | 64.0 % | **2.4 %** |
+| `omni-0191` | 3-col magazine | 45.1 % | **3.4 %** |
+| `omni-0152` | newspaper, 2 stories + sidebar | 31.5 % | **3.7 %** |
+| `omni-0085` | title slide, 75 chars | 76.0 % | 33.3 % |
+
+Near-perfect recognition sitting behind a sequencing error. `omni-0085` is the
+odd one out and is small-page noise.
+
+**The cost is a function of COLUMN COUNT, and single-column pages are already
+right.** This is the finding that scopes everything after it:
+
+| | pages | default | GT order | cost/page |
+|---|---:|---:|---:|---:|
+| dense, 1 column | 17 | 10.63 % | 9.75 % | **0.88 pp** |
+| dense, 2 columns | 48 | 13.70 % | 11.29 % | 2.41 pp |
+| dense, 3+ columns | 116 | 17.31 % | 11.37 % | **5.94 pp** |
+| sparse (cover < 0.18) | 43 | 39.79 % | 33.86 % | 5.93 pp |
+
+Single column is effectively solved. Two columns is close. The defect is 3+
+columns — and sparse pages cost as much per page, on far fewer pages.
+
+**What this changes.** With correct ordering we would read 15.55 % against
+Unlimited-OCR's 17.76 % — a 2.21 pp win instead of a 2.70 pp deficit. The gap
+against the reference is not a recognition gap. It is a sequencing gap, and it is
+larger than the gap itself.
+
+### 8.153 The Great Gate on the order SELECTOR — refuted three times, and what survived
+
+`order_reading` dispatches to ten strategies and the shipped default,
+`order_by_selection`, picks among three of them by a proxy: the rate at which x
+jumps backwards, `FFAI_ORDER_SELECT_EPS` = 0.08. Its own source records three
+candidates rejected because "a wrong ordering can be more column-coherent than a
+right one". A hand-guessed heuristic scoring a hand-set threshold is exactly what
+the Great Gate exists to replace. It did not work here, and the reasons are worth
+more than the rule would have been.
+
+**The instrument was built three times and thrown away twice.** Ordering is a
+pure post-process on recognised boxes, so one OCR pass can score all eleven
+strategies via `order_probe` — but only if the replay is the same function the
+engine runs.
+
+| rig | D6a agreement | fault |
+|---|---:|---|
+| body-only lines | 25/29 | ordering sees ALL detected lines; `FFAI_BODY_ONLY` deletes non-body ones AFTERWARDS. Gutters over 111 lines are not gutters over 80. Diverged at **76 of 80 positions** on `omni-0001` |
+| full population | 111/119 | recognition drops a line AFTER ordering — 100 boxes in, 99 out on `omni-0023`. Same defect, one level down |
+| full population, divergent pages dropped | **224/224** | valid |
+
+D6b, independent: the replay's default CER matched §8.152's engine-driven
+measurement on **224/224 pages within 0.5 pp**, subset means identical at
+20.34 %. Both earlier rigs would have produced confident numbers about a
+different function — the trap `order_probe`'s own docstring records from a
+reimplementation that matched the real order on 2 pages of 12.
+
+**The decomposition, which is the result.**
+
+| | macro | |
+|---|---:|---|
+| shipped default | 20.34 % | best single strategy of the eleven |
+| best-of-10 per page (ORACLE) | 18.45 % | **selector regret 1.90 pp** |
+| ground-truth order | 15.55 % | **pool ceiling 2.90 pp** |
+
+The ceiling exceeds the regret. And `best_of_10 == default` **on 180 of 224
+pages** — on 80 % of the corpus not one of the ten alternatives changes anything.
+The pool is not ten strategies, it is one strategy with variations, which is why
+adding an eleventh candidate has now failed four times (§8.78, `xy_cut_cost`,
+`order_one_level`, `xy_cut_span`).
+
+**Three framings each looked like a win and each was contaminated.**
+
+1. **The optimizer's own ranking.** `suppress_optimizer` sorts by its `MACRO`
+   column, and that column BLENDS train and holdout — MACRO +0.916 sat between
+   train +0.940 and holdout +0.908. Taking the top row lets holdout participate
+   in the choice. The bootstrap CI then quoted as vindication, [+0.270, +1.724],
+   was computed on a rule holdout had helped select.
+2. **Ranking candidates directly by holdout gain.** 665,018 rules, best +0.903 pp
+   with zero pages hurt. Every rule in its top twelve had the SAME train gain
+   (+0.475) — holdout did all the choosing. §8.132's error wearing a holdout
+   column.
+3. **Scoring against `best_of_10`.** `cer_best = min(default, ...alternatives)`
+   INCLUDES the baseline, so `regret >= 0` on every page by construction and
+   EVERY gate shows zero hurts. Demonstrated by scoring deliberately meaningless
+   gates the same way:
+
+| gate | fires | total | hurts |
+|---|---:|---:|---:|
+| `col_max_frac < 0.40` (recommended) | 84 | +1.31 pp | 0 |
+| fire on every page | 224 | +1.90 pp | 0 |
+| coin flip | 120 | +1.11 pp | 0 |
+| **page ID ends in an odd digit** | 154 | **+1.39 pp** | 0 |
+
+The filename's last digit scores +1.39 pp with zero hurts. The metric cannot
+distinguish a gate from a parity check. "Captures 69 % of available `best_of_10`
+gain" is an oracle capture — the same error as §8.131's withdrawn "96 % capture",
+third occurrence this campaign.
+
+**Selected on TRAIN alone and judged once, nothing survives.**
+
+| switch to | train | HOLDOUT | fires | helps | hurts | 95 % CI |
+|---|---:|---:|---:|---:|---:|---|
+| `xycut` | +0.860 | **+0.133** | 39/224 | 10 | 2 | [−0.572, +0.776] |
+| `vtop` | +0.832 | −0.097 | 36 | 8 | 5 | — |
+| `cost` | +0.786 | −0.075 | 33 | 5 | 2 | — |
+| `adaptive` | +0.514 | −0.756 | 46 | 7 | 7 | — |
+| `col_max_frac<0.40` (recommended) | −0.582 | **−1.352** | 84 | 5 | 9 | [−2.781, −0.207] |
+
+The gate recommended as "highest total gain, still zero hurts" is the only one
+whose CI sits entirely BELOW zero. Its "+1.31 pp" and its "−1.352 pp" are the
+same gate on the same pages; the difference is whether what it switches to is an
+oracle or something we can run.
+
+**Why this target resisted when suppression did not.** The suppression gate had
+35,354 line rows. This has **79 train pages, of which 12 fire**. The decision unit
+is the page and there are not enough of them.
+
+**Why the winning rule could not have worked anyway.** Its load-bearing variable,
+`dy_mean > 0.0268`, is not an interleaving detector. Measured:
+`corr(dy_mean, log n_lines)` = **−0.683**, `corr(dy_mean, cover)` = −0.510. Split
+at the threshold, `dy_mean <= 0.0268` holds pages with a median of **149 lines**
+and `> 0.0268` a median of **49**. It is a DENSITY filter, and what it buys is
+avoidance: mean `xycut` gain is **−6.38 pp** on the dense side. The rule earns its
+train gain by dodging harm, not by finding wins — and the pages carrying the
+ceiling are precisely the dense multi-column ones it must exclude to stay safe.
+
+**What survived, and is safe to build on.**
+
+- **`resets`, the score `order_by_selection` decides on, has AUC 0.397.** Below
+  0.5 — inverted, worse than a coin flip at identifying a page that needs a
+  different ordering. Holdout gain +0.001 pp. This is a defect in shipped code
+  and does not depend on any rule generalising.
+- **The y-BACKTRACKING family separates**: `y_back_big` 0.721, `y_back` 0.681,
+  `dy_mean` 0.675, `dy_over_h` 0.674 — all measuring whether the emitted sequence
+  jumps back UP the page, which is the interleaving signature the renders showed.
+  An independent Spearman ranking run outside this harness put `y_back` top at
+  +0.261, from a different statistic, on the same family.
+- **`cover` and `h_med` SIGN-FLIP across splits** (cover +0.878 train, −0.051
+  holdout) and both sat in rules that were nearly shipped.
+
+**The next move is not another selector.** A correct column-aware ordering needs
+no page-level gate: `order_reading`'s contract already degenerates to
+top-to-bottom when no gutter is found, so single-column pages cannot regress
+through that path — confirmed by the data, since pages with 10+ spanning lines
+(i.e. genuinely single-column) cost 0.45 pp. Where a guard IS wanted, it is
+structural rather than fitted:
+
+| candidate gate | fires | cost inside | coverage |
+|---|---:|---:|---:|
+| fitted 3-var switch rule | 39 | 1.29 pp | 27 % |
+| `n_col >= 2 & cover >= 0.18` | 164 | 3.59 pp | 75 % |
+| **`n_col >= 2`** | **189** | **4.49 pp** | **94 %** |
+
+The fitted gate would hand a new detector 27 % of the problem — it catches 27 of
+the 128 pages with 3+ columns — because it was optimised for "does `xycut` beat
+`default` here", not "does this page have columns". `n_col >= 2` needs no fitting,
+covers 94 % of the cost, and fires on **0 of the 35 single-column pages**.
+
+**A refuted mechanism, recorded so it is not re-attempted.** `xy_cut_pernode`
+calls `find_gutters` only when NO line spans 60 % of the page, so one wide line
+disables column detection for that node — and `FFAI_COL_DEBUG` confirms it prints
+nothing on `omni-0001`. That looked like the mechanism. It is not the dominant
+one: pages WITH a spanning line cost 4.26 pp each, pages WITHOUT cost **5.29 pp**.
+What the same measurement does show is a U-shape in how many wide lines a page
+has — 2–3 wide lines is the poison at **7.56 pp/page**, 10+ is harmless at
+0.45 pp — which is §8.85's failure (three gutter-merged lines of ninety costing
+56.3 pp on `omni-0069`) as a population rather than a page. Loosening the veto to
+a fraction is ALREADY REFUTED in `boxes.rs` (tolerance 0.01 costs +2.45 pp, 0.50
+costs +3.24 pp); the comment there points upstream, at line grouping, and the
+U-shape agrees with it.
+
+### 8.154 The never-swept column knobs, swept — all three refused
+
+`boxes.rs` recorded `GUTTER_MIN_FRAC` and `MARGIN_FRAC` as "the only
+`find_gutters` constants never swept in any campaign, and the grid path they gate
+is where §8.47's remaining 7.42 pp of ordering slack lives". Both are env
+overrides, so the sweep needed no rebuild and no branch — it runs on §8.153's
+replay, validated against the engine on 224/224 pages, at subprocess cost per arm
+instead of an OCR pass. `FFAI_ORDER_SELECT_EPS` was swept alongside them because
+§8.153 measured the score it thresholds (`resets`) at AUC 0.397.
+
+Fitted on train, holdout read once.
+
+| knob | train best | holdout |
+|---|---:|---:|
+| `FFAI_GUTTER_MIN` 0.015 | 16.542 % (**-0.402**) | 20.279 % (**-0.064**) |
+| `FFAI_ORDER_SELECT_EPS` 0.04 | 16.701 % (-0.242) | 20.574 % (**+0.231**) |
+| `FFAI_MARGIN` (0.02 .. 0.13) | 16.943 % (+0.000) | 20.343 % (+0.000) |
+
+**`FFAI_GUTTER_MIN` — REFUSED on the page count.** The -0.064 pp is not a small
+win, it is two pages against five: of 235 holdout pages only **7 change at all,
+2 better and 5 worse** (`omni-0139` -14.95 and `omni-0125` -13.83 carrying it,
+against +6.78, +3.55, +2.19, +1.82, +0.17). Bootstrap CI **[-0.270, +0.095],
+spans zero**. §8.114's rule, and this time with a negative page count.
+
+The train curve shows why the shipped default is where it is:
+
+```
+0.010 -0.269   0.015 -0.402   0.020 -0.402   0.025 (default)
+0.030 -0.195   0.040 +4.443   0.055 +4.909
+```
+
+A CLIFF between 0.030 and 0.040 — past it, real gutters are rejected and ordering
+collapses. The default sits just under the cliff on the safe side. The 0.015-0.020
+plateau is a real train optimum and it does not transfer.
+
+**`FFAI_ORDER_SELECT_EPS` — REFUSED, sign flip**, train -0.242 to holdout +0.231.
+This is what AUC 0.397 predicts: a threshold on an inverted score cannot be tuned
+into a good one. The fix for `resets` is to replace the quantity, not move its cut.
+
+**`FFAI_MARGIN` — no lever, and NOT inert.** Five values from 0.02 to 0.13 give
+byte-identical output, which read as dead code until an extreme-value probe was
+run: at 0.45 it costs **+2.08 pp**. So the constant is live and simply flat across
+the whole plausible range — no detected gutter sits near enough to a page edge for
+it to bind. Recorded because "inert" and "flat where it matters" are different
+claims and only the second one is true.
+
+**What this closes.** The 7.42 pp of §8.47 ordering slack is NOT in these three
+constants. Combined with §8.153 (no page-level selector generalises) and §8.152
+(single-column pages are already correct at 0.88 pp/page), the remaining lever is
+the ordering ALGORITHM on multi-column pages, guarded — if a guard is wanted at
+all — by `n_col >= 2`, which covers 94 % of the cost and fires on 0 of the 35
+single-column pages.
+
+**Cost of this experiment: one file in `.tools-bench/`, no code change, nothing to
+revert.** That is the shape every knob sweep should have.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
