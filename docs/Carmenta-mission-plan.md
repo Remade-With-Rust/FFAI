@@ -8146,6 +8146,59 @@ alphabet is not purchasable at this price. The 1.02 pp stays on the table, and t
 honest next lever is the one §8.141 measured: reading order, worth ~0.76 pp, in
 code we own.
 
+### 8.148 Crop normalisation works where predicted, and loses on volume
+
+§8.146 built `FFAI_CROP_NORM` from a visual observation — sixteen of twenty
+Gate 2 pages have coloured headings — after two wrong hypotheses (colour destroys
+luma contrast; coloured means display typeface) and one right one (compressed
+DYNAMIC RANGE, which Otsu could not see because it is scale-invariant).
+
+**The prediction was -0.1 to -0.4 pp macro, against a hard ceiling: the affected
+crops carry 2.7 % of the corpus's characters.** Measured:
+
+| | before | after | delta |
+|---|---:|---:|---:|
+| **Gate 2 pages (14)** | 26.469 % | **25.896 %** | **-0.573 pp** |
+| all others (222) | 20.063 % | 20.247 % | **+0.184 pp** |
+| **corpus MACRO** | 20.443 % | **20.582 %** | **+0.139 pp** |
+| corpus micro | 14.39 % | 14.37 % | -0.02 pp |
+
+**It works exactly where it was aimed and loses everywhere else.** 49 pages
+improve, 25 worsen, 162 are untouched.
+
+**The mechanism, and it is not noise.** Two pages carry +0.171 pp — more than the
+entire net regression:
+
+| page | reference | emitted off -> on |
+|---|---:|---|
+| `omni-0245` | 317 | 1 013 -> **1 075** (+62) |
+| `omni-0259` | 86 | 51 -> **65** (+14) |
+| `omni-0216` | 1 133 | 1 013 -> 1 013 (unchanged, **-2.73 pp**) |
+
+Crop normalisation makes faint text LEGIBLE. On a healthy page that is better
+characters at the same volume — `omni-0216` emits identically and reads 2.73 pp
+better. On a page that already over-emits it is more junk, and `omni-0259`'s
+86-character reference turns +14 characters into +16 pp of CER on its own. That
+is §8.119's small-page amplification meeting §8.105's scope problem: **we emit
+14.6 % unscored text, and this makes more of it readable.**
+
+**Refused as a default on the metric that scores**, and kept opt-in. Micro is
+fractionally better and macro fractionally worse, which is a wash dressed as a
+decision — but the campaign's rule is that macro decides, and macro says no.
+
+**The ablation worth running.** `FFAI_CROP_NORM` does two things and only one of
+them is a correctness fix. The POLARITY flip repairs an input the recognizer was
+never trained to accept — a reversed heading is a wrong image, not a stylistic
+variant. The CONTRAST STRETCH raises sensitivity, which is what makes faint junk
+legible. Splitting them is one build and one run, and the hypothesis is specific:
+polarity alone should keep the Gate 2 win and drop the volume penalty.
+
+**And the observation that started it was right.** Three sections of tables
+missed the coloured headings entirely; a look at the renders found them, and the
+fix reads `Let's Spell` where the shipped engine reads `Let" $ Spell`. That the
+corpus-wide number came out flat does not make the diagnosis wrong — it makes it
+narrow, which is what the 2.7 % ceiling said before the run started.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
