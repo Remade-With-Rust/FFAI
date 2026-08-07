@@ -1241,3 +1241,56 @@ streams should measure 2.
 cheap — five levers, one harness, minutes. Two of tonight's refutations got
 stronger, one got a caveat, and two settings turned out to be operating points
 rather than losers.
+
+
+## 2026-08-06 — the tail is the MACHINE, and Diana is the robust one
+
+Standing claim, now retracted: *"Diana's latency tail is heavier than
+Ultralytics'."* It is not, and the runs that said so were measuring the desktop.
+
+Three arms, same 220 frames of MOT17-09, engines ALTERNATED per frame so
+neither owns a quiet moment, Normal priority throughout.
+
+**Quiet box** — no tail on either engine, and they are indistinguishable:
+
+| engine | p50 | p99 | max | p99/p50 |
+|---|---|---|---|---|
+| diana | 44.0 | 51.3 | 61.4 | **1.17** |
+| ultralytics | 37.8 | 45.0 | 47.4 | **1.19** |
+
+**Same box, 16 synthetic burn threads** — both degrade, very unequally:
+
+| engine | p50 | p99 | max | p99/p50 |
+|---|---|---|---|---|
+| diana | **89.3** | **168.7** | 357.1 | **1.89** |
+| ultralytics | **171.5** | **934.4** | 1424.4 | **5.45** |
+
+Under load Diana is **1.92x faster on the median** and its tail ratio is a third
+of the reference's. Quiet-to-loaded degradation is 2.0x for Diana against 4.5x
+for Ultralytics.
+
+**What the tail actually is.** Priority alone removes it, with identical work
+and identical CPU time (200 frames, rusty_alloc build):
+
+| priority | p50 | p99 | max | cpu_s | cores_busy |
+|---|---|---|---|---|---|
+| Normal | 64.0 | 384.2 | 408.1 | 29.5 | 2.05 |
+| High | 64.7 | **100.5** | **113.4** | 30.0 | 2.43 |
+| RealTime | 68.9 | 147.9 | 177.8 | 37.3 | 2.17 |
+
+Same median, same CPU, 3.8x better tail — so the spikes are timeslices lost, not
+work done. Note `cores_busy ~2.1`: Diana is a two-core workload, not the
+28-thread fan-out previously assumed, so it never saturates the box. And
+RealTime is WORSE than High; the answer is High, not "more".
+
+**Two wrong attributions this cost.** The tail was first blamed on
+`rusty_alloc` (sequential run: p99 618 vs mimalloc 204) — ABBA-interleaved it
+reads 409 vs 480 in rusty_alloc's favour, and the effect was entirely which arm
+ran while a neighbouring build was hot. It was then blamed on Diana, from a
+single contended run showing mean/median 1.93 against Ultralytics' 1.23; that
+does not reproduce, and under controlled load the ordering is emphatically the
+other way.
+
+**Rule.** A latency tail measured at Normal priority on a shared desktop is a
+measurement of the desktop. Pin the priority or report the CPU time, and never
+attribute a tail to a component without an arm that holds that component fixed.
