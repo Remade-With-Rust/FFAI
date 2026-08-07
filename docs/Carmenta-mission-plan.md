@@ -8107,6 +8107,45 @@ section-scope rule by rendering pages; §8.121 found the screenshot the same way
 this found a language boundary that eleven sections of numbers had not. The
 tables cannot see an alphabet.
 
+### 8.147 The Chinese model REFUSED as a default — the regression is 19x the gain
+
+§8.143 shipped `FFAI_REC_LANG=zh` off by default on the argument that a
+6 719-class head is normally weaker on Latin than a 97-class specialist, and that
+trading English CER for CJK coverage is a bad bargain until measured. Measured:
+
+| | english | chinese | delta | corpus impact |
+|---|---:|---:|---:|---:|
+| **all 236 pages (MACRO)** | **20.44 %** | **24.83 %** | **+4.39 pp** | |
+| CJK pages (7) | 50.58 % | 42.26 % | **-8.32 pp** | **-0.247 pp** |
+| non-CJK (229) | 19.52 % | **24.30 %** | **+4.78 pp** | **+4.634 pp** |
+
+**The Latin regression costs 19x what the CJK gain returns.** The break-even was
+~1.4 pp; the regression is 4.78 pp. **168 of 229 non-CJK pages get worse by more
+than a point** — `omni-0055` 6.3 % -> 99.7 %, `omni-0048` 1.6 % -> 53.4 %,
+`omni-0245` 231 % -> 582 %.
+
+And the CJK gain is smaller than the sample suggested: 8.32 pp on those seven
+pages, not the transformation `omni-0079`'s `KRT 分类词汇训练` implied. Reading
+the Chinese does not rescue a page whose remaining error is layout and English.
+
+**The feature stays, opt-in and unchanged.** Its real use is a corpus that is
+genuinely Chinese, where the English model is catastrophic and a 4.78 pp Latin
+penalty is irrelevant — not a corpus of English documents carrying Chinese
+glosses, which is what §8.142 established this one to be.
+
+**What the gate was for.** Every branch this campaign shipped went in behind one
+— `FFAI_BODY_ONLY`, `FFAI_CONV3X3`, `--features mimalloc`, now `FFAI_REC_LANG`.
+Four of them survived measurement and this one did not, at a cost of one
+afternoon and zero risk to the default path. **A feature that ships off is not a
+feature that failed; it is one whose price got discovered before its users paid
+it.**
+
+**And it closes the CJK line properly.** §8.142 priced these pages at 51 % of the
+competitive gap and called it "an alphabet we do not have". True, and the
+alphabet is not purchasable at this price. The 1.02 pp stays on the table, and the
+honest next lever is the one §8.141 measured: reading order, worth ~0.76 pp, in
+code we own.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
