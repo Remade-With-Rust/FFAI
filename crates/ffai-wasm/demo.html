@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Diana — YOLO26 in WebAssembly</title>
+<style>
+ body{font:14px system-ui;margin:2rem;max-width:60rem}
+ canvas{max-width:100%;border:1px solid #ccc}
+ #log{white-space:pre;font-family:ui-monospace,monospace;font-size:12px}
+ input{margin:.25rem 0}
+</style>
+<h1>Diana — YOLO26 object detection in WebAssembly</h1>
+<p>Pure Rust. No ONNX Runtime, no TensorFlow.js — the whole graph is in the wasm module.</p>
+<p><b>Weights are yours.</b> YOLO26 checkpoints are AGPL-3.0 and none are bundled here.</p>
+<label>safetensors <input type="file" id="st"></label><br>
+<label>manifest .json <input type="file" id="mf"></label><br>
+<label>image <input type="file" id="im" accept="image/*"></label><br>
+<canvas id="cv"></canvas>
+<div id="log">load the three files above</div>
+<script type="module">
+import init, { Detector, allocator } from './pkg/ffai_wasm.js';
+const log = m => document.getElementById('log').textContent = m;
+let det = null, stBuf = null, mfTxt = null;
+await init();
+log(`wasm ready — allocator: ${allocator()}`);
+
+const tryBuild = () => {
+  if (!stBuf || !mfTxt) return;
+  const t = performance.now();
+  det = new Detector(new Uint8Array(stBuf), mfTxt, 'n');
+  log(`model loaded in ${(performance.now()-t).toFixed(0)} ms — now pick an image`);
+};
+document.getElementById('st').onchange = async e => { stBuf = await e.target.files[0].arrayBuffer(); tryBuild(); };
+document.getElementById('mf').onchange = async e => { mfTxt = await e.target.files[0].text();       tryBuild(); };
+document.getElementById('im').onchange = async e => {
+  if (!det) return log('load the weights and manifest first');
+  const bmp = await createImageBitmap(e.target.files[0]);
+  const cv = document.getElementById('cv');
+  cv.width = bmp.width; cv.height = bmp.height;
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(bmp, 0, 0);
+  const { data } = ctx.getImageData(0, 0, cv.width, cv.height);
+  const t = performance.now();
+  const found = det.detect(data, cv.width, cv.height, 0.25);
+  const ms = performance.now() - t;
+  ctx.lineWidth = 2; ctx.strokeStyle = '#0a0'; ctx.fillStyle = '#0a0'; ctx.font = '14px system-ui';
+  for (const d of found) {
+    ctx.strokeRect(d.x0, d.y0, d.x1-d.x0, d.y1-d.y0);
+    ctx.fillText(`${d.name} ${d.confidence.toFixed(2)}`, d.x0+2, d.y0-4);
+  }
+  log(`${found.length} detections in ${ms.toFixed(0)} ms (single-threaded wasm)\n` +
+      found.map(d=>`  ${d.name.padEnd(14)}${d.confidence.toFixed(3)}`).join('\n'));
+};
+</script>

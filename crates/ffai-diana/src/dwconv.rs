@@ -36,7 +36,7 @@
 //! differs.
 
 use candle_core::{Result, Tensor};
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 /// Depthwise 3x3, stride 1, padding 1 — the only shape YOLO26 uses.
 ///

@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use rayon::prelude::*;
+use crate::par::prelude::*;
 use ffai_core::engine::{DetectEngine, DetectOptions, EngineInfo, EngineStatus, Task};
 use ffai_core::error::{Error, Result};
 use ffai_core::types::{Detection, DetectOutput, ImageBuffer};
@@ -266,7 +266,17 @@ impl DetectEngine for Yolo26 {
         if crate::parallel::serial_kernels() || crate::parallel::no_pool() {
             return self.detect_inner(image, opts);
         }
-        crate::parallel::latency_pool().install(|| self.detect_inner(image, opts))
+        // Unreachable on wasm — `serial_kernels()` is unconditionally true
+        // there — but still type-checked, and `latency_pool` does not exist on
+        // a target with no threads to put in it.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::parallel::latency_pool().install(|| self.detect_inner(image, opts))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.detect_inner(image, opts)
+        }
     }
     fn detect_batch(
         &self,

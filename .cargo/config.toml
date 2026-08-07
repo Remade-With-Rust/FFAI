@@ -1,0 +1,9 @@
+# getrandom 0.3 refuses `wasm32-unknown-unknown` unless the backend is named at
+# BUILD time — the `wasm_js` feature alone is explicitly insufficient, and the
+# crate says so in its own error. It has to be a rustflag rather than a feature
+# because the choice is a property of the host environment (a browser with
+# `crypto.getRandomValues`), not of any crate in the graph.
+#
+# Scoped to the wasm target so native builds are untouched.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

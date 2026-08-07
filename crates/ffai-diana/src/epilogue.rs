@@ -116,7 +116,7 @@ impl InplaceOp1 for Epilogue {
         if crate::parallel::serial_kernels() {
             data.chunks_mut(n).enumerate().for_each(apply);
         } else {
-            use rayon::prelude::*;
+            use crate::par::prelude::*;
             data.par_chunks_mut(n).enumerate().for_each(apply);
         }
         Ok(())
@@ -195,7 +195,7 @@ fn apply_out_of_place(
             if crate::parallel::serial_kernels() {
                 spare.chunks_mut(per_channel).enumerate().for_each(fill);
             } else {
-                use rayon::prelude::*;
+                use crate::par::prelude::*;
                 spare.par_chunks_mut(per_channel).enumerate().for_each(fill);
             }
         }
@@ -317,7 +317,7 @@ impl InplaceOp1 for EpilogueNhwc {
         if crate::parallel::serial_kernels() {
             data.chunks_mut(n).for_each(apply);
         } else {
-            use rayon::prelude::*;
+            use crate::par::prelude::*;
             data.par_chunks_mut(n).for_each(apply);
         }
         Ok(())
@@ -355,7 +355,7 @@ pub fn apply_transposed(
     const TILE: usize = 64;
 
     crate::cpuop::SliceOp::new("ffai-epilogue-transpose", move |ys, _| {
-        use rayon::prelude::*;
+        use crate::par::prelude::*;
         let n = c_out * ohw;
         let mut v: Vec<f32> = vec![0.0; n];
         let avx2 = act && crate::silu::avx2_enabled();

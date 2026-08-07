@@ -32,7 +32,7 @@
 //! the stride.
 
 use candle_core::{Result, Tensor};
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 /// Dense 3x3, padding 1, groups 1, stride 1 or 2.
 ///
@@ -377,7 +377,7 @@ fn im2col_t(
     ow: usize,
     stride: usize,
 ) -> Vec<f32> {
-    use rayon::prelude::*;
+    use crate::par::prelude::*;
     let k = c_in * 9;
     let hw = h * w;
     // Pre-zeroed, so only the in-bounds taps are written; the padding is
@@ -479,7 +479,7 @@ fn weight_nhwc_cached(weight: &Tensor, c_out: usize, c_in: usize) -> Result<Tens
 ///
 /// K is tap-major to match [`weight_nhwc_cached`]. Stride 1, padding 1.
 fn im2col_from_nhwc(xs: &[f32], c_in: usize, h: usize, w: usize) -> Vec<f32> {
-    use rayon::prelude::*;
+    use crate::par::prelude::*;
     let k = c_in * 9;
     let mut col = vec![0.0f32; h * w * k];
     col.par_chunks_mut(w * k).enumerate().for_each(|(oy, dst)| {

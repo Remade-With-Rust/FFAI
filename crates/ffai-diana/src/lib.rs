@@ -56,6 +56,7 @@ pub mod head;
 pub mod image;
 pub mod live;
 pub mod neck;
+pub mod par;
 pub mod parallel;
 pub mod profile;
 pub mod track;

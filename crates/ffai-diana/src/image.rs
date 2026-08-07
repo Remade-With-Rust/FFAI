@@ -11,7 +11,7 @@
 //! recomputed by the caller, and travels onward in
 //! [`ffai_core::types::DetectOutput`].
 
-use rayon::prelude::*;
+use crate::par::prelude::*;
 use candle_core::{Device, Result as CandleResult, Tensor};
 use ffai_core::types::{ImageBuffer, Letterbox, PixelFormat};
 

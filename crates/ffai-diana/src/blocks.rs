@@ -12,7 +12,7 @@
 //! refuses a file that says otherwise, because unfused weights would be a
 //! different forward pass rather than a slower one.
 
-use rayon::prelude::*;
+use crate::par::prelude::*;
 use candle_core::{Result, Tensor, D};
 use candle_nn::{conv2d, Conv2d, Conv2dConfig, Module, VarBuilder};
 

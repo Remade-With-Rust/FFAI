@@ -24,7 +24,7 @@
 //! stays the oracle), plus the full-graph parity oracle downstream.
 
 use candle_core::{Result, Tensor};
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 /// `exp` without a libm call, accurate to ~1e-7 relative over the range an
 /// activation sees.
@@ -224,7 +224,7 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                 // Explicit AVX2: eight lanes of the polynomial at a time.
                 // Allocation still happens once (the double-write lesson),
                 // and the vector kernel writes into it.
-                let chunk = (1 << 14).max(xs.len().div_ceil(rayon::current_num_threads().max(1)));
+                let chunk = (1 << 14).max(xs.len().div_ceil(crate::par::current_num_threads().max(1)));
                 if xs.len() <= chunk && !crate::smallgains::disabled() {
                     // ONE chunk, so `par_chunks_mut` would fork a job, hand
                     // the whole buffer to a single worker, and join — the

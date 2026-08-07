@@ -74,6 +74,14 @@ rusty_h264 = "0.8"
 # longer a blocker for still images.
 remade-ffmpeg = []
 
+# wasm32 needs getrandom's browser backend selected explicitly. BOTH halves are
+# required and the crate errors if either is missing: this feature, plus
+# `--cfg getrandom_backend="wasm_js"` from `.cargo/config.toml`. It arrives
+# transitively (via zip/rand under the codec stack), so it must be named here
+# even though nothing in this crate asks for randomness directly.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
 [lints]
 workspace = true
 

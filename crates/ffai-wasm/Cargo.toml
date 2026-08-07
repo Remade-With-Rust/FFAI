@@ -1,0 +1,35 @@
+[package]
+name = "ffai-wasm"
+description = "Diana in the browser — YOLO26 object detection compiled to WebAssembly, pure Rust, no ONNX runtime"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["wasm", "object-detection", "yolo", "webassembly", "computer-vision"]
+categories = ["wasm", "computer-vision"]
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ffai-core = { workspace = true }
+ffai-diana = { workspace = true }
+wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
+
+# The binary is the only thing entitled to choose an allocator, and a cdylib IS
+# the binary here. On wasm32 the Rust default is dlmalloc; `rusty_alloc` ships
+# `prim/wasm.rs` and has already made a measured wasm-specific choice (arena
+# pre-reservation is disabled there, because wasm `memory.grow` is never
+# returned to the host). Whether it beats dlmalloc on THIS workload is a
+# measurement we can now run, which is the point of having a cdylib at all.
+rusty_alloc-api = "=0.3.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[lints]
+workspace = true

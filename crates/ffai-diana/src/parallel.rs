@@ -60,7 +60,18 @@ thread_local! {
 /// caller has already saturated the machine at a coarser grain.
 #[inline]
 pub fn serial_kernels() -> bool {
-    SERIAL.with(Cell::get)
+    // wasm32 has no threads to spawn, so the fan-out arm does not exist. This
+    // is not a concession: the table above says serial is 363 ms of CPU
+    // against 844 ms at 24 threads, so wasm gets the arm that was already
+    // winning on CPU. Only wall-clock parallelism is lost.
+    #[cfg(target_arch = "wasm32")]
+    {
+        return true;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        SERIAL.with(Cell::get)
+    }
 }
 
 /// Run `f` with intra-image parallelism disabled on this thread.
@@ -218,6 +229,7 @@ pub fn no_pool() -> bool {
     std::env::var("FFAI_DIANA_THREADS").is_ok_and(|v| v == "0")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn latency_pool() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {

@@ -43,7 +43,7 @@
 //! question rather than a copy-paste.
 
 use candle_core::{Result, Tensor};
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 /// Output columns accumulated at once. 32 f32 = 4 AVX2 registers, which
 /// leaves room for the broadcast weight and the loaded row.
