@@ -8521,6 +8521,76 @@ single-column pages.
 **Cost of this experiment: one file in `.tools-bench/`, no code change, nothing to
 revert.** That is the shape every knob sweep should have.
 
+### 8.155 The axis-price ceiling probe — §8.41's diagnosis refuted, and the shipped cut defended
+
+§8.41 diagnosed the recursive cut's failure as the AXIS CHOICE — "a figure's
+horizontal whitespace (~19 line-heights) outbids a real column gutter (~2)". That
+is a testable claim with a knob on it, and §8.152-154 had narrowed the remaining
+lever to the ordering ALGORITHM. So: price the axis explicitly, in Python, before
+writing any Rust.
+
+A recursive XY-cut whose axis decision is one tunable, both sides in their natural
+units — a gutter is wide in CHARACTERS, a band gap is tall in LINES:
+
+    prefer VERTICAL when   gutter_w / med_char_w  >  ALPHA * (hgap / med_line_h)
+
+ALPHA = 0 cuts vertically whenever any gutter exists; ALPHA = inf never does. The
+shipped code makes this choice implicitly and has never priced it.
+
+**It loses, everywhere, and never beats the shipped order even on TRAIN.**
+
+| | train | holdout |
+|---|---:|---:|
+| shipped `order_by_selection` | **16.943 %** | **20.343 %** |
+| probe, best alpha at default knobs | 21.424 % | — |
+| probe, best secondary knobs | 18.173 % | — |
+| probe, alpha RE-SWEPT at those knobs (alpha=4) | 17.869 % | 20.968 % (**+0.626**) |
+| oracle order | 11.120 % | 15.547 % |
+
+The sequential search was re-run because it had a real flaw — alpha was swept at
+default knobs, then knobs at the winning alpha, and the second sweep moved train
+3.25 pp, enough that the interaction could have hidden a better alpha. It did not:
+re-swept, alpha=4.0 is best and still 0.93 pp WORSE than shipped on train.
+
+Holdout: 80 pages changed, **35 better / 45 worse**. Gated to `n_col >= 2` or
+ungated makes no difference (+0.569 vs +0.550 pp).
+
+**But the variance is the finding.** The probe does not fail by being uniformly
+mediocre — it is enormous in both directions:
+
+```
+improvements   omni-0001 -61.6   omni-0116 -49.5   omni-0003 -48.2   omni-0185 -40.4
+regressions    omni-0033 +70.0   omni-0063 +67.7   omni-0075 +50.2   omni-0277 +49.6
+```
+
+`omni-0001`'s ordering cost is +61.6 pp, so **-61.6 means this algorithm reaches
+the ORACLE on the worst page in the corpus** — and on `omni-0116`, `omni-0003`,
+`omni-0185` too, the exact pages §8.152's renders showed being read with their
+columns interleaved. A correct ordering for those pages exists and is reachable by
+a simple geometric cut. This one buys them at 1:1 against pages it destroys.
+
+**What is refuted.** Pricing the axis is not the lever. The best ALPHA at the best
+knobs is worse than shipped on both splits, and the degenerate arms bracket it
+(alpha=0 "always cut vertically" 20.281 %, alpha=inf "never" 18.173 %) — so no
+setting of this family reaches 16.943 %.
+
+**What is defended.** `order_by_selection` is stronger than it looked. §8.153
+showed it beats all ten alternatives it can dispatch to; this shows it also beats
+a from-scratch parameterised XY-cut at every setting tried, including ones tuned
+directly on train. The 2.90 pp pool ceiling is NOT "we have not tuned XY-cut
+properly". It is more likely that XY-cut as a FAMILY is the wrong algorithm for
+these pages, which is a different and more expensive problem than this campaign
+assumed.
+
+**Caveat on the instrument.** This is a probe, not a port: a Python
+reimplementation of `order_reading` matched the shipped order on 2 pages of 12
+(`order_probe`'s docstring), so the comparison is a DIFFERENT algorithm on the same
+metric, not an ablation of the shipped one. That is the right shape for a ceiling
+probe and the wrong shape for a keep decision — but since the answer is "worse on
+train", no keep decision arises.
+
+**Cost: one gitignored file, no Rust written, nothing to revert.**
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
