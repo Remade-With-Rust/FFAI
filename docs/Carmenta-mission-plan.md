@@ -9058,6 +9058,34 @@ opt-in by engine name, `crnn.rs` untouched. LIVE is unaffected — it wraps
 `dyn OcrEngine` and never reaches inside — but a global default flip would need
 its own `live_bench`/`live_soak` verdicts before it happened.
 
+
+**§8.164 FINAL: the ghost branch REVERTED on a -0.988 pp engine verdict, and the
+mechanism of the loss is a lesson about ordering the filter's passes.** Engine
+A/B: 19.661 % -> 20.649 %, CI [-3.232, +0.180]. 18 pages improved and it still
+lost a full point, because ONE page absorbed everything: `omni-0245` went
+228.9 % -> **468.6 %**. That page is the §8.161 screenshot-of-nested-text whose
+CER already exceeds 100 % (we emit 3.2x the reference); dropping lines there does
+not remove junk, it removes the few ANCHORS that were holding the alignment
+together, and the edit distance more than doubles.
+
+Three transferables:
+1. **A rule validated on page-normalised gain can still be destroyed by one page
+   whose CER exceeds 100 %.** Macro treats a 468 % page and a 4 % page as equals;
+   the replay's per-page normalisation hid a 240-pp-page swing inside a +0.288.
+   Any future suppression fit must EXCLUDE or CAP over-100 % pages before
+   sweeping, or price them explicitly.
+2. **Predicted -0.057, measured -0.988.** The corrected replay still understated
+   the loss 17x, because the branch ran BEFORE the §8.136 block pass: deleting
+   lines changes the surviving population, which changes that pass's own page
+   statistics (`lh2`, `p90_2`), which cascades. A replay that models one branch
+   in isolation cannot see inter-pass coupling. Filter passes are not additive.
+3. The rule's real signal was never wrong: it genuinely helped `omni-0261`
+   (-7.2), `omni-0263` (-4.0), `omni-0080` (-3.2) — the faded/CJK pages the user
+   identified by eye. It is the collateral, not the target, that refutes it.
+
+The §8.164 train-only corpus extension (325 pages, three-way labels) STANDS as
+infrastructure and is unaffected by this revert.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
