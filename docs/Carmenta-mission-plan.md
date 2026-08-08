@@ -9239,3 +9239,107 @@ Everything optional and composable; explicit measured trade-offs; rich
 structured output by default; engines swappable by name; the same mental
 model as Mercury — and every number on this page eventually replaced by a
 ledger line or deleted.
+
+### 8.171 SVTR ships at +1.521 pp — and the competitive claim it was supposed to win does NOT hold
+
+Two results, and the second one matters more than the first.
+
+**1. The abstain was recalibrated, and the miscalibration was far larger than
+the page that exposed it.** §8.170's conflated run was killed by one page
+(`omni-0003`); the harvest over all 236 holdout pages, both engines, one binary,
+shows it was never about one page:
+
+| | abstains | rate |
+|---|---:|---:|
+| CRNN @ 0.96 (shipped, what +0.987 pp was measured under) | 19 | 8.1 % |
+| **SVTR @ 0.96 (carrying CRNN's constant across)** | **66** | **28.0 %** |
+| SVTR @ 0.946 (rate-matched) | 18 | 7.6 % |
+
+Carrying the constant across would have silenced the ordering verifier on **47
+pages that should keep it**. `VERIFY_LOWCONF` is now per-recognizer, threaded
+from `engine.rs` where `self.rec` is known, with `FFAI_VERIFY_LOWCONF` as a
+one-binary sweep override. The threading landed FIRST as a provably inert
+refactor (SVTR's constant set equal to CRNN's) so the behaviour change was one
+number moving.
+
+**The honest limit on that number.** The rate matches; the PAGE SETS only half
+overlap — 9 shared, 9 SVTR-only, 10 CRNN-only, Jaccard 0.321. That is defensible
+(competence is a property of a (model, page) pair, and a better recognizer
+should find different pages legible) and 0.946 is also the peak of page
+agreement, but it is weaker than "identical behaviour", and the claim that it
+reproduces the behaviour the +0.987 pp was measured under should not be made
+more strongly than that. It is also FRAGILE: 0.946 -> 18 pages but 0.956 -> 52.
+The durable fix is a scale-free rule; open work.
+
+**2. The full-config A/B — the shipped configuration, both arms, no override.**
+
+| | MACRO | MICRO | sec/page |
+|---|---:|---:|---:|
+| CRNN | 18.680 % | 12.720 % | 8.66 |
+| **SVTR** | **17.158 %** | **11.567 %** | 16.53 |
+| gain | **+1.521 pp** | **+1.154 pp** | 1.91x slower |
+
+95 % CI **[+1.068, +2.016]**, excludes zero. 214 better, 19 worse. CRNN returns
+18.680 / 12.720 — the shipped standings to three decimals, which here is the
+POSITIVE CONTROL rather than the stale-binary tell: CRNN's path is untouched by
+this change, the engine is deterministic, so the unchanged arm reproducing its
+known number while the changed arm moves is exactly right. (§8.169's stale-binary
+incident was the inverse — a number matching the arm that should have been
+DISABLED. A freshness assert now runs before the first measurement.)
+
+**The pre-registered prediction was WRONG, in our favour.** A gain SMALLER than
+§8.170's +1.435 was predicted, on the reasoning that the verifier already rescues
+what SVTR fixes. Measured +1.521 — statistically indistinguishable from +1.435
+(the CIs overlap heavily). The two mechanisms are **largely independent**: better
+recognition and better reading order fix different pages.
+
+**3. THE CORRECTION. The 0.60 pp lead over Unlimited-OCR is not real.** The A/B's
+CI is on the CRNN->SVTR GAIN. That is a different question from "are we ahead",
+and the campaign has now twice been burned by conflating them (§8.118, §8.119).
+Scored head-to-head on the same 236 pages — their cached output re-scored through
+OUR path first, reproducing the ledger's 17.76 % / 18.72 % to +0.00 on both, so
+the scoring paths are identical:
+
+| comparison | point | 95 % CI | verdict |
+|---|---:|---|---|
+| SVTR vs Unlimited, MACRO | +0.60 pp | [-3.13, +4.89] | **SPANS 0** |
+| SVTR vs Unlimited, MICRO | +7.15 pp | [-2.73, +20.20] | **SPANS 0** |
+
+**Neither statistic supports a claim in either direction.** A 236-page macro
+comparison against a model whose error is concentrated in a few catastrophic
+pages has enormous per-page variance, and the point estimates were reported for
+three sections as though they were verdicts.
+
+**4. And the sensitivity inverts the story.** Their 8 pages over 100 % CER carry
+6.53 pp of their 17.76 pp macro and 7.46 pp of their 18.72 pp micro. Excluding
+them:
+
+| | ours | theirs | delta | CI |
+|---|---:|---:|---:|---|
+| MACRO, their 228 normal pages | 15.15 % | **11.63 %** | **-3.52 pp (BEHIND)** | [-5.58, -1.49] **excludes 0** |
+| MICRO, their 228 normal pages | 11.72 % | 11.78 % | +0.06 pp | [-4.76, +6.94] spans 0 |
+
+**On the 96.6 % of pages where Unlimited-OCR does not lose coherence, it beats us
+by 3.52 pp page-weighted with a CI that excludes zero, and ties us exactly on
+characters.** Our entire apparent macro advantage is their failure mode, not our
+accuracy.
+
+That failure mode is real and ours is structurally better — a detector plus a
+recognizer cannot emit 225 % of a page, and a VLM losing coherence can. It is
+legitimate to count it. But the honest competitive position is:
+
+- **character accuracy: parity** with best-in-class (11.72 vs 11.78 on normal pages);
+- **page-weighted accuracy: behind** on normal pages, ahead only via their blowups;
+- **robustness, speed, footprint: ours**, and those are the defensible claims.
+
+Our page-weighted deficit is the same one §8.161 named and never fixed: the 72
+holdout pages under 1 500 reference characters, where we read 34.19 % against
+their 28.32 %. Macro weights a mangled 200-character slide exactly as heavily as
+a well-read 5 000-character journal page. **That is now the single highest-value
+front on the board** — it is where the remaining gap lives, it is measured, and
+no lever has been aimed at it.
+
+**Speed caveat:** the 8.66 / 16.53 s/page figures were taken while a concurrent
+build saturated the machine. The 1.91x RATIO is ABBA-interleaved and survives
+drift; the ABSOLUTE seconds are contaminated and must not be quoted as the
+shipping figure. Re-measure on a quiet box before any speed claim.

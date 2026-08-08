@@ -752,8 +752,15 @@ impl OcrEngine for CraftCrnn {
         // over 80, and that mistake voided a whole harness in §8.153.
         let probe_stats = crate::suppress::probe_stats(&out_lines, w as f32, h as f32);
         let out_lines = crate::suppress::body_only(out_lines, w as f32, h as f32);
+        // §8.171: the abstain's low-confidence line belongs to the RECOGNIZER,
+        // not to the page. Passed in from here because this is the only place
+        // that knows which one ran.
+        let lowconf = match self.rec {
+            RecStage::Svtr => crate::suppress::VERIFY_LOWCONF_SVTR,
+            RecStage::Crnn | RecStage::Parseq => crate::suppress::VERIFY_LOWCONF_CRNN,
+        };
         let out_lines =
-            crate::suppress::probe_reorder(out_lines, &probe_stats, w as f32, h as f32);
+            crate::suppress::probe_reorder(out_lines, &probe_stats, lowconf, w as f32, h as f32);
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.

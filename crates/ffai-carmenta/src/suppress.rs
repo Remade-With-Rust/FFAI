@@ -819,13 +819,23 @@ fn probe_cut(it: &[Item], bx: (f32, f32, f32, f32), depth: usize) -> Vec<usize> 
 pub fn probe_reorder(
     lines: Vec<OcrLine>,
     st: &ProbeStats,
+    lowconf: f32,
     page_w: f32,
     page_h: f32,
 ) -> Vec<OcrLine> {
     if std::env::var("FFAI_ORDER_PROBE").as_deref() == Ok("0") {
         return lines;
     }
-    probe_apply(lines, st, page_w, page_h)
+    // FFAI_VERIFY_LOWCONF overrides the per-model constant so §8.171's
+    // calibration can be swept from ONE binary. Env-reading stays in this
+    // wrapper; `probe_apply` is pure so tests need not mutate process env.
+    let lowconf = env_f32_opt("FFAI_VERIFY_LOWCONF").unwrap_or(lowconf);
+    probe_apply(lines, st, lowconf, page_w, page_h)
+}
+
+/// A float from the environment, or `None` when unset or unparseable.
+fn env_f32_opt(key: &str) -> Option<f32> {
+    std::env::var(key).ok()?.parse().ok()
 }
 
 /// The guard and the reorder, without the env check — so tests exercise the
@@ -834,6 +844,7 @@ pub fn probe_reorder(
 fn probe_apply(
     lines: Vec<OcrLine>,
     st: &ProbeStats,
+    lowconf: f32,
     page_w: f32,
     page_h: f32,
 ) -> Vec<OcrLine> {
@@ -878,7 +889,7 @@ fn probe_apply(
         true // ground 1: the shipped §8.157 guard
     } else if std::env::var("FFAI_ORDER_VERIFY").as_deref() == Ok("0") {
         false
-    } else if verifier_blind(&lines) {
+    } else if verifier_blind(&lines, lowconf) {
         // The verifier must not vote on text it cannot read. `omni-0080`'s CJK
         // columns reach the recognizer as garbage and its "evidence" was one
         // net join; 85.3 % of its lines sit under 0.96 against a population
@@ -911,20 +922,45 @@ fn probe_apply(
 }
 
 /// §8.135's block-rule low-confidence line, reused rather than a new constant.
-const VERIFY_LOWCONF: f32 = 0.96;
-/// Abstain when more than this fraction of lines sits under `VERIFY_LOWCONF`.
+/// CRNN'S SCALE. §8.171: this number is a property of a RECOGNIZER'S CONFIDENCE
+/// DISTRIBUTION, not of documents, and carrying it across models is a silent
+/// bug. SVTR's median line confidence is 0.9689 against CRNN's 0.9892, so on
+/// `omni-0003` the same page puts 27.8 % of lines under this line against
+/// CRNN's 6.7 % — it trips the abstain under SVTR only, the verifier never
+/// runs, and the page loses its row-major fix (5.1 -> 53.1). That single page
+/// was the entire apparent deficit in the first conflated A/B.
+pub const VERIFY_LOWCONF_CRNN: f32 = 0.96;
+/// SVTR's scale, calibrated in §8.171 over all 236 holdout pages to reproduce
+/// CRNN's abstain RATE rather than its numeric value: 18 pages against CRNN's
+/// 19 (8.1 %). Carrying 0.96 across would have abstained on 66 pages — 28 %,
+/// 3.5x the rate the verifier was measured under — silencing the reordering on
+/// 47 pages that should keep it.
+///
+/// HONEST LIMIT, so it is not over-trusted: the rate matches but the PAGE SETS
+/// only half overlap (9 shared, 9 SVTR-only, 10 CRNN-only, Jaccard 0.321). That
+/// is defensible — competence is a property of a (model, page) pair, and a
+/// better recognizer should find different pages legible — and 0.946 is also
+/// the peak of page agreement, but it is weaker than "identical behaviour".
+/// The full-config A/B, not this calibration, is what accepts the number.
+///
+/// FRAGILE: the constant sits on a steep part of the curve (0.946 -> 18 pages,
+/// 0.956 -> 52). A future recognizer wants its own harvest, not this value; the
+/// durable fix is a scale-free rule, which is open work.
+pub const VERIFY_LOWCONF_SVTR: f32 = 0.946;
+/// Abstain when more than this fraction of lines sits under the low-confidence
+/// line. Scale-free (it is a fraction of the page), so it is NOT per-model.
 const VERIFY_ABSTAIN_FRAC: f32 = 0.25;
 
 /// True when too much of the page's text is unreliable for a TEXT verifier's
 /// vote to mean anything (§8.160). Engine re-scored with this abstain:
 /// +0.987 pp macro, 95 % CI [+0.179, +1.988], excludes zero.
-fn verifier_blind(lines: &[OcrLine]) -> bool {
+fn verifier_blind(lines: &[OcrLine], lowconf: f32) -> bool {
     if lines.is_empty() {
         return true;
     }
     let low = lines
         .iter()
-        .filter(|l| l.confidence.unwrap_or(0.0) < VERIFY_LOWCONF)
+        .filter(|l| l.confidence.unwrap_or(0.0) < lowconf)
         .count();
     low as f32 / lines.len() as f32 > VERIFY_ABSTAIN_FRAC
 }
@@ -1275,7 +1311,7 @@ mod tests {
         }
         let n = lines.len();
         let st = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.8, n_all: n };
-        let out = probe_apply(lines.clone(), &st, 800.0, 1600.0);
+        let out = probe_apply(lines.clone(), &st, VERIFY_LOWCONF_CRNN, 800.0, 1600.0);
         assert_eq!(out.len(), n, "reorder dropped or duplicated a line");
         let mut got: Vec<&str> = out.iter().map(|l| l.text.as_str()).collect();
         got.sort_unstable();
@@ -1340,8 +1376,8 @@ mod tests {
             v
         };
         let st = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.2, n_all: 9 };
-        let confident = probe_apply(build(0.99), &st, 850.0, 1020.0);
-        let garbage = probe_apply(build(0.50), &st, 850.0, 1020.0);
+        let confident = probe_apply(build(0.99), &st, VERIFY_LOWCONF_CRNN, 850.0, 1020.0);
+        let garbage = probe_apply(build(0.50), &st, VERIFY_LOWCONF_CRNN, 850.0, 1020.0);
         let ys = |v: &[OcrLine]| v.iter().map(|l| l.bbox.as_ref().unwrap().y as i32).collect::<Vec<_>>();
         let input = vec![100, 100, 100, 114, 114, 114, 128, 128, 128];
         assert_ne!(ys(&confident), input,
@@ -1369,7 +1405,7 @@ mod tests {
         let first_y = lines[0].bbox.as_ref().unwrap().y;
         // aspect 1.2 fails the §8.157 guard; verifier must then refuse too.
         let st = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.2, n_all: lines.len() };
-        let out = probe_apply(lines, &st, 800.0, 960.0);
+        let out = probe_apply(lines, &st, VERIFY_LOWCONF_CRNN, 800.0, 960.0);
         assert_eq!(out[0].bbox.as_ref().unwrap().y, first_y, "order must be untouched");
     }
 
@@ -1385,7 +1421,7 @@ mod tests {
         };
         let lines = vec![mk(300.0), mk(100.0), mk(200.0)];
         let two_col = ProbeStats { n_col: 2, cover: 0.30, aspect: 1.8, n_all: 3 };
-        let out = probe_apply(lines, &two_col, 800.0, 1600.0);
+        let out = probe_apply(lines, &two_col, VERIFY_LOWCONF_CRNN, 800.0, 1600.0);
         assert_eq!(out[0].bbox.as_ref().unwrap().y, 300.0, "order must be untouched");
     }
 }
