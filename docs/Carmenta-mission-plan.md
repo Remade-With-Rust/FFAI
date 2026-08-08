@@ -8980,6 +8980,25 @@ and the engine already ships a runtime detector for exactly that:
      colorful_textbook + magazine, ~1.4 pp ceiling.
 Standing at 0.92 pp, the queue above prices out beyond parity.
 
+
+**§8.163 EXECUTED EARLY — the separation iterations, and where the rule stands.**
+(1) `is_reversed` REFUTED as the conjunct: show-through is MIRRORED faint-gray-
+on-white, not tone-inverted; the border test catches 26 lines and +0.001 pp. The
+queued form would have shipped a dead variable. (2) Two mechanism conjuncts on
+the fixed exam base (conf<0.757 & slf<0.159) both hold with CIs excluding zero:
+ghost ink (+0.087, prec 0.78) and FAINT CONTRAST span<120 (+0.185 [+0.070,
++0.334], prec 0.85). (3) The bare base reads +0.219 EXCL0 — apparently
+contradicting the -0.535 certification; D6: different thresholds. The certified
+loss was the corpus-train pick (0.85/0.38); the 0.757/0.159 base is EXAM-fitted,
+83 % holdout pages — contaminated selection. (4) The clean corpus-train refit of
+conf x slf x span picks the degenerate loose corner (span<999), holdout -0.014
+spans 0: an 80-page train split rewards volume and cannot find the ghost rule.
+STATUS: `conf<0.757 & slf<0.159 & span<120` is a mechanism-complete CANDIDATE
+whose base is holdout-tainted — the same promotion problem §8.157's aspect rule
+had, and the same resolution applies: a fresh ENGINE A/B is the judge. Requires
+plumbing span (already in hand at crop time) into a post-recognition filter.
+Queued as brick 1, ahead of zh dispatch and SVTR.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
