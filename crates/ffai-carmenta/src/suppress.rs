@@ -837,7 +837,20 @@ fn probe_apply(
     page_w: f32,
     page_h: f32,
 ) -> Vec<OcrLine> {
-    if lines.len() < 3 || !probe_gate_fires(st, lines.len()) {
+    // §8.160 widens §8.157: the probe order is computed for EVERY dense
+    // multi-column page, and accepted on either of two grounds:
+    //   1. the §8.157 aspect guard (engine-verified, +0.231 pp macro), or
+    //   2. the TEXT VERIFIER — the probe's join fluency strictly beats the
+    //      shipped order's, or ties it while its numbered-item sequence is
+    //      strictly more monotone.
+    // Every ordering score before the verifier was geometric and all ten
+    // failed the rescue/wreck question (ceiling AUC 0.643) for one reason: a
+    // wrong ordering can be more geometrically tidy than a right one. Reading
+    // order is a LINGUISTIC property; scored in text space the same question
+    // reads AUC 0.750, and the three catastrophic wrecks (-69.0, -47.6, -45.5)
+    // all sit at negative margin — their shipped text already flows, and
+    // breaking it is visible. `FFAI_ORDER_VERIFY=0` disables ground 2.
+    if lines.len() < 3 || st.n_col < 3 || st.cover < 0.18 {
         return lines;
     }
     let it: Vec<Item> = lines
@@ -861,8 +874,114 @@ fn probe_apply(
     if order.len() != lines.len() {
         return lines; // not a permutation — refuse rather than drop output
     }
+    let accept = if probe_gate_fires(st, lines.len()) {
+        true // ground 1: the shipped §8.157 guard
+    } else if std::env::var("FFAI_ORDER_VERIFY").as_deref() == Ok("0") {
+        false
+    } else if verifier_blind(&lines) {
+        // The verifier must not vote on text it cannot read. `omni-0080`'s CJK
+        // columns reach the recognizer as garbage and its "evidence" was one
+        // net join; 85.3 % of its lines sit under 0.96 against a population
+        // median of 5.0 %, and no rescued page exceeds 8.3 %. The rule was
+        // pre-registered before that harvest ran, reusing the §8.135 block
+        // rules' existing low-confidence line rather than a new constant.
+        // NOTE this is competence-gating, not order-gating: per-line confidence
+        // is permutation-invariant, so it can never CHOOSE between orders —
+        // §8.160 refuted that use by argument — but it can say whether the
+        // strings the verifier reads mean anything.
+        false
+    } else {
+        // ground 2: the text verifier, on the SAME recognized strings.
+        let shipped: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        let probed: Vec<&str> = order.iter().map(|&i| lines[i].text.as_str()).collect();
+        let jm = join_fluency(&probed) - join_fluency(&shipped);
+        if jm > 1e-9 {
+            true
+        } else if jm.abs() <= 1e-9 {
+            num_seq_monotone(&probed) > num_seq_monotone(&shipped) + 1e-9
+        } else {
+            false
+        }
+    };
+    if !accept {
+        return lines;
+    }
     let mut slot: Vec<Option<OcrLine>> = lines.into_iter().map(Some).collect();
     order.into_iter().filter_map(|i| slot[i].take()).collect()
+}
+
+/// §8.135's block-rule low-confidence line, reused rather than a new constant.
+const VERIFY_LOWCONF: f32 = 0.96;
+/// Abstain when more than this fraction of lines sits under `VERIFY_LOWCONF`.
+const VERIFY_ABSTAIN_FRAC: f32 = 0.25;
+
+/// True when too much of the page's text is unreliable for a TEXT verifier's
+/// vote to mean anything (§8.160). Engine re-scored with this abstain:
+/// +0.987 pp macro, 95 % CI [+0.179, +1.988], excludes zero.
+fn verifier_blind(lines: &[OcrLine]) -> bool {
+    if lines.is_empty() {
+        return true;
+    }
+    let low = lines
+        .iter()
+        .filter(|l| l.confidence.unwrap_or(0.0) < VERIFY_LOWCONF)
+        .count();
+    low as f32 / lines.len() as f32 > VERIFY_ABSTAIN_FRAC
+}
+
+/// Join fluency of a reading order (§8.160). Higher = the text flows better.
+///
+/// Per consecutive pair: +2 when a hyphenated fragment is completed by a
+/// lowercase (or digit) start; +1 when a mid-sentence line is continued
+/// lowercase; -1 when a mid-sentence line is followed by a capital (a broken
+/// join). Crude on purpose — no dictionary, no language model. Crude measured
+/// AUC 0.750 on the rescue/wreck question; refinement is upside, not rescue.
+fn join_fluency(texts: &[&str]) -> f32 {
+    const TERM: &[char] = &['.', '!', '?', ':', ';', '"', '\'', '\u{201d}', '\u{2019}', ')'];
+    let (mut s, mut pairs) = (0.0f32, 0u32);
+    for w in texts.windows(2) {
+        let a = w[0].trim_end();
+        let b = w[1].trim_start();
+        let (Some(last), Some(first)) = (a.chars().next_back(), b.chars().next()) else {
+            continue;
+        };
+        pairs += 1;
+        if last == '-' && (first.is_lowercase() || first.is_ascii_digit()) {
+            s += 2.0;
+        } else if !TERM.contains(&last) && !last.is_ascii_digit() {
+            if first.is_lowercase() {
+                s += 1.0;
+            } else if first.is_uppercase() {
+                s -= 1.0;
+            }
+        }
+    }
+    s / (pairs.max(1) as f32)
+}
+
+/// Monotonicity of leading item numbers ("55.", "(12)", "3]") — §8.160.
+///
+/// Self-contained numbered units are invisible to `join_fluency` (every
+/// inter-item join scores 0 in any order), but their numbers carry the
+/// canonical order directly: `omni-0003` reads 55,58,61,56.. shipped and
+/// 55,56,57,58.. probed, and the reference is monotone. 0.5 = no evidence.
+fn num_seq_monotone(texts: &[&str]) -> f32 {
+    let mut nums: Vec<u32> = Vec::new();
+    for t in texts {
+        let s = t.trim_start().trim_start_matches('(');
+        let d: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if d.is_empty() || d.len() > 4 {
+            continue;
+        }
+        let rest = &s[d.len()..];
+        if matches!(rest.chars().next(), Some('.') | Some(')') | Some(']')) {
+            nums.push(d.parse().unwrap_or(0));
+        }
+    }
+    if nums.len() < 3 {
+        return 0.5;
+    }
+    nums.windows(2).filter(|w| w[1] > w[0]).count() as f32 / (nums.len() - 1) as f32
 }
 
 #[cfg(test)]
@@ -1162,6 +1281,96 @@ mod tests {
         got.sort_unstable();
         assert_eq!(got.iter().filter(|t| **t == "left").count(), 5);
         assert_eq!(got.iter().filter(|t| **t == "right").count(), 5);
+    }
+
+    /// The §8.160 verifier's parts, pinned on constructed text.
+    #[test]
+    fn join_fluency_prefers_the_flowing_order() {
+        // Correct read: hyphen completes, sentence continues.
+        let good = ["the leg was in an elong-", "ated position and the", "subject could rest."];
+        // Interleaved read: same lines, joins broken.
+        let bad = ["the leg was in an elong-", "subject could rest.", "ated position and the"];
+        let g: Vec<&str> = good.to_vec();
+        let b: Vec<&str> = bad.to_vec();
+        assert!(join_fluency(&g) > join_fluency(&b));
+    }
+
+    #[test]
+    fn num_seq_prefers_ascending_items() {
+        let asc = ["55. first item?", "56. second item?", "57. third item?", "58. fourth?"];
+        let col = ["55. first item?", "57. third item?", "56. second item?", "58. fourth?"];
+        let a: Vec<&str> = asc.to_vec();
+        let c: Vec<&str> = col.to_vec();
+        assert!(num_seq_monotone(&a) > num_seq_monotone(&c));
+        // fewer than 3 numbers = no evidence, not a preference
+        let few: Vec<&str> = vec!["1. one?", "no number", "also none"];
+        assert_eq!(num_seq_monotone(&few), 0.5);
+    }
+
+    /// The abstain: identical geometry and text, only CONFIDENCE differs — the
+    /// verifier reorders the confident page and must leave the garbage one
+    /// alone. Pins the §8.160 competence gate (`omni-0080`, 85.3 % low-conf).
+    #[test]
+    fn verifier_abstains_on_unreliable_text() {
+        let mk = |x: f32, y: f32, t: &str, conf: f32| OcrLine {
+            text: t.into(),
+            words: Vec::new(),
+            bbox: Some(ffai_core::types::BoundingBox { x, y, width: 200.0, height: 12.0 }),
+            confidence: Some(conf),
+        };
+        // Three columns; shipped (input) order interleaves them so the probe's
+        // column-major read strictly improves the joins.
+        let build = |conf: f32| {
+            // Column starts are CAPITALISED, so the row-major interleave
+            // breaks every hyphen join (uppercase after "-" scores -1) while
+            // the column-major read completes them (+2). Uniformly lowercase
+            // text ties the margins and the verifier correctly refuses.
+            let texts = [["Alpha beta gam-", "ma delta and the", "value keeps going"],
+                         ["Second column al-", "so continues in a", "flowing manner too"],
+                         ["Third column runs-", "on with more of", "the same body text"]];
+            let mut v = Vec::new();
+            for row in 0..3 {
+                for col in 0..3 {
+                    // pitch 14 on height-12 lines: no horizontal band gap, so
+                    // the cut goes vertical and reads column-major.
+                    v.push(mk(40.0 + col as f32 * 270.0, 100.0 + row as f32 * 14.0,
+                              texts[col][row], conf));
+                }
+            }
+            v
+        };
+        let st = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.2, n_all: 9 };
+        let confident = probe_apply(build(0.99), &st, 850.0, 1020.0);
+        let garbage = probe_apply(build(0.50), &st, 850.0, 1020.0);
+        let ys = |v: &[OcrLine]| v.iter().map(|l| l.bbox.as_ref().unwrap().y as i32).collect::<Vec<_>>();
+        let input = vec![100, 100, 100, 114, 114, 114, 128, 128, 128];
+        assert_ne!(ys(&confident), input,
+                   "confident text: verifier must accept the column-major reorder");
+        assert_eq!(ys(&garbage), input,
+                   "unreliable text: verifier must abstain and leave the order alone");
+    }
+
+    /// Ground 2 must NOT accept when the text is indifferent: a guard-failing
+    /// page whose margins are all zero passes through byte-for-byte.
+    #[test]
+    fn verifier_rejects_when_text_is_indifferent() {
+        let mk = |x: f32, y: f32| OcrLine {
+            text: "self contained.".into(), // terminal '.' -> every join scores 0
+            words: Vec::new(),
+            bbox: Some(ffai_core::types::BoundingBox { x, y, width: 150.0, height: 12.0 }),
+            confidence: Some(0.99),
+        };
+        let mut lines = Vec::new();
+        for i in 0..4 {
+            for c in 0..3 {
+                lines.push(mk(40.0 + c as f32 * 260.0, 100.0 + i as f32 * 30.0));
+            }
+        }
+        let first_y = lines[0].bbox.as_ref().unwrap().y;
+        // aspect 1.2 fails the §8.157 guard; verifier must then refuse too.
+        let st = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.2, n_all: lines.len() };
+        let out = probe_apply(lines, &st, 800.0, 960.0);
+        assert_eq!(out[0].bbox.as_ref().unwrap().y, first_y, "order must be untouched");
     }
 
     /// A page the guard rejects passes through byte-for-byte, whatever the

@@ -8745,6 +8745,179 @@ it away from, and nothing yet separates those from the ones it rescues — page
 features top out at AUC 0.623, and every intrinsic sequence score picks worse
 than not switching at all.
 
+### 8.158 Full standings vs Unlimited-OCR — and a stale binary caught by agreeing too well
+
+Re-benchmarked on all 236 holdout pages after §8.156/§8.157 shipped, through the
+committed harness with every guard active (structural alignment, the
+exactly-100 % check reading 0/0, micro AND macro, no reference handicap).
+
+| engine | micro | MACRO |
+|---|---:|---:|
+| Carmenta, body-only | **13.65 %** | 19.67 % |
+| Unlimited-OCR | 18.72 % | **17.76 %** |
+| gap | **-5.07 (we win)** | +1.90 (they win) |
+
+Both metrics moved our way since §8.139 (micro -4.33 -> -5.07, macro
++2.68 -> +1.90); we win 87 of 236 pages outright at 15.5x their speed on CPU
+against their RTX 4060. Eight reference pages exceed 100 % CER (runaway
+insertion, two of them the corpus's largest pages) and carry 6.53 pp of their
+macro; excluding them inverts the standings hard (17.73 vs 11.63). Neither
+metric is lying: they fail catastrophically but rarely on huge pages, we fail
+mildly but consistently on small ones. Macro remains the deciding metric.
+
+**The process note that must not be lost.** The first run of this benchmark
+returned 19.90 % macro — the §8.157-DISABLED arm to three decimals — because the
+default flip was rebuilt into the test target dir but not the benchmark one.
+Both arms were internally consistent; nothing looked wrong. It was caught only
+because the number agreed TOO EXACTLY with an earlier measurement taken under
+different settings. The existing rule says to suspect the artifact when a number
+contradicts one you just took; this run adds the mirror rule — suspect it just as
+hard when a number AGREES with one taken under settings that should differ.
+
+### 8.159 The dense 3+ column population, and ten discriminators refuted
+
+After §8.157, 2.66 pp of ordering cost remained on 160 dense 3+ column pages,
+and §8.155's axis probe was known to RESCUE 25 of them (+16.6 pp mean, 18 of 25
+within 2 pp of the oracle) while WRECKING 21 (-18.2 pp mean) — net +0.057, all
+value in the discrimination. Ten runtime discriminators were built and refused:
+
+| candidate | AUC | note |
+|---|---:|---|
+| row_align | 0.527 | detects "multi-column", which the filter already knew |
+| short_frac | 0.543 | |
+| interleave | 0.589 | |
+| hop25 | 0.592 | `omni-0001` and `omni-0003` are both huge rescues with OPPOSITE hop rates |
+| band_frac | 0.609 | |
+| numlead | 0.619 | 0 of 160 pages exceed 30 % numbered leads |
+| n_bands | 0.620 | |
+| y_back_big | 0.643 | best geometric feature, still unusable |
+| optimizer conjunctions | — | every rule ties at train +0.233 (11 informative train rows); the MACRO column blends splits |
+| hand-picked 18-page class | — | `h_cv` reads 0.156 INSIDE the class and 0.571 on the nearest runtime approximation of it — the signal exists only on the exact page list |
+
+Also refuted for the record: an external "0 hurts" analysis whose scoring
+baseline (`best_of_10`) contained the shipped default, so no gate could ever be
+scored as hurting — a parity check on the FILENAME scored +1.39 pp under it; and
+two oracle gates keyed on `default_cer`/`cost`, which are the answer key. The one
+thing that separated rescue from wreck was our own shipped CER (AUC 0.754) —
+also the answer key, but it named the question the next section answers: not
+"what kind of page is this?" but "is our current reading of it already good?"
+
+One census fact carried forward: `omni-0080` is the population's only page over
+5 % CJK (13.8 %, a bilingual EN->ZH vocabulary list; 155 of 160 are pure Latin).
+Its ordering cost is confounded with a recognition failure already refused
+(§8.14x), so it must never be evidence for or against an ordering rule.
+
+### 8.160 The text verifier — reading order is a linguistic property, and scoring it as one ships
+
+**The argument that reframed it.** Ten geometric discriminators failed for one
+reason: a wrong ordering can be more geometrically tidy than a right one. And
+confidence-gating the CHOICE between orders is refuted by argument, not
+experiment: both candidate orders contain the same lines with the same
+confidences, so every per-line-confidence aggregate is PERMUTATION-INVARIANT.
+But reading order is a linguistic property, and §8.157's stage holds the
+recognized text. A correct column read completes hyphens (`elong-` -> `ated`)
+and continues sentences lowercase; an interleaved read breaks every join. So:
+compute BOTH orders and let the text vote.
+
+`join_fluency` — +2 hyphen completion, +1 lowercase continuation, -1 capital
+after a mid-sentence end, weights written before measuring — reads **AUC 0.750**
+on the rescue/wreck question against the geometric ceiling of 0.643 and the
+answer key's own 0.754. All three catastrophic wrecks (-69.0, -47.6, -45.5) sit
+at NEGATIVE margin: their shipped text already flows and breaking it is visible.
+The margin==0 bucket is the grids — self-contained numbered cells have no
+sentences to break — and their numbers carry the canonical order instead:
+`num_seq_monotone` (leading-integer ascent) catches `omni-0003` (55,58,61,56..
+shipped vs 55,56,57,58.. probed, +48.2 pp) exactly as pre-stated.
+
+**Engine A/B (one binary, arms interleaved), pre-registered +0.779 pp:**
+measured **+0.779 pp macro / +0.845 pp micro** — the point estimate to three
+decimals — but CI [-0.150, +1.856] SPANS ZERO, and the left tail is ONE page:
+`omni-0080`, the §8.159 CJK page, admitted on one net join of "evidence" from
+garbage text. Sensitivity minus that page alone: +0.991, CI [+0.155, +1.984].
+
+**The competence abstain, pre-registered before its harvest ran:** a text
+verifier must not vote on text it cannot read — abstain when > 25 % of lines sit
+under confidence 0.96 (the §8.135 block rules' existing low-confidence line, not
+a new constant). This is competence-gating, not order-gating; it does not touch
+the permutation-invariance refutation. The harvest: `omni-0080` has **85.3 %**
+low-confidence lines against a population median of 5.0 %, and no rescued page
+exceeds 8.3 %. Engine re-scored with the abstain: **+0.987 pp macro, CI
+[+0.179, +1.988], excludes zero.** Delta-verified end-to-end (4/4 pages:
+`omni-0080` abstains at 32.09 %, rescues hold at 2.37/5.13, the §8.157 guard
+path untouched at 8.30); final full A/B CONFIRMS: 19.666 % -> **18.680 %** macro (+0.987, CI
+[+0.179, +1.988] excluding zero), micro 13.648 % -> 12.720 % (+0.927), 12 pages
+changed 9/3, `omni-0080` correctly absent. SHIPPED, default on,
+`FFAI_ORDER_VERIFY=0` disables. Standings after: macro 18.68 % vs their
+17.76 % — the gap is **0.92 pp**, down from 2.68 at §8.139 — and micro leads by
+6.00 pp at 15.5x their speed.
+
+**The verifier's floor, measured so it is not re-attempted:** `omni-0153`
+(wreck, -25.8) and `omni-0191` (rescue, +36.1) are IDENTICAL to the join score —
++4 raw joins each. No text-margin threshold separates them; the remaining hurts
+(-25.8, -13.7) are the verifier's true error rate, priced into the +0.987.
+
+**What remains on ordering** after three shipped mechanisms plus the verifier
+(~+1.77 pp of the original 4.80): the margin-0 prose pages the probe rescues but
+text cannot certify (`omni-0160` +24.2, `omni-0175` +20.3, `omni-0172` +17.4,
+`omni-0104` +14.6), and §8.155's four probe-vs-oracle gaps (`omni-0004`,
+`omni-0138` — grids the probe only half-fixes). Next candidate signals: within-
+column continuation of the join score at the BLOCK level, or upstream line
+grouping (§8.85's diagnosis).
+
+### 8.161 The scope pool re-priced — five refusals, one false alarm, and where the gap actually lives
+
+A directed sweep of the remaining fronts against Unlimited-OCR (§8.158's budget),
+executed through the great-gate process with fit-on-train/judge-once discipline.
+
+**The catastrophe autopsy (`omni-0245` 228.9 %, `omni-0213` 188.0 %).** Both are
+screenshots of nested text inside book pages — a Google-results screenshot in a
+web-scraping book, an indented register table in a hardware manual. We emit 3.2x
+and 2.8x the reference; the junk is INDENTED (x0 260/410 vs prose 147/155),
+NARROW (w 212/369 vs 833/1166) and CONFIDENT (0.985 — the recognizer reads
+rendered code perfectly). It survives the block branch precisely through the
+`conf < 0.96` clause: §8.135's rules protect confident text by design.
+
+**A false alarm, owned.** The harvest CSV appeared to carry zero orphan labels
+for these pages, and an entire stale-harvest narrative was built before checking
+the file's encoding: `orphan` is `1`/`0` and the comparison read `'true'`. The
+harvest was correct all along — 4,441 orphans, `omni-0245` at 132/137. Cost: one
+discarded rebuild. The §8.158 lesson generalises: verify the ENCODING before
+diagnosing the instrument.
+
+**The pool, priced correctly.** Oracle orphan suppression on top of what ships is
+worth 5.70 pp macro — but the honest denominator is lines the shipped filter
+KEEPS: **729 orphan lines, 23,217 chars, 2.4 % of kept lines**. The rest of the
+oracle pool is junk already caught plus annotated text wrongly dropped.
+
+**Five searches, five refusals** (each fit on train, judged once on holdout):
+
+| search | result |
+|---|---|
+| line features + relative indent, full harvest | inflated by double-counting already-dropped lines; discarded |
+| same, kept-lines only | 1 rule survives both splits: +0.054, top3 117 % — a page list |
+| block-level with text statistics (sym/digit/chars-per-word) | best +0.104, train +0.006 — nothing |
+| corpus-wide confidence rule (`conf<0.85 & same_left_frac<0.38`) | train +0.052 -> holdout **-0.535**, CI entirely negative: a certified loss — low-conf kept lines are mostly REAL text |
+| adaptive-context: same rule INSIDE low-conf pages (the §8.160 competence signal as context) | context holds 4 train pages with zero droppable junk; train +0.000, holdout +0.006, spans 0 |
+
+§8.117's "the gates are at their optimum" therefore extends to three new feature
+families (indent, block-text statistics, confidence). The 729 surviving orphans
+are geometrically and statistically body-like; separating them requires
+SEMANTICS — is-this-code, is-this-a-figure-callout — which is deferred-feature-map
+territory, not threshold territory.
+
+**The class decomposition that redirects the campaign.** Suppressible share of
+each class's error, on top of what ships: book 17.50 pp/page (the two
+catastrophes and their kin — concentrated, unreachable statistically),
+academic 5.78, exam_paper 5.14, **colorful_textbook 2.19 — oracle suppression
+HURTS its average**. Meanwhile exam_paper's in-class signal is real (junk conf
+0.534 vs body 0.979; in-class rule reads +2.1 both splits) but the class has 2
+train pages and the rule is a certified corpus loss, so it cannot ship in any
+form tried. Fronts 2 and 3 converge: **their deficits are RECOGNITION on hard
+content** — stylized textbook type, low-confidence exam forms — not scope, not
+ordering. The next lever on those classes is recognition-side (preprocessing or
+model), with §8.150's polarity-only crop-norm arm already measured neutral on the
+60-page slice and the coloured-text dispatch (§8.145-149) the open direction.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
