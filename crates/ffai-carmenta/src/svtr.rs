@@ -1,0 +1,291 @@
+//! PP-OCRv5 mobile recognition (SVTR) — the matched half of our detector.
+//!
+//! We pair a 2024 PP-OCRv5 DETECTOR with EasyOCR's 2019 VGG-CRNN recognizer.
+//! §8.165 measured the mismatch: with detection held constant and only the
+//! recognizer swapped, SVTR reads our hardest stylized pages at 40.12 % against
+//! CRNN's 44.13 % (-4.01 pp) AND the clean controls at 2.66 % against 3.20 %
+//! (-0.53 pp). It wins on both halves, so the 18,383-class multilingual head's
+//! confusability risk did not materialise.
+//!
+//! ## Written against the checkpoint, not a paper
+//!
+//! Structure and constants come from the recorded inference program
+//! (`corpora/refs/fixtures/ppocrv5_mobile_rec_graph.json`, 407 ops with their
+//! weights, strides, groups and paddings), and the backbone table below is
+//! GENERATED from it rather than transcribed — hand-copying 30 layers is the
+//! error class that yields fluent-but-wrong text.
+//!
+//! §8.167 wrote a numpy reference first and matched the paddle oracle at
+//! **1.3e-5**. Three hypotheses died there, two of which looked correct:
+//! skipping the head convs still matched EVERY SHAPE, and `concat([h, h])`
+//! scored 100 % argmax agreement while being structurally wrong. What fixed it
+//! was an op's `struct_name` — `/MultiHead/SequenceEncoder/EncoderWithSVTR/` —
+//! revealing that the encoder keeps a SHORTCUT concatenated with its own output
+//! (960 = 480 shortcut + 480 encoder). This port carries that structure.
+//!
+//! `examples/svtr_oracle.rs` asserts this module against the same fixture.
+
+use candle_core::{DType, Device, Result, Tensor, D};
+use candle_nn::{ops::softmax, Module, VarBuilder};
+
+/// One backbone unit: conv -> +bias -> LAB -> hardswish -> LAB.
+/// BatchNorm is folded into the weights at export, so only the stem has a real
+/// one; every other block's `.b_0` IS the folded bias.
+struct Blk(&'static str, usize, (usize, usize), (usize, usize));
+/// Squeeze-excite: global avg -> conv -> relu -> conv -> hardsigmoid -> scale.
+struct Se(&'static str, &'static str);
+
+enum Stage {
+    Blk(Blk),
+    Se(Se),
+}
+
+/// Generated from the recorded graph; 28 blocks and 2 SE branches, in order.
+fn backbone_spec() -> Vec<Stage> {
+    use Stage::{Blk as B, Se as S};
+    vec![
+        B(Blk("conv2d_136", 16, (1, 1), (1, 1))),
+        B(Blk("conv2d_137", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_138", 32, (1, 1), (1, 1))),
+        B(Blk("conv2d_139", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_140", 64, (1, 1), (1, 1))),
+        B(Blk("conv2d_141", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_142", 64, (2, 1), (1, 1))),
+        B(Blk("conv2d_143", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_144", 128, (1, 1), (1, 1))),
+        B(Blk("conv2d_145", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_146", 128, (1, 2), (1, 1))),
+        B(Blk("conv2d_147", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_148", 240, (1, 1), (2, 2))),
+        B(Blk("conv2d_149", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_150", 240, (1, 1), (2, 2))),
+        B(Blk("conv2d_151", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_152", 240, (1, 1), (2, 2))),
+        B(Blk("conv2d_153", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_154", 240, (1, 1), (2, 2))),
+        B(Blk("conv2d_155", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_156", 240, (2, 1), (2, 2))),
+        S(Se("conv2d_96", "conv2d_97")),
+        B(Blk("conv2d_157", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_158", 480, (1, 1), (2, 2))),
+        S(Se("conv2d_107", "conv2d_108")),
+        B(Blk("conv2d_159", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_160", 480, (2, 1), (2, 2))),
+        B(Blk("conv2d_161", 1, (1, 1), (0, 0))),
+        B(Blk("conv2d_162", 480, (1, 1), (2, 2))),
+        B(Blk("conv2d_163", 1, (1, 1), (0, 0))),
+    ]
+}
+
+const BN_EPS: f64 = 1e-5;
+/// The final encoder norm uses a tighter epsilon than the rest (recorded).
+const LN_EPS: f64 = 1e-5;
+const LN_EPS_FINAL: f64 = 1e-6;
+const HEADS: usize = 8;
+const HEAD_DIM: usize = 15;
+
+pub struct Svtr {
+    vb: VarBuilder<'static>,
+    n_class: usize,
+}
+
+fn hardswish(x: &Tensor) -> Result<Tensor> {
+    ((x + 3.0)?.clamp(0.0, 6.0)? * x)? / 6.0
+}
+
+fn hardsigmoid(x: &Tensor) -> Result<Tensor> {
+    ((x / 6.0)? + 0.5)?.clamp(0.0, 1.0)
+}
+
+fn swish(x: &Tensor) -> Result<Tensor> {
+    x * candle_nn::ops::sigmoid(x)?
+}
+
+impl Svtr {
+    pub fn new(vb: VarBuilder<'static>, n_class: usize) -> Result<Self> {
+        Ok(Self { vb, n_class })
+    }
+
+    fn w(&self, name: &str, shape: (usize, usize, usize, usize)) -> Result<Tensor> {
+        self.vb.get(shape, name)
+    }
+
+    /// Conv with the recorded stride/pad/groups, then the folded bias.
+    fn conv(
+        &self,
+        x: &Tensor,
+        name: &str,
+        stride: (usize, usize),
+        pad: (usize, usize),
+        groups: usize,
+        bias: bool,
+    ) -> Result<Tensor> {
+        let w = self.vb.get_unchecked(&format!("{name}.w_0"))?;
+        let (oc, icg, kh, kw) = w.dims4()?;
+        let _ = (oc, icg, kh, kw);
+        // candle's conv2d takes ONE stride and ONE padding; the recorded model
+        // uses asymmetric values (e.g. (2,1) to collapse height faster than
+        // width). Emulate by padding manually and striding per axis.
+        let x = x.pad_with_zeros(2, pad.0, pad.0)?.pad_with_zeros(3, pad.1, pad.1)?;
+        let cfg = candle_nn::Conv2dConfig { padding: 0, stride: 1, dilation: 1, groups,
+            ..Default::default() };
+        let y = candle_nn::Conv2d::new(w, None, cfg).forward(&x)?;
+        let y = if stride.0 > 1 {
+            let n = (y.dim(2)? + stride.0 - 1) / stride.0;
+            y.index_select(
+                &Tensor::from_vec(
+                    (0..n).map(|i| (i * stride.0) as u32).collect::<Vec<_>>(),
+                    n,
+                    y.device(),
+                )?,
+                2,
+            )?
+        } else {
+            y
+        };
+        let y = if stride.1 > 1 {
+            let n = (y.dim(3)? + stride.1 - 1) / stride.1;
+            y.index_select(
+                &Tensor::from_vec(
+                    (0..n).map(|i| (i * stride.1) as u32).collect::<Vec<_>>(),
+                    n,
+                    y.device(),
+                )?,
+                3,
+            )?
+        } else {
+            y
+        };
+        if bias {
+            let b = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+            y.broadcast_add(&b.reshape((1, b.elem_count(), 1, 1))?)
+        } else {
+            Ok(y)
+        }
+    }
+
+    fn bn(&self, x: &Tensor, name: &str) -> Result<Tensor> {
+        let mean = self.vb.get_unchecked(&format!("{name}.w_1"))?;
+        let var = self.vb.get_unchecked(&format!("{name}.w_2"))?;
+        let gamma = self.vb.get_unchecked(&format!("{name}.w_0"))?;
+        let beta = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+        let s = (gamma / (var + BN_EPS)?.sqrt()?)?;
+        let shift = (beta - (mean * &s)?)?;
+        let c = s.elem_count();
+        x.broadcast_mul(&s.reshape((1, c, 1, 1))?)?
+            .broadcast_add(&shift.reshape((1, c, 1, 1))?)
+    }
+
+    /// Learnable affine block: per-channel scale then shift, consumed in order.
+    fn lab(&self, x: &Tensor, i: &mut usize) -> Result<Tensor> {
+        let w = self.vb.get_unchecked(&format!("learnable_affine_block_{i}.w_0"))?;
+        let b = self.vb.get_unchecked(&format!("learnable_affine_block_{i}.w_1"))?;
+        *i += 1;
+        let c = w.elem_count();
+        x.broadcast_mul(&w.reshape((1, c, 1, 1))?)?
+            .broadcast_add(&b.reshape((1, c, 1, 1))?)
+    }
+
+    fn ln(&self, x: &Tensor, name: &str, eps: f64) -> Result<Tensor> {
+        let w = self.vb.get_unchecked(&format!("{name}.w_0"))?;
+        let b = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+        let mean = x.mean_keepdim(D::Minus1)?;
+        let d = x.broadcast_sub(&mean)?;
+        let var = d.sqr()?.mean_keepdim(D::Minus1)?;
+        d.broadcast_div(&(var + eps)?.sqrt()?)?
+            .broadcast_mul(&w)?
+            .broadcast_add(&b)
+    }
+
+    fn linear(&self, x: &Tensor, name: &str) -> Result<Tensor> {
+        let w = self.vb.get_unchecked(&format!("{name}.w_0"))?;
+        let b = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+        x.broadcast_matmul(&w)?.broadcast_add(&b)
+    }
+
+    fn attention(&self, x: &Tensor, qkv: &str, proj: &str) -> Result<Tensor> {
+        let (b, n, c) = x.dims3()?;
+        let t = self
+            .linear(x, qkv)?
+            .reshape((b, n, 3, HEADS, HEAD_DIM))?
+            .permute((2, 0, 3, 1, 4))?
+            .contiguous()?;
+        let q = (t.i(0)? * (HEAD_DIM as f64).powf(-0.5))?;
+        let k = t.i(1)?;
+        let v = t.i(2)?;
+        let a = q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)?;
+        let a = softmax(&a, D::Minus1)?;
+        let o = a.matmul(&v.contiguous()?)?.transpose(1, 2)?.reshape((b, n, c))?;
+        self.linear(&o, proj)
+    }
+
+    fn enc_block(
+        &self,
+        x: &Tensor,
+        l1: &str,
+        qkv: &str,
+        proj: &str,
+        l2: &str,
+        fc1: &str,
+        fc2: &str,
+    ) -> Result<Tensor> {
+        let x = (x + self.attention(&self.ln(x, l1, LN_EPS)?, qkv, proj)?)?;
+        let h = swish(&self.linear(&self.ln(&x, l2, LN_EPS)?, fc1)?)?;
+        &x + self.linear(&h, fc2)?
+    }
+
+    /// (1, 3, 48, W) normalised to [-1, 1] -> (1, T, n_class) probabilities.
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let mut x = self.bn(&self.conv(x, "conv2d_0", (2, 2), (1, 1), 1, false)?, "batch_norm2d_0")?;
+        let mut lab = 0usize;
+        for st in backbone_spec() {
+            match st {
+                Stage::Blk(Blk(name, groups, stride, pad)) => {
+                    x = self.conv(&x, name, stride, pad, groups, true)?;
+                    x = self.lab(&x, &mut lab)?;
+                    x = hardswish(&x)?;
+                    x = self.lab(&x, &mut lab)?;
+                }
+                Stage::Se(Se(reduce, expand)) => {
+                    let s = x.mean_keepdim(2)?.mean_keepdim(3)?;
+                    let s = self.conv(&s, reduce, (1, 1), (0, 0), 1, true)?.relu()?;
+                    let s = self.conv(&s, expand, (1, 1), (0, 0), 1, true)?;
+                    x = x.broadcast_mul(&hardsigmoid(&s)?)?;
+                }
+            }
+        }
+        // Neck pool k=(3,2) s=(3,2): H 3->1, W 80->40 (the timesteps).
+        let (_, _, h, w) = x.dims4()?;
+        let x = x.avg_pool2d_with_stride((3, 2), (3, 2))?;
+        let _ = (h, w);
+        // SHORTCUT: EncoderWithSVTR keeps the pre-reduction tensor and
+        // concatenates it with the encoder output later. 960 = 480 + 480.
+        let shortcut = x.clone();
+        let x = swish(&self.bn(&self.conv(&x, "conv2d_131", (1, 1), (0, 1), 1, false)?, "batch_norm2d_146")?)?;
+        let x = swish(&self.bn(&self.conv(&x, "conv2d_132", (1, 1), (0, 0), 1, false)?, "batch_norm2d_147")?)?;
+        let (b, c, h, w) = x.dims4()?;
+        let x = x.reshape((b, c, h * w))?.transpose(1, 2)?.contiguous()?;
+        let x = self.enc_block(&x, "layer_norm_0", "linear_0", "linear_1", "layer_norm_1", "linear_2", "linear_3")?;
+        let x = self.enc_block(&x, "layer_norm_2", "linear_4", "linear_5", "layer_norm_3", "linear_6", "linear_7")?;
+        let x = self.ln(&x, "layer_norm_4", LN_EPS_FINAL)?;
+        // Head: (B,N,C) -> (B,C,1,N) -> conv133 -> cat(shortcut) -> conv134 -> conv135
+        let (b, n, c) = x.dims3()?;
+        let hd = x.reshape((b, 1, n, c))?.permute((0, 3, 1, 2))?.contiguous()?;
+        let hd = swish(&self.bn(&self.conv(&hd, "conv2d_133", (1, 1), (0, 0), 1, false)?, "batch_norm2d_148")?)?;
+        let hd = Tensor::cat(&[&shortcut, &hd], 1)?;
+        let hd = swish(&self.bn(&self.conv(&hd, "conv2d_134", (1, 1), (0, 1), 1, false)?, "batch_norm2d_149")?)?;
+        let hd = swish(&self.bn(&self.conv(&hd, "conv2d_135", (1, 1), (0, 0), 1, false)?, "batch_norm2d_150")?)?;
+        let x = hd.squeeze(2)?.transpose(1, 2)?.contiguous()?;
+        let y = self.linear(&x, "linear_8")?;
+        let _ = self.n_class;
+        softmax(&y, D::Minus1)
+    }
+}
+
+use candle_core::IndexOp;
+
+/// Load from a safetensors file produced by `tools/carmenta_svtr_prepare.py`.
+pub fn load(path: &std::path::Path, device: &Device, n_class: usize) -> Result<Svtr> {
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, device)? };
+    Svtr::new(vb, n_class)
+}

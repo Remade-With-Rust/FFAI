@@ -9129,6 +9129,38 @@ NEXT: transliterate to `crates/ffai-carmenta/src/svtr.rs` against this verified
 reference (which now doubles as a per-stage debugger), then `RecStage::Svtr`,
 registry entry, and the engine A/B. `crnn.rs` untouched; opt-in by engine name.
 
+
+### 8.168 The candle SVTR port MATCHES the paddle oracle — 8.9e-5
+
+`crates/ffai-carmenta/src/svtr.rs` + `examples/svtr_oracle.rs`:
+
+    output [1, 40, 18385]
+    max abs diff 8.857e-5   mean 3.141e-9   argmax agreement 100.0 %
+    MATCH — candle port reproduces the paddle oracle
+
+Inside the 1e-4 bar. Larger than the numpy reference's 1.3e-5, as expected —
+candle's grouped conv accumulates in a different order than numpy's matmul, and
+the gap is float32 associativity, not structure.
+
+**Transliteration, not reinvention.** §8.167's verified numpy reference was the
+target, so the port carried the three lessons already paid for: the head convs
+are real (skipping them matched every shape), the encoder SHORTCUT is what feeds
+conv134's 960 channels (`concat([h, h])` scored 100 % argmax while structurally
+wrong), and the backbone table is GENERATED from the recorded graph rather than
+hand-copied. The one genuinely new problem was candle-side: `Conv2d` takes a
+single stride and padding, while this model uses ASYMMETRIC values — (2,1) to
+collapse height faster than width, (1,2) the reverse, (0,1) on the 1x3 kernels.
+Emulated by padding each axis explicitly and striding via `index_select` per
+axis.
+
+STATUS: correctness proven, accuracy NOT yet measured in-engine. Remaining:
+`RecStage::Svtr` + `models/ppocrv5-mobile-rec.toml` (opt-in by engine name),
+the 3x48x320 BGR preprocessing path (different geometry from our 1x64xW
+grayscale crops), CTC decode against the 18,385-class charset in head order
+(blank, dict, space), and the 236-page engine A/B that decides whether the
+default flips. `crnn.rs` untouched; 33 lib tests green; the shipped default is
+unchanged at 18.68 % macro.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**

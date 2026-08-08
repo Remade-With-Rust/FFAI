@@ -37,6 +37,7 @@ pub mod image;
 pub mod conv3x3;
 pub mod live;
 pub mod suppress;
+pub mod svtr;
 pub mod mobiledet;
 pub mod parseq;
 pub mod profile;
