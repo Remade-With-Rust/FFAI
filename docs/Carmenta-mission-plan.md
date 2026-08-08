@@ -8959,6 +8959,27 @@ CONVERSION project (safetensors + charset + oracle fixture, the zh_sim_g2
 route), not training — opt-in by registry, engine A/B to decide, revert by not
 selecting it.
 
+
+**§8.163 (queued): the exam-class rule is real, and show-through is its missing
+context.** External analysis on the non-CJK exam pages confirms
+`conf<0.757 & same_left_frac<0.159`: positive on BOTH splits (+134 train, +498
+holdout, +632 net chars ≈ 3.8 % of the class's characters), concentrated on
+`omni-0261` (+349) and `omni-0263` (+61). The corpus-wide judgment stands — the
+bare rule is a certified loss (-0.535) because conf+alignment alone also drops
+real faint text. The unlock is the USER'S observation: `0261`/`0263`'s orphans
+are FADED, INVERTED background printing — show-through from the sheet's reverse —
+and the engine already ships a runtime detector for exactly that:
+`image::is_reversed` (§8.149 border polarity). NEXT SESSION, in order:
+  1. harvest `is_reversed` + post-flip conf per line (engine debug column, one
+     316-page pass);
+  2. judge ONCE corpus-wide: drop if `conf<0.757 & same_left_frac<0.159 &
+     reversed` — the mechanism-complete form; ship on a CI excluding zero;
+  3. zh page-dispatch for the CJK pair (competence signal already shipped,
+     zh_sim_g2 already converted): ~0.6 pp;
+  4. PP-OCRv5 SVTR mobile-rec conversion (the matched half of our detector):
+     colorful_textbook + magazine, ~1.4 pp ceiling.
+Standing at 0.92 pp, the queue above prices out beyond parity.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
