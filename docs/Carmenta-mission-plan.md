@@ -8999,6 +8999,22 @@ had, and the same resolution applies: a fresh ENGINE A/B is the judge. Requires
 plumbing span (already in hand at crop time) into a post-recognition filter.
 Queued as brick 1, ahead of zh dispatch and SVTR.
 
+
+**§8.164 first refit: REFUSED — the pool transfers volume, not physics.** The
+405-page fit gorges on train2's table innards (65 % of its 40,800 lines are
+orphans; train macro +6.723) and switches the span axis OFF; judged once on the
+tableless holdout it reads -0.244, CI spanning zero, precision 0.67. The
+distribution shift dominated exactly as the §8.164 caveat predicted: thresholds
+tuned to junk the deployment corpus never presents. THE REPAIR IS SPECIFIED, NOT
+GUESSED: the importer carried only TEXT_CATS regions into the train2 sidecars,
+so table innards are indistinguishable from ghost junk in the labels. Re-import
+carrying `table`/`equation_isolated` POLYGONS, label three ways (text /
+table-junk / other-junk), and fit the ghost rule on OTHER-JUNK only — the class
+whose physics the holdout actually contains. Table-junk lines become a separate,
+legitimately fittable rule for a future corpus that scores table pages. Until
+that re-import runs, brick 1 remains queued on its tainted-base candidate and
+the A/B promised on it stays unrun.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
