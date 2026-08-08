@@ -9161,6 +9161,53 @@ grayscale crops), CTC decode against the 18,385-class charset in head order
 default flips. `crnn.rs` untouched; 33 lib tests green; the shipped default is
 unchanged at 18.68 % macro.
 
+
+### 8.170 SVTR beats CRNN by 1.435 pp macro — the largest single win of the campaign
+
+Engine A/B, 236 holdout pages, ONE BINARY and two engine names, arms interleaved,
+detection identical in both (same DBNet, same `UNCLIP_LINE`) so the only variable
+is recognition:
+
+| | MACRO | MICRO | sec/page |
+|---|---:|---:|---:|
+| CRNN (`english_g2`, 2019) | 19.666 % | 13.648 % | 6.41 |
+| **SVTR (PP-OCRv5 mobile rec)** | **18.232 %** | **12.610 %** | 10.66 |
+| gain | **+1.435 pp** | **+1.037 pp** | 1.66x slower |
+
+95 % CI **[+1.001, +1.914]**, excludes zero. **214 pages better, 19 worse.** The
+§8.165 ceiling probe pre-registered -4.01 pp on hard pages and -0.53 pp on clean
+ones; the corpus mix lands between them, as it should.
+
+The biggest wins are the pages this campaign has been stuck on: `omni-0265`
+83.5 -> 50.8, `omni-0105` 45.9 -> 20.0, `omni-0163` 36.2 -> 22.4, `omni-0080`
+32.1 -> 18.5 — CJK and stylized type a 97-class Latin head cannot emit at all.
+
+**The speed cost is accepted deliberately, not overlooked.** 6.41 -> 10.66 s/page
+is 1.66x, and against Unlimited-OCR's 90.9 s/page on an RTX 4060 it takes us from
+~15.5x faster to ~9x faster on CPU. Spending a surplus to close the deficit we
+actually have is the right trade, and it is recorded as a cost rather than
+omitted. LIVE does NOT inherit this: it wraps `dyn OcrEngine` and never reaches
+inside, and its change gate has throughput constraints document OCR does not —
+a LIVE default would need its own `live_bench`/`live_soak` verdicts.
+
+**A conflated first run, caught and discarded.** The A/B was launched with the
+shipped config and read -2.14 pp at 20 pages while winning 16 of them. One page
+was the whole deficit: `omni-0003` 5.1 -> 53.1. Cause: §8.160's competence
+abstain (>25 % of lines under confidence 0.96) is calibrated to CRNN's scale, and
+SVTR's median line confidence is 0.9689 against CRNN's 0.9892 — 27.8 % of that
+page's lines fall under the line versus 6.7 %, so the abstain fires, the ordering
+verifier never runs, and the page loses its row-major fix. That measures
+"SVTR plus a verifier calibrated for a different model", two changes at once. The
+run was killed and relaunched with the verifier OFF IN BOTH ARMS, isolating
+recognition. §8.164's law again: pipeline stages are not independent, and only an
+engine A/B reveals the coupling.
+
+NEXT, in order: recalibrate the abstain to reproduce CRNN's abstain RATE rather
+than its numeric threshold (`.tools-bench/verify_abstain_calib.py`); re-run the
+A/B in the FULL shipped configuration (CRNN+verifier vs SVTR+recalibrated); flip
+the default only if that CI also excludes zero; then the full rebenchmark against
+Unlimited-OCR.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
