@@ -282,6 +282,103 @@ impl Svtr {
     }
 }
 
+
+/// CRNN-path crops are 1x64xW grayscale; SVTR wants 3x48xW **BGR**, normalised
+/// (x/255 - 0.5)/0.5, height fixed at 48 with the width scaled by aspect
+/// (PaddleOCR's `RecResizeImg`, image_shape [3,48,320]).
+///
+/// The model's own input signature is `[-1, 3, 48, -1]` — width is dynamic — so
+/// a single crop is sized to its true aspect instead of being padded to 320.
+/// That is what PaddleOCR does for a one-image batch (it sets `imgW` from the
+/// batch's max width/height ratio), and it is also what the §8.165 ceiling probe
+/// measured, so the accuracy result carries over.
+///
+/// BGR is not cosmetic: the checkpoint was trained on cv2-decoded images, and
+/// feeding RGB silently swaps two channels of every crop.
+pub fn svtr_input(
+    img: &ffai_core::types::ImageBuffer,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    device: &Device,
+) -> Result<Tensor> {
+    const H: usize = 48;
+    let (iw, ih) = (img.width as usize, img.height as usize);
+    let (x1, y1) = (x1.min(iw), y1.min(ih));
+    if x1 <= x0 + 1 || y1 <= y0 + 1 {
+        return Err(candle_core::Error::Msg("degenerate crop".into()));
+    }
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    let w = (((H as f32) * cw as f32 / ch as f32).ceil() as usize).clamp(8, 2048);
+    let stride = match img.format {
+        ffai_core::types::PixelFormat::Rgb8 => 3,
+        ffai_core::types::PixelFormat::Rgba8 => 4,
+        ffai_core::types::PixelFormat::Gray8 => 1,
+    };
+    // planar BGR, bilinear sample from the crop
+    let mut planes = vec![0f32; 3 * H * w];
+    for oy in 0..H {
+        let sy = ((oy as f32 + 0.5) * ch as f32 / H as f32 - 0.5).max(0.0);
+        let (y0i, fy) = (sy.floor() as usize, sy - sy.floor());
+        let y1i = (y0i + 1).min(ch - 1);
+        for ox in 0..w {
+            let sx = ((ox as f32 + 0.5) * cw as f32 / w as f32 - 0.5).max(0.0);
+            let (x0i, fx) = (sx.floor() as usize, sx - sx.floor());
+            let x1i = (x0i + 1).min(cw - 1);
+            let at = |yy: usize, xx: usize, c: usize| -> f32 {
+                let i = ((y0 + yy) * iw + (x0 + xx)) * stride;
+                if stride == 1 { img.data[i] as f32 } else { img.data[i + c] as f32 }
+            };
+            for c in 0..3 {
+                // source channel: BGR output from RGB input
+                let sc = if stride == 1 { 0 } else { 2 - c };
+                let top = at(y0i, x0i, sc) * (1.0 - fx) + at(y0i, x1i, sc) * fx;
+                let bot = at(y1i, x0i, sc) * (1.0 - fx) + at(y1i, x1i, sc) * fx;
+                let v = top * (1.0 - fy) + bot * fy;
+                planes[c * H * w + oy * w + ox] = (v / 255.0 - 0.5) / 0.5;
+            }
+        }
+    }
+    Tensor::from_vec(planes, (1, 3, H, w), device)
+}
+
+/// Greedy CTC over the head's label order: index 0 is the blank, 1..N are the
+/// charset lines. Returns the string and the mean probability of the kept
+/// (non-blank, non-repeat) steps, matching what `crnn::decode` reports.
+pub fn ctc_greedy(probs: &Tensor, charset: &[String]) -> Result<(String, Option<f32>)> {
+    let (_, t, n) = probs.dims3()?;
+    let best = probs.argmax(D::Minus1)?.flatten_all()?.to_vec1::<u32>()?;
+    let conf = probs.max(D::Minus1)?.flatten_all()?.to_vec1::<f32>()?;
+    let mut out = String::new();
+    let (mut sum, mut kept) = (0f32, 0usize);
+    let mut prev = u32::MAX;
+    for i in 0..t {
+        let k = best[i];
+        if k != 0 && k != prev {
+            // class k -> charset[k - 1]; the blank occupies index 0
+            if let Some(s) = charset.get(k as usize - 1) {
+                out.push_str(s);
+            }
+            sum += conf[i];
+            kept += 1;
+        }
+        prev = k;
+    }
+    let _ = n;
+    Ok((out, if kept == 0 { None } else { Some(sum / kept as f32) }))
+}
+
+/// Charset in head order from the file `carmenta_svtr_prepare.py` writes.
+/// Entries can be multi-character (CJK ligatures are single lines), so this is
+/// `Vec<String>`, not `Vec<char>` — indexing chars here would desynchronise the
+/// table from the head.
+pub fn load_charset(path: &std::path::Path) -> Result<Vec<String>> {
+    let txt = std::fs::read_to_string(path)
+        .map_err(|e| candle_core::Error::Msg(format!("charset {}: {e}", path.display())))?;
+    Ok(txt.lines().map(|s| s.to_string()).collect())
+}
+
 use candle_core::IndexOp;
 
 /// Load from a safetensors file produced by `tools/carmenta_svtr_prepare.py`.

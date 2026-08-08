@@ -34,6 +34,7 @@ fn main() {
         "craft-parseq" => (DetStage::Craft, RecStage::Parseq),
         "mobiledet-crnn" => (DetStage::MobileDet, RecStage::Crnn),
         "mobiledet-parseq" => (DetStage::MobileDet, RecStage::Parseq),
+        "mobiledet-svtr" => (DetStage::MobileDet, RecStage::Svtr),
         "composed-crnn" => (DetStage::Composed, RecStage::Crnn),
         "composed-parseq" => (DetStage::Composed, RecStage::Parseq),
         other => panic!("unknown engine `{other}`"),

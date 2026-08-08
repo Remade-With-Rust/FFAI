@@ -60,7 +60,20 @@ def main():
     CACHE.mkdir(parents=True, exist_ok=True)
     from safetensors.numpy import save_file
     save_file({k: np.ascontiguousarray(v) for k, v in state.items()}, str(CACHE / "rec.safetensors"))
-    (CACHE / "charset.txt").write_text("\n".join(charset), encoding="utf-8")
+    # HEAD ORDER, LF only, space appended. PaddleOCR's CTC label list is
+    # [blank] + dict + [space]; index 0 is the implicit blank and lines 1..N of
+    # this file are classes 1..N. An earlier edit meant to append the space
+    # silently did not apply and the file shipped 18,383 entries — an off-by-one
+    # that shifts EVERY decoded character, invisible until the text is read.
+    # `write_bytes`, not `write_text`: on Windows the latter rewrites LF as CRLF
+    # and every entry gains a trailing carriage return.
+    # THEN READ IT BACK. Writing is not evidence; this assert is what would have
+    # caught the miss at the time it happened.
+    lf = chr(10)
+    (CACHE / "charset.txt").write_bytes(lf.join(charset + [" "]).encode("utf-8"))
+    back = (CACHE / "charset.txt").read_bytes().decode("utf-8").split(lf)
+    assert len(back) == n_class - 1 and back[-1] == " ", (
+        f"charset.txt wrote {len(back)} entries, expected {n_class - 1} ending in a space")
     sha = hashlib.sha256((CACHE / "rec.safetensors").read_bytes()).hexdigest()
     print(f"  wrote {CACHE / 'rec.safetensors'}  sha256={sha}")
     print(f"  wrote {CACHE / 'charset.txt'}")

@@ -1,0 +1,40 @@
+# PP-OCRv5 mobile text recognizer (SVTR) — the MATCHED HALF of the detector we
+# already ship. Today we pair a 2024 PP-OCRv5 detector with EasyOCR's 2019
+# VGG-CRNN; §8.165 measured the mismatch with detection held constant and only
+# the recognizer swapped:
+#
+#   6 hard stylized pages   CRNN 44.13 %  ->  SVTR 40.12 %   (-4.01 pp)
+#   3 clean controls        CRNN  3.20 %  ->  SVTR  2.66 %   (-0.53 pp)
+#
+# It wins on BOTH halves, which refutes the risk this model opened with: an
+# 18,383-class multilingual head does not confuse English against a 97-class
+# English-only one. It reads it better.
+#
+# OPT-IN, NOT THE DEFAULT — the `crnn-zh-sim-g2` shape. Selected by engine name
+# (`mobiledet-svtr`); the shipped default stays `mobiledet-crnn` until a 236-page
+# engine A/B returns a macro gain whose CI excludes zero. LIVE wraps
+# `dyn OcrEngine` and never reaches inside, so it is unaffected either way — but
+# a global default flip would need its own live_bench/live_soak verdicts first.
+#
+# Converted from the paddlex cache by `tools/carmenta_svtr_prepare.py`
+# (234 tensors). The candle port in `svtr.rs` is pinned by
+# `examples/svtr_oracle.rs` against the recorded fixture: max abs diff 8.857e-5,
+# argmax agreement 100 % (§8.168).
+name = "ppocrv5-mobile-rec"
+task = "ocr"
+description = "PP-OCRv5 mobile rec (SVTR, 18385-class CTC) — opt-in via engine name mobiledet-svtr"
+license = "Apache-2.0"
+
+[[files]]
+name = "rec.safetensors"
+sha256 = "04da812bb245cb92ea384e8d15899628d85b243b48e44755e9dc6d4296c874d1"
+
+# Head order: index 0 is the implicit CTC blank, lines 1..18384 are these
+# entries — PaddleOCR's label list is [blank] + dict + [space]. The prepare tool
+# READS THE FILE BACK and refuses unless it holds 18,384 entries ending in a
+# space: an earlier edit meant to append that space silently did not apply, and
+# an off-by-one here shifts every decoded character (§8.113's failure mode, in a
+# form that only shows up as subtly wrong text).
+[[files]]
+name = "charset.txt"
+sha256 = "9a5b0e675766282fa1042f6ff7e153b11a3433cf29c053412d27438f11af1920"

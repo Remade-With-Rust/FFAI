@@ -31,6 +31,10 @@ pub enum RecStage {
     /// PARSeq-tiny: WORD-level 32x128 crops (25-char AR decoder), joined
     /// with spaces within each detected line.
     Parseq,
+    /// PP-OCRv5 mobile rec (SVTR): the matched half of the mobile DETECTOR we
+    /// already ship. LINE crops at 3x48xW BGR, 18,385-class CTC. Opt-in by
+    /// engine name until an A/B says otherwise (§8.165-168).
+    Svtr,
 }
 
 /// Which detector feeds the recognition stage.
@@ -89,6 +93,7 @@ struct Models {
     mobiledet: Option<crate::mobiledet::MobileDet>,
     crnn: Option<Crnn>,
     parseq: Option<crate::parseq::Parseq>,
+    svtr: Option<(crate::svtr::Svtr, Vec<String>)>,
     device: Device,
 }
 
@@ -198,6 +203,7 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
             (Some(c), Some(d))
         }
     };
+    let mut svtr = None;
     let (crnn, parseq) = match rec {
         RecStage::Crnn => {
             // §8.143: `FFAI_REC_LANG=zh` swaps in `zh_sim_g2`, whose head is
@@ -220,8 +226,20 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
                 .map_err(image::candle_err)?;
             (None, Some(m))
         }
+        RecStage::Svtr => {
+            let f = find("ppocrv5-mobile-rec")?.fetch()?;
+            let weights = f.file("rec.safetensors")?.to_path_buf();
+            let charset = crate::svtr::load_charset(&f.file("charset.txt")?.to_path_buf())
+                .map_err(image::candle_err)?;
+            // Head classes = charset + 1 blank. Asserted at load rather than
+            // trusted: an off-by-one shifts every decoded character (§8.168).
+            let m = crate::svtr::Svtr::new(load_vb(weights)?, charset.len() + 1)
+                .map_err(image::candle_err)?;
+            svtr = Some((m, charset));
+            (None, None)
+        }
     };
-    Ok(Models { craft, mobiledet, crnn, parseq, device })
+    Ok(Models { craft, mobiledet, crnn, parseq, svtr, device })
 }
 
 impl OcrEngine for CraftCrnn {
@@ -230,6 +248,14 @@ impl OcrEngine for CraftCrnn {
             (DetStage::Craft, RecStage::Crnn) => (
                 "craft-crnn",
                 "CRAFT detection + english_g2 CRNN recognition (EasyOCR lineage), pure Rust on candle",
+            ),
+            (DetStage::MobileDet, RecStage::Svtr) => (
+                "mobiledet-svtr",
+                "PP-OCRv5 mobile det + PP-OCRv5 mobile rec (SVTR) — the matched pair, pure Rust on candle",
+            ),
+            (_, RecStage::Svtr) => (
+                "svtr",
+                "PP-OCRv5 mobile rec (SVTR) recognition",
             ),
             (DetStage::Craft, RecStage::Parseq) => (
                 "craft-parseq",
@@ -350,7 +376,11 @@ impl OcrEngine for CraftCrnn {
                         // Unclip is a property of the RECOGNIZER's crop, not
                         // of the detector — see `UNCLIP_LINE` / `UNCLIP_WORD`.
                         let unclip = match self.rec {
-                            RecStage::Crnn => crate::mobiledet::UNCLIP_LINE,
+                            // SVTR is a LINE recognizer like CRNN, so it takes
+                            // the line unclip. Holding this constant is also
+                            // what keeps the A/B honest: detection identical,
+                            // only the recognizer differs.
+                            RecStage::Crnn | RecStage::Svtr => crate::mobiledet::UNCLIP_LINE,
                             RecStage::Parseq => crate::mobiledet::UNCLIP_WORD,
                         };
                         // FFAI_DUMP_PROB writes the raw text-probability map so
@@ -517,6 +547,22 @@ impl OcrEngine for CraftCrnn {
                 let y1 = (to_img(lb.y1) + py) as usize;
 
                 let (text, confidence) = match self.rec {
+                    RecStage::Svtr => {
+                        let (svtr, charset) =
+                            m.svtr.as_ref().expect("svtr loaded for RecStage::Svtr");
+                        let crop = match crate::profile::timed(|p| &p.rec_pre, || {
+                            crate::svtr::svtr_input(img, x0, y0, x1, y1, &m.device)
+                        }) {
+                            Ok(c) => c,
+                            Err(_) => return Ok(None),
+                        };
+                        let probs = crate::profile::timed(|p| &p.rec_fwd, || svtr.forward(&crop))
+                            .map_err(image::candle_err)?;
+                        crate::profile::timed(|p| &p.decode, || {
+                            crate::svtr::ctc_greedy(&probs, charset)
+                        })
+                        .map_err(image::candle_err)?
+                    }
                     RecStage::Crnn => {
                         let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
                         let crop = match crate::profile::timed(|p| &p.rec_pre, || {
