@@ -9015,6 +9015,49 @@ legitimately fittable rule for a future corpus that scores table pages. Until
 that re-import runs, brick 1 remains queued on its tainted-base candidate and
 the A/B promised on it stays unrun.
 
+
+### 8.165 SVTR ceiling probe — the recognizer swap is justified, and the conversion is started
+
+§8.162 refuted the preprocessing route (channel dispatch, null) and the in-tree
+second opinion (PARSeq, a wash), leaving the recognizer itself. We pair a 2024
+PP-OCRv5 mobile DETECTOR with EasyOCR's 2019 VGG-CRNN; PP-OCRv5's own SVTR mobile
+REC is the matched half, and it was already in the paddlex cache.
+
+**Ceiling probed BEFORE any Rust** (§8.155's law). Detection held constant — our
+own line boxes, cropped from the page and fed to both recognizers — so the only
+variable is recognition:
+
+| | CRNN | SVTR | delta |
+|---|---:|---:|---:|
+| 6 hard stylized pages | 44.13 % | **40.12 %** | **-4.01 pp** |
+| 3 clean controls | 3.20 % | **2.66 %** | **-0.53 pp** |
+
+`omni-0079` 69.0 -> 61.3, `omni-0257` 38.5 -> 31.3, `omni-0224` 35.6 -> 31.2,
+`omni-0164` 17.2 -> 13.2. **It wins on BOTH halves**, which refutes the specific
+risk this section opened with: an 18,383-class multilingual head does NOT confuse
+English relative to a 97-class English-only one. It reads it better.
+
+**A scoring bug caught on the way**, worth recording because it nearly inverted
+the read: the first cut scored each line against its PARENT REGION's full text,
+so a 20-line region contributed its text 20 times and clean control pages read
+94 % CER. The tell was a control page we know reads 4.1 %. Fixed to score the
+page reference, one denominator both engines.
+
+**Conversion started, isolated by construction.** `tools/carmenta_svtr_prepare.py`
+follows the detector's route (paddle static program -> 234 tensors -> shape map ->
+safetensors + charset). Its charset guard EARNED ITS KEEP IMMEDIATELY: the head
+is 18,385 against a dict of 18,383, and refusing to write forced the discovery
+that PaddleOCR's CTC label list is `[blank] + dict + [' ']` — an off-by-two that
+would have shifted every character index and produced fluent garbage. Charset is
+now written in head order. Preprocessing recorded for the port: BGR, 3x48x320,
+which is a different geometry from our 1x64xW grayscale path.
+
+REMAINING: the candle forward pass (the real build), pinned by an oracle fixture
+against this same paddle model; then `RecStage::Svtr` + `models/ppocrv5-mobile-rec.toml`,
+opt-in by engine name, `crnn.rs` untouched. LIVE is unaffected — it wraps
+`dyn OcrEngine` and never reaches inside — but a global default flip would need
+its own `live_bench`/`live_soak` verdicts before it happened.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
