@@ -610,7 +610,17 @@ fn main() -> Result<()> {
         }
         Cmd::Ocr { input, engine, language, live, fps, change_fraction, sample_every, output, watch } => {
             let opts = OcrOptions { languages: language, ..Default::default() };
-            let eng = reg.ocr(engine.as_deref())?;
+            // §8.171: the DOCUMENT default is SVTR (+1.521 pp macro on the
+            // OmniDocBench text holdout, CI excluding zero), but it costs 1.91x
+            // wall time and `--live` runs through this same resolution. LIVE
+            // keeps the registry default until it has its own `live_bench` /
+            // `live_soak` verdict — a throughput gate document OCR does not
+            // have. An explicit `--engine` still wins in both modes.
+            let eng = match (engine.as_deref(), live) {
+                (Some(name), _) => reg.ocr(Some(name))?,
+                (None, true) => reg.ocr(None)?,
+                (None, false) => reg.ocr(Some(ffai_carmenta::DOC_DEFAULT))?,
+            };
             if live {
                 if fps <= 0.0 {
                     anyhow::bail!("--fps must be positive");

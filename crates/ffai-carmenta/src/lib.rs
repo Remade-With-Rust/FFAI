@@ -60,12 +60,32 @@ pub fn parseq_pads() -> (f32, f32) {
     })
 }
 
+/// The engine `ffai ocr` uses for DOCUMENT work when none is named.
+///
+/// §8.171 measured it against `mobiledet-crnn` in the full shipped config, one
+/// binary, both arms interleaved: 18.680 % -> 17.158 % macro (+1.521 pp, 95 %
+/// CI [+1.068, +2.016] excluding zero), 12.720 % -> 11.567 % micro, 214 of 236
+/// holdout pages better and 19 worse. It costs 1.91x wall time, accepted
+/// deliberately for the quality.
+///
+/// This is NOT the registry default. `ffai ocr --live` resolves through the
+/// same `reg.ocr()`, and LIVE has no verdict for this model.
+pub const DOC_DEFAULT: &str = "mobiledet-svtr";
+
 /// Install every Carmenta engine into a registry.
 pub fn register(reg: &mut EngineRegistry) {
     reg.register_ocr(Arc::new(engine::CraftCrnn::new()));
     reg.register_ocr(Arc::new(engine::CraftCrnn::new_parseq()));
     reg.register_ocr(Arc::new(engine::CraftCrnn::new_mobiledet(engine::RecStage::Crnn)));
     reg.register_ocr(Arc::new(engine::CraftCrnn::new_mobiledet(engine::RecStage::Parseq)));
+    // §8.171: `mobiledet-svtr` is the DOCUMENT default (see `DOC_DEFAULT`), but
+    // it is registered LAST on purpose. The registry's default is "first
+    // registered", and `ffai ocr --live` resolves through the same `reg.ocr()`
+    // call — so making SVTR the registry default would put a 1.91x slower
+    // recognizer into the LIVE path, which has throughput constraints document
+    // OCR does not and has no `live_bench`/`live_soak` verdict for this model.
+    // The document path selects it BY NAME instead; LIVE keeps `craft-crnn`.
+    reg.register_ocr(Arc::new(engine::CraftCrnn::new_mobiledet(engine::RecStage::Svtr)));
     // `composed-*` is deliberately NOT registered. It runs both detectors and
     // was measured dominated on every corpus class (§8.19) — on frames it ties
     // craft-parseq exactly, on receipts it loses to it. The code path stays
@@ -83,5 +103,17 @@ mod tests {
         register(&mut reg);
         assert!(reg.ocr(Some("craft-crnn")).is_ok());
         assert_eq!(reg.ocr(None).unwrap().info().name, "craft-crnn");
+    }
+
+    /// The document default must RESOLVE, and it must NOT be the registry
+    /// default — LIVE shares `reg.ocr()` and must not inherit the slower model
+    /// without its own gates (§8.171).
+    #[test]
+    fn svtr_is_registered_but_not_the_registry_default() {
+        let mut reg = EngineRegistry::new();
+        register(&mut reg);
+        assert!(reg.ocr(Some(DOC_DEFAULT)).is_ok(), "document default must resolve");
+        assert_ne!(reg.ocr(None).unwrap().info().name, DOC_DEFAULT,
+                   "SVTR must not become the registry-wide default: LIVE shares it");
     }
 }
