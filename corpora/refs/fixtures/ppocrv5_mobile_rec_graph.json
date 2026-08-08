@@ -1,0 +1,4527 @@
+[
+{
+"i": 0,
+"op": "data"
+},
+{
+"i": 1,
+"op": "conv2d",
+"params": [
+"conv2d_0.w_0"
+],
+"shapes": [
+[
+16,
+3,
+3,
+3
+]
+],
+"attr": {
+"strides": [
+2,
+2
+],
+"paddings": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 2,
+"op": "batch_norm_",
+"params": [
+"batch_norm2d_0.w_1",
+"batch_norm2d_0.w_2",
+"batch_norm2d_0.w_0",
+"batch_norm2d_0.b_0"
+],
+"shapes": [
+[
+16
+],
+[
+16
+],
+[
+16
+],
+[
+16
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 3,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_136.w_0"
+],
+"shapes": [
+[
+16,
+1,
+3,
+3
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"groups": 16
+}
+},
+{
+"i": 4,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 5,
+"op": "reshape",
+"params": [
+"conv2d_136.b_0"
+],
+"shapes": [
+[
+16
+]
+]
+},
+{
+"i": 6,
+"op": "add"
+},
+{
+"i": 7,
+"op": "multiply",
+"params": [
+"learnable_affine_block_0.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 8,
+"op": "add",
+"params": [
+"learnable_affine_block_0.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 9,
+"op": "hardswish"
+},
+{
+"i": 10,
+"op": "multiply",
+"params": [
+"learnable_affine_block_1.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 11,
+"op": "add",
+"params": [
+"learnable_affine_block_1.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 12,
+"op": "conv2d",
+"params": [
+"conv2d_137.w_0"
+],
+"shapes": [
+[
+32,
+16,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 13,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 14,
+"op": "reshape",
+"params": [
+"conv2d_137.b_0"
+],
+"shapes": [
+[
+32
+]
+]
+},
+{
+"i": 15,
+"op": "add"
+},
+{
+"i": 16,
+"op": "multiply",
+"params": [
+"learnable_affine_block_2.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 17,
+"op": "add",
+"params": [
+"learnable_affine_block_2.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 18,
+"op": "hardswish"
+},
+{
+"i": 19,
+"op": "multiply",
+"params": [
+"learnable_affine_block_3.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 20,
+"op": "add",
+"params": [
+"learnable_affine_block_3.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 21,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_138.w_0"
+],
+"shapes": [
+[
+32,
+1,
+3,
+3
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"groups": 32
+}
+},
+{
+"i": 22,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 23,
+"op": "reshape",
+"params": [
+"conv2d_138.b_0"
+],
+"shapes": [
+[
+32
+]
+]
+},
+{
+"i": 24,
+"op": "add"
+},
+{
+"i": 25,
+"op": "multiply",
+"params": [
+"learnable_affine_block_4.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 26,
+"op": "add",
+"params": [
+"learnable_affine_block_4.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 27,
+"op": "hardswish"
+},
+{
+"i": 28,
+"op": "multiply",
+"params": [
+"learnable_affine_block_5.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 29,
+"op": "add",
+"params": [
+"learnable_affine_block_5.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 30,
+"op": "conv2d",
+"params": [
+"conv2d_139.w_0"
+],
+"shapes": [
+[
+64,
+32,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 31,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 32,
+"op": "reshape",
+"params": [
+"conv2d_139.b_0"
+],
+"shapes": [
+[
+64
+]
+]
+},
+{
+"i": 33,
+"op": "add"
+},
+{
+"i": 34,
+"op": "multiply",
+"params": [
+"learnable_affine_block_6.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 35,
+"op": "add",
+"params": [
+"learnable_affine_block_6.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 36,
+"op": "hardswish"
+},
+{
+"i": 37,
+"op": "multiply",
+"params": [
+"learnable_affine_block_7.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 38,
+"op": "add",
+"params": [
+"learnable_affine_block_7.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 39,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_140.w_0"
+],
+"shapes": [
+[
+64,
+1,
+3,
+3
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"groups": 64
+}
+},
+{
+"i": 40,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 41,
+"op": "reshape",
+"params": [
+"conv2d_140.b_0"
+],
+"shapes": [
+[
+64
+]
+]
+},
+{
+"i": 42,
+"op": "add"
+},
+{
+"i": 43,
+"op": "multiply",
+"params": [
+"learnable_affine_block_8.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 44,
+"op": "add",
+"params": [
+"learnable_affine_block_8.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 45,
+"op": "hardswish"
+},
+{
+"i": 46,
+"op": "multiply",
+"params": [
+"learnable_affine_block_9.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 47,
+"op": "add",
+"params": [
+"learnable_affine_block_9.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 48,
+"op": "conv2d",
+"params": [
+"conv2d_141.w_0"
+],
+"shapes": [
+[
+64,
+64,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 49,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 50,
+"op": "reshape",
+"params": [
+"conv2d_141.b_0"
+],
+"shapes": [
+[
+64
+]
+]
+},
+{
+"i": 51,
+"op": "add"
+},
+{
+"i": 52,
+"op": "multiply",
+"params": [
+"learnable_affine_block_10.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 53,
+"op": "add",
+"params": [
+"learnable_affine_block_10.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 54,
+"op": "hardswish"
+},
+{
+"i": 55,
+"op": "multiply",
+"params": [
+"learnable_affine_block_11.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 56,
+"op": "add",
+"params": [
+"learnable_affine_block_11.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 57,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_142.w_0"
+],
+"shapes": [
+[
+64,
+1,
+3,
+3
+]
+],
+"attr": {
+"strides": [
+2,
+1
+],
+"paddings": [
+1,
+1
+],
+"groups": 64
+}
+},
+{
+"i": 58,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 59,
+"op": "reshape",
+"params": [
+"conv2d_142.b_0"
+],
+"shapes": [
+[
+64
+]
+]
+},
+{
+"i": 60,
+"op": "add"
+},
+{
+"i": 61,
+"op": "multiply",
+"params": [
+"learnable_affine_block_12.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 62,
+"op": "add",
+"params": [
+"learnable_affine_block_12.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 63,
+"op": "hardswish"
+},
+{
+"i": 64,
+"op": "multiply",
+"params": [
+"learnable_affine_block_13.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 65,
+"op": "add",
+"params": [
+"learnable_affine_block_13.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 66,
+"op": "conv2d",
+"params": [
+"conv2d_143.w_0"
+],
+"shapes": [
+[
+128,
+64,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 67,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 68,
+"op": "reshape",
+"params": [
+"conv2d_143.b_0"
+],
+"shapes": [
+[
+128
+]
+]
+},
+{
+"i": 69,
+"op": "add"
+},
+{
+"i": 70,
+"op": "multiply",
+"params": [
+"learnable_affine_block_14.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 71,
+"op": "add",
+"params": [
+"learnable_affine_block_14.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 72,
+"op": "hardswish"
+},
+{
+"i": 73,
+"op": "multiply",
+"params": [
+"learnable_affine_block_15.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 74,
+"op": "add",
+"params": [
+"learnable_affine_block_15.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 75,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_144.w_0"
+],
+"shapes": [
+[
+128,
+1,
+3,
+3
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"groups": 128
+}
+},
+{
+"i": 76,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 77,
+"op": "reshape",
+"params": [
+"conv2d_144.b_0"
+],
+"shapes": [
+[
+128
+]
+]
+},
+{
+"i": 78,
+"op": "add"
+},
+{
+"i": 79,
+"op": "multiply",
+"params": [
+"learnable_affine_block_16.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 80,
+"op": "add",
+"params": [
+"learnable_affine_block_16.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 81,
+"op": "hardswish"
+},
+{
+"i": 82,
+"op": "multiply",
+"params": [
+"learnable_affine_block_17.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 83,
+"op": "add",
+"params": [
+"learnable_affine_block_17.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 84,
+"op": "conv2d",
+"params": [
+"conv2d_145.w_0"
+],
+"shapes": [
+[
+128,
+128,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 85,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 86,
+"op": "reshape",
+"params": [
+"conv2d_145.b_0"
+],
+"shapes": [
+[
+128
+]
+]
+},
+{
+"i": 87,
+"op": "add"
+},
+{
+"i": 88,
+"op": "multiply",
+"params": [
+"learnable_affine_block_18.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 89,
+"op": "add",
+"params": [
+"learnable_affine_block_18.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 90,
+"op": "hardswish"
+},
+{
+"i": 91,
+"op": "multiply",
+"params": [
+"learnable_affine_block_19.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 92,
+"op": "add",
+"params": [
+"learnable_affine_block_19.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 93,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_146.w_0"
+],
+"shapes": [
+[
+128,
+1,
+3,
+3
+]
+],
+"attr": {
+"strides": [
+1,
+2
+],
+"paddings": [
+1,
+1
+],
+"groups": 128
+}
+},
+{
+"i": 94,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 95,
+"op": "reshape",
+"params": [
+"conv2d_146.b_0"
+],
+"shapes": [
+[
+128
+]
+]
+},
+{
+"i": 96,
+"op": "add"
+},
+{
+"i": 97,
+"op": "multiply",
+"params": [
+"learnable_affine_block_20.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 98,
+"op": "add",
+"params": [
+"learnable_affine_block_20.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 99,
+"op": "hardswish"
+},
+{
+"i": 100,
+"op": "multiply",
+"params": [
+"learnable_affine_block_21.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 101,
+"op": "add",
+"params": [
+"learnable_affine_block_21.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 102,
+"op": "conv2d",
+"params": [
+"conv2d_147.w_0"
+],
+"shapes": [
+[
+240,
+128,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 103,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 104,
+"op": "reshape",
+"params": [
+"conv2d_147.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 105,
+"op": "add"
+},
+{
+"i": 106,
+"op": "multiply",
+"params": [
+"learnable_affine_block_22.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 107,
+"op": "add",
+"params": [
+"learnable_affine_block_22.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 108,
+"op": "hardswish"
+},
+{
+"i": 109,
+"op": "multiply",
+"params": [
+"learnable_affine_block_23.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 110,
+"op": "add",
+"params": [
+"learnable_affine_block_23.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 111,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_148.w_0"
+],
+"shapes": [
+[
+240,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 240
+}
+},
+{
+"i": 112,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 113,
+"op": "reshape",
+"params": [
+"conv2d_148.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 114,
+"op": "add"
+},
+{
+"i": 115,
+"op": "multiply",
+"params": [
+"learnable_affine_block_24.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 116,
+"op": "add",
+"params": [
+"learnable_affine_block_24.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 117,
+"op": "hardswish"
+},
+{
+"i": 118,
+"op": "multiply",
+"params": [
+"learnable_affine_block_25.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 119,
+"op": "add",
+"params": [
+"learnable_affine_block_25.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 120,
+"op": "conv2d",
+"params": [
+"conv2d_149.w_0"
+],
+"shapes": [
+[
+240,
+240,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 121,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 122,
+"op": "reshape",
+"params": [
+"conv2d_149.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 123,
+"op": "add"
+},
+{
+"i": 124,
+"op": "multiply",
+"params": [
+"learnable_affine_block_26.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 125,
+"op": "add",
+"params": [
+"learnable_affine_block_26.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 126,
+"op": "hardswish"
+},
+{
+"i": 127,
+"op": "multiply",
+"params": [
+"learnable_affine_block_27.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 128,
+"op": "add",
+"params": [
+"learnable_affine_block_27.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 129,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_150.w_0"
+],
+"shapes": [
+[
+240,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 240
+}
+},
+{
+"i": 130,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 131,
+"op": "reshape",
+"params": [
+"conv2d_150.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 132,
+"op": "add"
+},
+{
+"i": 133,
+"op": "multiply",
+"params": [
+"learnable_affine_block_28.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 134,
+"op": "add",
+"params": [
+"learnable_affine_block_28.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 135,
+"op": "hardswish"
+},
+{
+"i": 136,
+"op": "multiply",
+"params": [
+"learnable_affine_block_29.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 137,
+"op": "add",
+"params": [
+"learnable_affine_block_29.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 138,
+"op": "conv2d",
+"params": [
+"conv2d_151.w_0"
+],
+"shapes": [
+[
+240,
+240,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 139,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 140,
+"op": "reshape",
+"params": [
+"conv2d_151.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 141,
+"op": "add"
+},
+{
+"i": 142,
+"op": "multiply",
+"params": [
+"learnable_affine_block_30.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 143,
+"op": "add",
+"params": [
+"learnable_affine_block_30.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 144,
+"op": "hardswish"
+},
+{
+"i": 145,
+"op": "multiply",
+"params": [
+"learnable_affine_block_31.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 146,
+"op": "add",
+"params": [
+"learnable_affine_block_31.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 147,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_152.w_0"
+],
+"shapes": [
+[
+240,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 240
+}
+},
+{
+"i": 148,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 149,
+"op": "reshape",
+"params": [
+"conv2d_152.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 150,
+"op": "add"
+},
+{
+"i": 151,
+"op": "multiply",
+"params": [
+"learnable_affine_block_32.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 152,
+"op": "add",
+"params": [
+"learnable_affine_block_32.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 153,
+"op": "hardswish"
+},
+{
+"i": 154,
+"op": "multiply",
+"params": [
+"learnable_affine_block_33.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 155,
+"op": "add",
+"params": [
+"learnable_affine_block_33.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 156,
+"op": "conv2d",
+"params": [
+"conv2d_153.w_0"
+],
+"shapes": [
+[
+240,
+240,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 157,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 158,
+"op": "reshape",
+"params": [
+"conv2d_153.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 159,
+"op": "add"
+},
+{
+"i": 160,
+"op": "multiply",
+"params": [
+"learnable_affine_block_34.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 161,
+"op": "add",
+"params": [
+"learnable_affine_block_34.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 162,
+"op": "hardswish"
+},
+{
+"i": 163,
+"op": "multiply",
+"params": [
+"learnable_affine_block_35.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 164,
+"op": "add",
+"params": [
+"learnable_affine_block_35.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 165,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_154.w_0"
+],
+"shapes": [
+[
+240,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 240
+}
+},
+{
+"i": 166,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 167,
+"op": "reshape",
+"params": [
+"conv2d_154.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 168,
+"op": "add"
+},
+{
+"i": 169,
+"op": "multiply",
+"params": [
+"learnable_affine_block_36.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 170,
+"op": "add",
+"params": [
+"learnable_affine_block_36.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 171,
+"op": "hardswish"
+},
+{
+"i": 172,
+"op": "multiply",
+"params": [
+"learnable_affine_block_37.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 173,
+"op": "add",
+"params": [
+"learnable_affine_block_37.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 174,
+"op": "conv2d",
+"params": [
+"conv2d_155.w_0"
+],
+"shapes": [
+[
+240,
+240,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 175,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 176,
+"op": "reshape",
+"params": [
+"conv2d_155.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 177,
+"op": "add"
+},
+{
+"i": 178,
+"op": "multiply",
+"params": [
+"learnable_affine_block_38.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 179,
+"op": "add",
+"params": [
+"learnable_affine_block_38.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 180,
+"op": "hardswish"
+},
+{
+"i": 181,
+"op": "multiply",
+"params": [
+"learnable_affine_block_39.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 182,
+"op": "add",
+"params": [
+"learnable_affine_block_39.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 183,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_156.w_0"
+],
+"shapes": [
+[
+240,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+2,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 240
+}
+},
+{
+"i": 184,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 185,
+"op": "reshape",
+"params": [
+"conv2d_156.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 186,
+"op": "add"
+},
+{
+"i": 187,
+"op": "multiply",
+"params": [
+"learnable_affine_block_40.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 188,
+"op": "add",
+"params": [
+"learnable_affine_block_40.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 189,
+"op": "hardswish"
+},
+{
+"i": 190,
+"op": "multiply",
+"params": [
+"learnable_affine_block_41.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 191,
+"op": "add",
+"params": [
+"learnable_affine_block_41.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 192,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+1
+]
+}
+},
+{
+"i": 193,
+"op": "pool2d",
+"attr": {
+"strides": [
+1,
+1
+],
+"global_pooling": false,
+"paddings": [
+0,
+0
+],
+"pooling_type": "avg"
+}
+},
+{
+"i": 194,
+"op": "conv2d",
+"params": [
+"conv2d_96.w_0"
+],
+"shapes": [
+[
+60,
+240,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 195,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 196,
+"op": "reshape",
+"params": [
+"conv2d_96.b_0"
+],
+"shapes": [
+[
+60
+]
+]
+},
+{
+"i": 197,
+"op": "add"
+},
+{
+"i": 198,
+"op": "relu"
+},
+{
+"i": 199,
+"op": "conv2d",
+"params": [
+"conv2d_97.w_0"
+],
+"shapes": [
+[
+240,
+60,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 200,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 201,
+"op": "reshape",
+"params": [
+"conv2d_97.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 202,
+"op": "add"
+},
+{
+"i": 203,
+"op": "hardsigmoid"
+},
+{
+"i": 204,
+"op": "multiply"
+},
+{
+"i": 205,
+"op": "conv2d",
+"params": [
+"conv2d_157.w_0"
+],
+"shapes": [
+[
+480,
+240,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 206,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 207,
+"op": "reshape",
+"params": [
+"conv2d_157.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 208,
+"op": "add"
+},
+{
+"i": 209,
+"op": "multiply",
+"params": [
+"learnable_affine_block_42.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 210,
+"op": "add",
+"params": [
+"learnable_affine_block_42.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 211,
+"op": "hardswish"
+},
+{
+"i": 212,
+"op": "multiply",
+"params": [
+"learnable_affine_block_43.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 213,
+"op": "add",
+"params": [
+"learnable_affine_block_43.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 214,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_158.w_0"
+],
+"shapes": [
+[
+480,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 480
+}
+},
+{
+"i": 215,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 216,
+"op": "reshape",
+"params": [
+"conv2d_158.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 217,
+"op": "add"
+},
+{
+"i": 218,
+"op": "multiply",
+"params": [
+"learnable_affine_block_44.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 219,
+"op": "add",
+"params": [
+"learnable_affine_block_44.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 220,
+"op": "hardswish"
+},
+{
+"i": 221,
+"op": "multiply",
+"params": [
+"learnable_affine_block_45.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 222,
+"op": "add",
+"params": [
+"learnable_affine_block_45.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 223,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+1
+]
+}
+},
+{
+"i": 224,
+"op": "pool2d",
+"attr": {
+"strides": [
+1,
+1
+],
+"global_pooling": false,
+"paddings": [
+0,
+0
+],
+"pooling_type": "avg"
+}
+},
+{
+"i": 225,
+"op": "conv2d",
+"params": [
+"conv2d_107.w_0"
+],
+"shapes": [
+[
+120,
+480,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 226,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 227,
+"op": "reshape",
+"params": [
+"conv2d_107.b_0"
+],
+"shapes": [
+[
+120
+]
+]
+},
+{
+"i": 228,
+"op": "add"
+},
+{
+"i": 229,
+"op": "relu"
+},
+{
+"i": 230,
+"op": "conv2d",
+"params": [
+"conv2d_108.w_0"
+],
+"shapes": [
+[
+480,
+120,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 231,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 232,
+"op": "reshape",
+"params": [
+"conv2d_108.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 233,
+"op": "add"
+},
+{
+"i": 234,
+"op": "hardsigmoid"
+},
+{
+"i": 235,
+"op": "multiply"
+},
+{
+"i": 236,
+"op": "conv2d",
+"params": [
+"conv2d_159.w_0"
+],
+"shapes": [
+[
+480,
+480,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 237,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 238,
+"op": "reshape",
+"params": [
+"conv2d_159.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 239,
+"op": "add"
+},
+{
+"i": 240,
+"op": "multiply",
+"params": [
+"learnable_affine_block_46.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 241,
+"op": "add",
+"params": [
+"learnable_affine_block_46.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 242,
+"op": "hardswish"
+},
+{
+"i": 243,
+"op": "multiply",
+"params": [
+"learnable_affine_block_47.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 244,
+"op": "add",
+"params": [
+"learnable_affine_block_47.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 245,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_160.w_0"
+],
+"shapes": [
+[
+480,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+2,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 480
+}
+},
+{
+"i": 246,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 247,
+"op": "reshape",
+"params": [
+"conv2d_160.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 248,
+"op": "add"
+},
+{
+"i": 249,
+"op": "multiply",
+"params": [
+"learnable_affine_block_48.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 250,
+"op": "add",
+"params": [
+"learnable_affine_block_48.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 251,
+"op": "hardswish"
+},
+{
+"i": 252,
+"op": "multiply",
+"params": [
+"learnable_affine_block_49.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 253,
+"op": "add",
+"params": [
+"learnable_affine_block_49.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 254,
+"op": "conv2d",
+"params": [
+"conv2d_161.w_0"
+],
+"shapes": [
+[
+480,
+480,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 255,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 256,
+"op": "reshape",
+"params": [
+"conv2d_161.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 257,
+"op": "add"
+},
+{
+"i": 258,
+"op": "multiply",
+"params": [
+"learnable_affine_block_50.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 259,
+"op": "add",
+"params": [
+"learnable_affine_block_50.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 260,
+"op": "hardswish"
+},
+{
+"i": 261,
+"op": "multiply",
+"params": [
+"learnable_affine_block_51.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 262,
+"op": "add",
+"params": [
+"learnable_affine_block_51.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 263,
+"op": "depthwise_conv2d",
+"params": [
+"conv2d_162.w_0"
+],
+"shapes": [
+[
+480,
+1,
+5,
+5
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+2,
+2
+],
+"groups": 480
+}
+},
+{
+"i": 264,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 265,
+"op": "reshape",
+"params": [
+"conv2d_162.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 266,
+"op": "add"
+},
+{
+"i": 267,
+"op": "multiply",
+"params": [
+"learnable_affine_block_52.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 268,
+"op": "add",
+"params": [
+"learnable_affine_block_52.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 269,
+"op": "hardswish"
+},
+{
+"i": 270,
+"op": "multiply",
+"params": [
+"learnable_affine_block_53.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 271,
+"op": "add",
+"params": [
+"learnable_affine_block_53.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 272,
+"op": "conv2d",
+"params": [
+"conv2d_163.w_0"
+],
+"shapes": [
+[
+480,
+480,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 273,
+"op": "full_int_array",
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 274,
+"op": "reshape",
+"params": [
+"conv2d_163.b_0"
+],
+"shapes": [
+[
+480
+]
+]
+},
+{
+"i": 275,
+"op": "add"
+},
+{
+"i": 276,
+"op": "multiply",
+"params": [
+"learnable_affine_block_54.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 277,
+"op": "add",
+"params": [
+"learnable_affine_block_54.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 278,
+"op": "hardswish"
+},
+{
+"i": 279,
+"op": "multiply",
+"params": [
+"learnable_affine_block_55.w_0"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 280,
+"op": "add",
+"params": [
+"learnable_affine_block_55.w_1"
+],
+"shapes": [
+[
+1
+]
+]
+},
+{
+"i": 281,
+"op": "full_int_array",
+"attr": {
+"value": [
+3,
+2
+]
+}
+},
+{
+"i": 282,
+"op": "pool2d",
+"attr": {
+"strides": [
+3,
+2
+],
+"global_pooling": false,
+"paddings": [
+0,
+0
+],
+"pooling_type": "avg"
+}
+},
+{
+"i": 283,
+"op": "assign"
+},
+{
+"i": 284,
+"op": "conv2d",
+"params": [
+"conv2d_131.w_0"
+],
+"shapes": [
+[
+60,
+480,
+1,
+3
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 285,
+"op": "batch_norm_",
+"params": [
+"batch_norm2d_146.w_1",
+"batch_norm2d_146.w_2",
+"batch_norm2d_146.w_0",
+"batch_norm2d_146.b_0"
+],
+"shapes": [
+[
+60
+],
+[
+60
+],
+[
+60
+],
+[
+60
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 286,
+"op": "swish"
+},
+{
+"i": 287,
+"op": "conv2d",
+"params": [
+"conv2d_132.w_0"
+],
+"shapes": [
+[
+120,
+60,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 288,
+"op": "batch_norm_",
+"params": [
+"batch_norm2d_147.w_1",
+"batch_norm2d_147.w_2",
+"batch_norm2d_147.w_0",
+"batch_norm2d_147.b_0"
+],
+"shapes": [
+[
+120
+],
+[
+120
+],
+[
+120
+],
+[
+120
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 289,
+"op": "swish"
+},
+{
+"i": 290,
+"op": "shape64"
+},
+{
+"i": 291,
+"op": "full_int_array",
+"attr": {
+"value": [
+3
+]
+}
+},
+{
+"i": 292,
+"op": "full_int_array",
+"attr": {
+"value": [
+4
+]
+}
+},
+{
+"i": 293,
+"op": "slice"
+},
+{
+"i": 294,
+"op": "flatten"
+},
+{
+"i": 295,
+"op": "transpose",
+"attr": {
+"perm": [
+0,
+2,
+1
+]
+}
+},
+{
+"i": 296,
+"op": "layer_norm",
+"params": [
+"layer_norm_0.w_0",
+"layer_norm_0.b_0"
+],
+"shapes": [
+[
+120
+],
+[
+120
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 297,
+"op": "matmul",
+"params": [
+"linear_0.w_0"
+],
+"shapes": [
+[
+120,
+360
+]
+]
+},
+{
+"i": 298,
+"op": "add",
+"params": [
+"linear_0.b_0"
+],
+"shapes": [
+[
+360
+]
+]
+},
+{
+"i": 299,
+"op": "full_int_array",
+"attr": {
+"value": [
+0,
+-1,
+3,
+8,
+15
+]
+}
+},
+{
+"i": 300,
+"op": "reshape"
+},
+{
+"i": 301,
+"op": "transpose",
+"attr": {
+"perm": [
+2,
+0,
+3,
+1,
+4
+]
+}
+},
+{
+"i": 302,
+"op": "full_int_array",
+"attr": {
+"value": [
+0
+]
+}
+},
+{
+"i": 303,
+"op": "full_int_array",
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 304,
+"op": "slice"
+},
+{
+"i": 305,
+"op": "full",
+"attr": {
+"value": 0.25819888710975647
+}
+},
+{
+"i": 306,
+"op": "scale"
+},
+{
+"i": 307,
+"op": "full_int_array",
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 308,
+"op": "full_int_array",
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 309,
+"op": "slice"
+},
+{
+"i": 310,
+"op": "full_int_array",
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 311,
+"op": "full_int_array",
+"attr": {
+"value": [
+3
+]
+}
+},
+{
+"i": 312,
+"op": "slice"
+},
+{
+"i": 313,
+"op": "transpose",
+"attr": {
+"perm": [
+0,
+1,
+3,
+2
+]
+}
+},
+{
+"i": 314,
+"op": "matmul"
+},
+{
+"i": 315,
+"op": "softmax",
+"attr": {
+"axis": -1
+}
+},
+{
+"i": 316,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 317,
+"op": "dropout"
+},
+{
+"i": 318,
+"op": "matmul"
+},
+{
+"i": 319,
+"op": "transpose",
+"attr": {
+"perm": [
+0,
+2,
+1,
+3
+]
+}
+},
+{
+"i": 320,
+"op": "full_int_array",
+"attr": {
+"value": [
+0,
+-1,
+120
+]
+}
+},
+{
+"i": 321,
+"op": "reshape"
+},
+{
+"i": 322,
+"op": "matmul",
+"params": [
+"linear_1.w_0"
+],
+"shapes": [
+[
+120,
+120
+]
+]
+},
+{
+"i": 323,
+"op": "add",
+"params": [
+"linear_1.b_0"
+],
+"shapes": [
+[
+120
+]
+]
+},
+{
+"i": 324,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 325,
+"op": "dropout"
+},
+{
+"i": 326,
+"op": "add"
+},
+{
+"i": 327,
+"op": "layer_norm",
+"params": [
+"layer_norm_1.w_0",
+"layer_norm_1.b_0"
+],
+"shapes": [
+[
+120
+],
+[
+120
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 328,
+"op": "matmul",
+"params": [
+"linear_2.w_0"
+],
+"shapes": [
+[
+120,
+240
+]
+]
+},
+{
+"i": 329,
+"op": "add",
+"params": [
+"linear_2.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 330,
+"op": "swish"
+},
+{
+"i": 331,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 332,
+"op": "dropout"
+},
+{
+"i": 333,
+"op": "matmul",
+"params": [
+"linear_3.w_0"
+],
+"shapes": [
+[
+240,
+120
+]
+]
+},
+{
+"i": 334,
+"op": "add",
+"params": [
+"linear_3.b_0"
+],
+"shapes": [
+[
+120
+]
+]
+},
+{
+"i": 335,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 336,
+"op": "dropout"
+},
+{
+"i": 337,
+"op": "add"
+},
+{
+"i": 338,
+"op": "layer_norm",
+"params": [
+"layer_norm_2.w_0",
+"layer_norm_2.b_0"
+],
+"shapes": [
+[
+120
+],
+[
+120
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 339,
+"op": "matmul",
+"params": [
+"linear_4.w_0"
+],
+"shapes": [
+[
+120,
+360
+]
+]
+},
+{
+"i": 340,
+"op": "add",
+"params": [
+"linear_4.b_0"
+],
+"shapes": [
+[
+360
+]
+]
+},
+{
+"i": 341,
+"op": "full_int_array",
+"attr": {
+"value": [
+0,
+-1,
+3,
+8,
+15
+]
+}
+},
+{
+"i": 342,
+"op": "reshape"
+},
+{
+"i": 343,
+"op": "transpose",
+"attr": {
+"perm": [
+2,
+0,
+3,
+1,
+4
+]
+}
+},
+{
+"i": 344,
+"op": "full_int_array",
+"attr": {
+"value": [
+0
+]
+}
+},
+{
+"i": 345,
+"op": "full_int_array",
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 346,
+"op": "slice"
+},
+{
+"i": 347,
+"op": "full",
+"attr": {
+"value": 0.25819888710975647
+}
+},
+{
+"i": 348,
+"op": "scale"
+},
+{
+"i": 349,
+"op": "full_int_array",
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 350,
+"op": "full_int_array",
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 351,
+"op": "slice"
+},
+{
+"i": 352,
+"op": "full_int_array",
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 353,
+"op": "full_int_array",
+"attr": {
+"value": [
+3
+]
+}
+},
+{
+"i": 354,
+"op": "slice"
+},
+{
+"i": 355,
+"op": "transpose",
+"attr": {
+"perm": [
+0,
+1,
+3,
+2
+]
+}
+},
+{
+"i": 356,
+"op": "matmul"
+},
+{
+"i": 357,
+"op": "softmax",
+"attr": {
+"axis": -1
+}
+},
+{
+"i": 358,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 359,
+"op": "dropout"
+},
+{
+"i": 360,
+"op": "matmul"
+},
+{
+"i": 361,
+"op": "transpose",
+"attr": {
+"perm": [
+0,
+2,
+1,
+3
+]
+}
+},
+{
+"i": 362,
+"op": "full_int_array",
+"attr": {
+"value": [
+0,
+-1,
+120
+]
+}
+},
+{
+"i": 363,
+"op": "reshape"
+},
+{
+"i": 364,
+"op": "matmul",
+"params": [
+"linear_5.w_0"
+],
+"shapes": [
+[
+120,
+120
+]
+]
+},
+{
+"i": 365,
+"op": "add",
+"params": [
+"linear_5.b_0"
+],
+"shapes": [
+[
+120
+]
+]
+},
+{
+"i": 366,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 367,
+"op": "dropout"
+},
+{
+"i": 368,
+"op": "add"
+},
+{
+"i": 369,
+"op": "layer_norm",
+"params": [
+"layer_norm_3.w_0",
+"layer_norm_3.b_0"
+],
+"shapes": [
+[
+120
+],
+[
+120
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 370,
+"op": "matmul",
+"params": [
+"linear_6.w_0"
+],
+"shapes": [
+[
+120,
+240
+]
+]
+},
+{
+"i": 371,
+"op": "add",
+"params": [
+"linear_6.b_0"
+],
+"shapes": [
+[
+240
+]
+]
+},
+{
+"i": 372,
+"op": "swish"
+},
+{
+"i": 373,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 374,
+"op": "dropout"
+},
+{
+"i": 375,
+"op": "matmul",
+"params": [
+"linear_7.w_0"
+],
+"shapes": [
+[
+240,
+120
+]
+]
+},
+{
+"i": 376,
+"op": "add",
+"params": [
+"linear_7.b_0"
+],
+"shapes": [
+[
+120
+]
+]
+},
+{
+"i": 377,
+"op": "full",
+"attr": {
+"value": 0.10000000149011612
+}
+},
+{
+"i": 378,
+"op": "dropout"
+},
+{
+"i": 379,
+"op": "add"
+},
+{
+"i": 380,
+"op": "layer_norm",
+"params": [
+"layer_norm_4.w_0",
+"layer_norm_4.b_0"
+],
+"shapes": [
+[
+120
+],
+[
+120
+]
+],
+"attr": {
+"epsilon": 9.999999974752427e-07
+}
+},
+{
+"i": 381,
+"op": "full",
+"attr": {
+"value": 0.0
+}
+},
+{
+"i": 382,
+"op": "full",
+"attr": {
+"value": 1.0
+}
+},
+{
+"i": 383,
+"op": "full",
+"attr": {
+"value": 120.0
+}
+},
+{
+"i": 384,
+"op": "combine"
+},
+{
+"i": 385,
+"op": "stack",
+"attr": {
+"axis": 0
+}
+},
+{
+"i": 386,
+"op": "reshape"
+},
+{
+"i": 387,
+"op": "transpose",
+"attr": {
+"perm": [
+0,
+3,
+1,
+2
+]
+}
+},
+{
+"i": 388,
+"op": "conv2d",
+"params": [
+"conv2d_133.w_0"
+],
+"shapes": [
+[
+480,
+120,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 389,
+"op": "batch_norm_",
+"params": [
+"batch_norm2d_148.w_1",
+"batch_norm2d_148.w_2",
+"batch_norm2d_148.w_0",
+"batch_norm2d_148.b_0"
+],
+"shapes": [
+[
+480
+],
+[
+480
+],
+[
+480
+],
+[
+480
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 390,
+"op": "swish"
+},
+{
+"i": 391,
+"op": "full",
+"attr": {
+"value": 1.0
+}
+},
+{
+"i": 392,
+"op": "combine"
+},
+{
+"i": 393,
+"op": "concat"
+},
+{
+"i": 394,
+"op": "conv2d",
+"params": [
+"conv2d_134.w_0"
+],
+"shapes": [
+[
+60,
+960,
+1,
+3
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 395,
+"op": "batch_norm_",
+"params": [
+"batch_norm2d_149.w_1",
+"batch_norm2d_149.w_2",
+"batch_norm2d_149.w_0",
+"batch_norm2d_149.b_0"
+],
+"shapes": [
+[
+60
+],
+[
+60
+],
+[
+60
+],
+[
+60
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 396,
+"op": "swish"
+},
+{
+"i": 397,
+"op": "conv2d",
+"params": [
+"conv2d_135.w_0"
+],
+"shapes": [
+[
+120,
+60,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"groups": 1
+}
+},
+{
+"i": 398,
+"op": "batch_norm_",
+"params": [
+"batch_norm2d_150.w_1",
+"batch_norm2d_150.w_2",
+"batch_norm2d_150.w_0",
+"batch_norm2d_150.b_0"
+],
+"shapes": [
+[
+120
+],
+[
+120
+],
+[
+120
+],
+[
+120
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 399,
+"op": "swish"
+},
+{
+"i": 400,
+"op": "full_int_array",
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 401,
+"op": "squeeze"
+},
+{
+"i": 402,
+"op": "transpose",
+"attr": {
+"perm": [
+0,
+2,
+1
+]
+}
+},
+{
+"i": 403,
+"op": "matmul",
+"params": [
+"linear_8.w_0"
+],
+"shapes": [
+[
+120,
+18385
+]
+]
+},
+{
+"i": 404,
+"op": "add",
+"params": [
+"linear_8.b_0"
+],
+"shapes": [
+[
+18385
+]
+]
+},
+{
+"i": 405,
+"op": "softmax",
+"attr": {
+"axis": 2
+}
+},
+{
+"i": 406,
+"op": "fetch"
+}
+]
