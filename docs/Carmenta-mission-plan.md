@@ -9086,6 +9086,49 @@ Three transferables:
 The §8.164 train-only corpus extension (325 pages, three-way labels) STANDS as
 infrastructure and is unaffected by this revert.
 
+
+### 8.167 SVTR reference implementation MATCHES the oracle — 1.3e-5
+
+A numpy reference was written before any Rust, because numpy iterates in seconds
+where a candle port iterates in minutes: every structural misunderstanding
+surfaces against the fixture while it is still cheap to be wrong.
+
+**Final: max abs diff 1.317e-05, mean 5.4e-10, argmax agreement 100 %.** Inside
+the 1e-4 bar; the residual is float32 accumulation order.
+
+The backbone is NOT transcribed — hand-copying 30 layers of stride/group/padding
+is the error class that yields fluent-but-wrong text, so the conv chain is READ
+from the recorded graph and executed in order. Only structural landmarks (where
+the SE branches sit, where the neck pool ends the backbone) are in code.
+
+Verified structure: stem conv s2 + the one real BN; 28 backbone blocks of
+`conv -> +bias -> LAB -> hardswish -> LAB` (BN folded at export) with 56 LABs and
+two squeeze-excite branches; neck avgpool k=(3,2) s=(3,2) taking H 3->1, W 80->40
+— the 40 timesteps; 2 pre-norm encoder blocks, dim 120, 8 heads x 15, scale
+1/sqrt(15), MLP 120->240->120 swish; head convs then `linear_8` to 18,385 classes.
+
+**Three wrong hypotheses, each killed by the fixture rather than by inspection:**
+1. Skipping the head convs entirely — EVERY SHAPE STILL MATCHED end to end
+   (max diff 0.71). Shape agreement is not correctness.
+2. `concat([h, h])` to reach conv134's 960 in-channels — right count, wrong
+   tensor. It scored **100 % argmax agreement** at max diff 0.205, i.e. it
+   predicted every character correctly while being structurally wrong. This is
+   precisely the fluent-garbage failure the fixture exists to catch.
+3. `hardsigmoid` slope 0.2 and dropout `downgrade_in_infer` — both refuted by
+   measurement (0.2 is worse; the op records `upscale_in_train` + `is_test`, so
+   dropout is identity at inference).
+
+What cracked it was not the weights or the shapes but a STRING: the dropout op's
+`struct_name`, `/MultiHead/SequenceEncoder/EncoderWithSVTR/Block/Attention/`,
+names the architecture. `EncoderWithSVTR` keeps a SHORTCUT — the tensor before
+dimension reduction — and concatenates it with the encoder output. 960 = 480
+shortcut + 480 encoder. One field in an op's metadata, worth more than the whole
+shape map for this bug.
+
+NEXT: transliterate to `crates/ffai-carmenta/src/svtr.rs` against this verified
+reference (which now doubles as a per-stage debugger), then `RecStage::Svtr`,
+registry entry, and the engine A/B. `crnn.rs` untouched; opt-in by engine name.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
