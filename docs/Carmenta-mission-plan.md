@@ -8948,6 +8948,17 @@ four sorts). What remains for stylized text is the model itself — glyph-level,
 not channel-level — which sets next session's opening question: fine-tune vs a
 second recognizer head, both via the zh_sim_g2 opt-in route.
 
+
+**And the in-tree second opinion, probed:** PARSeq-tiny on the five hardest
+stylized pages is a wash (+3.5, +3.7, -0.8, -0.2, +0.2) and WORSE on normal-print
+controls — both architectures fail the same glyphs at this scale, so per-line
+fallback dispatch has nothing to dispatch to. The named next brick: we pair a
+PP-OCRv5 mobile DETECTOR with the english_g2 VGG-CRNN recognizer; PP-OCRv5's own
+SVTR-based mobile REC model is the matched half we never converted. That is a
+CONVERSION project (safetensors + charset + oracle fixture, the zh_sim_g2
+route), not training — opt-in by registry, engine A/B to decide, revert by not
+selecting it.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
