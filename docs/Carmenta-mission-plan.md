@@ -8935,6 +8935,19 @@ and one adaptive context. The 729 surviving orphans are a union of one-page
 mechanisms with no shared statistical signature. This refusal is load-bearing:
 the next attempt on this pool must bring SEMANTICS or a model, not a threshold.
 
+
+**§8.162 (first recognition brick): the max-contrast channel hypothesis, refuted
+by null effect.** Per-crop RGB-channel dispatch (pick the channel whose p2..p98
+span beats luma's 1.5x) was built env-gated, unit-tested (fires on red-on-green,
+refuses neutral print), and probed on the five hardest stylized pages: **zero
+pages changed, +0.00 pp**. The dispatch never fires on real content — coloured-
+on-white and white-on-photo text keep healthy LUMA spans; luma-flat colour pairs
+barely exist in this corpus. The recognizer sees the contrast and misreads the
+GLYPHS. Reverted per revert-if-unproven (the inert path taxed every crop with
+four sorts). What remains for stylized text is the model itself — glyph-level,
+not channel-level — which sets next session's opening question: fine-tune vs a
+second recognizer head, both via the zh_sim_g2 opt-in route.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
