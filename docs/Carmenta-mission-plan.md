@@ -8918,6 +8918,23 @@ ordering. The next lever on those classes is recognition-side (preprocessing or
 model), with §8.150's polarity-only crop-norm arm already measured neutral on the
 60-page slice and the coloured-text dispatch (§8.145-149) the open direction.
 
+
+**Three further iterations, at request, extending the refusal to airtight.**
+(1) The 4-variable tables for the kept-line and block searches — previously
+computed but never displayed — hold nothing: best kept-line rule +0.146 with a
+NEGATIVE char balance and top3 111 %; best block rule has train +0.006.
+(2) A sixth feature family, never before in any harvest: per-run RIGHT-EDGE
+RAGGEDNESS (justified prose aligns right; code is ragged-right), plus left
+raggedness and run indent. The medians refute the mechanism DIRECTIONALLY:
+corpus-wide, surviving orphans are LESS ragged (0.030 vs 0.034) and LESS
+indented (0.165 vs 0.319) than body — the `omni-0245`/`omni-0213` signature is
+PAGE-LOCAL, not population-wide. Zero 2-variable rules positive on both splits;
+every 3/4-variable candidate is a page list.
+(3) Total: ~5.5 M conjunctions over six feature families, three decision units
+and one adaptive context. The 729 surviving orphans are a union of one-page
+mechanisms with no shared statistical signature. This refusal is load-bearing:
+the next attempt on this pool must bring SEMANTICS or a model, not a threshold.
+
 ## 9. Pure-Rust boundary and watchlist
 
 **Decisions, recorded:**
