@@ -317,3 +317,87 @@ the seven laws govern whether a GATE is well-formed.** Both bind. The two that
   best-fitted one; the abstaining gate is the one whose train and holdout
   numbers converge. §8.160's competence abstain is exactly this and it is the
   single largest ordering win we have (+0.987 pp).
+
+---
+
+## 11. Deploying the Great Gate — the work items, in order
+
+§10 says what the tool is. This says what we BUILD to use it, and when. The
+governing economics: engine runs are expensive (236 pages x ~9 s/page, plus the
+official harness on top), rule search is free. **So harvest ONCE with a WIDE
+feature set and search many rules offline** — the CSV is schema-agnostic and
+discovers features from its header, which is exactly what makes that possible.
+Harvesting per-lever would spend the expensive resource on the cheap problem.
+
+### W1 — the feature tap (engine, env-gated, inert by default)
+
+`FFAI_GATE_HARVEST=<path>` makes the engine append one row per page carrying
+every decision-time signal it already computes, plus the ones we know we want:
+
+```
+page, n_col, cover, aspect, body_frac, n_lines, n_all,
+sparse_scatter,                 §8.156's gate signal
+join_margin, numseq_margin,     §8.160's text-verifier margins
+conf_median, conf_frac_low,     the abstain's inputs, both engines' scales
+mean_line_h, page_w, page_h, ink_extent, col_gap_max, ...
+```
+
+Rules that bind it: **harvested AT DECISION TIME** (a tap after the action
+measures the action), and **inert when the env var is unset** — no allocation,
+no branch cost in the shipped path. One test asserting the tap changes no
+output.
+
+### W2 — the harvest builder (`.tools-bench/gg_harvest.py`)
+
+`gain` must now be the signed effect on the **OFFICIAL** metric, which our old
+optimizer could not produce. The pipeline:
+
+1. run the engine with the lever's arm **OFF** -> predictions -> official
+   harness -> per-page `text_block` and `reading_order` edit;
+2. run it **ON** -> same -> same;
+3. `gain = off - on` per page (positive = the arm helps), for BOTH metrics;
+4. join with W1's features on `page`;
+5. emit the CSV with `page`, `page_chars`, `split`, `shipped`, `work`,
+   `cpu_ms`, and every feature column.
+
+Two arms, one binary, ABBA-interleaved, freshness-asserted — §3 applies to the
+harvest exactly as it applies to a result. **`gain` is computed from a paired
+per-page difference, so the ordering bias that voided §8.119–§8.171 cannot
+recur here: both arms are the same engine on the same pages, differenced.**
+
+### W3 — Phase 0A, run through the gate
+
+Re-validating §8.156/§8.157/§8.160 needs an ON/OFF pair per mechanism, which is
+exactly what W2 produces. Prefer `gate_refit` once the source repo's `bd`
+feature is declared and we have re-synced; until then W2 + `gate_calculator`
+answers the same question from the same data. **Do not block Phase 0A on the
+refit binary** — the harvest is the evidence, refit is a convenience over it.
+
+### W4 — Phase 1C, every new lever
+
+No lever reaches `suppress.rs` without first surviving `gate_calculator` on the
+W2 harvest: both splits agreeing in SIGN, `top3` well under 100 %, MACRO and
+MICRO not disagreeing in sign, and — where the lever has a speed half — the
+work counter present. Then transcribed as a branch of depth <= 4, one
+doc-comment per feature, one test per branch, threshold in
+**population-relative** form.
+
+### Sequencing
+
+| # | item | depends on | cost |
+|---|---|---|---|
+| W1 | feature tap | — | small, inert |
+| W2 | harvest builder | W1 | one engine pass per arm |
+| W3 | Phase 0A verdict on the shipped +1.78 pp | W2 | 2 arms x 3 mechanisms |
+| W4 | Phase 1C lever search | W2 | free per rule |
+
+**W1 and W2 are on the critical path for everything else in this plan** —
+Phase 0A, Phase 1C, and any future gate all consume the same harvest. Build
+them while the full 1651-page run finishes; neither needs its output.
+
+### The one thing that would make this go wrong
+
+Harvesting a NARROW feature set. Every feature omitted at harvest time costs a
+full engine pass to add later, and the tool cannot search for a signal that is
+not in the CSV. **When in doubt, emit the column.** Storage is free; the
+expensive resource is the engine pass, and a wide harvest is the same pass.
