@@ -908,6 +908,49 @@ fn probe_decide(
         r.put("total_chars", chars);
         r.put("mean_chars", chars / n);
         r.put("lowconf_thresh", lowconf as f64);
+        // FLOAT-INTERRUPTION PROXIES (§13). 67.9 % of English reading-order
+        // error is on pages carrying a figure, table or isolated equation, and
+        // our detector emits no such regions — so the signal has to be
+        // geometric. A float shows up as a tall band with no text, and as lines
+        // that stop short of the page's usual measure. Whether any of these
+        // actually separates the population is the question the harvest asks;
+        // they are emitted because a signal absent from the CSV can never be
+        // searched for.
+        let mut bx: Vec<(f32, f32, f32, f32)> = lines
+            .iter()
+            .filter_map(|l| l.bbox.as_ref().map(|b| (b.y, b.height, b.x, b.width)))
+            .collect();
+        bx.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut max_gap = 0.0f32;
+        let mut bands = 1usize;
+        let med_h = if bx.is_empty() { 1.0 } else { bx[bx.len() / 2].1.max(1.0) };
+        for w in bx.windows(2) {
+            let gap = w[1].0 - (w[0].0 + w[0].1);
+            if gap > max_gap {
+                max_gap = gap;
+            }
+            if gap > 2.0 * med_h {
+                bands += 1;
+            }
+        }
+        let widths: Vec<f32> = bx.iter().map(|b| b.3).collect();
+        let wmax = widths.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+        let wmean = if widths.is_empty() { 0.0 } else { widths.iter().sum::<f32>() / widths.len() as f32 };
+        let wsd = if widths.len() < 2 { 0.0 } else {
+            (widths.iter().map(|w| (w - wmean).powi(2)).sum::<f32>() / widths.len() as f32).sqrt()
+        };
+        let rights: Vec<f32> = bx.iter().map(|b| b.2 + b.3).collect();
+        let rmean = if rights.is_empty() { 0.0 } else { rights.iter().sum::<f32>() / rights.len() as f32 };
+        let rsd = if rights.len() < 2 { 0.0 } else {
+            (rights.iter().map(|r| (r - rmean).powi(2)).sum::<f32>() / rights.len() as f32).sqrt()
+        };
+        r.put("max_vgap", (max_gap / page_h.max(1.0)) as f64);
+        r.put("n_bands", bands as f64);
+        r.put("width_cv", if wmean > 0.0 { (wsd / wmean) as f64 } else { f64::NAN });
+        r.put("frac_short", widths.iter().filter(|&&w| w < 0.6 * wmax).count() as f64
+            / widths.len().max(1) as f64);
+        r.put("right_cv", if rmean > 0.0 { (rsd / rmean) as f64 } else { f64::NAN });
+        r.put("max_line_w_frac", (wmax / page_w.max(1.0)) as f64);
     }
     // §8.160 widens §8.157: the probe order is computed for EVERY dense
     // multi-column page, and accepted on either of two grounds:
@@ -922,7 +965,28 @@ fn probe_decide(
     // reads AUC 0.750, and the three catastrophic wrecks (-69.0, -47.6, -45.5)
     // all sit at negative margin — their shipped text already flows, and
     // breaking it is visible. `FFAI_ORDER_VERIFY=0` disables ground 2.
-    if lines.len() < 3 || st.n_col < 3 || st.cover < 0.18 {
+    // §13 HARVEST ARM, off unless asked. `FFAI_ORDER_PROBE_ALL=1` bypasses the
+    // column/coverage guard so the probe is COMPUTED on every page with enough
+    // lines to order. Without it a gate search over 1- and 2-column pages is
+    // impossible: the probe never runs there, so an ON/OFF harvest reads gain 0
+    // on every page and the calculator has nothing to find. 67.9 % of English
+    // reading-order error lives in that excluded population.
+    //
+    // This is a MEASUREMENT arm, not a proposal. Forcing the probe everywhere
+    // is expected to LOSE overall — the guard exists because §8.157 measured
+    // that it should. The harvest asks a narrower question: on which pages, by
+    // which decision-time signal, would it have won? A rule that answers it
+    // becomes the gate's new axis; if none does, the guard stays and we have
+    // refuted the lever with data instead of extending it on a hunch.
+    let probe_all = std::env::var("FFAI_ORDER_PROBE_ALL").as_deref() == Ok("1");
+    // Pages the SHIPPED guard rejects. Under the harvest arm these are reordered
+    // UNCONDITIONALLY — the verifier's opinion is not what we are asking about.
+    // We want the ORACLE gain: what reordering is worth on this page, so the
+    // calculator can search for the signal that predicts it. Pages the guard
+    // ADMITS keep the normal accept logic, so the arm changes exactly one
+    // population and the 3+ column result stays comparable.
+    let bypassed = probe_all && (st.n_col < 3 || st.cover < 0.18);
+    if lines.len() < 3 || (!probe_all && (st.n_col < 3 || st.cover < 0.18)) {
         if let Some(r) = row.as_deref_mut() {
             r.put_bool("reached_probe", false);
             r.missing(DECISION_COLS);
@@ -982,7 +1046,9 @@ fn probe_decide(
         r.put("numseq_margin", (np - ns) as f64);
         r.put("frac_moved", moved as f64 / lines.len().max(1) as f64);
     }
-    let accept = if probe_gate_fires(st, lines.len()) {
+    let accept = if bypassed {
+        true // §13 harvest arm: oracle gain on the excluded population
+    } else if probe_gate_fires(st, lines.len()) {
         true // ground 1: the shipped §8.157 guard
     } else if std::env::var("FFAI_ORDER_VERIFY").as_deref() == Ok("0") {
         false
