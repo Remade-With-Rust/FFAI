@@ -9343,3 +9343,64 @@ no lever has been aimed at it.
 build saturated the machine. The 1.91x RATIO is ABBA-interleaved and survives
 drift; the ABSOLUTE seconds are contaminated and must not be quoted as the
 shipping figure. Re-measure on a quiet box before any speed claim.
+
+### 8.173 THE INSTRUMENT WAS BIASED — every competitive claim is withdrawn
+
+Unlimited-OCR's CACHED output — the same 236 pages, the same bytes our harness
+scored at 17.76 % macro — re-scored through OmniDocBench's OFFICIAL harness:
+
+| | Text^Edit | ReadOrder^Edit |
+|---|---:|---:|
+| **Unlimited-OCR** | **0.0406** | **0.0522** |
+| Carmenta (shipped, SVTR) | 0.1084 | 0.1749 |
+
+Paired per-page over 235 common pages:
+
+| metric | gap (ours - theirs) | 95 % CI | pages they win / we win |
+|---|---:|---|---|
+| text_block | **+0.0679** | [+0.0485, +0.0884] excludes 0 | 172 / 35 |
+| reading_order | **+0.1227** | [+0.0960, +0.1506] excludes 0 | 96 / 7 |
+
+**Their 0.0406 on our subset matches their PUBLISHED 0.038.** So the cached
+output is faithful and the adapter's markdown-stripping cost them almost
+nothing. The discrepancy was never in the capture. It was in our scorer.
+
+**The mechanism, measured.** Our scorer concatenates every emitted line into one
+string and takes a single edit distance against a reference built from
+OmniDocBench's `order` field. It therefore charges ORDERING divergence as TEXT
+error — and it does so ASYMMETRICALLY:
+
+| | our scorer | official | inflation |
+|---|---:|---:|---:|
+| Carmenta | 0.1716 | 0.1084 | **1.58x** |
+| Unlimited-OCR | 0.1776 | 0.0406 | **4.37x** |
+
+A **2.8x bias in our favour**. Our detector emits in roughly geometric order,
+close to how the reference concatenation was built; a VLM emits in its own
+parsing order and was charged for the difference as though it had misread the
+characters. Same pages, same scorer, both arms — and still not a fair
+comparison, because the instrument has a systematic axis one arm sits closer to
+by construction. **"One instrument, both arms" is necessary and NOT sufficient;
+the instrument must also be neutral with respect to how the arms differ.**
+
+**Withdrawn:** every competitive statement in §8.119 through §8.171 — "2.68 pp
+behind", "0.92 pp behind", "+0.60 pp ahead". We were never ahead and never near
+parity. On the benchmark's own metrics we are 2.7x behind on text and 3.4x
+behind on reading order.
+
+**NOT withdrawn, and this is most of the campaign.** Every internal A/B is a
+PAIRED comparison between two configurations of OUR OWN engine, where the
+ordering bias applies equally to both arms. §8.156 (+0.562), §8.157 (+0.231),
+§8.160 (+0.987), §8.170/§8.171 SVTR (+1.521, CI [+1.068, +2.016]) all stand.
+The bias corrupts CROSS-ENGINE comparison, not self-comparison.
+
+**And the campaign was aimed correctly.** Reading order is our WORST column
+relative to best-in-class — 3.4x against 2.7x on text — which is exactly where
+four shipped mechanisms were pointed. The target was right; the distance to it
+was under-reported by the instrument.
+
+**The rule that would have caught this**, and which this campaign already had
+and applied to MODELS but never to the HARNESS: benchmark the reference using
+the reference's own instruments. Running OmniDocBench's official evaluator took
+under an hour and inverted a competitive conclusion that had shaped fifty
+sections. Any future claim against an external engine runs THEIR harness first.
