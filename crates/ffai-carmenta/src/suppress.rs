@@ -848,6 +848,67 @@ fn probe_apply(
     page_w: f32,
     page_h: f32,
 ) -> Vec<OcrLine> {
+    // W1 (plan §11): the Great Gate feature tap. `probe_decide` returns early on
+    // four paths, so the emit lives HERE, outside it, and fires for every page —
+    // tapping at the decision point would harvest only pages that reached it and
+    // silently narrow the denominator (§3 rule 10). Disabled, this is one cached
+    // bool and no allocation; `harvest_inert_when_unset` pins that.
+    if !crate::harvest::enabled() {
+        return probe_decide(lines, st, lowconf, page_w, page_h, None);
+    }
+    let mut row = crate::harvest::Row::new();
+    let out = probe_decide(lines, st, lowconf, page_w, page_h, Some(&mut row));
+    row.emit();
+    out
+}
+
+/// Columns filled only once the decision is actually reached, in emit order.
+/// Early exits fill them as MISSING via `Row::missing` so every row carries
+/// every column — see `harvest_row_width_is_constant`.
+const DECISION_COLS: &[&str] = &[
+    "probe_valid", "gate_fires", "verifier_blind",
+    "join_shipped", "join_probe", "join_margin",
+    "numseq_shipped", "numseq_probe", "numseq_margin",
+    "frac_moved", "accepted",
+];
+
+/// The ordering decision itself. `row`, when present, is filled as the decision
+/// proceeds; it never changes what is returned.
+fn probe_decide(
+    lines: Vec<OcrLine>,
+    st: &ProbeStats,
+    lowconf: f32,
+    page_w: f32,
+    page_h: f32,
+    mut row: Option<&mut crate::harvest::Row>,
+) -> Vec<OcrLine> {
+    // Page-level features, available on EVERY path including the early guards.
+    if let Some(r) = row.as_deref_mut() {
+        let n = lines.len().max(1) as f64;
+        let confs: Vec<f32> = lines.iter().filter_map(|l| l.confidence).collect();
+        let mut sorted = confs.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = if sorted.is_empty() { f64::NAN } else { sorted[sorted.len() / 2] as f64 };
+        let heights: f64 = lines.iter().filter_map(|l| l.bbox.as_ref()).map(|b| b.height as f64).sum();
+        let chars: f64 = lines.iter().map(|l| l.text.chars().count() as f64).sum();
+        r.put("n_col", st.n_col as f64);
+        r.put("cover", st.cover as f64);
+        r.put("aspect", st.aspect as f64);
+        r.put("n_all", st.n_all as f64);
+        r.put("n_lines", lines.len() as f64);
+        r.put("body_frac", lines.len() as f64 / st.n_all.max(1) as f64);
+        r.put("page_w", page_w as f64);
+        r.put("page_h", page_h as f64);
+        r.put("page_aspect", (page_h / page_w.max(1.0)) as f64);
+        r.put("conf_median", median);
+        r.put("conf_mean", if confs.is_empty() { f64::NAN } else { confs.iter().map(|&c| c as f64).sum::<f64>() / confs.len() as f64 });
+        r.put("conf_frac_low", confs.iter().filter(|&&c| c < lowconf).count() as f64 / confs.len().max(1) as f64);
+        r.put("conf_frac_low_096", confs.iter().filter(|&&c| c < 0.96).count() as f64 / confs.len().max(1) as f64);
+        r.put("mean_line_h", heights / n);
+        r.put("total_chars", chars);
+        r.put("mean_chars", chars / n);
+        r.put("lowconf_thresh", lowconf as f64);
+    }
     // §8.160 widens §8.157: the probe order is computed for EVERY dense
     // multi-column page, and accepted on either of two grounds:
     //   1. the §8.157 aspect guard (engine-verified, +0.231 pp macro), or
@@ -862,7 +923,14 @@ fn probe_apply(
     // all sit at negative margin — their shipped text already flows, and
     // breaking it is visible. `FFAI_ORDER_VERIFY=0` disables ground 2.
     if lines.len() < 3 || st.n_col < 3 || st.cover < 0.18 {
+        if let Some(r) = row.as_deref_mut() {
+            r.put_bool("reached_probe", false);
+            r.missing(DECISION_COLS);
+        }
         return lines;
+    }
+    if let Some(r) = row.as_deref_mut() {
+        r.put_bool("reached_probe", true);
     }
     let it: Vec<Item> = lines
         .iter()
@@ -879,11 +947,40 @@ fn probe_apply(
         })
         .collect();
     if it.len() != lines.len() {
+        if let Some(r) = row.as_deref_mut() {
+            r.put_bool("probe_valid", false);
+            r.missing(&DECISION_COLS[1..]);
+        }
         return lines; // a line without a box: cannot order what cannot be placed
     }
     let order = probe_cut(&it, (0.0, 0.0, page_w.max(1.0), page_h.max(1.0)), 0);
     if order.len() != lines.len() {
+        if let Some(r) = row.as_deref_mut() {
+            r.put_bool("probe_valid", false);
+            r.missing(&DECISION_COLS[1..]);
+        }
         return lines; // not a permutation — refuse rather than drop output
+    }
+    // The verifier's own signals, computed here whether or not the verifier is
+    // the branch that decides — a rule search needs the margin on pages the
+    // §8.157 guard admitted too, or it can only ever learn about the pages the
+    // verifier already handles.
+    if let Some(r) = row.as_deref_mut() {
+        let shipped: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        let probed: Vec<&str> = order.iter().map(|&i| lines[i].text.as_str()).collect();
+        let (js, jp) = (join_fluency(&shipped), join_fluency(&probed));
+        let (ns, np) = (num_seq_monotone(&shipped), num_seq_monotone(&probed));
+        let moved = order.iter().enumerate().filter(|&(i, &o)| i != o).count();
+        r.put_bool("probe_valid", true);
+        r.put_bool("gate_fires", probe_gate_fires(st, lines.len()));
+        r.put_bool("verifier_blind", verifier_blind(&lines, lowconf));
+        r.put("join_shipped", js as f64);
+        r.put("join_probe", jp as f64);
+        r.put("join_margin", (jp - js) as f64);
+        r.put("numseq_shipped", ns as f64);
+        r.put("numseq_probe", np as f64);
+        r.put("numseq_margin", (np - ns) as f64);
+        r.put("frac_moved", moved as f64 / lines.len().max(1) as f64);
     }
     let accept = if probe_gate_fires(st, lines.len()) {
         true // ground 1: the shipped §8.157 guard
@@ -914,6 +1011,9 @@ fn probe_apply(
             false
         }
     };
+    if let Some(r) = row.as_deref_mut() {
+        r.put_bool("accepted", accept);
+    }
     if !accept {
         return lines;
     }
@@ -1407,6 +1507,80 @@ mod tests {
         let st = ProbeStats { n_col: 3, cover: 0.30, aspect: 1.2, n_all: lines.len() };
         let out = probe_apply(lines, &st, VERIFY_LOWCONF_CRNN, 800.0, 960.0);
         assert_eq!(out[0].bbox.as_ref().unwrap().y, first_y, "order must be untouched");
+    }
+
+    /// The Great Gate tap must not change what the engine returns (plan §11 W1).
+    /// A telemetry tap that perturbs output would corrupt the very harvest it
+    /// exists to produce, and every gate fitted on it after. Exercises BOTH the
+    /// tapped and untapped paths through `probe_decide` on the same input and
+    /// asserts the orders are identical — including a page that returns early,
+    /// since the tap deliberately fires on those too.
+    #[test]
+    fn harvest_tap_does_not_change_output() {
+        let mk = |x: f32, y: f32, t: &str| OcrLine {
+            text: t.into(),
+            words: Vec::new(),
+            bbox: Some(ffai_core::types::BoundingBox { x, y, width: 180.0, height: 12.0 }),
+            confidence: Some(0.97),
+        };
+        for (st, lines) in [
+            // reaches the decision
+            (ProbeStats { n_col: 3, cover: 0.30, aspect: 1.8, n_all: 9 },
+             (0..9).map(|i| mk((i % 3) as f32 * 260.0, (i / 3) as f32 * 14.0 + 100.0, "item text"))
+                 .collect::<Vec<_>>()),
+            // returns early on the guard — the tap must still be inert here
+            (ProbeStats { n_col: 1, cover: 0.05, aspect: 1.0, n_all: 3 },
+             vec![mk(0.0, 300.0, "a"), mk(0.0, 100.0, "b"), mk(0.0, 200.0, "c")]),
+        ] {
+            let plain = probe_decide(lines.clone(), &st, VERIFY_LOWCONF_CRNN, 800.0, 1600.0, None);
+            let mut row = crate::harvest::Row::new();
+            let tapped =
+                probe_decide(lines, &st, VERIFY_LOWCONF_CRNN, 800.0, 1600.0, Some(&mut row));
+            let ys = |v: &[OcrLine]| {
+                v.iter().map(|l| (l.bbox.as_ref().unwrap().x as i32,
+                                  l.bbox.as_ref().unwrap().y as i32)).collect::<Vec<_>>()
+            };
+            assert_eq!(ys(&plain), ys(&tapped), "the harvest tap changed the ordering");
+            assert_eq!(plain.len(), tapped.len(), "the harvest tap changed the line count");
+        }
+    }
+
+    /// EVERY harvest row carries EVERY column, whichever path the page takes.
+    ///
+    /// The header is written from whichever row lands first, so a single
+    /// early-returning page at the head of a run would misalign every full row
+    /// after it and the calculator would fit rules to columns shifted under
+    /// their names — a silent, total corruption of the harvest. Found by
+    /// inspection after a three-page smoke test happened to hit only the full
+    /// path; this is the test that would have caught it.
+    #[test]
+    fn harvest_row_width_is_constant() {
+        let mk = |x: f32, y: f32| OcrLine {
+            text: "item 1 text".into(),
+            words: Vec::new(),
+            bbox: Some(ffai_core::types::BoundingBox { x, y, width: 180.0, height: 12.0 }),
+            confidence: Some(0.97),
+        };
+        let dense: Vec<OcrLine> =
+            (0..9).map(|i| mk((i % 3) as f32 * 260.0, (i / 3) as f32 * 14.0 + 100.0)).collect();
+        let mut widths = Vec::new();
+        for (st, lines) in [
+            // full path: reaches the decision
+            (ProbeStats { n_col: 3, cover: 0.30, aspect: 1.8, n_all: 9 }, dense.clone()),
+            // early exit on the column guard
+            (ProbeStats { n_col: 1, cover: 0.30, aspect: 1.8, n_all: 9 }, dense.clone()),
+            // early exit on the coverage guard
+            (ProbeStats { n_col: 3, cover: 0.01, aspect: 1.8, n_all: 9 }, dense.clone()),
+            // early exit on too few lines
+            (ProbeStats { n_col: 3, cover: 0.30, aspect: 1.8, n_all: 2 },
+             vec![mk(0.0, 100.0), mk(0.0, 120.0)]),
+        ] {
+            let mut row = crate::harvest::Row::new();
+            let _ = probe_decide(lines, &st, VERIFY_LOWCONF_CRNN, 800.0, 1600.0, Some(&mut row));
+            widths.push(row.len());
+        }
+        assert!(widths.windows(2).all(|w| w[0] == w[1]),
+                "harvest rows differ in width across paths: {widths:?} — the CSV would be ragged");
     }
 
     /// A page the guard rejects passes through byte-for-byte, whatever the
