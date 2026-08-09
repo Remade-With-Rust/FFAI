@@ -467,3 +467,71 @@ captions interleaving into the body sequence. Investigate before building.
 | magazine | 6.5 % | 6.0 % |
 
 `academic_literature` leads BOTH axes. It is the first target.
+
+---
+
+## 13. §12 CORRECTED — it is floats, not single-column, and the gate excludes them
+
+§12 read "single_column is our worst layout for reading order (0.3404)" off the
+raw per-layout means. Decomposing further shows part of that was a DEGENERATE
+CASE of the metric, and the real driver is something else entirely.
+
+**The first hypothesis died on inspection.** The metric's own pairing filters
+out `header`, `footer`, `page_number`, `figure_caption`, `figure_footnote`,
+`table_caption`, `table_footnote` and `page_footnote` before comparing order
+(`end2end_dataset.py` ~2258). `FFAI_BODY_ONLY` dropping those therefore CANNOT
+cost us reading order — our scope choice is ALIGNED with the metric, not
+fighting it. That was the obvious explanation and it was wrong.
+
+**English pages, order error decomposed:**
+
+| segment | n | mean | share of total |
+|---|---:|---:|---:|
+| DEGENERATE — <= 1 orderable body region | 48 | 0.7135 | 16.1 % |
+| clean — 2+ regions, no float | 185 | 0.1838 | 16.0 % |
+| **has float — figure / table / equation** | **517** | **0.2798** | **67.9 %** |
+
+**1. Sixteen percent is the evaluator's degenerate case, not our defect.** A page
+with one orderable region has no sequence to get wrong, yet these score 0.71.
+`page-035cb436` reads **text 0.000 and order 1.000** — read perfectly, scored as
+entirely misordered. EXCLUDE these from any optimisation target; a lever fitted
+to them is fitted to an artifact.
+
+**2. Sixty-eight percent is floats.** Pages carrying a figure, table or isolated
+equation read 0.2798 against 0.1838 for clean pages, and they are two thirds of
+the error mass. Text flowing around and between floats is the real defect.
+
+**3. The gate excludes exactly that population.** `probe_apply` guards on
+`n_col >= 3 && cover >= 0.18`, so the reordering machinery NEVER RUNS on one-
+and two-column pages. The gating variable is COLUMN COUNT; the thing that
+actually predicts damage is FLOAT INTERRUPTION. That is a Great Gate variable
+problem in the precise sense §10 describes — the gate is fitted on the wrong
+axis for this population — and NOT a detection or box-sizing problem.
+
+**Per-layout, with degenerates removed:**
+
+| layout | all | non-degenerate | n |
+|---|---:|---:|---:|
+| double_column | 0.3151 | **0.3085** | 104 |
+| single_column | 0.3181 | 0.2635 | 297 |
+| 1andmore_column | 0.2674 | 0.2634 | 100 |
+| other_layout | 0.2412 | 0.2278 | 153 |
+| **three_column** | **0.1480** | **0.1480** | 48 |
+
+**DOUBLE-column is our worst, not single.** And **three_column is our best by a
+wide margin** — the dense-column campaign delivered on exactly the population it
+was aimed at. §12's framing was partly the degenerate case talking; this table
+supersedes it.
+
+### What this makes the next lever
+
+Not more ordering machinery for dense columns — that population is solved.
+**Widen the gate's axis:** the candidate is a float-interruption signal (a wide
+horizontal band with no text, or a text block that fails to span the expected
+measure) admitting 1- and 2-column pages that currently return early. That is a
+W2 harvest away: the features are decision-time and cheap, and the gate
+calculator can search them offline against `gain_order` before any of it
+reaches `suppress.rs`.
+
+**Harvest note:** exclude the 48 degenerate pages, or `top3` and the macro
+column will both be dominated by an artifact that no rule can fix.
