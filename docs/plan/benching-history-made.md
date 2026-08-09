@@ -607,3 +607,80 @@ as a candidate PREDICATE — an outcome predicting an outcome, the §8.161
 contamination, in a file written by the tool built to avoid it. Removed. The
 rule stands: **the calculator treats every numeric non-required column as a
 feature, so an outcome must never be in the same file.**
+
+---
+
+## 15. CORRECTION — we are NOT English-only, and 894 pages are back in scope
+
+§4, §12 and §13 all partition the corpus into "ADDRESSABLE (English)" and "OUT
+OF SCOPE (non-English), because our recognizers are English-only by deliberate
+design". **That premise is false.** The shipped recognizer's charset:
+
+| block | entries |
+|---|---:|
+| CJK unified ideographs | **15 565** |
+| CJK punctuation / other | 2 530 |
+| ASCII | 95 |
+| katakana | 94 |
+| hiragana | 86 |
+| cyrillic | 11 |
+
+**SVTR is PP-OCRv5 — a Chinese/Japanese/Latin model.** It is not an English
+recogniser with a big table; CJK is 96 % of its head.
+
+**And we read Chinese well.** Sampled against GT, one page returns
+`2．学会“茬、砖、涎”3个会认字。` character-for-character. Simplified Chinese
+scores **0.2038** against English's 0.1155 — 1.8x worse, not the ~1.0 a model
+that could not read the script would produce. The errors on those pages are
+ORDERING and OVER-EMISSION (we emit a `WWW.1PPT.COM` watermark the GT excludes),
+exactly the failure modes we have on English pages.
+
+**WITHDRAWN:** every statement that non-English pages are out of scope, and the
+attribution of 67.3 % of text error to a scope decision. Those 894 pages are
+addressable and their error is ours.
+
+### The mechanism, and it is in our source not the model
+
+`join_fluency` — the text verifier behind §8.160's +0.987 pp, our largest
+ordering win — is **structurally inert on CJK**:
+
+```rust
+const TERM: &[char] = &['.', '!', '?', ':', ';', ...];   // Latin punctuation only
+...
+if first.is_lowercase() { s += 1.0 } else if first.is_uppercase() { s -= 1.0 }
+```
+
+Chinese uses `。！？：；`, which never match `TERM`; and CJK characters have NO
+CASE, so `is_lowercase()` and `is_uppercase()` are both false and NEITHER branch
+fires. The function returns ~0 for EVERY candidate ordering on a Chinese page.
+**Our best ordering mechanism cannot distinguish a good order from a bad one on
+54 % of the benchmark.** §8.160's `verifier_blind` abstain was a symptom of this
+that we diagnosed as a confidence problem.
+
+The same Latin assumption runs through the suppression branches
+(`bibliography_branch`, `after_refs_branch`, `year_paren_syntax`) and through
+`num_seq_monotone`, which does not know 一二三.
+
+### On building a language detector — we need detection, not a detector
+
+- **Not for model routing.** SVTR already IS the Chinese model; there is nothing
+  better to route to. A pre-pass would spend compute choosing between models we
+  do not have.
+- **Script comes FREE from the output.** After one recognition pass, counting
+  Unicode blocks in the recognised text classifies the page with near-certainty
+  — no second pass, no model, no image-feature threshold. That is the signal
+  script-aware post-processing needs.
+- **A pre-pass is only required for scripts SVTR CANNOT read** (Arabic,
+  Devanagari, Cyrillic), where output-based detection fails by construction: the
+  model will not emit Arabic, it will emit confident garbage in a script it
+  knows. Worth building for graceful refusal as a product feature; NOT a
+  benchmark lever — OmniDocBench carries only English, Chinese, mixed and 2
+  "other" pages.
+
+### The lever this opens
+
+**Script-aware post-processing**: a CJK branch for `join_fluency` (CJK
+terminators, no case test, no hyphenation), and script guards on the Latin-only
+suppression branches. Unlike §13's gate-axis hypothesis, this has a mechanism
+visible in the source rather than a correlation — and it addresses a population
+carrying two thirds of our text error that we had written off.
