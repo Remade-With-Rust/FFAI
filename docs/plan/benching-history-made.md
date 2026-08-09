@@ -401,3 +401,69 @@ Harvesting a NARROW feature set. Every feature omitted at harvest time costs a
 full engine pass to add later, and the tool cannot search for a signal that is
 not in the CSV. **When in doubt, emit the column.** Storage is free; the
 expensive resource is the engine pass, and a wide harvest is the same pass.
+
+---
+
+## 12. Phase 1A RESULT — the full benchmark, decomposed
+
+Official evaluator, all 1651 pages, shipped engine, no Carmenta changes.
+Population verified: 1557 pages carry a `text_block` region and 1638 a reading
+order; the 94 and 13 absent have no such region in the GT, so nothing was
+silently dropped.
+
+| | ours (full) | published range |
+|---|---:|---|
+| Text^Edit | **0.1636** | 0.0326 (PaddleOCR-VL-1.6) – 0.157 (Marker) |
+| ReadOrder^Edit | **0.3226** | 0.116 – 0.243 (Marker) |
+
+**On the full benchmark we are last on both columns.** That is the honest
+leaderboard-comparable figure and it goes in the record first.
+
+**Scope carries two thirds of it:**
+
+| | n | mean | share of total error |
+|---|---:|---:|---:|
+| OUT OF SCOPE (non-English) | 836 | 0.2052 | **67.3 %** |
+| ADDRESSABLE (English) | 721 | **0.1155** | 32.7 % |
+
+English-only: **Text 0.1155**, **ReadOrder 0.2839**. Both numbers are true —
+0.1636 describes the SCOPE, 0.1155 describes the ENGINE, and any public claim
+must say which it is quoting.
+
+### The finding that inverts a campaign assumption
+
+| reading_order by layout | n | mean | pp_of_total |
+|---|---:|---:|---:|
+| **single_column** | 881 | **0.3404** | **0.1831 (56.8 %)** |
+| other_layout | 367 | 0.3264 | 0.0731 |
+| double_column | 182 | 0.3118 | 0.0346 |
+| 1andmore_column | 155 | 0.2793 | 0.0264 |
+| **three_column** | 53 | **0.1626** | 0.0053 |
+
+**Three-column pages are our BEST layout for reading order; single-column is
+our WORST — by mean, not merely by volume.** Roughly fifty sections and four
+shipped mechanisms targeted dense 3+ column pages, and that work shows: 0.1626
+against a corpus mean of 0.3226. Meanwhile single-column pages, where reading
+order should be trivially top-to-bottom, carry **56.8 % of all reading-order
+error**.
+
+This was invisible under the old scorer, which conflated text and order into
+one number, and it re-points the campaign: **the remaining reading-order work
+is not in dense columns. It is in ordinary single-column pages**, and a page
+whose order should be trivial reading 0.34 says something is wrong upstream of
+the ordering machinery — suppression dropping content, or headers, footers and
+captions interleaving into the body sequence. Investigate before building.
+
+### The addressable work queue, by contribution
+
+| doc type | text share | order share |
+|---|---:|---:|
+| **academic_literature** (185 EN pages) | **26.2 %** | **36.3 %** |
+| PPT2PDF | 20.4 % | 10.0 % |
+| book | 16.3 % | 19.2 % |
+| exam_paper | 8.3 % | 14.4 % |
+| newspaper | 12.9 % | 7.3 % |
+| colorful_textbook | 9.5 % | 6.4 % |
+| magazine | 6.5 % | 6.0 % |
+
+`academic_literature` leads BOTH axes. It is the first target.
