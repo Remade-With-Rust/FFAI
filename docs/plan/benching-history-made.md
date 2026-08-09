@@ -239,3 +239,81 @@ restricted data. Check before it becomes load-bearing in anything public.
 | 2026-08-08 | §8.173 — instrument bias found; all competitive claims withdrawn |
 | 2026-08-08 | official baseline: Text 0.1084 / Order 0.1749 (236 EN pages) |
 | 2026-08-08 | full 1651-page run in flight |
+
+---
+
+## 10. The Great Gate calculator — the instrument for Phases 0A and 1C
+
+Imported 2026-08-08 from `remade_ffmpeg_rs@ae6b5ce` to `/_greatgate/`
+(**gitignored, `publish = false`, detached workspace, outside
+`members = ["crates/*"]`** — three independent guards; offline analysis tooling
+and its harvests never ship).
+
+**This is our own tool coming home generalized.** Its header cites this
+campaign by section — §8.106–§8.119 — and it kept our vocabulary: the CSV's
+`clip` column takes alias **`page`**, and `clip_total` takes **`page_chars`**.
+It went FFai suppress-optimizer → `rs_h264/_greatgate/` → generalized here, and
+independently re-derived the same laws the codec dispatch skill distilled.
+
+**What it adds over the optimizer we already had:**
+
+| capability | why it matters HERE |
+|---|---|
+| `shipped` column → **incremental** scoring | scores only units the shipped gate still keeps. This is the ghost-branch trap exactly: 92 % of a candidate's targeted lines were already dropped, replay read −0.057 and the engine −0.988. A standalone table cannot see that. |
+| `top3` concentration column | §8.114 — a rule scored +4 407 micro and three clips carried all of it; removing them took it to −0.01. Half a corpus's residual routinely sits on a handful of pages. |
+| MICRO **and** MACRO with sign-disagreement flags | §8.119 — the two pick different rules and flip signs, and this campaign fitted the wrong one for weeks. |
+| instrument audit that withholds "bankable" | refuses to certify a rule until quality, macro, split, work counter and clock are all present. Prints HYPOTHESES ONLY otherwise. |
+| `gate_refit` (verification stage) | **this is Phase 0A** — "re-ask whether an already-SHIPPED threshold is still right by running the engine end-to-end." |
+
+**Where it plugs in:**
+
+- **Phase 0A** — `gate_refit` is the right shape for re-validating §8.156/§8.157/§8.160 against the true reading-order metric.
+- **Phase 1C** — `gate_calculator` is where every new lever is tried BEFORE any of it reaches `suppress.rs` as a transcribed branch (depth ≤ 4, one doc-comment per feature, one test per branch).
+
+**The harvest Carmenta must emit** (per page, at decision time):
+
+```
+gain          signed effect on the OFFICIAL metric if the gate fires on this unit
+page          the macro denominator (alias of `clip`)
+page_chars    reference mass, for macro_gain (alias of `clip_total`)
+split         train (the 80) / holdout — anything else counts as holdout
+shipped       does the currently shipped gate already route this unit?
+work          deterministic work saved (positive = cheaper)
+cpu_ms        pinned-CPU delta, confirmatory only
+<features>    every other numeric column, harvested AT DECISION TIME
+```
+
+### Two honest limits, recorded so we neither fake a number nor dismiss the audit
+
+1. **Most Carmenta levers have NO speed component by construction.** A
+   reordering gate permutes lines the engine already recognized — the arm costs
+   the same either way, so `work = 0` is the truthful value, not a missing
+   measurement. The audit will print HYPOTHESES ONLY for these, and for a
+   quality-only lever that verdict should be read as *"this gate has no speed
+   half"* rather than *"the harvest is incomplete."* Suppression gates DO have a
+   real counter (lines dropped) and must carry it. **Do not invent a `work`
+   column to silence the audit.**
+2. **We took a mid-flight snapshot.** `refit.rs` and `bin/gate_refit.rs` were
+   written 2026-08-08T17:50 against a `Cargo.toml` that does not yet declare the
+   `bd` feature they are gated behind, so only
+   `--no-default-features --bin gate_calculator` builds. The discovery half is
+   complete and verified (`--demo` runs clean). Re-sync from the source repo
+   before relying on refit, and re-record the source commit when you do.
+
+### Reconciliation with §3
+
+The Great Gate's seven architecture laws and §3's fourteen instrument rules
+overlap but are not duplicates — **§3 governs whether a MEASUREMENT is valid;
+the seven laws govern whether a GATE is well-formed.** Both bind. The two that
+§3 does not otherwise state, and which this campaign should adopt:
+
+- **Population-relative normalization** — thresholds as percentiles of *this
+  page's own* signal distribution, never absolute values. §8.171 proved the
+  cost of the alternative: `VERIFY_LOWCONF = 0.96` was bound to CRNN's
+  confidence distribution and silently abstained on 66 pages instead of 19 when
+  a different recognizer arrived. **Choose the normalization for TRANSFER, not
+  for in-corpus fit.**
+- **Abstention beats fit** — prefer the gate that refuses when unsure over the
+  best-fitted one; the abstaining gate is the one whose train and holdout
+  numbers converge. §8.160's competence abstain is exactly this and it is the
+  single largest ordering win we have (+0.987 pp).
