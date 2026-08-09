@@ -1138,7 +1138,104 @@ fn verifier_blind(lines: &[OcrLine], lowconf: f32) -> bool {
 /// lowercase; -1 when a mid-sentence line is followed by a capital (a broken
 /// join). Crude on purpose — no dictionary, no language model. Crude measured
 /// AUC 0.750 on the rescue/wreck question; refinement is upside, not rescue.
+/// True for a character in a script with no letter case and no inter-word
+/// spacing — CJK ideographs, kana, and the CJK punctuation block.
+fn is_cjk(c: char) -> bool {
+    let o = c as u32;
+    (0x4E00..=0x9FFF).contains(&o)       // unified ideographs
+        || (0x3400..=0x4DBF).contains(&o) // extension A
+        || (0x3040..=0x309F).contains(&o) // hiragana
+        || (0x30A0..=0x30FF).contains(&o) // katakana
+        || (0xF900..=0xFAFF).contains(&o) // compatibility ideographs
+        || (0x3000..=0x303F).contains(&o) // CJK punctuation 。、「」etc
+        || (0xFF00..=0xFFEF).contains(&o) // fullwidth forms ，．！？
+}
+
+/// Is this passage predominantly CJK? Decided on the TEXT, which is free — we
+/// already recognised it — rather than on a language-detector pass over the
+/// image. §15: script routing needs DETECTION, not a detector.
+fn mostly_cjk(texts: &[&str]) -> bool {
+    let (mut cjk, mut total) = (0usize, 0usize);
+    for t in texts {
+        for c in t.chars() {
+            if c.is_whitespace() {
+                continue;
+            }
+            total += 1;
+            if is_cjk(c) {
+                cjk += 1;
+            }
+        }
+    }
+    total >= 8 && cjk * 4 >= total * 3 // >= 75 % of non-space characters
+}
+
 fn join_fluency(texts: &[&str]) -> f32 {
+    // `FFAI_CJK_FLUENCY=0` forces the old Latin-only behaviour, so the CJK arm
+    // can be A/B'd from ONE binary (§3 rule: one binary, two env settings —
+    // §8.53 was lost comparing arms across builds). Default ON: the Latin arm is
+    // measurably blind on CJK, so leaving it as the default would mean shipping
+    // a verifier we have proven cannot work on 54 % of the benchmark.
+    if mostly_cjk(texts) && std::env::var("FFAI_CJK_FLUENCY").as_deref() != Ok("0") {
+        return join_fluency_cjk(texts);
+    }
+    join_fluency_latin(texts)
+}
+
+/// §15: the CJK arm. `join_fluency_latin` scores on letter CASE and Latin
+/// terminators, and CJK has NEITHER — `join_fluency_is_blind_on_cjk` measures it
+/// returning ~0 for every candidate ordering, so the §8.160 verifier could never
+/// rank two orders on 54 % of the benchmark.
+///
+/// The Latin arm asks: does line B continue line A's sentence, or start a new
+/// one? The same question in CJK is answered by different evidence:
+///   * a line ending in a SENTENCE TERMINATOR (。！？) is a clean break, so a
+///     following line neither confirms nor denies flow — score 0, as Latin does
+///     after a full stop;
+///   * a line ending in a NON-TERMINAL character mid-sentence should be
+///     continued, and a continuation in CJK simply means the next line starts
+///     with more text rather than with a closing bracket or a comma;
+///   * a line ending in an OPENING bracket 「（ or a comma-class mark 、，
+///     is explicitly unfinished — the strongest continuation evidence there is.
+///
+/// Sign convention matches the Latin arm: positive = this order flows.
+fn join_fluency_cjk(texts: &[&str]) -> f32 {
+    const SENT_END: &[char] = &['\u{3002}', '\u{FF01}', '\u{FF1F}', '.', '!', '?'];
+    const COMMA: &[char] = &['\u{3001}', '\u{FF0C}', '\u{FF1B}', '\u{FF1A}', ',', ';', ':'];
+    const OPEN: &[char] = &['\u{300C}', '\u{300E}', '\u{FF08}', '\u{3010}', '\u{FF3B}', '('];
+    const CLOSE: &[char] = &['\u{300D}', '\u{300F}', '\u{FF09}', '\u{3011}', '\u{FF3D}', ')'];
+    let (mut s, mut pairs) = (0.0f32, 0u32);
+    for w in texts.windows(2) {
+        let a = w[0].trim_end();
+        let b = w[1].trim_start();
+        let (Some(last), Some(first)) = (a.chars().next_back(), b.chars().next()) else {
+            continue;
+        };
+        pairs += 1;
+        if COMMA.contains(&last) || OPEN.contains(&last) {
+            // Unambiguously mid-clause: the next line must continue it.
+            s += 2.0;
+        } else if SENT_END.contains(&last) {
+            // A finished sentence. A following CLOSING mark is stranded — that
+            // is the one arrangement a clean break cannot explain.
+            if CLOSE.contains(&first) {
+                s -= 1.0;
+            }
+        } else {
+            // Mid-sentence with no punctuation cue, which is the common CJK
+            // case. Continuing with ordinary text is coherent; opening a new
+            // quotation or bracket right after an unterminated line is not.
+            if OPEN.contains(&first) {
+                s -= 1.0;
+            } else if is_cjk(first) || first.is_alphanumeric() {
+                s += 1.0;
+            }
+        }
+    }
+    s / (pairs.max(1) as f32)
+}
+
+fn join_fluency_latin(texts: &[&str]) -> f32 {
     const TERM: &[char] = &['.', '!', '?', ':', ';', '"', '\'', '\u{201d}', '\u{2019}', ')'];
     let (mut s, mut pairs) = (0.0f32, 0u32);
     for w in texts.windows(2) {
@@ -1609,6 +1706,61 @@ mod tests {
             assert_eq!(ys(&plain), ys(&tapped), "the harvest tap changed the ordering");
             assert_eq!(plain.len(), tapped.len(), "the harvest tap changed the line count");
         }
+    }
+
+    /// §15: `join_fluency` is STRUCTURALLY INERT on CJK, measured not argued.
+    ///
+    /// Its terminator set is Latin punctuation and it scores on letter CASE.
+    /// Chinese uses `。！？：；` and CJK characters have no case, so neither the
+    /// lowercase nor the uppercase branch can fire and the score is ~0 for every
+    /// candidate ordering. The §8.160 verifier — our largest ordering win — can
+    /// therefore never rank two orders on a Chinese page, on 54 % of the
+    /// benchmark. This test pins that so the CJK fix has a failing baseline, and
+    /// so nobody "simplifies" the Latin path later without noticing it was
+    /// already blind here.
+    ///
+    /// The English control in the same test is what makes it evidence: the same
+    /// function separates a good order from a bad one when the text is Latin.
+    #[test]
+    fn join_fluency_separates_cjk_orders() {
+        // The BASELINE this replaces: `join_fluency_latin` returns ~0 on both of
+        // these, measured before the fix — its terminator set is Latin and it
+        // scores on letter case, which CJK does not have. The verifier could
+        // therefore never rank two orders on 54 % of the benchmark (§15).
+        let good = ["本文提出了一种新的方法", "用于解决图像识别中的", "长期存在的问题。"];
+        let bad = ["长期存在的问题。", "本文提出了一种新的方法", "用于解决图像识别中的"];
+        let (lg, lb) = (join_fluency_latin(&good.to_vec()), join_fluency_latin(&bad.to_vec()));
+        assert!((lg - lb).abs() < 1e-6,
+                "the Latin arm is supposed to be blind here — that is the bug: {lg} vs {lb}");
+
+        // THE FIX: routed by script, the flowing order now scores strictly higher.
+        let (fg, fb) = (join_fluency(&good.to_vec()), join_fluency(&bad.to_vec()));
+        assert!(fg > fb, "CJK arm must prefer the flowing order: {fg} vs {fb}");
+
+        // CONTROL: Latin text must still take the Latin arm and still separate.
+        let eg = ["this paper proposes a new", "method for solving the", "long-standing problem."];
+        let eb = ["long-standing problem.", "this paper proposes a new", "method for solving the"];
+        let (eg_s, eb_s) = (join_fluency(&eg.to_vec()), join_fluency(&eb.to_vec()));
+        assert!(eg_s > eb_s, "Latin routing regressed: {eg_s} vs {eb_s}");
+    }
+
+    /// The script router must not hijack Latin pages that merely quote CJK, and
+    /// must not fall back to Latin on CJK pages carrying Latin numerals or
+    /// citations — both are common in academic text and getting either wrong
+    /// silently sends a page down the arm that cannot read it.
+    #[test]
+    fn script_router_picks_the_right_arm() {
+        let latin_with_cjk_quote = ["the term (中文) appears here", "and the sentence continues"];
+        assert!(!mostly_cjk(&latin_with_cjk_quote.to_vec()),
+                "a Latin line quoting CJK must stay on the Latin arm");
+
+        let cjk_with_numerals = ["本文提出了一种新的方法 2024", "用于解决图像识别问题"];
+        assert!(mostly_cjk(&cjk_with_numerals.to_vec()),
+                "CJK with Latin numerals must still take the CJK arm");
+
+        // Too little evidence to route on: stay with the Latin default.
+        assert!(!mostly_cjk(&["中文".to_string().as_str()].to_vec()),
+                "a two-character fragment is not enough evidence to switch arms");
     }
 
     /// EVERY harvest row carries EVERY column, whichever path the page takes.
