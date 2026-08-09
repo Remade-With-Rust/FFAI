@@ -535,3 +535,75 @@ reaches `suppress.rs`.
 
 **Harvest note:** exclude the 48 degenerate pages, or `top3` and the macro
 column will both be dominated by an artifact that no rule can fix.
+
+---
+
+## 14. §13's lever REFUTED — the reorder is invisible to the metric, and why
+
+The gate-axis hypothesis was: extend the reordering machinery to the 1- and
+2-column pages the `n_col >= 3` guard excludes, where 67.9 % of English
+reading-order error lives. `FFAI_ORDER_PROBE_ALL=1` measured the ORACLE gain of
+doing exactly that, over 755 English pages, scored by the official evaluator.
+
+**Four probes, varied, all agreeing — the refutation bar (§3 rule 11):**
+
+| # | probe | result |
+|---|---|---|
+| 1 | oracle gain, 750 pages | mean **-0.0007**; 18 helped, 23 hurt, **709 unchanged** |
+| 2 | did the probe actually move anything? | different order on **361/730** pages, median `frac_moved` 0.455 |
+| 3 | of those 361 moved pages | **321 were score NO-OPS** |
+| 4 | exhaustive search, 39 features, both splits | best rule **+0.001 MACRO**, `top3` 95-128 % |
+
+Probe 4 is the level-above check: it is not that we failed to find the
+threshold, it is that no combination of 39 decision-time signals separates a
+population worth routing. `top3` above 100 % means the crumbs are carried by
+three pages and the rest are negative — a clip list, not a rule.
+
+### The mechanism, which is the valuable part
+
+The probe reorders nearly half the lines on half the pages and the metric does
+not notice. Splitting the moved pages by whether their score responded:
+
+| | GT body regions | our lines | **lines per region** |
+|---|---:|---:|---:|
+| score CHANGED (n=40) | 12 | 28 | **4.9** |
+| score NO-OP (n=321) | 9 | 67 | **27.4** |
+
+**Our line-level output is far finer than the granularity the metric scores.**
+OmniDocBench compares the order of MATCHED REGIONS; MGAM merges our many lines
+into one GT paragraph, and permuting lines INSIDE a merged region is invisible.
+The score only responds when our lines sit near 1:1 with regions.
+
+So the reordering machinery is operating below the level the metric measures.
+That is not a gate problem and never was — no threshold on any axis can fix a
+granularity mismatch.
+
+### What this refutes, precisely, and what it does not
+
+REFUTED: *widening the gate's axis so the existing line-level probe runs on
+1- and 2-column pages.* Measured, mechanism identified, four probes.
+
+NOT refuted: *that reading order on float-interrupted pages is recoverable.* We
+showed the EXISTING machinery cannot recover it, not that nothing can. The
+remaining 68 % of error is real and still on the board.
+
+### The lever this points at instead
+
+**BLOCK-LEVEL GROUPING.** Group lines into paragraph-scale blocks first, then
+order the BLOCKS — operating at the granularity the metric actually scores.
+§8.160 already named this as the next candidate ("within-column continuation of
+the join score at the BLOCK level, or upstream line grouping"), from the
+engine's side; this is the same conclusion arriving from the METRIC's side,
+which is the stronger form of the argument.
+
+Note that block grouping is also what would make our output match the GT's
+structure generally — so it is likely to move `text_block` as well, not only
+reading order.
+
+### Harvest hygiene, recorded
+
+`gain_text` shipped as a column in the first cut and the calculator picked it up
+as a candidate PREDICATE — an outcome predicting an outcome, the §8.161
+contamination, in a file written by the tool built to avoid it. Removed. The
+rule stands: **the calculator treats every numeric non-required column as a
+feature, so an outcome must never be in the same file.**
