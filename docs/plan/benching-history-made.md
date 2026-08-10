@@ -684,3 +684,52 @@ terminators, no case test, no hyphenation), and script guards on the Latin-only
 suppression branches. Unlike §13's gate-axis hypothesis, this has a mechanism
 visible in the source rather than a correlation — and it addresses a population
 carrying two thirds of our text error that we had written off.
+
+---
+
+## 16. Phase 0B RESULT — body-only suppression is HURTING us
+
+`FFAI_BODY_ONLY` off vs the shipped baseline, 755 English pages, official
+evaluator, one engine pass against the existing baseline:
+
+| metric | shipped | body-only OFF | gain | 95 % CI | |
+|---|---:|---:|---:|---|---|
+| text_block | 0.1155 | **0.1066** | +0.0089 | [+0.0004, +0.0173] | excludes 0 |
+| reading_order | 0.2839 | **0.2257** | **+0.0582** | [+0.0469, +0.0703] | excludes 0 |
+
+**Suppression is a net HARM on both published metrics**, and reading order
+improves by 20 % relative. This is the largest lever the campaign has found on
+the official instrument.
+
+**It confirms the §13 correlation was causal.** `body_frac` (the fraction of
+detected lines kept) tracked reading-order error monotonically — 0.144 at 0.95+
+against 0.404 below 0.5 — and survived controls for floats, confidence and line
+count. The A/B says that relationship was not pages-that-need-suppression-are-
+hard; it was suppression doing the damage.
+
+**And it is the THIRD mechanism fitted to the discredited scorer.** §8.119
+measured body-only as a large win (30.12 -> 25.85 macro) on our own
+concatenate-then-edit-distance metric, which charged the extra headers, footers
+and captions as INSERTIONS. The official metric matches regions first, so that
+material costs nothing and gives the matcher more to align against. After the
+competitive standings (§8.173) and the ordering verifier (§15), this is the
+third time a shipped behaviour turns out to have been optimising the instrument
+rather than the output.
+
+### Stated honestly
+
+- The **text** gain is MARGINAL: CI lower bound +0.0004 is one page of noise
+  from spanning zero. The reading-order gain is the solid one.
+- **English only** (721/750 pages). §15 showed our post-processing is
+  Latin-centric, so transfer to the 894 non-English pages must be MEASURED, not
+  assumed.
+- Body-only exists for a real reason — a document-to-text user usually does not
+  want page furniture. The right end state is probably a SCOPE FLAG that is off
+  for benchmark parity and available for users who want it, not deletion.
+
+### Interaction to watch
+
+The §15 CJK pricing run is measuring its ceiling with `FFAI_BODY_ONLY=1`, i.e.
+under a configuration this result says we should abandon. The ordering ceiling
+is broadly independent of scope, but any number taken from that run carries the
+caveat until re-measured against the new baseline.
