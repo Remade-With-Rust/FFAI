@@ -785,3 +785,67 @@ is wrong and that is the more interesting result.
 The intended disposition is to keep the CJK arm behind its toggle, DEFAULT OFF,
 with this ceiling recorded as the reason — so the mechanism is available if a
 future lever makes CJK ordering matter, and no unproven behaviour ships.
+
+---
+
+## 18. §17's disposition REVERSED — the CJK arm ships, and why the pricing missed it
+
+**Pre-registered in §17:** "the arm will land inside noise and its CI will SPAN
+ZERO. If it excludes zero in either direction, my model of this lever is wrong
+and that is the more interesting result."
+
+It excluded zero. The model was wrong.
+
+| metric | shipped | CJK arm | gain | 95 % CI | |
+|---|---:|---:|---:|---|---|
+| **text_block** | 0.2052 | **0.1979** | **+0.0073** | [+0.0035, +0.0116] | **excludes 0** |
+| reading_order | 0.3553 | 0.3520 | +0.0033 | [-0.0002, +0.0068] | spans 0 |
+
+836 non-English pages, helped 23 / hurt 5 on text, 22 / 5 on order.
+
+### Why §17's ceiling missed it
+
+§17 priced the ceiling on **reading_order**, because that is the metric the
+mechanism targets, measured +0.0077, and recommended not shipping. The payoff
+arrived on **text_block** instead.
+
+**The metrics are COUPLED through the matcher.** MGAM aligns our output to GT
+regions before scoring text; a better line order produces better region
+alignment, so more of our text matches the right region and the TEXT edit
+distance falls. Fixing reading order improves the text score without the
+reading-order score moving much.
+
+**A ceiling probe aimed at the wrong column is barely better than none.** §14
+refuted a lever for skipping the ceiling; §17 ran one and still nearly killed a
+real win by pricing the metric the mechanism TOUCHES rather than the metric the
+campaign OPTIMISES. Price every column the change can reach, not the obvious one.
+
+### The control that made this bankable
+
+v1 compared the new binary against `odb_pred_full`, built from older source —
+two builds, the §8.53 violation, with the extra code merely ARGUED to be inert.
+The `FFAI_CJK_FLUENCY=0` toggle existed precisely so that argument could be
+replaced by a measurement:
+
+| cjkoff vs baseline | delta | pages changed |
+|---|---:|---:|
+| text_block | **+0.0000** | 0 |
+| reading_order | **+0.0000** | 0 |
+
+Byte-identical. The W1 tap and the §13 probe-all arm are PROVEN inert when
+unset, so the only active difference in v1 was the CJK arm and its result
+stands. **This is what a positive control is for** — it converted a suspect
+cross-binary comparison into a valid one without re-running it.
+
+### Shipped
+
+`caec493` is already default-on and stays. Per §2: text is the primary
+objective and it gains with a CI excluding zero; reading order is the
+non-regression gate and it improves.
+
+**Benchmark impact, CJK arm alone:** 836 of 1557 scored pages are non-English,
+so +0.0073 there is **+0.0039 on the full metric — 0.1636 -> 0.1597**.
+
+Body-only OFF (§16) would add more, but it is measured on ENGLISH ONLY. If it
+transferred it would give 0.1556; that number is **not banked** and must be
+measured on non-English before anyone quotes it.
