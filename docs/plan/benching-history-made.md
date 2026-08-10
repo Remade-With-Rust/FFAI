@@ -733,3 +733,55 @@ The §15 CJK pricing run is measuring its ceiling with `FFAI_BODY_ONLY=1`, i.e.
 under a configuration this result says we should abandon. The ordering ceiling
 is broadly independent of scope, but any number taken from that run carries the
 caveat until re-measured against the new baseline.
+
+---
+
+## 17. §15's CJK fix PRICED — the mechanism is real, the prize is not
+
+The lever: `join_fluency` is measurably blind on CJK (§15, pinned by a unit test
+with a Latin control), so the §8.160 verifier cannot rank two orders on 54 % of
+the benchmark. The fix is built and tested (`caec493`). Before shipping it, the
+ceiling — what a PERFECT gate on this lever could ever be worth.
+
+`FFAI_ORDER_PROBE_ALL=1` with `FFAI_CJK_FLUENCY=0` (old behaviour pinned so the
+measurement contains the ceiling and NOT the fix), 896 non-English pages:
+
+| | shipped | probe-all | CEILING (perfect gate) | blind application |
+|---|---:|---:|---:|---:|
+| text_block | 0.2052 | 0.2100 | **+0.0028** | -0.0048, CI [-0.0094, -0.0009] |
+| reading_order | 0.3553 | 0.3639 | **+0.0077** | -0.0087, CI [-0.0150, -0.0025] |
+
+reading_order: helped 30 pages, hurt 55.
+
+**The ceiling is +0.0077.** Body-only OFF (§16) buys **+0.0582** on the same
+metric. The CJK ordering lever is worth **7.5x less at its theoretical maximum**
+than a lever we already have in hand — and the maximum is unachievable, since it
+assumes a gate that is never wrong.
+
+**This is the check §14 was refuted for skipping.** The mechanism was real,
+measured, and correctly fixed; the prize was never sized first. Fifteen minutes
+of ceiling probe against an hour of building. Price BEFORE building, not after.
+
+### What is refuted, and what is not
+
+REFUTED: *CJK-aware `join_fluency` as a QUALITY lever worth shipping on its
+merits.* Its ceiling is negligible against the alternatives on the board.
+
+NOT REFUTED: *that CJK reading order is improvable.* At 0.3553 it is our worst
+population by a wide margin. What the ceiling says is that the PROBE'S
+ALTERNATIVE ORDER is rarely better than what we already emit on those pages —
+the same shape as §14. A different ordering approach is untested, not refuted.
+
+### Disposition of `caec493`
+
+The code is correct, tested, and fixes a proven defect. But "revert if unproven"
+binds: a change whose ceiling is +0.0077 cannot produce a CI excluding zero on
+888 pages, so it cannot be shipped as a measured win.
+
+**PRE-REGISTERED before the A/B ran:** the arm will land inside noise and its CI
+will SPAN ZERO. If it excludes zero in either direction, my model of this lever
+is wrong and that is the more interesting result.
+
+The intended disposition is to keep the CJK arm behind its toggle, DEFAULT OFF,
+with this ceiling recorded as the reason — so the mechanism is available if a
+future lever makes CJK ordering matter, and no unproven behaviour ships.
