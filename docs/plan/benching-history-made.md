@@ -849,3 +849,47 @@ so +0.0073 there is **+0.0039 on the full metric — 0.1636 -> 0.1597**.
 Body-only OFF (§16) would add more, but it is measured on ENGLISH ONLY. If it
 transferred it would give 0.1556; that number is **not banked** and must be
 measured on non-English before anyone quotes it.
+
+---
+
+## 19. Item 1 BANKED — body-only OFF clears both halves; the benchmark config flips
+
+`FFAI_BODY_ONLY` off on the 896 non-English pages, differenced against the
+same-binary `cjkfluency` baseline so the delta contains only this lever:
+
+| metric | shipped | body-only OFF | gain | 95 % CI | pages |
+|---|---:|---:|---:|---|---|
+| text_block | 0.1979 | **0.1492** | **+0.0486** | [+0.0389, +0.0584] excludes 0 | 505 helped / 86 hurt |
+| reading_order | 0.3520 | **0.2424** | **+0.1096** | [+0.0968, +0.1227] excludes 0 | 388 helped / 31 hurt |
+
+**5.5x the English text gain and 2x the English order gain.** The Latin-fitted
+suppression heuristics misfire harder on CJK — §15's mechanism, showing up in
+§16's lever exactly where it predicted.
+
+**The mechanism has a name now (item 4's "worst text" mystery).** The §8.135
+bibliography branches delete `reference` regions, and the official GT scores
+`reference` as text (it is NOT in the metric's ignore list). Verified per page:
+0.824 -> 0.005, 0.689 -> 0.020, 0.636 -> 0.001 with body-only off. Only 16
+English pages carry references (2 % of pages, 2.2 % of chars) but they are
+individually savaged — a concentrated slice of the win. One counter-example
+recorded (0.549 -> 0.615): suppression is not uniformly harmful.
+
+**Banked.** Both populations, both metrics, CIs excluding zero. Note the
+engine's default was ALREADY off (§8.106 made it opt-in); it was the BENCHMARK
+config that opted in, because the old biased scorer rewarded deletion by 4+ pp.
+The harnesses now run body-only OFF as the shipped config; legacy arms pass
+`--env FFAI_BODY_ONLY=1`. This is the FOURTH mechanism exposed as an artifact
+of the §8.173 scorer, and the largest.
+
+**Projected standing, both banked changes (CJK arm + body-only off):**
+
+| | text_block | reading_order |
+|---|---:|---:|
+| session start | 0.1636 | 0.3226 |
+| **projected now** | **~0.1295** | **~0.2348** |
+| Marker (worst published row) | 0.157 | 0.243 |
+
+Off the bottom of the published board on both columns. PROJECTION ONLY — the
+arithmetic composite of separately measured arms. The merged full-population
+run scores next and becomes the banked number and the new baseline for every
+subsequent arm.
