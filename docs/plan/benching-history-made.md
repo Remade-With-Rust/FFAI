@@ -893,3 +893,28 @@ Off the bottom of the published board on both columns. PROJECTION ONLY — the
 arithmetic composite of separately measured arms. The merged full-population
 run scores next and becomes the banked number and the new baseline for every
 subsequent arm.
+
+---
+
+## 20. THE NEW BANKED STANDING — off the bottom of the board
+
+Merged full-population run (755 EN from `nb_en` + 896 non-EN from
+`bodyoff_zh`, coverage-asserted, control-attested), scored once by the
+official evaluator. Config: CJK-aware `join_fluency` (§18) + body-only OFF
+(§19).
+
+| | session start | **BANKED** | Marker (worst published) |
+|---|---:|---:|---:|
+| text_block | 0.1636 | **0.1363** | 0.157 |
+| reading_order | 0.3226 | **0.2381** | 0.243 |
+
+**Ahead of Marker on both columns.** Two banked changes, both with CIs
+excluding zero on their measured populations, took text down 17 % relative and
+reading order 26 % relative in one day of work on the correct instrument.
+
+The §19 projection (0.1295 / 0.2348) was optimistic by ~0.007 / ~0.003 —
+arithmetic composites of arm means do not survive contact with the merged
+official pass, which is why the plan banks only the scored number.
+
+`odb_pred_newbase_quick_match` is now the baseline every subsequent arm
+differences against.
