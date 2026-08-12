@@ -918,3 +918,35 @@ official pass, which is why the plan banks only the scored number.
 
 `odb_pred_newbase_quick_match` is now the baseline every subsequent arm
 differences against.
+
+---
+
+## 21. Item 3 REFUTED — coarse granularity is irrecoverable, and line-level was already right
+
+The blockgroup pricing arm (no engine changes: identical text, identical order,
+lines grouped 3.1-per-block by vertical gap + column overlap, blocks as
+markdown paragraphs), 755 English pages vs the new baseline:
+
+| metric | base | blockgroup | gain | CI | pages |
+|---|---:|---:|---:|---|---|
+| text_block | 0.1073 | 0.2051 | **-0.0978** | [-0.1098, -0.0852] excludes 0 | 537 hurt / 77 helped |
+| reading_order | 0.2257 | 0.2840 | **-0.0583** | [-0.0704, -0.0463] excludes 0 | 282 hurt / 73 helped |
+
+Ceiling with a PERFECT per-page gate: +0.0120 / +0.0165 — not worth a gate
+even if one existed.
+
+**The mechanism is the metric's merge asymmetry.** MGAM searches segmentation
+granularity on the PREDICTION side by MERGING: fine output is safe (our lines
+merge up to GT regions), coarse output is irrecoverable (a block crossing a GT
+boundary cannot be split back). So the optimal prediction granularity is AT OR
+BELOW GT granularity, never above. §14's "permutations inside a merged region
+are invisible" was the benign face of the same property; this is the hostile
+face.
+
+REFUTED: block-level grouping of our output, both as presentation and as the
+in-engine stage §14 proposed — the pricing arm exists precisely so that stage
+was never built. Line-level emission stands as the correct granularity.
+
+Item 4's remaining real target (order on 3+ float academic pages, 0.4493)
+therefore needs a lever that reorders LINES without regrouping them; the §14/
+§8.160 "block grouping" hypothesis is closed.
