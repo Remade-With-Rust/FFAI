@@ -981,3 +981,43 @@ Notable: the probe's contribution on the TRUE metric (+0.0126 text) is larger
 than the verifier's, the reverse of their old-scorer ranking — one more case
 of the §18 lesson that the metrics are coupled through the matcher and levers
 land on columns they do not aim at.
+
+---
+
+## 23. Item 5 RESULT — the Text OCR task isolates our real defect: line order in PLAIN TEXT
+
+7 019 block-level `text_block` crops from all 755 English pages, ground-truth
+regions handed to the engine, scored by their `cal_metric.py` formula
+(disclosed: the v1.6 repo does not ship this task's pipeline).
+
+**Headline: `mobiledet-svtr` reads 0.4133 sample-avg — and that number is NOT
+a recognition score.** The same engine scores 0.1073 end-to-end on the same
+pages where it must also detect. An engine cannot be four times worse when
+handed the regions. The instrument was asking for help, and the samples answer:
+
+```
+GT  : When an attempt is made to form the product BA, we discover that the...
+PRED: BA, we discover made to form the product dimensions When ana attempt...
+```
+
+**Every word present, order scrambled.** 2 279 long crops show it. On a
+paragraph crop there are no floats, no columns, no furniture — and the emitted
+line order is still wrong. This is §12's single-column anomaly reproduced in a
+minimal test case: the residual reading-order defect is not about layout
+complexity at all. It is in how detected boxes are sequenced within PLAIN
+TEXT, and it only escapes end-to-end notice because MGAM's merging forgives
+within-region permutation (§14) — the crop task scores the string directly and
+exposes it.
+
+Secondary: crops with GT <= 10 chars read 0.915 (n=206) — detection fails on
+tiny context-free images. Real, small, separate.
+
+**What this opens: the next campaign's target, with 2 279 ready-made repro
+cases** — each a small image where recognition is proven right and ordering
+provably wrong. No harvest needed; the failure set exists on disk.
+
+**What this blocks: any public Text OCR claim from these numbers.** 0.4133
+must not be quoted against PaddleOCR's 0.071 — it measures our box
+sequencing, not our recognizer. The craft-crnn pass over the SAME crops is
+still valid as a PAIRED recognizer comparison (same detector, same ordering,
+differenced), running now.
