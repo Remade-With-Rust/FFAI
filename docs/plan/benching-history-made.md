@@ -1021,3 +1021,36 @@ must not be quoted against PaddleOCR's 0.071 — it measures our box
 sequencing, not our recognizer. The craft-crnn pass over the SAME crops is
 still valid as a PAIRED recognizer comparison (same detector, same ordering,
 differenced), running now.
+
+---
+
+## 24. CORRECTION to §23's pairing claim — and the finding it uncovered
+
+§23 said the craft-crnn crop pass "stays valid as a PAIRED recognizer
+comparison (same detector, same ordering, differenced)". **That was wrong.**
+`craft-crnn` is CRAFT detection + CRNN; `mobiledet-svtr` is DBNet + SVTR. The
+pair changes DETECTOR and RECOGNIZER together — it isolates nothing. The
+one-variable pair on crops is `mobiledet-crnn` vs `mobiledet-svtr`; a targeted
+sample is running.
+
+**The confound turned out to be the diagnostic.** On the same 7 019 crops:
+
+| engine | sample_avg | page_avg |
+|---|---:|---:|
+| **craft-crnn** (CRAFT + CRNN) | **0.1051** | 0.1235 |
+| mobiledet-svtr (DBNet + SVTR) | 0.4133 | 0.3399 |
+
+CRAFT+CRNN reads the crops nearly clean — NO scrambling. The §23 defect is
+therefore SPECIFIC TO THE MOBILEDET/DBNET PATH: its line formation on cropped
+paragraphs produces fragments the orderer then scrambles. It is not a
+universal boxes.rs flaw, which reshapes step 2: the fix candidates are (a) a
+raster candidate that orders fragments correctly, and/or (b) the mobiledet
+line-grouping itself — step 1b's ceiling decides which, exactly the branch it
+was pre-registered to decide.
+
+**And the accidental headline: our EasyOCR-stack port reads 0.1051 where
+published EasyOCR reads 0.26 EN** — 2.5x better on the benchmark's own Text
+OCR task. Caveats attach (their row predates the v1.5/v1.6 annotation
+corrections; our scoring reproduces their formula because v1.6 does not ship
+the task pipeline) — but as a like-for-like model-stack claim it is the
+cleanest one this project has: same models, our engineering, their task.
