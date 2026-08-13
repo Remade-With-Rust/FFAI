@@ -950,3 +950,34 @@ was never built. Line-level emission stands as the correct granularity.
 Item 4's remaining real target (order on 3+ float academic pages, 0.4493)
 therefore needs a lever that reorders LINES without regrouping them; the §14/
 §8.160 "block grouping" hypothesis is closed.
+
+---
+
+## 22. Phase 0A COMPLETE — the ordering machinery is REAL
+
+The last open question from §8.173: the +1.78 pp of ordering mechanisms were
+fitted AND judged on the discredited scorer. Four other mechanisms from that
+era fell as artifacts (standings, Latin verifier blindness, body-only, and the
+old competitive frame). These three were the remaining suspects. Each arm
+disables ONE mechanism against the new baseline (`nb_en`, body-only OFF, CJK
+arm on), 721/750 English pages, official evaluator:
+
+| mechanism disabled | text_block delta | reading_order delta | verdict |
+|---|---:|---:|---|
+| §8.160 verifier (`FFAI_ORDER_VERIFY=0`) | -0.0083 [-0.0153, -0.0018] | -0.0075 [-0.0140, -0.0015] | **CONFIRMED REAL — keep** |
+| §8.157/160 probe (`FFAI_ORDER_PROBE=0`) | -0.0126 [-0.0187, -0.0071] | -0.0093 [-0.0154, -0.0036] | **CONFIRMED REAL — keep** |
+| §8.156 sparse gate (`FFAI_ORDER_GATE=0`) | -0.0006 [-0.0036, +0.0028] | -0.0041 [-0.0096, +0.0008] | inconclusive — stays, no evidence either way |
+
+(Deltas are the COST of disabling: negative = the mechanism helps.)
+
+**The ordering machinery survives the instrument it was never fitted to.**
+The verifier and the probe are confirmed on both official metrics with CIs
+excluding zero; the sparse gate is small and unproven in both directions
+(point estimates lean keep: 13 hurt vs 3 helped on order). The fifty sections
+of ordering work were real engineering — it was the scoreboard around them
+that was broken, which is §8.173's conclusion completing its own audit.
+
+Notable: the probe's contribution on the TRUE metric (+0.0126 text) is larger
+than the verifier's, the reverse of their old-scorer ranking — one more case
+of the §18 lesson that the metrics are coupled through the matcher and levers
+land on columns they do not aim at.
