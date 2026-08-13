@@ -1210,3 +1210,61 @@ probe before any build; the oracle harness already exists.
 * Anything from the crop task (§26: invalid condition for our shipped engine).
 * The degenerate pages (unfixable by construction).
 * Speed work — we win there by ~9x and the goal is quality.
+
+---
+
+## 28. A's threshold refuted — and a HARNESS BUG that was corrupting the banked number
+
+**The cheap hypothesis died first, as intended.** `BIN_THRESHOLD = 0.3` tuned
+for Latin stroke density rejecting dense CJK glyph masses: swept `FFAI_DB_BIN`
+across 0.30 -> 0.10 on 14 failing pages and counted CHARACTERS EMITTED, a
+deterministic count rather than a score:
+
+| FFAI_DB_BIN | 0.30 | 0.25 | 0.20 | 0.15 | 0.10 |
+|---|---:|---:|---:|---:|---:|
+| chars | 7267 | 7257 | 7234 | 7208 | 7140 |
+
+**Flat across a 3x range.** The threshold is not the mechanism. Cost: 13 minutes.
+
+**But the sweep printed `empty pages 0` where the banked run had empties**, and
+that contradiction was the real find. Re-running the four worst pages with the
+same engine and config:
+
+| page | banked | re-run |
+|---|---:|---:|
+| newspaper_d1716a12... | **0 chars** | **7 741** |
+| newspaper_d6cd76e5... | **0 chars** | **6 172** |
+| page-942ac90d... (trad. Chinese historical) | 1 | 1 |
+| yanbaopptmerge_4570 | 15 | 15 |
+
+Two of the four were **subprocess crashes**, not detection failures. The arm
+harness writes `""` when the child exits non-zero — visible rather than silent,
+which was the right instinct and the wrong action: **an empty prediction scores
+1.0**, so a crash masquerades as a total quality failure.
+
+**Corrected banked standing** (four pages repaired, full population rescored):
+
+| | recorded in §20 | **corrected** |
+|---|---:|---:|
+| text_block | 0.1363 | **0.1307** |
+| reading_order | 0.2381 | **0.2348** |
+
+The engine was always this good; 0.0056 of text and 0.0033 of order were a
+harness artifact. §20's number is superseded.
+
+**The fix, applied to `gg_arm.py`:** retry once, and on a second failure record
+the page in `failed_<arm>.txt` and write NO prediction file at all — the
+evaluator then omits it and `n` reflects the true population, instead of a
+crash being scored as a perfect-failure page. A page the engine genuinely
+cannot read still legitimately writes `""`; the distinction is between "the
+engine answered nothing" and "the engine never answered".
+
+**Standing lesson, and it is the session's own rule turned on itself:** §3
+rule 10 says never silently narrow the population — we obeyed it by writing a
+placeholder, and the placeholder was worse than the omission it prevented.
+*Visible* is not enough; the placeholder must not be a value the metric can
+score.
+
+**Still real after the correction:** 54 non-English pages genuinely under-emit
+(median 0.48 of GT length). Two of the four audited were true detection
+failures. Lever A's prize must be re-priced against 0.1307, not 0.1363.
