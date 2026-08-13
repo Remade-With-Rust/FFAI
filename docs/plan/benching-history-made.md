@@ -1137,3 +1137,76 @@ annotation corrections so it is directional; **our document default
 reason above** — we report `craft-crnn` because it is the like-for-like
 comparison and we say plainly that it is not our default; and the two
 environment deviations (`lxml>=5.2`, `PYTHONUTF8=1`), neither touching scoring.
+
+---
+
+## 27. #3 — the next campaign, ranked by measured contribution
+
+Segments of the BANKED baseline (0.1363 text / 0.2381 order), each with its
+share of the remaining error. Targets are chosen by contribution, never by mean
+(§3 rule 5).
+
+### TEXT — banked 0.1363 over 1557 pages
+
+| segment | n | mean | share |
+|---|---:|---:|---:|
+| non-EN 1-2 floats | 344 | 0.1259 | 20.4 % |
+| non-EN no float | 240 | 0.1575 | 17.8 % |
+| non-EN 3+ floats | 189 | 0.1937 | 17.2 % |
+| EN no float | 185 | **0.1656** | 14.4 % |
+| EN 3+ floats | 234 | 0.1275 | 14.1 % |
+| EN 1-2 floats | 283 | 0.0805 | 10.7 % |
+| degenerate (artifact) | 82 | — | 5.3 % |
+
+**non-English carries 55.4 % of all text error** and it is spread evenly across
+float counts — so floats are NOT the driver; the language is. Two banked wins
+already came from Latin-fitted code hurting CJK (§18 join_fluency, §19
+suppression), which makes a third plausible but NOT assumable.
+
+### ORDER — banked 0.2381 over 1638 pages
+
+| segment | n | mean | share |
+|---|---:|---:|---:|
+| **EN 3+ floats** | 234 | **0.3605** | **21.6 %** |
+| non-EN 1-2 floats | 344 | 0.2037 | 18.0 % |
+| **degenerate (artifact)** | 163 | 0.60-0.73 | **26.6 %** |
+| non-EN 3+ floats | 189 | 0.2869 | 13.9 % |
+| EN 1-2 floats | 283 | 0.1229 | 8.9 % |
+| no float (both langs) | 425 | ~0.10 | 11.0 % |
+
+**A quarter of remaining order error is the metric's degenerate case** — pages
+with <= 1 orderable region, where no sequence exists to get wrong. Excluding
+them our order reads **0.1941**, which would sit mid-pack on the published
+board (better than Marker 0.243, olmOCR 0.216, Nanonets 0.213, POINTS-Reader
+0.198). We cannot CLAIM that number — the leaderboard includes those pages —
+but it must not be a TARGET either. Chasing it is chasing an artifact.
+
+### The three candidate levers, in order
+
+**A. Diagnose non-English text (55 % of text error).** DIAGNOSIS FIRST, no
+lever named yet — §14 and §17 both cost time by building or pricing before the
+mechanism was known. The audit question: what is still Latin-specific in the
+active path? With body-only OFF most suppression branches no longer run;
+`num_seq_monotone` remains ASCII-only (`is_ascii_digit`, `.`/`)`/`]`
+terminators — it cannot see 一二三 or `、`), but it is only a tiebreak when the
+join margin ties. That is a small lever, so the 55 % is probably NOT
+post-processing at all — more likely recognition or detection on CJK, which
+would be a different and larger campaign. **Measure which before choosing.**
+
+**B. EN no-float pages are our WORST English text segment (0.1656).** A page
+with no figure, table or equation should be our easiest case, and it is our
+hardest. That inversion is the same shape as §12's single-column anomaly, which
+turned out to be a metric artifact plus a mechanism — worth the same
+decomposition. Cheap: the data is on disk.
+
+**C. Order on 3+ float pages (35.5 % across both languages).** The float
+problem §13 identified. §14 refuted widening the gate axis and §25 refuted
+raster ordering — but both were refuted for CROP or granularity reasons, and
+the page-level float case has never had a lever aimed at it. Needs a ceiling
+probe before any build; the oracle harness already exists.
+
+### Explicitly NOT next
+
+* Anything from the crop task (§26: invalid condition for our shipped engine).
+* The degenerate pages (unfixable by construction).
+* Speed work — we win there by ~9x and the goal is quality.
