@@ -1054,3 +1054,43 @@ OCR task. Caveats attach (their row predates the v1.5/v1.6 annotation
 corrections; our scoring reproduces their formula because v1.6 does not ship
 the task pipeline) — but as a like-for-like model-stack claim it is the
 cleanest one this project has: same models, our engineering, their task.
+
+---
+
+## 25. Step 1 KILLS the ordering fix — the defect is FRAGMENTATION, not sequence
+
+The ceiling probe (7 019 crops, engine's own lines reordered offline, no engine
+changes) against the rules pre-registered in §23 step 1:
+
+| segment | ENGINE | RASTER | YSORT | ORACLE |
+|---|---:|---:|---:|---:|
+| ALL (n=6875) | 0.4010 | 0.3818 | 0.4420 | 0.2971 |
+| BAD (n=2911) | 0.6645 | 0.5343 | 0.6364 | 0.4880 |
+| GOOD (n=1448) | 0.0169 | **0.1668** | 0.1097 | 0.0166 |
+
+**Both pre-registered rules fail.** RASTER regresses the good crops 14 better
+against 643 worse (0.0169 -> 0.1668) and closes only 570 of 2 911 bad crops
+under 0.2 — it is not best-somewhere-and-harmless-elsewhere, which is the
+boxes.rs pool's own admission rule. And **2 185 of the 2 911 bad crops keep
+ORACLE >= 0.3**: no permutation of the engine's own lines recovers them, so the
+defect is upstream of ordering exactly as the kill branch anticipated.
+
+**The mechanism, measured:** median GT 130 chars, median 19 DETECTED LINES —
+about 7 characters per line. DBNet shatters a paragraph into ~19 fragments;
+59 % of bad crops still carry >= 80 % of the text. The words survive and the
+JOINS do not: every fragment boundary injects a spurious space or line break,
+which no reordering can undo. §23 read "scrambled" off a few samples; it is
+OVER-FRAGMENTATION, and the two have opposite fixes.
+
+**Refuted:** a raster candidate in the ordering pool, and with it §23's whole
+"fix our ordering" framing for this defect. Cost: one analysis script. The
+engine campaign it prevented would have been days.
+
+**Still open, and the right question before anything is built:** does this
+fragmentation hurt SHIPPED FULL PAGES, or is it an artifact of the crop
+condition (tight bbox, no margin, small input — all scale inputs DBNet is
+sensitive to)? Our end-to-end English text is 0.1073, which is not what a
+badly fragmenting detector produces, and §14 measured 27.4 lines per GT region
+on full pages where MGAM's merging absorbs it. **Price that before treating
+0.4133 as a shipping defect** — it may be a valid measurement of an invalid
+condition.
