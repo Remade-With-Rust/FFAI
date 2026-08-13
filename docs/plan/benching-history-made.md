@@ -1094,3 +1094,46 @@ badly fragmenting detector produces, and §14 measured 27.4 lines per GT region
 on full pages where MGAM's merging absorbs it. **Price that before treating
 0.4133 as a shipping defect** — it may be a valid measurement of an invalid
 condition.
+
+---
+
+## 26. Fragmentation PRICED — crop-condition only; and the Text OCR claim banked
+
+**#1 — is §25's fragmentation a shipping defect?** No. Measured on data already
+on disk, no engine run:
+
+| | chars per detected line |
+|---|---:|
+| crops | median **5.0** |
+| full pages | median **28.0** |
+| GT `text_block` regions | median 183 chars |
+
+**5.6x.** On full pages DBNet forms proper text lines; on tight margin-free
+crops it shatters into ~5-character fragments. The defect is CROP-CONDITION
+SPECIFIC — DBNet's scale sensitivity on small inputs — and our shipped page
+pipeline is unaffected (0.1073 end-to-end English text is not what a
+fragmenting detector produces). **`0.4133` is a valid measurement of a
+condition we do not ship. Walked away from.**
+
+This also retires §23's "next campaign" framing entirely: there is no
+plain-text ordering defect, there was never a raster fix worth building, and
+the 2 279 "repro cases" are reproductions of an artificial condition. Three
+sections of hypothesis closed by two analysis scripts and zero engine changes.
+
+**#2 — the claim, banked with its kit** (`docs/textocr-claim.md`):
+
+> On OmniDocBench v1.6's Text OCR task, English pages, Carmenta's `craft-crnn`
+> reads **0.1051** normalized edit distance (95 % CI [0.1013, 0.1091], 7 019
+> regions / 755 pages) against **published EasyOCR's 0.26**.
+
+`craft-crnn` IS the EasyOCR model stack (CRAFT + `english_g2` CRNN) in pure
+Rust on candle — same models, same task, different engineering. That places it
+between Tesseract (0.096) and OpenOCR (0.070) on their published column.
+
+Four disclosures travel with it, all in the document: we reproduced the metric
+(v1.6 ships no pipeline for this task); their rows predate the v1.5/v1.6
+annotation corrections so it is directional; **our document default
+(`mobiledet-svtr`) scores worse on this task, 0.4133, for the crop-condition
+reason above** — we report `craft-crnn` because it is the like-for-like
+comparison and we say plainly that it is not our default; and the two
+environment deviations (`lxml>=5.2`, `PYTHONUTF8=1`), neither touching scoring.
