@@ -1268,3 +1268,44 @@ score.
 **Still real after the correction:** 54 non-English pages genuinely under-emit
 (median 0.48 of GT length). Two of the four audited were true detection
 failures. Lever A's prize must be re-priced against 0.1307, not 0.1363.
+
+---
+
+## 29. Lever C REFUTED — and it inverts §27's ranking
+
+The oracle ordering ceiling on real pages: our OWN lines, unchanged, re-emitted
+in the GT's annotated region order and scored against GT text. Both arms use
+identical text, so the difference isolates SEQUENCE. 1 145 pages with geometry
+and >= 2 orderable regions.
+
+| segment | n | shipped | ORACLE | ceiling |
+|---|---:|---:|---:|---:|
+| **EN no float** | 155 | 0.1943 | 0.1522 | **+0.0421** |
+| non-EN 3+ floats | 122 | 0.5818 | 0.5420 | +0.0397 |
+| non-EN 1-2 floats | 260 | 0.5018 | 0.4764 | +0.0254 |
+| non-EN no float | 195 | 0.2756 | 0.2503 | +0.0253 |
+| EN 1-2 floats | 203 | 0.3405 | 0.3308 | +0.0097 |
+| **EN 3+ floats** | 210 | 0.4427 | 0.4378 | **+0.0049** |
+
+**§27 named EN 3+ floats as the top ordering target — 21.6 % of remaining order
+error — and it has the SMALLEST ceiling on the board.** Perfect sequencing buys
++0.0049 there. Those pages are wrong in their TEXT, not their order, so no
+ordering lever can reach them however the order column scores them.
+
+This is the third time this campaign a segment's SHARE OF ERROR has been
+mistaken for its RECOVERABLE prize (§14's gate axis, §17's reading-order
+ceiling, now this). **Share of error tells you where to look; a ceiling tells
+you what is there.** Rank by contribution to choose what to PRICE, never to
+choose what to BUILD.
+
+**The inversion:** the biggest ordering prize (+0.0421) is EN NO-FLOAT pages —
+which is also §27 lever B's segment and our worst English text at 0.1656. Two
+independent decompositions, arriving from text and from order, name the same
+155 pages. That convergence is the strongest steer the campaign has.
+
+**Caveat on the instrument:** this is an ordering-only measure over our own
+text scored against GT text — NOT the official `reading_order` column, which
+scores region sequence and would show a different (larger) oracle. It is a
+RELATIVE prize between segments, which is what a target-selection decision
+needs. A lever that moved the order column without moving text would still be
+low value under §2's objective, where text is primary.
