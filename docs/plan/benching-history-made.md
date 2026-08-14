@@ -1404,3 +1404,44 @@ whole configuration, not against one component**, so any config flip should
 re-audit every constant whose inputs that flip touches. §19 banked a real win
 and left a dead term behind it; nobody looked, because the win was measured and
 the term was invisible.
+
+---
+
+## 32. The engine choice RE-VALIDATED on the correct instrument — mobiledet-svtr holds
+
+The largest decision still resting on the §8.173 scorer: mobiledet+SVTR over
+CRAFT+CRNN. Three things argued it deserved re-testing — §8.16 recorded that
+mobiledet "won speed decisively, quality LOST"; §8.170's +1.435 pp for SVTR was
+measured on the biased scorer with body-only ON (a config §19 has since shown
+was harmful); and on the Text OCR crop task `craft-crnn` read **0.1051** against
+`mobiledet-svtr`'s 0.4133, four times better with GT boxes supplied.
+
+Run end-to-end on 755 English pages, official evaluator, current config:
+
+| metric | mobiledet-svtr | craft-crnn | |
+|---|---:|---:|---|
+| text_block | **0.1073** | 0.3522 | -0.2449, CI [-0.2693, -0.2199] |
+| reading_order | **0.2257** | 0.4149 | -0.1892, CI [-0.2137, -0.1654] |
+
+**mobiledet-svtr wins by a factor of three, decisively.** 540 of 721 pages
+worse under craft-crnn on text.
+
+**And it resolves the crop-task paradox in the other direction from §26.** §26
+concluded DBNet fragments on tight crops and CRAFT does not — true, and it made
+craft-crnn the right engine to REPORT on that task. But end-to-end, where the
+detector must find its own regions on a full page, CRAFT is far worse: it is
+strong at recognising a supplied region and weak at finding regions. Those are
+different jobs and the crop task only measures the first.
+
+**What this retires:** the engine choice was the biggest decision still leaning
+on the discredited instrument, and it survives re-measurement on the correct
+one. Every mechanism from that era has now been re-tested — four fell
+(standings, Latin verifier, body-only, competitive frame), and three stand
+(verifier, probe, and now the engine).
+
+**What it costs the §26 claim: nothing, but the framing tightens.** Reporting
+`craft-crnn`'s 0.1051 on the Text OCR task remains honest — it is a real
+configuration on a real task — and `docs/textocr-claim.md` already discloses
+that our document default scores worse there. This adds the converse, which
+belongs beside it: on full-page parsing the default is three times BETTER, and
+the two facts together are the whole truth about the two engines.
