@@ -1309,3 +1309,57 @@ scores region sequence and would show a different (larger) oracle. It is a
 RELATIVE prize between segments, which is what a target-selection decision
 needs. A lever that moved the order column without moving text would still be
 low value under §2's objective, where text is primary.
+
+---
+
+## 30. THE EVALUATOR SCORES ABSENT PAGES AS 1.0 — §28's fix was wrong, and lever B is refuted
+
+**The instrument fact, verified rather than assumed:** a page with no prediction
+file is scored **1.0**, not omitted. The leadfix arm wrote 1 351 files, the
+evaluator scored 1 557 pages, and **all 296 pages without a file read exactly
+1.0000**.
+
+**This voided a result and invalidated a fix.** The first leadfix scoring read
+-0.159 text / -0.145 order, "WORSE, CI excludes 0" on every scope — a clean,
+decisive-looking refutation that was entirely 296 absent pages. And §28
+concluded the harness should write NO FILE on a crash so the evaluator would
+omit the page: **writing nothing and writing empty are identically corrupting.**
+§28 replaced a bug with the same bug wearing better intentions, on an
+assumption about the evaluator that was never tested.
+
+**The real mechanism** is `score_arm.py`: filter the GROUND TRUTH to the pages
+BOTH arms produced, and score both on that same filtered GT. That is the only
+exclusion the evaluator offers, and it enforces population parity instead of
+assuming it.
+
+### Lever B, scored correctly
+
+Population-matched to 1 351 pages, both arms on the same filtered GT:
+
+| metric | scope | n | base | leadfix | gain | |
+|---|---|---:|---:|---:|---:|---|
+| text_block | all | 1261 | 0.1179 | 0.1220 | **-0.0041** | worse, CI excludes 0 |
+| text_block | english | 614 | 0.1040 | 0.1118 | **-0.0078** | worse, CI excludes 0 |
+| text_block | EN no-float | 163 | 0.1363 | 0.1426 | -0.0064 | spans 0 |
+| reading_order | all | 1339 | 0.2390 | 0.2409 | -0.0019 | worse, CI excludes 0 |
+| reading_order | EN no-float | 163 | 0.0905 | 0.0900 | +0.0004 | spans 0 |
+
+**REFUTED — but honestly this time, at a hundredth of the fake magnitude.**
+Stripping leading and trailing furniture is mildly harmful: the geometric
+heuristic removes real body text more often than it removes running headers,
+and even on its own target segment it buys nothing.
+
+The DIAGNOSIS stands — a leading header really can cascade a near-correct page
+to 1.000, and three such pages were shown. What is refuted is that a
+geometric top-of-page rule can find them without collateral damage. A rule
+precise enough would need the linguistic signal (§8.160's lesson: page
+structure is a text property, not a geometric one), and its ceiling on 163
+pages is too small to justify building one.
+
+### Standing lesson
+
+**Test what the instrument does with a MISSING input before designing around
+it.** §3 rule 10 has now been got wrong twice from opposite directions: first by
+writing a placeholder the metric could score (§28), then by removing the
+placeholder and assuming absence meant exclusion (§30). The correct form is
+neither — it is to change the POPULATION both arms are scored on.
