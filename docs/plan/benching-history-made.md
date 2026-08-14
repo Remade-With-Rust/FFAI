@@ -1363,3 +1363,44 @@ it.** §3 rule 10 has now been got wrong twice from opposite directions: first b
 writing a placeholder the metric could score (§28), then by removing the
 placeholder and assuming absence meant exclusion (§30). The correct form is
 neither — it is to change the POPULATION both arms are scored on.
+
+---
+
+## 31. THE FILTERS WERE FITTED UNDER A CONFIG WE NO LONGER RUN
+
+Raised from outside the measurement loop: *most of our filters were added
+before SVTR, on CRNN.* Auditing every filter still live under the banked config
+(body-only OFF, CJK arm on, SVTR):
+
+| filter | fitted under | status now |
+|---|---|---|
+| `reject_threshold()` | CORD/CRNN (§8.22) | **0.0 — off by default**, not a factor |
+| `VERIFY_LOWCONF` | CRNN's confidence scale | already per-recognizer (§8.171) |
+| `join_fluency` | Latin text | already script-routed (§18) |
+| §8.135 block rules | CRNN + body-only ON | **dead — body_only never runs** |
+| `ORDER_GATE_T = 0.0525` | CRNN-era boxes | pre-recognition, recognizer-independent |
+| **§8.157 guard `body_frac > 0.85`** | **body-only ON** | **DEGENERATE — always true** |
+
+**The live defect.** `probe_gate_fires` is
+`n_col >= 3 && cover >= 0.18 && aspect > 1.6 && body_frac > 0.85`, where
+`body_frac = n_body / n_all` measures how much SUPPRESSION removed. §19 turned
+suppression off for the benchmark config, so `n_body == n_all`, `body_frac` is
+**always exactly 1.0**, and the fourth term is always true.
+
+The guard silently went from four conditions to three and **now fires more
+often than it was ever fitted to**. That is not cosmetic: ground 1 BYPASSES the
+text verifier, and §22 measured the verifier as genuinely good (disabling it
+costs 0.0083 text, CI excluding zero). A looser guard force-accepts reorders on
+pages the verifier would have judged.
+
+`FFAI_ORDER_GUARD=0` drops ground 1 so the verifier decides every page. Default
+unchanged, 38 tests pass, A/B-able from one binary.
+
+**The general lesson, and it is not the one the observation started from.** The
+filters did not rot because the RECOGNIZER changed — §8.171 and §18 had already
+caught those. They rotted because a CONFIG change (§19's body-only OFF) silently
+emptied a term that another filter depended on. **A constant is fitted against a
+whole configuration, not against one component**, so any config flip should
+re-audit every constant whose inputs that flip touches. §19 banked a real win
+and left a dead term behind it; nobody looked, because the win was measured and
+the term was invisible.

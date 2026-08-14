@@ -1046,9 +1046,20 @@ fn probe_decide(
         r.put("numseq_margin", (np - ns) as f64);
         r.put("frac_moved", moved as f64 / lines.len().max(1) as f64);
     }
+    // §31: ground 1 (the §8.157 geometric guard) BYPASSES the text verifier, and
+    // one of its four terms is now dead. `body_frac = n_body / n_all` measured
+    // how much SUPPRESSION removed, and §19 turned suppression off for the
+    // benchmark config — so `n_body == n_all`, `body_frac` is always 1.0, and
+    // `body_frac > 0.85` is always true. The guard fires more often than it was
+    // ever fitted to, force-accepting reorders on pages §22 proved the verifier
+    // judges well (disabling the verifier costs 0.0083 text).
+    //
+    // `FFAI_ORDER_GUARD=0` drops ground 1 so every page is decided by the
+    // verifier. Default unchanged; this is an A/B-able arm, not a silent edit.
+    let guard_on = std::env::var("FFAI_ORDER_GUARD").as_deref() != Ok("0");
     let accept = if bypassed {
         true // §13 harvest arm: oracle gain on the excluded population
-    } else if probe_gate_fires(st, lines.len()) {
+    } else if guard_on && probe_gate_fires(st, lines.len()) {
         true // ground 1: the shipped §8.157 guard
     } else if std::env::var("FFAI_ORDER_VERIFY").as_deref() == Ok("0") {
         false
