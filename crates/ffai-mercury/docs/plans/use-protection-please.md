@@ -4,6 +4,11 @@
 **Registry**: 41 gates / 12 phases (`use-protection-please` v1)
 **Unit**: `crates/ffai-mercury` — library crate (no `[[bin]]`), v0.7.0
 **Tier**: critical-path — parses ONNX, JSON and binary lexicon blobs from the on-disk model cache, and carries ~30 hand-written `unsafe` SIMD/aliasing sites
+**Mirrors**: this crate's `README.md`, and the standalone landing page
+[Remade-With-Rust/mercury](https://github.com/Remade-With-Rust/mercury) (`README.md` on
+`main`, rendered with `--link` to this file). The crates.io page renders this crate's
+README, so it inherits the block — but **only absolute links resolve there**. All mirrors
+**must be re-rendered in the same pass as this file** (SKILL.md §3.1)
 **Audit depth**: survey (static evidence only — no tool probe was executed)
 **Audited**: 2026-08-15 by Claude (pilot) · **Next review**: 2026-11-15
 
