@@ -459,6 +459,10 @@ fn flash_head_strided(
 }
 
 #[cfg(not(target_arch = "x86_64"))]
+// SAFETY: non-x86 stub. It is `unsafe fn` only to match the signature of the
+// x86 kernel it stands in for, and its body is `unreachable!` - the runtime
+// feature check that guards every call site can never pass on this target,
+// so there is no reachable code here to be unsound.
 unsafe fn xattn_head(_q: &[f32], _k: &[f32], _v: &[f32], _o: &mut [f32], _n: usize, _s: &mut [f32]) {
     unreachable!("guarded by have_avx2()")
 }

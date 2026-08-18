@@ -182,6 +182,10 @@ unsafe fn dot_f16(w: *const u16, x: &[f32], d: usize) -> f32 {
 }
 
 #[cfg(not(target_arch = "x86_64"))]
+// SAFETY: non-x86 stub. It is `unsafe fn` only to match the signature of the
+// x86 kernel it stands in for, and its body is `unreachable!` - the runtime
+// feature check that guards every call site can never pass on this target,
+// so there is no reachable code here to be unsound.
 unsafe fn dot_f16(_w: *const u16, _x: &[f32], _d: usize) -> f32 {
     unreachable!("guarded by have_f16c()")
 }

@@ -264,6 +264,10 @@ unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, bl
 }
 
 #[cfg(not(target_arch = "x86_64"))]
+// SAFETY: non-x86 stub. It is `unsafe fn` only to match the signature of the
+// x86 kernel it stands in for, and its body is `unreachable!` - the runtime
+// feature check that guards every call site can never pass on this target,
+// so there is no reachable code here to be unsound.
 unsafe fn dot_i8_blocked(_w: &[i8], _b: &[f32], _xu: &[u8], _n: usize, _k: usize) -> f32 {
     unreachable!("guarded by have_avx2()")
 }

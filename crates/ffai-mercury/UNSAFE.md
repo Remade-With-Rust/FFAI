@@ -3,14 +3,22 @@
 Satisfies gate **H-16**. Every `unsafe` site in this crate, what it is for, and what makes
 it sound. **Last audited: 2026-08-15** (survey depth — no Miri, no TSan; see H-23/H-24).
 
-> **How this list was built, and why the obvious method undercounts.** The workspace lint
-> `unsafe_code = "warn"` enumerates 25 sites in this crate. It reports **nothing** for the
-> 3 sites carrying `#[allow(unsafe_code)]` — an attribute that silences the lint also
-> silences the inventory. Both sources were used. If you add `#[allow(unsafe_code)]`
-> anywhere, add the site here in the same commit, because nothing else will catch it.
+> **How this list was built, and why the obvious method undercounts — TWICE.** The
+> workspace lint `unsafe_code = "warn"` enumerates 25 sites. It reports **nothing** for the
+> 3 sites carrying `#[allow(unsafe_code)]`: an attribute that silences the lint also
+> silences the inventory. It also reports nothing for code behind a `cfg` for a target you
+> are not compiling — the 3 `#[cfg(not(target_arch = "x86_64"))]` fallback stubs were
+> invisible on this x86 machine and were missed by the first pass of this file. They were
+> caught later by `tools/lint_invariants.py`, which reads the SOURCE rather than the
+> compiler's opinion about one target.
+>
+> The lesson generalises: **an inventory built from compiler output describes one
+> configuration, not the crate.** `tools/lint_invariants.py` now enforces R1 (every unsafe
+> site has a SAFETY comment) and R2 (every `#[allow(unsafe_code)]` file is named here) in
+> CI, so neither blind spot can reopen.
 
-**Totals**: 28 sites — 12 blocks, 11 `unsafe fn`, 2 `unsafe impl`, 3 allow-suppressed.
-**SAFETY comments**: 27, covering all 28 sites — the adjacent `unsafe impl Send`/`Sync`
+**Totals**: **31 sites** — 12 blocks, 14 `unsafe fn`, 2 `unsafe impl`, 3 allow-suppressed.
+**SAFETY comments**: 30, covering all 31 sites — the adjacent `unsafe impl Send`/`Sync`
 pair at `decoder_kernels.rs:194-195` shares one comment. Each states the invariant *and*
 what upholds it: for Class A the dominating `have_avx2()`/`have_f16c()` check, for Class B
 the index arithmetic that makes the regions disjoint, for Class C the fact that the
@@ -27,6 +35,7 @@ without AVX2 is UB. Soundness therefore rests entirely on the runtime dispatch c
 | [`asr/flash_attn.rs`](src/asr/flash_attn.rs) | 15 — 7 blocks, 8 `fn` | `have_avx2()` / `have_f16c()`; non-x86 builds get an `unreachable!` stub |
 | [`tts/decoder_kernels.rs`](src/tts/decoder_kernels.rs) | 4 — 212, 241, 1341 (blocks); 732 (`fn`) | same dispatch pattern |
 | [`asr/f16_gemv.rs`](src/asr/f16_gemv.rs) | 2 — 141 (block); 153 (`fn`) | `have_f16c()` |
+| non-x86 fallback stubs | 3 — one per kernel file | `unsafe fn` only to match the x86 signature; body is `unreachable!`, so no reachable code exists to be unsound |
 | [`asr/vocab_int8.rs`](src/asr/vocab_int8.rs) | 2 — 202 (block); 237 (`fn`) | `have_avx2()` |
 
 **Invariant**: every `#[target_feature]` function is called only from a path that has
