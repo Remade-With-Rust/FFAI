@@ -18,7 +18,7 @@ categories = ["multimedia::audio", "science", "accessibility"]
 
 [dependencies]
 ffai-core = { workspace = true }
-ffai-models = { workspace = true }
+ffai-models = { path = "../ffai-models", version = "0.6.1", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 tokenizers = { workspace = true }
@@ -33,6 +33,20 @@ proptest = "1"
 ffai-models = { workspace = true }
 
 [features]
+# Weight downloading, ON by default because the README documents it: `cargo add
+# ffai-mercury` + `WhisperCandle::new()` fetches on first use.
+#
+# Turning it OFF is what a security-conscious embedder wants, and it is a large
+# lever rather than a tidy-up. `fetch` pulls hf-hub -> reqwest -> rustls ->
+# aws-lc-rs -> aws-lc-sys, a C crypto library, and with it roughly 180 crates:
+# ffai-mercury resolves 320 dependencies with it and about 140 without, which is
+# what ffai-diana already measures because it opted out first.
+#
+# Ship your own weights and build with --no-default-features to get a graph with
+# no TLS stack and no C crypto at all. Manifests still load and local files still
+# resolve; only fetching is unavailable, and it says so.
+default = ["fetch"]
+fetch = ["ffai-models/fetch"]
 cuda = ["ffai-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 metal = ["ffai-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 

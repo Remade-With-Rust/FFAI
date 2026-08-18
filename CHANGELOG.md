@@ -70,6 +70,12 @@ mechanics are in `.github/workflows/release.yml`.
 
 ### Changed
 
+- `ffai-mercury` gains a default-on `fetch` feature. Building with
+  `--no-default-features` drops **166 of 320 dependencies** and removes
+  `aws-lc-sys` — a C crypto library — from the graph entirely, by removing the
+  weight downloader (`hf-hub → reqwest → rustls → aws-lc-rs`) rather than the
+  crypto. The default is unchanged, so inference performance is untouched.
+
 - `ffai-mercury`'s lib is clippy-clean and rustfmt-clean; CI blocks on both for
   that crate. Behaviour verified unchanged: 128 lib + 7 property tests pass,
   `cargo-careful` green, and the `cargo-geiger` unsafe surface is identical.

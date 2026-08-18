@@ -279,6 +279,31 @@ stays open regardless of what is decided about TTS.
 
 ---
 
+### Pass 3 — attack-surface reduction, 2026-08-15
+
+Asked whether `aws-lc-sys` could be swapped for a pure-Rust crypto library. It cannot,
+safely: `ring` is also C and assembly, and the only pure-Rust rustls provider
+(`rustls-rustcrypto`) is not production-recommended — STANDARD.md §11 says prefer a
+well-audited library over a novel one. The feature graph blocks it anyway, since
+`reqwest`'s `rustls` feature hardcodes `__rustls-aws-lc-rs` and `hf-hub` only forwards
+that one; adding `rustls/ring` alongside would compile BOTH providers.
+
+So the crypto stayed and the *need* for it went. `fetch` (default-on) now gates the
+weight downloader:
+
+| build | dependencies | `aws-lc-sys` |
+|---|---:|---|
+| default | 320 | present |
+| `--no-default-features` | **154** | **absent** |
+
+`ffai-diana` had already opted out and measures 138, which is where the number came from.
+Cargo forbids `default-features = false` on an inherited workspace dependency, so
+`ffai-models` is now declared by path in `ffai-mercury` exactly as `ffai-diana` declares
+it. **Maintenance trap that creates**: the `version = "0.6.1"` requirement is now written
+in two places and will not follow a workspace bump automatically.
+
+---
+
 ## Waivers
 
 Time-bounded only. An expired waiver is an `Incomplete` gate, not a `Completed` one.

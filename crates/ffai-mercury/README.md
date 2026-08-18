@@ -247,6 +247,24 @@ MIT OR Apache-2.0. Model weights carry their own licenses, surfaced at selection
 - **`unsafe` inventory**: [UNSAFE.md](UNSAFE.md) — all 28 sites, classified, with the invariant each one rests on.
 - **Reporting a vulnerability**: [SECURITY.md](../../SECURITY.md) at the repo root.
 
+### Building without the downloader
+
+`fetch` is on by default, because `WhisperCandle::new()` is documented to fetch on
+first use. It is also the single largest thing in the dependency graph:
+
+```toml
+ffai-mercury = { version = "0.7", default-features = false }   # ship your own weights
+```
+
+| build | dependencies | C crypto |
+|---|---:|---|
+| default (`fetch`) | 320 | `aws-lc-sys` via hf-hub → reqwest → rustls |
+| `--no-default-features` | **154** | **none** |
+
+166 crates and the whole TLS stack, gone. Manifests still load and local files still
+resolve; only downloading is unavailable, and it says so. **Inference is unaffected** —
+the removed subtree is the weight downloader, not compute.
+
 ### Model files are trusted input
 
 Mercury **does not validate model files**. Weights, ONNX graphs, JSON configs and
