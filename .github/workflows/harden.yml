@@ -94,6 +94,25 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  miri:
+    name: Miri (UB interpreter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with: { components: miri }
+      - uses: Swatinem/rust-cache@v2
+      # Scoped to tests/miri_safe.rs on purpose, and BLOCKING because that scope
+      # is verified green. Miri interprets Rust: it cannot run x86 SIMD
+      # intrinsics (rustfft, reached via mel::compute) or foreign functions (the
+      # Win32 memory instrumentation). Pointing it at --lib or tests/properties.rs
+      # fails for those reasons and not because the code is wrong, which is
+      # exactly the sort of red CI that teaches people to ignore CI.
+      # TO WIDEN: move a test into miri_safe.rs once it avoids SIMD and FFI.
+      - run: cargo miri test -p ffai-mercury --test miri_safe
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+
   invariants:
     name: Project invariants
     runs-on: ubuntu-latest
