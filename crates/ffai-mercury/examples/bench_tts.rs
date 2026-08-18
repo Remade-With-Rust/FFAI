@@ -43,6 +43,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = BenchConfig {
         engine: None,
         skip_engine: false,
+        // NOT skipped: this example exists to run the TTS reference AND the
+        // frozen third-party `tts-judge` ASR that scores our audio. Skipping
+        // references here would turn the quality gate into self-grading, which
+        // is the one thing the judge is there to prevent.
+        skip_references: false,
         corpus: PathBuf::from("corpora/harvard-sentences-v1.toml"),
         references,
         runs: std::env::var("FFAI_RUNS")

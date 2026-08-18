@@ -76,6 +76,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Compile EVERY target, not just the libs. Two examples had rotted against
+      # a `BenchConfig` field added to ffai-bench - `cargo test --lib` never
+      # compiles an example, so nothing noticed until cargo-mutants tried to
+      # build the tree. An example that does not compile is dead documentation.
+      - run: cargo check --workspace --all-targets
       # Lib + integration tests. Model-dependent tests skip when fixtures are absent.
       - run: cargo test --workspace --lib
 
