@@ -79,7 +79,10 @@ fn main() {
             continue;
         }
 
-        let opts = AsrOptions { word_timestamps: true, ..Default::default() };
+        let opts = AsrOptions {
+            word_timestamps: true,
+            ..Default::default()
+        };
         let transcript = match engine.transcribe(&audio, &opts) {
             Ok(t) => t,
             Err(e) => {
@@ -161,18 +164,43 @@ fn main() {
             duration,
             (duration / 30.0).ceil() as usize,
             words.len(),
-            if transcribed > 0 { 100.0 * words.len() as f64 / transcribed as f64 } else { 0.0 },
-            if words.is_empty() { 0.0 } else { 100.0 * contained as f64 / words.len() as f64 },
+            if transcribed > 0 {
+                100.0 * words.len() as f64 / transcribed as f64
+            } else {
+                0.0
+            },
+            if words.is_empty() {
+                0.0
+            } else {
+                100.0 * contained as f64 / words.len() as f64
+            },
             if monotone { "yes" } else { "NO" }
         );
     }
 
     println!("\n{}", "=".repeat(62));
-    let containment = if tot_words > 0 { 100.0 * tot_contained as f64 / tot_words as f64 } else { 0.0 };
-    let coverage = if tot_expected > 0 { 100.0 * tot_words as f64 / tot_expected as f64 } else { 0.0 };
-    println!("  words timed        {tot_words} of {tot_expected} transcribed ({coverage:.0}% coverage)");
+    let containment = if tot_words > 0 {
+        100.0 * tot_contained as f64 / tot_words as f64
+    } else {
+        0.0
+    };
+    let coverage = if tot_expected > 0 {
+        100.0 * tot_words as f64 / tot_expected as f64
+    } else {
+        0.0
+    };
+    println!(
+        "  words timed        {tot_words} of {tot_expected} transcribed ({coverage:.0}% coverage)"
+    );
     println!("  inside utterance   {tot_contained} ({containment:.1}%)");
-    println!("  monotone           {}", if all_monotone { "yes, every file" } else { "NO — words go backwards" });
+    println!(
+        "  monotone           {}",
+        if all_monotone {
+            "yes, every file"
+        } else {
+            "NO — words go backwards"
+        }
+    );
     println!(
         "\n  GATE: {}",
         if containment >= 95.0 && coverage >= 90.0 && all_monotone {

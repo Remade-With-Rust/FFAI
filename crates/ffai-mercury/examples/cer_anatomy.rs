@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 use ffai_bench::corpus::Manifest;
 use ffai_bench::metrics::cer;
-use ffai_bench::normalize::{normalize, Mode};
+use ffai_bench::normalize::{Mode, normalize};
 use ffai_bench::reference::ReferenceFile;
 use ffai_core::engine::{AsrEngine, AsrOptions};
 use ffai_mercury::asr::WhisperCandle;
@@ -61,10 +61,18 @@ fn main() {
     let mut rows = Vec::new();
 
     for (clip, path) in clips.iter().zip(&paths) {
-        let Some(their_text) = batch.text_for(path) else { continue };
-        let Ok(audio) = ffai_media::load_audio(path) else { continue };
-        let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
-        let Ok(t) = engine.transcribe(&audio, &opts) else { continue };
+        let Some(their_text) = batch.text_for(path) else {
+            continue;
+        };
+        let Ok(audio) = ffai_media::load_audio(path) else {
+            continue;
+        };
+        let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+            continue;
+        };
+        let Ok(t) = engine.transcribe(&audio, &opts) else {
+            continue;
+        };
         let our_text = t.text();
         rows.push(Row {
             id: clip.id.clone(),
@@ -81,22 +89,37 @@ fn main() {
     let worse = rows.iter().filter(|r| r.ours > r.theirs + 1e-9).count();
     let same = rows.len() - better - worse;
     let n = (better + worse) as f64;
-    let z = if n > 0.0 { (better as f64 - n / 2.0) / (n * 0.25).sqrt() } else { 0.0 };
+    let z = if n > 0.0 {
+        (better as f64 - n / 2.0) / (n * 0.25).sqrt()
+    } else {
+        0.0
+    };
 
     let mut deltas: Vec<f64> = rows.iter().map(|r| r.theirs - r.ours).collect();
     deltas.sort_by(|a, b| b.total_cmp(a));
     let total: f64 = deltas.iter().sum();
     let top5: f64 = deltas.iter().take(5).sum();
 
-    println!("\n=== per-clip CER, us vs {REFERENCE} ({} clips) ===", rows.len());
+    println!(
+        "\n=== per-clip CER, us vs {REFERENCE} ({} clips) ===",
+        rows.len()
+    );
     println!("  we are better on {better}   worse on {worse}   tied {same}");
     println!(
         "  sign test  z = {z:+.2}   {}",
-        if z.abs() > 2.0 { "SIGNIFICANT" } else { "not significant (bar is |z| > 2)" }
+        if z.abs() > 2.0 {
+            "SIGNIFICANT"
+        } else {
+            "not significant (bar is |z| > 2)"
+        }
     );
     println!(
         "  net {total:+.3}; top 5 clips carry {top5:+.3} ({:.0}% of net)",
-        if total.abs() > 1e-9 { 100.0 * top5 / total } else { 0.0 }
+        if total.abs() > 1e-9 {
+            100.0 * top5 / total
+        } else {
+            0.0
+        }
     );
 
     // ---- what the characters actually are ----
@@ -107,7 +130,10 @@ fn main() {
         if r.ours <= r.theirs + 1e-9 {
             break;
         }
-        println!("\n[{}] CER ours {:.3} vs theirs {:.3}", r.id, r.ours, r.theirs);
+        println!(
+            "\n[{}] CER ours {:.3} vs theirs {:.3}",
+            r.id, r.ours, r.theirs
+        );
         let truth = normalize(&r.truth, Mode::default());
         let ours = normalize(&r.our_text, Mode::default());
         let theirs = normalize(&r.their_text, Mode::default());
@@ -115,20 +141,38 @@ fn main() {
             let diffs = word_diffs(&truth, hyp);
             println!(
                 "  {label}: {}",
-                if diffs.is_empty() { "(exact)".to_string() } else { diffs.join("  ") }
+                if diffs.is_empty() {
+                    "(exact)".to_string()
+                } else {
+                    diffs.join("  ")
+                }
             );
         }
     }
 
     println!("\n=== aggregate, for contrast ===");
-    let joined_truth: String =
-        rows.iter().map(|r| r.truth.as_str()).collect::<Vec<_>>().join(" ");
+    let joined_truth: String = rows
+        .iter()
+        .map(|r| r.truth.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     println!(
         "  ours   {:.4}\n  theirs {:.4}",
-        cer(&joined_truth, &rows.iter().map(|r| r.our_text.as_str()).collect::<Vec<_>>().join(" ")),
         cer(
             &joined_truth,
-            &rows.iter().map(|r| r.their_text.as_str()).collect::<Vec<_>>().join(" ")
+            &rows
+                .iter()
+                .map(|r| r.our_text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        cer(
+            &joined_truth,
+            &rows
+                .iter()
+                .map(|r| r.their_text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
         )
     );
     println!(

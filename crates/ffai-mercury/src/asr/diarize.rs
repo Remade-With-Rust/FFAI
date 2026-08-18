@@ -205,11 +205,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// versus 2.89 s when left alone. Extra clusters are cheap under DER's
 /// optimal mapping; a bad merge is not. Supply the count when it is certain,
 /// not as a safety measure.
-pub fn cluster(
-    embeddings: &[Vec<f32>],
-    threshold: f32,
-    max_speakers: Option<usize>,
-) -> Vec<usize> {
+pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, max_speakers: Option<usize>) -> Vec<usize> {
     let n = embeddings.len();
     if n == 0 {
         return Vec::new();
@@ -238,7 +234,11 @@ pub fn cluster(
                         count += 1;
                     }
                 }
-                let d = if count > 0 { sum / count as f32 } else { f32::MAX };
+                let d = if count > 0 {
+                    sum / count as f32
+                } else {
+                    f32::MAX
+                };
                 if best.as_ref().is_none_or(|(_, _, bd)| d < *bd) {
                     best = Some((i, j, d));
                 }
@@ -283,7 +283,11 @@ pub fn turns_from_labels(windows: &[(f64, f64)], labels: &[usize]) -> Vec<Speake
             Some(last) if last.speaker == speaker && start <= last.end => {
                 last.end = last.end.max(end);
             }
-            _ => turns.push(SpeakerTurn { start, end, speaker }),
+            _ => turns.push(SpeakerTurn {
+                start,
+                end,
+                speaker,
+            }),
         }
     }
     turns
@@ -295,10 +299,7 @@ pub fn turns_from_labels(windows: &[(f64, f64)], labels: &[usize]) -> Vec<Speake
 /// to whoever holds more of it, and a midpoint test would hand the whole
 /// segment to whoever happened to own one instant. A segment overlapping no
 /// turn gets `None` — unattributed, not guessed.
-pub fn assign(
-    segments: &[TimedSegment<String>],
-    turns: &[SpeakerTurn],
-) -> Vec<Option<usize>> {
+pub fn assign(segments: &[TimedSegment<String>], turns: &[SpeakerTurn]) -> Vec<Option<usize>> {
     segments
         .iter()
         .map(|seg| {
@@ -336,11 +337,21 @@ mod tests {
     use super::*;
 
     fn region(start: f64, end: f64) -> TimedSegment<()> {
-        TimedSegment { start, end, value: (), confidence: None }
+        TimedSegment {
+            start,
+            end,
+            value: (),
+            confidence: None,
+        }
     }
 
     fn seg(start: f64, end: f64) -> TimedSegment<String> {
-        TimedSegment { start, end, value: "x".into(), confidence: None }
+        TimedSegment {
+            start,
+            end,
+            value: "x".into(),
+            confidence: None,
+        }
     }
 
     /// Two well-separated directions in embedding space stand in for two
@@ -360,7 +371,10 @@ mod tests {
         // The gap 2.0-5.0 is where a speaker change is most likely; no window
         // may cover it.
         let windows = subsegment(&[region(0.0, 2.0), region(5.0, 7.0)], 1.5, 0.75);
-        assert!(windows.iter().all(|(s, e)| (*e <= 2.0) || (*s >= 5.0)), "{windows:?}");
+        assert!(
+            windows.iter().all(|(s, e)| (*e <= 2.0) || (*s >= 5.0)),
+            "{windows:?}"
+        );
     }
 
     #[test]
@@ -373,7 +387,10 @@ mod tests {
     fn windows_cover_a_long_region_to_its_end() {
         let windows = subsegment(&[region(0.0, 5.0)], 1.5, 0.75);
         assert!(windows.first().expect("some").0 == 0.0);
-        assert!((windows.last().expect("some").1 - 5.0).abs() < 1e-9, "{windows:?}");
+        assert!(
+            (windows.last().expect("some").1 - 5.0).abs() < 1e-9,
+            "{windows:?}"
+        );
     }
 
     #[test]
@@ -405,7 +422,14 @@ mod tests {
     fn one_voice_stays_one_cluster() {
         let e = vec![voice_a(), near(&voice_a(), 0.02), near(&voice_a(), 0.04)];
         let labels = cluster(&e, DEFAULT_THRESHOLD, None);
-        assert_eq!(labels.iter().collect::<std::collections::HashSet<_>>().len(), 1, "{labels:?}");
+        assert_eq!(
+            labels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            1,
+            "{labels:?}"
+        );
     }
 
     #[test]
@@ -419,7 +443,14 @@ mod tests {
             vec![0.0, 0.0, 0.0, 1.0],
         ];
         let labels = cluster(&e, DEFAULT_THRESHOLD, Some(2));
-        assert_eq!(labels.iter().collect::<std::collections::HashSet<_>>().len(), 2, "{labels:?}");
+        assert_eq!(
+            labels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            2,
+            "{labels:?}"
+        );
     }
 
     #[test]
@@ -461,15 +492,27 @@ mod tests {
     fn a_segment_goes_to_whoever_holds_more_of_it() {
         // Segment 0.0-1.0: speaker 0 holds 0.2, speaker 1 holds 0.8.
         let turns = vec![
-            SpeakerTurn { start: 0.0, end: 0.2, speaker: 0 },
-            SpeakerTurn { start: 0.2, end: 1.0, speaker: 1 },
+            SpeakerTurn {
+                start: 0.0,
+                end: 0.2,
+                speaker: 0,
+            },
+            SpeakerTurn {
+                start: 0.2,
+                end: 1.0,
+                speaker: 1,
+            },
         ];
         assert_eq!(assign(&[seg(0.0, 1.0)], &turns), vec![Some(1)]);
     }
 
     #[test]
     fn a_segment_overlapping_nothing_is_unattributed() {
-        let turns = vec![SpeakerTurn { start: 10.0, end: 11.0, speaker: 0 }];
+        let turns = vec![SpeakerTurn {
+            start: 10.0,
+            end: 11.0,
+            speaker: 0,
+        }];
         assert_eq!(assign(&[seg(0.0, 1.0)], &turns), vec![None]);
     }
 
@@ -485,7 +528,12 @@ mod absolute_grid_tests {
     use super::*;
 
     fn region(start: f64, end: f64) -> TimedSegment<()> {
-        TimedSegment { start, end, value: (), confidence: None }
+        TimedSegment {
+            start,
+            end,
+            value: (),
+            confidence: None,
+        }
     }
 
     /// THE invariant the live cache depends on: the same audio must produce
@@ -505,7 +553,8 @@ mod absolute_grid_tests {
 
         // Compare in ABSOLUTE time; buffer-relative bounds differ by design.
         let abs = |v: &[(f64, f64)], off: f64| -> Vec<(f64, f64)> {
-            v.iter().map(|&(s, e)| ((s + off) * 1e6).round() / 1e6)
+            v.iter()
+                .map(|&(s, e)| ((s + off) * 1e6).round() / 1e6)
                 .zip(v.iter().map(|&(_, e)| ((e + off) * 1e6).round() / 1e6))
                 .collect()
         };
@@ -527,7 +576,10 @@ mod absolute_grid_tests {
         // Long enough to take the windowed path, offset so the snap moves.
         let w = subsegment_at(&[region(0.10, 2.00)], 1.5, 0.75, 0.70);
         assert!(!w.is_empty(), "snapping must not erase a region");
-        assert!(w[0].0 >= 0.10 && w[0].0 < 2.00, "first window must start inside the region");
+        assert!(
+            w[0].0 >= 0.10 && w[0].0 < 2.00,
+            "first window must start inside the region"
+        );
     }
 }
 
@@ -550,7 +602,10 @@ pub fn geometry() -> (f64, f64) {
             .filter(|v| *v > 0.0 && *v <= 30.0)
             .unwrap_or(default)
     };
-    (read("FFAI_DIARIZE_WINDOW", WINDOW_SECS), read("FFAI_DIARIZE_HOP", HOP_SECS))
+    (
+        read("FFAI_DIARIZE_WINDOW", WINDOW_SECS),
+        read("FFAI_DIARIZE_HOP", HOP_SECS),
+    )
 }
 
 /// Embeddings already computed, in ABSOLUTE stream time.
@@ -612,7 +667,12 @@ impl StreamState {
     pub fn pending(&self, abs_regions: &[(f64, f64)], window: f64, hop: f64) -> Vec<(f64, f64)> {
         let regions: Vec<TimedSegment<()>> = abs_regions
             .iter()
-            .map(|&(s, e)| TimedSegment { start: s, end: e, value: (), confidence: None })
+            .map(|&(s, e)| TimedSegment {
+                start: s,
+                end: e,
+                value: (),
+                confidence: None,
+            })
             .collect();
         // Offset 0: the bounds are already absolute, so the grid is absolute.
         subsegment_at(&regions, window, hop, 0.0)
@@ -694,8 +754,6 @@ pub fn clip_to_buffer(turns: Vec<SpeakerTurn>, offset: f64, buffer_end: f64) -> 
 mod stream_state_tests {
     use super::*;
 
-
-
     fn emb(v: f32) -> Vec<f32> {
         vec![v; 4]
     }
@@ -708,16 +766,25 @@ mod stream_state_tests {
         let mut st = StreamState::new();
         let first = st.pending(&[(100.0, 110.0)], 1.5, 0.75);
         assert!(!first.is_empty());
-        st.extend(first.iter().map(|&(s, e)| (s, e, emb(1.0))).collect(), 110.0);
+        st.extend(
+            first.iter().map(|&(s, e)| (s, e, emb(1.0))).collect(),
+            110.0,
+        );
 
         // A new recording, back at the start of the clock.
-        assert!(st.note_buffer(10.0), "a buffer ending before everything seen is a rewind");
+        assert!(
+            st.note_buffer(10.0),
+            "a buffer ending before everything seen is a rewind"
+        );
         let after = st.pending(&[(0.0, 10.0)], 1.5, 0.75);
         assert!(
             !after.is_empty(),
             "rewound audio must be embedded, not swallowed by a stale processed_to"
         );
-        assert!(st.is_empty(), "stale history describes audio that has moved");
+        assert!(
+            st.is_empty(),
+            "stale history describes audio that has moved"
+        );
     }
 
     /// A normal sliding window overlaps its predecessor heavily and must NOT
@@ -730,7 +797,10 @@ mod stream_state_tests {
         st.extend(w.iter().map(|&(s, e)| (s, e, emb(1.0))).collect(), 10.0);
         let n = st.len();
         // Next tick: starts 1 s later, ends 1 s later.
-        assert!(!st.note_buffer(11.0), "advancing buffer end is not a rewind");
+        assert!(
+            !st.note_buffer(11.0),
+            "advancing buffer end is not a rewind"
+        );
         assert_eq!(st.len(), n, "history must survive ordinary sliding");
     }
 
@@ -739,13 +809,17 @@ mod stream_state_tests {
     /// and is arithmetic.
     #[test]
     fn turns_are_clipped_and_returned_buffer_relative() {
-        let t = |start: f64, end: f64| SpeakerTurn { start, end, speaker: 0 };
+        let t = |start: f64, end: f64| SpeakerTurn {
+            start,
+            end,
+            speaker: 0,
+        };
         let turns = vec![
-            t(90.0, 95.0),    // entirely before the buffer -> dropped
-            t(99.0, 102.0),   // straddles the start -> clipped to 0.0
-            t(103.0, 106.0),  // inside -> shifted by the offset
-            t(108.0, 115.0),  // straddles the end -> clipped to the buffer end
-            t(120.0, 125.0),  // entirely after -> dropped
+            t(90.0, 95.0),   // entirely before the buffer -> dropped
+            t(99.0, 102.0),  // straddles the start -> clipped to 0.0
+            t(103.0, 106.0), // inside -> shifted by the offset
+            t(108.0, 115.0), // straddles the end -> clipped to the buffer end
+            t(120.0, 125.0), // entirely after -> dropped
         ];
         let out = clip_to_buffer(turns, 100.0, 110.0);
         assert_eq!(out.len(), 3, "only overlapping turns survive: {out:?}");
@@ -757,7 +831,6 @@ mod stream_state_tests {
             "nothing may fall outside the buffer the caller sent"
         );
     }
-
 
     /// The point of the whole design: settled audio is never re-cut, so a
     /// sliding buffer asks only for its new tail.

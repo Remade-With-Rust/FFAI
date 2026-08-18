@@ -36,8 +36,33 @@ ffai-models = { workspace = true }
 cuda = ["ffai-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 metal = ["ffai-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
-[lints]
-workspace = true
+[lints.rust]
+# Mirrors [workspace.lints.rust]. Restated because this crate needs its own
+# [lints.clippy] table below, and `[lints] workspace = true` is all-or-nothing:
+# it cannot be combined with local lint tables. If the workspace rule changes,
+# change it here too.
+unsafe_code = "warn"
+
+# Crate-level exceptions, each a deliberate decision rather than a shortcut.
+# Gate H-15: the policy is "clippy::all denied, exceptions justified in writing".
+[lints.clippy]
+# `.max(a).min(b)` and `clamp` differ on NaN, and these paths carry audio
+# samples where NaN is reachable. Rewriting them would change behaviour.
+manual_clamp = "allow"
+# Kernel constants are transcribed from the reference implementation. Rounding
+# them to "nicer" literals changes the bits, and this crate advertises
+# byte-stable output.
+approx_constant = "allow"
+excessive_precision = "allow"
+# The SIMD kernels take the arguments the arithmetic needs; splitting them into
+# a struct adds an indirection to the hottest loops in the crate.
+too_many_arguments = "allow"
+type_complexity = "allow"
+# Index-based loops in the kernels are deliberate: the iterator form changes
+# what the autovectoriser produces, and these loops are the measured hot path.
+needless_range_loop = "allow"
+# Two arms that look identical today document two distinct cases.
+if_same_then_else = "allow"
 
 [dev-dependencies.ffai-bench]
 workspace = true

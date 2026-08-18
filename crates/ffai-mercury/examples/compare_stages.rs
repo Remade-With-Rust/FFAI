@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::profile;
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::asr::profile;
 
 /// Pull the `/ N runs` count out of whisper.cpp's timing block, summing.
 /// Decode cost is only comparable per token — the two implementations do not
@@ -78,7 +78,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_map(|p| ffai_media::load_audio(p).ok())
         .map(|a| a.duration_secs())
         .sum();
-    println!("{} clips, {media:.1}s audio, {threads} threads, greedy\n", clips.len());
+    println!(
+        "{} clips, {media:.1}s audio, {threads} threads, greedy\n",
+        clips.len()
+    );
 
     // ---- whisper.cpp: one invocation, model loaded once ----
     let out = Command::new(&bin)
@@ -86,18 +89,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // (43 decode runs instead of 50 on a sample clip, 23 % less decode
         // work), so passing it would compare our timestamped decode against
         // its untimestamped one and hand it a free advantage.
-        .args(["-m", &model.to_string_lossy(), "-t", &threads, "-bs", "1", "-bo", "1"])
+        .args([
+            "-m",
+            &model.to_string_lossy(),
+            "-t",
+            &threads,
+            "-bs",
+            "1",
+            "-bo",
+            "1",
+        ])
         .args(clips.iter().map(|p| p.to_string_lossy().into_owned()))
         .output()?;
-    let log = String::from_utf8_lossy(&out.stderr).into_owned()
-        + &String::from_utf8_lossy(&out.stdout);
+    let log =
+        String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
-        return Err(format!("whisper.cpp failed: {}", &log[log.len().saturating_sub(500)..]).into());
+        return Err(format!(
+            "whisper.cpp failed: {}",
+            &log[log.len().saturating_sub(500)..]
+        )
+        .into());
     }
     let cpp = [
         ("mel", parse_timing(&log, "mel time")),
         ("encode", parse_timing(&log, "encode time")),
-        ("decode", parse_timing(&log, "decode time") + parse_timing(&log, "batchd time")),
+        (
+            "decode",
+            parse_timing(&log, "decode time") + parse_timing(&log, "batchd time"),
+        ),
         ("sample", parse_timing(&log, "sample time")),
     ];
     let cpp_total: f64 = cpp.iter().map(|(_, v)| v).sum();
@@ -177,7 +196,11 @@ decode normalized: whisper.cpp {cpp_tokens:.0} tokens at {c:.2} ms/token ·     
     println!("\nWHERE WE LOSE (ranked by absolute cost, not ratio)");
     for (gap, name, ratio, c, m) in &gaps {
         if *gap <= 0.0 {
-            println!("  {name:<10} we WIN by {:.1} ms ({:.2}x faster)", -gap, c / m);
+            println!(
+                "  {name:<10} we WIN by {:.1} ms ({:.2}x faster)",
+                -gap,
+                c / m
+            );
         } else {
             println!(
                 "  {name:<10} +{gap:>7.1} ms  ({ratio:.2}x slower)  — {:.0}% of the total gap",

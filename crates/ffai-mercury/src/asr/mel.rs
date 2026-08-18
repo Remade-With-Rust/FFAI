@@ -98,7 +98,11 @@ impl MelFilters {
                 weights[m * n_bins + k] = enorm * rising.min(falling).max(0.0);
             }
         }
-        MelFilters { n_mels, n_bins, weights }
+        MelFilters {
+            n_mels,
+            n_bins,
+            weights,
+        }
     }
 
     fn row(&self, m: usize) -> &[f32] {
@@ -118,9 +122,7 @@ impl MelSpectrogram {
     pub fn new(n_mels: usize) -> Self {
         // torch.hann_window defaults to periodic=True: denominator N, not N-1.
         let window: Vec<f32> = (0..N_FFT)
-            .map(|n| {
-                0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / N_FFT as f32).cos())
-            })
+            .map(|n| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / N_FFT as f32).cos()))
             .collect();
         MelSpectrogram {
             filters: MelFilters::new(n_mels),
@@ -215,7 +217,11 @@ impl MelSpectrogram {
             *v = (v.max(floor) + 4.0) / 4.0;
         }
 
-        MelChunk { n_mels, n_frames, data: mel }
+        MelChunk {
+            n_mels,
+            n_frames,
+            data: mel,
+        }
     }
 }
 
@@ -236,7 +242,11 @@ impl MelChunk {
             data[m * frames..m * frames + take]
                 .copy_from_slice(&self.data[m * self.n_frames..m * self.n_frames + take]);
         }
-        MelChunk { n_mels: self.n_mels, n_frames: frames, data }
+        MelChunk {
+            n_mels: self.n_mels,
+            n_frames: frames,
+            data,
+        }
     }
 }
 
@@ -296,11 +306,7 @@ fn reflect_pad(samples: &[f32], pad: usize) -> Vec<f32> {
 }
 
 fn reflect_index(i: usize, n: usize) -> usize {
-    if n == 0 {
-        0
-    } else {
-        i.min(n - 1)
-    }
+    if n == 0 { 0 } else { i.min(n - 1) }
 }
 
 #[cfg(test)]
@@ -325,7 +331,10 @@ mod tests {
         // Every filter must have some energy, and none may be negative.
         for m in 0..80 {
             let row = f.row(m);
-            assert!(row.iter().all(|&w| w >= 0.0), "filter {m} has negative weight");
+            assert!(
+                row.iter().all(|&w| w >= 0.0),
+                "filter {m} has negative weight"
+            );
             assert!(row.iter().any(|&w| w > 0.0), "filter {m} is empty");
         }
     }
@@ -358,15 +367,15 @@ mod tests {
     fn a_tone_concentrates_energy_in_a_few_mel_bands() {
         let mel = MelSpectrogram::new(80);
         let samples: Vec<f32> = (0..SAMPLE_RATE)
-            .map(|i| {
-                (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin()
-            })
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin())
             .collect();
         let out = mel.compute(&samples);
         // Energy per mel band, averaged over frames.
         let band_energy: Vec<f32> = (0..out.n_mels)
             .map(|m| {
-                out.data[m * out.n_frames..(m + 1) * out.n_frames].iter().sum::<f32>()
+                out.data[m * out.n_frames..(m + 1) * out.n_frames]
+                    .iter()
+                    .sum::<f32>()
                     / out.n_frames as f32
             })
             .collect();
@@ -378,7 +387,10 @@ mod tests {
             .0;
         // 440 Hz sits in the linear part of the mel scale: 440/(200/3) = 6.6
         // mel, and the band spacing puts it in the low bands.
-        assert!(loudest < 20, "440 Hz landed in mel band {loudest}, expected a low band");
+        assert!(
+            loudest < 20,
+            "440 Hz landed in mel band {loudest}, expected a low band"
+        );
     }
 
     #[test]
@@ -410,7 +422,11 @@ mod tests {
 
     #[test]
     fn resized_truncates_each_mel_row_independently() {
-        let long = MelChunk { n_mels: 2, n_frames: 5, data: (0..10).map(|i| i as f32).collect() };
+        let long = MelChunk {
+            n_mels: 2,
+            n_frames: 5,
+            data: (0..10).map(|i| i as f32).collect(),
+        };
         let cut = long.resized(3);
         assert_eq!(cut.data, vec![0.0, 1.0, 2.0, 5.0, 6.0, 7.0]);
     }

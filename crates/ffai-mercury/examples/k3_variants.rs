@@ -37,7 +37,11 @@ fn bench(label: &str, gflop: f64, mut f: impl FnMut()) -> f64 {
         f();
         best = best.min(t0.elapsed().as_secs_f64());
     }
-    println!("  {label:<36} {:>8.1} ms  {:>7.1} GFLOP/s", best * 1000.0, gflop / best);
+    println!(
+        "  {label:<36} {:>8.1} ms  {:>7.1} GFLOP/s",
+        best * 1000.0,
+        gflop / best
+    );
     best
 }
 
@@ -58,7 +62,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lens: Vec<usize> = (0..20).map(|i| 70 + (i * 7) % 40).collect();
     let total_t: usize = lens.iter().sum();
     let gflop = LAYERS as f64 * total_t as f64 * (C_IN * C_HID * K * 2 * 2) as f64 / 1e9;
-    println!("{} sentences, {total_t} columns; FFN {gflop:.2} GFLOP\n", lens.len());
+    println!(
+        "{} sentences, {total_t} columns; FFN {gflop:.2} GFLOP\n",
+        lens.len()
+    );
 
     let w_up = Tensor::randn(0f32, 0.05f32, (C_HID, C_IN * K), &dev)?;
     let w_dn = Tensor::randn(0f32, 0.05f32, (C_IN, C_HID * K), &dev)?;
@@ -129,8 +136,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let col = &mut colu[..C_IN * K * t];
                 im2col_into(&hv, C_IN, t, col);
                 let cm = Tensor::from_slice(col, (C_IN * K, t), &dev).unwrap();
-                let mut yv: Vec<f32> =
-                    w_up.matmul(&cm).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+                let mut yv: Vec<f32> = w_up
+                    .matmul(&cm)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1()
+                    .unwrap();
                 for c in 0..C_HID {
                     let row = &mut yv[c * t..(c + 1) * t];
                     let bias = bu[c];
@@ -142,7 +154,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let col = &mut cold[..C_HID * K * t];
                 im2col_into(&yv, C_HID, t, col);
                 let cm = Tensor::from_slice(col, (C_HID * K, t), &dev).unwrap();
-                hv = w_dn.matmul(&cm).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+                hv = w_dn
+                    .matmul(&cm)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1()
+                    .unwrap();
                 for c in 0..C_IN {
                     let row = &mut hv[c * t..(c + 1) * t];
                     let bias = bd[c];
@@ -166,8 +184,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for &t in &lens {
         for _ in 0..LAYERS {
             // ours: [c_out, K] x [K, T] -> [c_out, T]
-            ours.push((w_up.clone(), Tensor::randn(0f32, 1f32, (C_IN * K, t), &dev).unwrap()));
-            ours.push((w_dn.clone(), Tensor::randn(0f32, 1f32, (C_HID * K, t), &dev).unwrap()));
+            ours.push((
+                w_up.clone(),
+                Tensor::randn(0f32, 1f32, (C_IN * K, t), &dev).unwrap(),
+            ));
+            ours.push((
+                w_dn.clone(),
+                Tensor::randn(0f32, 1f32, (C_HID * K, t), &dev).unwrap(),
+            ));
             // theirs: [T, K] x [K, c_out] -> [T, c_out]
             theirs.push((
                 Tensor::randn(0f32, 1f32, (t, C_IN * K), &dev).unwrap(),
@@ -189,15 +213,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::hint::black_box(a.matmul(b).unwrap());
         }
     });
-    println!("     -> ours is {:.2}x candle's orientation
-", o_theirs / o_ours);
+    println!(
+        "     -> ours is {:.2}x candle's orientation
+",
+        o_theirs / o_ours
+    );
 
     // ---- C. ceiling ----
     let mut ops: Vec<(Tensor, Tensor)> = Vec::new();
     for &t in &lens {
         for _ in 0..LAYERS {
-            ops.push((w_up.clone(), Tensor::randn(0f32, 1f32, (C_IN * K, t), &dev).unwrap()));
-            ops.push((w_dn.clone(), Tensor::randn(0f32, 1f32, (C_HID * K, t), &dev).unwrap()));
+            ops.push((
+                w_up.clone(),
+                Tensor::randn(0f32, 1f32, (C_IN * K, t), &dev).unwrap(),
+            ));
+            ops.push((
+                w_dn.clone(),
+                Tensor::randn(0f32, 1f32, (C_HID * K, t), &dev).unwrap(),
+            ));
         }
     }
     bench("C pure-GEMM ceiling", gflop, || {

@@ -37,12 +37,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest =
         ffai_bench::corpus::Manifest::load(Path::new("corpora/harvard-sentences-v1.toml"))?;
 
-    let n: usize = std::env::var("FFAI_N").ok().and_then(|s| s.parse().ok()).unwrap_or(134);
+    let n: usize = std::env::var("FFAI_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(134);
     let clips: Vec<_> = manifest.holdout().take(n).collect();
     let truths: Vec<(String, String)> = clips
         .iter()
         .map(|c| {
-            (c.id.clone(), std::fs::read_to_string(manifest.clip_path(c)).unwrap().trim().to_string())
+            (
+                c.id.clone(),
+                std::fs::read_to_string(manifest.clip_path(c))
+                    .unwrap()
+                    .trim()
+                    .to_string(),
+            )
         })
         .collect();
     println!("{} holdout clips", truths.len());
@@ -72,7 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // default) that `synthesize_ids` applies -- so it measured duration
             // noise only and read ~0.85 pp better than the bench. The engine's
             // own defaults, with only the seed varying, is the whole point.
-            let opts = SynthesisOptions { seed: *seed, ..vits.defaults };
+            let opts = SynthesisOptions {
+                seed: *seed,
+                ..vits.defaults
+            };
             let audio = ffai_core::types::AudioBuffer {
                 samples: vits.synthesize_ids(&ids, &opts)?,
                 sample_rate: vits.sample_rate,

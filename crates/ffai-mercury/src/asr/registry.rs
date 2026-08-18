@@ -109,7 +109,11 @@ impl SpeakerRegistry {
 
     /// Explicit matching distance, bypassing the margin derivation.
     pub fn with_match_threshold(match_threshold: f32, max_speakers: Option<usize>) -> Self {
-        SpeakerRegistry { known: Vec::new(), match_threshold, max_speakers }
+        SpeakerRegistry {
+            known: Vec::new(),
+            match_threshold,
+            max_speakers,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -159,7 +163,10 @@ impl SpeakerRegistry {
                 i
             }
             _ => {
-                self.known.push(Known { centroid: embedding.to_vec(), weight });
+                self.known.push(Known {
+                    centroid: embedding.to_vec(),
+                    weight,
+                });
                 self.known.len() - 1
             }
         }
@@ -218,7 +225,11 @@ mod tests {
     #[test]
     fn labels_are_assigned_in_order_of_first_appearance() {
         let mut r = SpeakerRegistry::new(0.80, None);
-        assert_eq!(r.assign(&voice_b(), 1.0), 0, "first voice heard is SPEAKER_00");
+        assert_eq!(
+            r.assign(&voice_b(), 1.0),
+            0,
+            "first voice heard is SPEAKER_00"
+        );
         assert_eq!(r.assign(&voice_a(), 1.0), 1);
         assert_eq!(r.assign(&near(&voice_b(), 0.02), 1.0), 0);
     }
@@ -279,7 +290,10 @@ mod tests {
         r.assign(&voice_a(), 1.0);
         let (idx, d) = r.nearest(&voice_a()).expect("one speaker known");
         assert_eq!(idx, 0);
-        assert!(d < 1e-6, "identical embedding should be at distance 0, got {d}");
+        assert!(
+            d < 1e-6,
+            "identical embedding should be at distance 0, got {d}"
+        );
         assert!(r.nearest(&voice_b()).expect("still one").1 > 0.5);
     }
 

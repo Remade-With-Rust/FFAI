@@ -37,8 +37,20 @@ impl Phone {
     pub fn is_vowel(&self) -> bool {
         matches!(
             self.symbol(),
-            "AA" | "AE" | "AH" | "AO" | "AW" | "AY" | "EH" | "ER" | "EY" | "IH" | "IY" | "OW"
-                | "OY" | "UH" | "UW"
+            "AA" | "AE"
+                | "AH"
+                | "AO"
+                | "AW"
+                | "AY"
+                | "EH"
+                | "ER"
+                | "EY"
+                | "IH"
+                | "IY"
+                | "OW"
+                | "OY"
+                | "UH"
+                | "UW"
         )
     }
 
@@ -47,7 +59,10 @@ impl Phone {
             Some(d @ b'0'..=b'2') => (&token[..token.len() - 1], d - b'0'),
             _ => (token, 0),
         };
-        SYMBOLS.binary_search(&sym).ok().map(|i| Phone { sym: i as u8, stress })
+        SYMBOLS.binary_search(&sym).ok().map(|i| Phone {
+            sym: i as u8,
+            stress,
+        })
     }
 }
 
@@ -64,9 +79,15 @@ impl Lexicon {
     /// Load from the `cmudict` manifest in a manifest directory (`models/`).
     pub fn from_manifest_dir(dir: &Path) -> Result<Self> {
         let manifests = ffai_models::load_dir(dir)?;
-        let manifest = manifests.into_iter().find(|m| m.name == "cmudict").ok_or_else(|| {
-            Error::Model(format!("no `cmudict` manifest in {} — see models/cmudict.toml", dir.display()))
-        })?;
+        let manifest = manifests
+            .into_iter()
+            .find(|m| m.name == "cmudict")
+            .ok_or_else(|| {
+                Error::Model(format!(
+                    "no `cmudict` manifest in {} — see models/cmudict.toml",
+                    dir.display()
+                ))
+            })?;
         Self::from_manifest(&manifest)
     }
 
@@ -87,17 +108,18 @@ impl Lexicon {
         let mut entries = HashMap::new();
         for line in text.lines() {
             let line = line.split('#').next().unwrap_or("").trim();
-            let Some((word, phones)) = line.split_once(' ') else { continue };
+            let Some((word, phones)) = line.split_once(' ') else {
+                continue;
+            };
             // `word(2)`+ are alternates; first listed wins (see type docs).
             if word.ends_with(')') {
                 continue;
             }
-            let parsed: Option<Vec<Phone>> =
-                phones.split_whitespace().map(Phone::parse).collect();
-            if let Some(p) = parsed {
-                if !p.is_empty() {
-                    entries.entry(word.to_ascii_lowercase()).or_insert(p);
-                }
+            let parsed: Option<Vec<Phone>> = phones.split_whitespace().map(Phone::parse).collect();
+            if let Some(p) = parsed
+                && !p.is_empty()
+            {
+                entries.entry(word.to_ascii_lowercase()).or_insert(p);
             }
         }
         if entries.is_empty() {
@@ -134,16 +156,18 @@ mod tests {
 
     #[test]
     fn parses_words_stress_and_skips_variants() {
-        let path = write_temp(
-            "canoe K AH0 N UW1\nbirch B ER1 CH\nthe DH AH0\nthe(2) DH IY0\n# comment\n",
-        );
+        let path =
+            write_temp("canoe K AH0 N UW1\nbirch B ER1 CH\nthe DH AH0\nthe(2) DH IY0\n# comment\n");
         let lex = Lexicon::load(&path).unwrap();
         std::fs::remove_file(&path).ok();
 
         // Content assertions, not shape: the exact phones and stresses.
         let canoe = lex.lookup("canoe").unwrap();
         assert_eq!(
-            canoe.iter().map(|p| (p.symbol(), p.stress)).collect::<Vec<_>>(),
+            canoe
+                .iter()
+                .map(|p| (p.symbol(), p.stress))
+                .collect::<Vec<_>>(),
             vec![("K", 0), ("AH", 0), ("N", 0), ("UW", 1)]
         );
         assert!(canoe[1].is_vowel() && !canoe[0].is_vowel());

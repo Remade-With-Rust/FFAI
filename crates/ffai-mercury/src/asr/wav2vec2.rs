@@ -125,9 +125,11 @@ impl Projection {
             .map_err(|e| model_err("quantized weight", e))?;
         let bias = vb.get(out_dim, "bias").ok();
         // Quantization needs f32 input whatever the VarBuilder was opened as.
-        let weight = weight.to_dtype(DType::F32).map_err(|e| model_err("weight dtype", e))?;
-        let q = QTensor::quantize(&weight, GgmlDType::Q8_0)
-            .map_err(|e| model_err("quantize", e))?;
+        let weight = weight
+            .to_dtype(DType::F32)
+            .map_err(|e| model_err("weight dtype", e))?;
+        let q =
+            QTensor::quantize(&weight, GgmlDType::Q8_0).map_err(|e| model_err("quantize", e))?;
         let w = QMatMul::from_qtensor(q).map_err(|e| model_err("qmatmul", e))?;
         Ok(Projection::Quantized { w, bias })
     }
@@ -183,7 +185,10 @@ impl FeatureExtractor {
                 in_ch,
                 out_ch,
                 cfg.conv_kernel[i],
-                Conv1dConfig { stride: cfg.conv_stride[i], ..Default::default() },
+                Conv1dConfig {
+                    stride: cfg.conv_stride[i],
+                    ..Default::default()
+                },
                 vbl.pp("conv"),
             )
             .map_err(|e| model_err(&format!("conv layer {i}"), e))?;
@@ -193,8 +198,13 @@ impl FeatureExtractor {
             // or to none, silently changes the feature scale.
             let (group_norm, layer_norm) = if cfg.conv_group_norm {
                 if i == 0 {
-                    let gn = candle_nn::group_norm(out_ch, out_ch, cfg.layer_norm_eps, vbl.pp("layer_norm"))
-                        .map_err(|e| model_err("conv group_norm", e))?;
+                    let gn = candle_nn::group_norm(
+                        out_ch,
+                        out_ch,
+                        cfg.layer_norm_eps,
+                        vbl.pp("layer_norm"),
+                    )
+                    .map_err(|e| model_err("conv group_norm", e))?;
                     (Some(gn), None)
                 } else {
                     (None, None)
@@ -204,7 +214,11 @@ impl FeatureExtractor {
                     .map_err(|e| model_err(&format!("conv layer_norm {i}"), e))?;
                 (None, Some(ln))
             };
-            layers.push(ConvLayer { conv, group_norm, layer_norm });
+            layers.push(ConvLayer {
+                conv,
+                group_norm,
+                layer_norm,
+            });
         }
         Ok(FeatureExtractor { layers })
     }
@@ -233,9 +247,7 @@ impl Attention {
     fn load(cfg: &Config, vb: VarBuilder, quantized: bool) -> Result<Self> {
         let h = cfg.hidden;
         let head_dim = h / cfg.heads;
-        let lin = |name: &str, vb: &VarBuilder| {
-            Projection::load(h, h, vb.pp(name), quantized)
-        };
+        let lin = |name: &str, vb: &VarBuilder| Projection::load(h, h, vb.pp(name), quantized);
         Ok(Attention {
             q: lin("q_proj", &vb)?,
             k: lin("k_proj", &vb)?,
@@ -250,7 +262,9 @@ impl Attention {
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
         let (b, t, _) = x.dims3()?;
         let split = |t_: Tensor| -> CandleResult<Tensor> {
-            t_.reshape((b, t, self.heads, self.head_dim))?.transpose(1, 2)?.contiguous()
+            t_.reshape((b, t, self.heads, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()
         };
         let q = split(self.q.forward(x)?)?;
         let k = split(self.k.forward(x)?)?;
@@ -259,7 +273,9 @@ impl Attention {
         let scores = (q.matmul(&k.transpose(2, 3)?)? * self.scale)?;
         let probs = softmax_last_dim(&scores)?;
         let ctx = probs.matmul(&v)?;
-        let ctx = ctx.transpose(1, 2)?.reshape((b, t, self.heads * self.head_dim))?;
+        let ctx = ctx
+            .transpose(1, 2)?
+            .reshape((b, t, self.heads * self.head_dim))?;
         self.out.forward(&ctx)
     }
 }
@@ -305,7 +321,12 @@ impl EncoderLayer {
         if self.stable {
             // Pre-norm (large): normalise going in, residual stays clean.
             let h = (x + self.attn.forward(&self.attn_norm.forward(x)?)?)?;
-            let ff = self.ff_out.forward(&self.ff_in.forward(&self.final_norm.forward(&h)?)?.gelu_erf()?)?;
+            let ff = self.ff_out.forward(
+                &self
+                    .ff_in
+                    .forward(&self.final_norm.forward(&h)?)?
+                    .gelu_erf()?,
+            )?;
             &h + ff
         } else {
             // Post-norm (base): normalise after each residual.
@@ -328,7 +349,11 @@ struct PosConv {
 impl PosConv {
     fn load(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = vb.pp("conv");
-        let v_shape = (cfg.hidden, cfg.hidden / cfg.pos_conv_groups, cfg.pos_conv_kernel);
+        let v_shape = (
+            cfg.hidden,
+            cfg.hidden / cfg.pos_conv_groups,
+            cfg.pos_conv_kernel,
+        );
         // HF applies `weight_norm(conv, name="weight", dim=2)`, so the gain is
         // per KERNEL POSITION — `[1, 1, k]`, one scalar per tap — not per
         // output channel. Reading it as `[c, 1, 1]` is the same size only by
@@ -367,7 +392,9 @@ impl PosConv {
             .broadcast_div(&norm)
             .and_then(|t| t.broadcast_mul(&g))
             .map_err(|e| model_err("pos_conv weight_norm reconstruction", e))?;
-        let bias = vb.get(cfg.hidden, "bias").map_err(|e| model_err("pos_conv bias", e))?;
+        let bias = vb
+            .get(cfg.hidden, "bias")
+            .map_err(|e| model_err("pos_conv bias", e))?;
 
         let conv = Conv1d::new(
             weight,
@@ -381,7 +408,10 @@ impl PosConv {
         // An even kernel with `padding = k/2` returns one frame too many;
         // HF's `Wav2Vec2SamePadLayer` drops the last. Off by one here shifts
         // every timestamp by 20 ms.
-        Ok(PosConv { conv, trim_last: cfg.pos_conv_kernel % 2 == 0 })
+        Ok(PosConv {
+            conv,
+            trim_last: cfg.pos_conv_kernel.is_multiple_of(2),
+        })
     }
 
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
@@ -420,12 +450,7 @@ impl Wav2Vec2Ctc {
     }
 
     /// `quantized` puts the transformer projections through Q8_0.
-    pub fn load_with(
-        cfg: Config,
-        vb: VarBuilder,
-        device: Device,
-        quantized: bool,
-    ) -> Result<Self> {
+    pub fn load_with(cfg: Config, vb: VarBuilder, device: Device, quantized: bool) -> Result<Self> {
         let root = vb.pp("wav2vec2");
         let features = FeatureExtractor::load(&cfg, root.pp("feature_extractor"))?;
         let last_conv = *cfg.conv_dim.last().expect("conv_dim is never empty");
@@ -449,7 +474,11 @@ impl Wav2Vec2Ctc {
                 .map_err(|e| model_err("encoder.layer_norm", e))?;
         let mut layers = Vec::with_capacity(cfg.layers);
         for i in 0..cfg.layers {
-            layers.push(EncoderLayer::load(&cfg, enc.pp("layers").pp(i.to_string()), quantized)?);
+            layers.push(EncoderLayer::load(
+                &cfg,
+                enc.pp("layers").pp(i.to_string()),
+                quantized,
+            )?);
         }
         let lm_head = candle_nn::linear(cfg.hidden, cfg.vocab, vb.pp("lm_head"))
             .map_err(|e| model_err("lm_head", e))?;
@@ -486,25 +515,42 @@ impl Wav2Vec2Ctc {
             .and_then(|t| t.to_dtype(self.dtype))
             .map_err(|e| model_err("input tensor", e))?;
 
-        let feats = self.features.forward(&x).map_err(|e| model_err("feature extractor", e))?;
+        let feats = self
+            .features
+            .forward(&x)
+            .map_err(|e| model_err("feature extractor", e))?;
         // (b, c, t) -> (b, t, c)
-        let feats = feats.transpose(1, 2).and_then(|t| t.contiguous()).map_err(|e| model_err("transpose", e))?;
+        let feats = feats
+            .transpose(1, 2)
+            .and_then(|t| t.contiguous())
+            .map_err(|e| model_err("transpose", e))?;
         let h = self
             .feat_norm
             .forward(&feats)
             .and_then(|t| self.feat_proj.forward(&t))
             .map_err(|e| model_err("feature projection", e))?;
 
-        let pos = self.pos_conv.forward(&h).map_err(|e| model_err("pos_conv", e))?;
+        let pos = self
+            .pos_conv
+            .forward(&h)
+            .map_err(|e| model_err("pos_conv", e))?;
         let mut h = (&h + pos).map_err(|e| model_err("pos_conv residual", e))?;
         if !self.cfg.stable_layer_norm {
-            h = self.encoder_norm.forward(&h).map_err(|e| model_err("encoder norm", e))?;
+            h = self
+                .encoder_norm
+                .forward(&h)
+                .map_err(|e| model_err("encoder norm", e))?;
         }
         for (i, layer) in self.layers.iter().enumerate() {
-            h = layer.forward(&h).map_err(|e| model_err(&format!("encoder layer {i}"), e))?;
+            h = layer
+                .forward(&h)
+                .map_err(|e| model_err(&format!("encoder layer {i}"), e))?;
         }
         if self.cfg.stable_layer_norm {
-            h = self.encoder_norm.forward(&h).map_err(|e| model_err("encoder norm", e))?;
+            h = self
+                .encoder_norm
+                .forward(&h)
+                .map_err(|e| model_err("encoder norm", e))?;
         }
         self.lm_head
             .forward(&h)
@@ -520,9 +566,11 @@ impl Wav2Vec2Ctc {
             .to_dtype(DType::F32)
             .map_err(|e| model_err("emissions dtype", e))?;
         let (frames, vocab) = logp.dims2().map_err(|e| model_err("emissions shape", e))?;
-        let data = logp.flatten_all().and_then(|t| t.to_vec1::<f32>()).map_err(|e| model_err("emissions readback", e))?;
-        Emissions::new(frames, vocab, data, self.cfg.frame_secs(sample_rate))
-            .map_err(Error::Model)
+        let data = logp
+            .flatten_all()
+            .and_then(|t| t.to_vec1::<f32>())
+            .map_err(|e| model_err("emissions readback", e))?;
+        Emissions::new(frames, vocab, data, self.cfg.frame_secs(sample_rate)).map_err(Error::Model)
     }
 }
 
@@ -562,7 +610,11 @@ mod tests {
     fn base_frame_rate_is_exactly_20ms() {
         let cfg = Config::base_960h();
         assert_eq!(cfg.total_stride(), 320);
-        assert!((cfg.frame_secs(16_000) - 0.02).abs() < 1e-12, "{}", cfg.frame_secs(16_000));
+        assert!(
+            (cfg.frame_secs(16_000) - 0.02).abs() < 1e-12,
+            "{}",
+            cfg.frame_secs(16_000)
+        );
     }
 
     #[test]
@@ -570,7 +622,10 @@ mod tests {
         let cfg = Config::base_960h();
         // One second of 16 kHz audio through a 320-sample stride.
         let f = cfg.output_frames(16_000);
-        assert!((49..=50).contains(&f), "expected ~49 frames for 1 s, got {f}");
+        assert!(
+            (49..=50).contains(&f),
+            "expected ~49 frames for 1 s, got {f}"
+        );
         // Too short for the first kernel at all.
         assert_eq!(cfg.output_frames(4), 0);
     }
@@ -583,20 +638,29 @@ mod tests {
         let out = model.logits(&samples).expect("forward runs");
         let (frames, vocab) = out.dims2().expect("2-D logits");
         assert_eq!(vocab, cfg.vocab);
-        assert_eq!(frames, cfg.output_frames(samples.len()), "frame count must match the strides");
+        assert_eq!(
+            frames,
+            cfg.output_frames(samples.len()),
+            "frame count must match the strides"
+        );
     }
 
     #[test]
     fn emissions_are_log_probabilities() {
         let cfg = tiny();
         let (model, _map) = build(&cfg);
-        let e = model.emissions(&vec![0.01f32; 8000], 16_000).expect("emissions");
+        let e = model
+            .emissions(&vec![0.01f32; 8000], 16_000)
+            .expect("emissions");
         assert_eq!(e.frames * e.vocab, e.data.len());
         assert!((e.frame_secs - 0.02).abs() < 1e-12);
         // Every row must sum to 1 in probability space.
         for f in 0..e.frames {
             let row = &e.data[f * e.vocab..(f + 1) * e.vocab];
-            assert!(row.iter().all(|v| *v <= 1e-6), "log-probs must be <= 0: {row:?}");
+            assert!(
+                row.iter().all(|v| *v <= 1e-6),
+                "log-probs must be <= 0: {row:?}"
+            );
             let total: f32 = row.iter().map(|v| v.exp()).sum();
             assert!((total - 1.0).abs() < 1e-3, "row {f} sums to {total}");
         }
@@ -613,7 +677,9 @@ mod tests {
         // The contract that matters: this model's output is consumable by the
         // forced aligner without any adaptation between them.
         let (model, _map) = build(&tiny());
-        let e = model.emissions(&vec![0.01f32; 16_000], 16_000).expect("emissions");
+        let e = model
+            .emissions(&vec![0.01f32; 16_000], 16_000)
+            .expect("emissions");
         let spans = super::super::align::forced_align(&e, &[4, 5, 6], 0).expect("aligns");
         assert_eq!(spans.len(), 3);
         for pair in spans.windows(2) {
@@ -627,7 +693,9 @@ mod tests {
         cfg.stable_layer_norm = true;
         cfg.conv_group_norm = false;
         let (model, _map) = build(&cfg);
-        let out = model.logits(&vec![0.01f32; 8000]).expect("large-style forward runs");
+        let out = model
+            .logits(&vec![0.01f32; 8000])
+            .expect("large-style forward runs");
         assert_eq!(out.dims2().expect("2-D").1, cfg.vocab);
     }
 }

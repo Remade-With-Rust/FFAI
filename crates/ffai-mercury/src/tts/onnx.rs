@@ -35,9 +35,16 @@ struct Reader<'a> {
 }
 
 /// One field's payload, already sliced.
+// Narrow allow: `Bytes`'s payload is navigated past rather than read, because
+// length-delimited fields are skipped by this parser. Scoped to this enum so
+// dead code elsewhere still surfaces.
+#[allow(dead_code)]
 enum Wire<'a> {
     Varint(u64),
     Fixed64(u64),
+    // The payload is sliced and skipped rather than read: length-delimited
+    // fields are navigated, not consumed, by this parser. Kept so the enum
+    // documents the whole wire format.
     Bytes(&'a [u8]),
     Fixed32(u32),
 }
@@ -69,7 +76,10 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self.pos.checked_add(n).ok_or_else(|| trunc("length overflow"))?;
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or_else(|| trunc("length overflow"))?;
         let slice = self.buf.get(self.pos..end).ok_or_else(|| trunc("bytes"))?;
         self.pos = end;
         Ok(slice)
@@ -244,7 +254,12 @@ fn parse_node(buf: &[u8]) -> Result<Node> {
             _ => {}
         }
     }
-    Ok(Node { op_type, name, inputs, ints })
+    Ok(Node {
+        op_type,
+        name,
+        inputs,
+        ints,
+    })
 }
 
 fn parse_graph(buf: &[u8]) -> Result<Graph> {
@@ -261,7 +276,10 @@ fn parse_graph(buf: &[u8]) -> Result<Graph> {
             _ => {}
         }
     }
-    Ok(Graph { nodes, initializers })
+    Ok(Graph {
+        nodes,
+        initializers,
+    })
 }
 
 /// Parse an `.onnx` file down to its graph.
@@ -272,7 +290,9 @@ pub fn parse(bytes: &[u8]) -> Result<Graph> {
             return parse_graph(b);
         }
     }
-    Err(Error::Model("onnx: no graph in the file — is it an ONNX model?".into()))
+    Err(Error::Model(
+        "onnx: no graph in the file — is it an ONNX model?".into(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +332,7 @@ fn module_path(node_name: &str, op_type: &str) -> String {
 /// 2. `ElementwiseAffine`'s `logs` is constant-folded into `exp(-logs)`;
 /// 3. weight-norm folding leaves 32 convolution weights named `onnx::Conv_*`,
 ///    recoverable only through the node that consumes them.
+///
 /// Takes the graph **by value** so the weights are moved, not copied. The
 /// first version borrowed and cloned, which meant the file bytes, the parsed
 /// initializers, the recovered copies and the candle tensors were all live at
@@ -327,7 +348,11 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
             "Conv" | "ConvTranspose" => {
                 let base = module_path(&node.name, &node.op_type);
                 let first = |k: &str, d: usize| {
-                    node.ints.get(k).and_then(|v| v.first()).map(|v| *v as usize).unwrap_or(d)
+                    node.ints
+                        .get(k)
+                        .and_then(|v| v.first())
+                        .map(|v| *v as usize)
+                        .unwrap_or(d)
                 };
                 geometry.insert(
                     base.clone(),
@@ -339,8 +364,11 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
                     },
                 );
                 // Inputs are (x, weight, bias?); only the initializers are ours.
-                let weights: Vec<&String> =
-                    node.inputs.iter().filter(|i| initializer_names.contains(i.as_str())).collect();
+                let weights: Vec<&String> = node
+                    .inputs
+                    .iter()
+                    .filter(|i| initializer_names.contains(i.as_str()))
+                    .collect();
                 for (k, input) in weights.iter().enumerate() {
                     let suffix = if k == 0 { "weight" } else { "bias" };
                     rename.insert((*input).clone(), format!("{base}.{suffix}"));
@@ -355,8 +383,7 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
             }
             "Mul" if node.name == "/dp/flows.0/Mul" => {
                 for input in &node.inputs {
-                    if initializer_names.contains(input.as_str())
-                        && input.ends_with("Exp_output_0")
+                    if initializer_names.contains(input.as_str()) && input.ends_with("Exp_output_0")
                     {
                         rename.insert(input.clone(), "dp.flows.0.exp_neg_logs".to_string());
                     }
@@ -368,17 +395,25 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
 
     let mut tensors = HashMap::new();
     for init in graph.initializers {
-        let canonical = rename.get(&init.name).cloned().unwrap_or_else(|| init.name.clone());
+        let canonical = rename
+            .get(&init.name)
+            .cloned()
+            .unwrap_or_else(|| init.name.clone());
         // Float constants the graph owns rather than the model: keep them
         // under a stable name so nothing is silently dropped, exactly as the
         // Python converter does.
         let canonical = if canonical.starts_with("onnx::") || canonical.starts_with('/') {
-            format!("graph_const.{}", canonical.replace('/', "_").replace("::", "_"))
+            format!(
+                "graph_const.{}",
+                canonical.replace('/', "_").replace("::", "_")
+            )
         } else {
             canonical
         };
         if tensors.contains_key(&canonical) {
-            return Err(Error::Model(format!("onnx: two tensors both named `{canonical}`")));
+            return Err(Error::Model(format!(
+                "onnx: two tensors both named `{canonical}`"
+            )));
         }
         tensors.insert(canonical, init);
     }
@@ -421,8 +456,10 @@ mod tests {
         tensor.extend(varint(2 << 3)); // data_type
         tensor.extend(varint(DT_FLOAT as u64));
         tensor.extend(len_delim(8, b"dp.flows.0.m")); // name
-        let raw: Vec<u8> =
-            [1.5f32, -2.25].iter().flat_map(|f| f.to_le_bytes()).collect();
+        let raw: Vec<u8> = [1.5f32, -2.25]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
         tensor.extend(len_delim(9, &raw)); // raw_data
 
         let graph = len_delim(5, &tensor);
@@ -442,14 +479,20 @@ mod tests {
             module_path("/flow/flows.6/enc/in_layers.0/Conv", "Conv"),
             "flow.flows.6.enc.in_layers.0"
         );
-        assert_eq!(module_path("/dec/ups.0/ConvTranspose", "ConvTranspose"), "dec.ups.0");
+        assert_eq!(
+            module_path("/dec/ups.0/ConvTranspose", "ConvTranspose"),
+            "dec.ups.0"
+        );
         // A numbered repeat of the op is stripped too (`Conv_1` → same base),
         // which is what the Python converter does and therefore what byte
         // equality with it requires. Two convs under one module would then
         // collide — `recover` errors on that rather than silently keeping one.
         assert_eq!(module_path("/dp/flows.0/Mul_1", "Mul"), "dp.flows.0");
         // A last segment that merely contains the op name is NOT stripped.
-        assert_eq!(module_path("/enc_p/proj/PreConv", "Conv"), "enc_p.proj.PreConv");
+        assert_eq!(
+            module_path("/enc_p/proj/PreConv", "Conv"),
+            "enc_p.proj.PreConv"
+        );
     }
 
     #[test]

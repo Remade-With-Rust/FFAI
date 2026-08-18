@@ -20,8 +20,8 @@ use std::time::Instant;
 use ffai_bench::corpus::Manifest;
 use ffai_bench::metrics::{cer, wer};
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::text_decoder::Precision;
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::asr::text_decoder::Precision;
 
 fn main() {
     let corpus = std::env::args()
@@ -33,21 +33,31 @@ fn main() {
         .split(',')
         .map(|s| s.to_string())
         .collect();
-    let limit: usize = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
+    let limit: usize = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(usize::MAX);
 
     let manifest = Manifest::load(&PathBuf::from(&corpus)).expect("corpus loads");
     let opts = AsrOptions::default();
 
     println!("corpus: {corpus}");
-    println!("{:<22} {:>8} {:>8} {:>9} {:>10}", "MODEL", "WER%", "CER%", "xRT", "CLIPS");
+    println!(
+        "{:<22} {:>8} {:>8} {:>9} {:>10}",
+        "MODEL", "WER%", "CER%", "xRT", "CLIPS"
+    );
 
     for model in &models {
         let engine = WhisperCandle::with_model("models", model.as_str(), Precision::F32);
 
         // Warm-up: weight load + any first-call calibration, outside the
         // timed region — and the download, on a cold cache.
-        let Some(first) = manifest.clips.first() else { continue };
-        let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(first)) else { continue };
+        let Some(first) = manifest.clips.first() else {
+            continue;
+        };
+        let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(first)) else {
+            continue;
+        };
         if let Err(e) = engine.transcribe(&audio, &opts) {
             println!("{model:<22}  load/transcribe failed: {e}");
             continue;
@@ -56,11 +66,17 @@ fn main() {
         let (mut wnum, mut wden, mut cnum, mut cden) = (0.0, 0.0, 0.0, 0.0);
         let (mut secs, mut audio_secs, mut n) = (0.0f64, 0.0f64, 0usize);
         for clip in manifest.clips.iter().take(limit) {
-            let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
-            let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+            let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else {
+                continue;
+            };
+            let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+                continue;
+            };
             audio_secs += audio.duration_secs();
             let t = Instant::now();
-            let Ok(out) = engine.transcribe(&audio, &opts) else { continue };
+            let Ok(out) = engine.transcribe(&audio, &opts) else {
+                continue;
+            };
             secs += t.elapsed().as_secs_f64();
             let text = out.text();
             // Length-weighted, matching how the bench harness aggregates:

@@ -40,25 +40,55 @@ pub fn normalize(text: &str) -> String {
 
 fn number_to_words(n: u64) -> String {
     const ONES: [&str; 20] = [
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
         "nineteen",
     ];
-    const TENS: [&str; 10] =
-        ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+    const TENS: [&str; 10] = [
+        "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ];
     match n {
         0..=19 => ONES[n as usize].to_string(),
         20..=99 => {
             let t = TENS[(n / 10) as usize];
-            if n % 10 == 0 { t.to_string() } else { format!("{t} {}", ONES[(n % 10) as usize]) }
+            if n.is_multiple_of(10) {
+                t.to_string()
+            } else {
+                format!("{t} {}", ONES[(n % 10) as usize])
+            }
         }
         100..=999 => {
             let h = format!("{} hundred", ONES[(n / 100) as usize]);
-            if n % 100 == 0 { h } else { format!("{h} {}", number_to_words(n % 100)) }
+            if n.is_multiple_of(100) {
+                h
+            } else {
+                format!("{h} {}", number_to_words(n % 100))
+            }
         }
         1000..=9999 => {
             let t = format!("{} thousand", ONES[(n / 1000) as usize]);
-            if n % 1000 == 0 { t } else { format!("{t} {}", number_to_words(n % 1000)) }
+            if n.is_multiple_of(1000) {
+                t
+            } else {
+                format!("{t} {}", number_to_words(n % 1000))
+            }
         }
         _ => n.to_string(),
     }

@@ -25,7 +25,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inputs = Vec::new();
     for clip in manifest.holdout().take(10) {
         let text = std::fs::read_to_string(manifest.clip_path(clip))?;
-        let ids = vits.id_map.sentence_to_ids(&phonemizer.phonemize(text.trim())?).0;
+        let ids = vits
+            .id_map
+            .sentence_to_ids(&phonemizer.phonemize(text.trim())?)
+            .0;
         let (m_p, logs_p, hidden) = vits.text_encoder(&ids)?;
         let mut rng = GaussRng::new(0);
         let w = vits.durations(&hidden, 0.8, 1.0, &mut rng)?;

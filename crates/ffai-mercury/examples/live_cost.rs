@@ -26,7 +26,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
         .nth(1)
         .unwrap_or("corpora/clips/librispeech-test-clean/audio/1089-134686-0000.wav".into());
-    let rounds: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(7);
+    let rounds: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(7);
     let audio = ffai_media::load_audio(std::path::Path::new(&path))?;
 
     // A live tick is a few seconds, not a whole utterance: take the first 3 s
@@ -46,7 +49,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let engine = WhisperCandle::new();
     let asr_only = AsrOptions::default();
-    let diarized = AsrOptions { diarize: true, persist_speakers: true, ..Default::default() };
+    let diarized = AsrOptions {
+        diarize: true,
+        persist_speakers: true,
+        ..Default::default()
+    };
 
     // Warm both paths: model load and the speaker model's first fetch must
     // not land inside a measured round.
@@ -83,7 +90,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{:<34} {ma:>10.0}", "speech: ASR only (what cpp does)");
     println!("{:<34} {mb:>10.0}", "speech: ASR + diarize + persist");
     println!("{:<34} {ms:>10.0}", "SILENCE: full demo config");
-    println!("\ndiarization costs {:+.0} ms/chunk ({:.2}x the ASR-only path)", mb - ma, mb / ma);
+    println!(
+        "\ndiarization costs {:+.0} ms/chunk ({:.2}x the ASR-only path)",
+        mb - ma,
+        mb / ma
+    );
     println!(
         "silence costs {ms:.0} ms — VAD drops it before the encoder, where whisper.cpp\n\
          pays a full pass to print [BLANK_AUDIO]"

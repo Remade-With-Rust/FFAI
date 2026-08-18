@@ -46,7 +46,10 @@ impl PiperCandle {
     /// The default engine: compiled-in manifests, weights from the cache.
     /// Works from any working directory.
     pub fn new() -> Self {
-        PiperCandle { manifest_dir: None, loaded: OnceLock::new() }
+        PiperCandle {
+            manifest_dir: None,
+            loaded: OnceLock::new(),
+        }
     }
 
     /// Read the `cmudict` and voice manifests from `dir` instead of using the
@@ -127,6 +130,7 @@ impl Default for PiperCandle {
     }
 }
 
+#[allow(dead_code)] // default-voice path helper, retained for the manifest-free fallback
 fn model_dir() -> PathBuf {
     ffai_models::cache_dir().join("models").join(DEFAULT_VOICE)
 }
@@ -149,13 +153,14 @@ impl TtsEngine for PiperCandle {
     }
 
     fn synthesize(&self, text: &str, opts: &TtsOptions) -> Result<AudioBuffer> {
-        if let Some(voice) = &opts.voice {
-            if voice != DEFAULT_VOICE && voice != "en_US-lessac-medium" {
-                return Err(Error::Model(format!(
-                    "voice `{voice}` is not converted — {DEFAULT_VOICE} is the M-T2 voice; \
+        if let Some(voice) = &opts.voice
+            && voice != DEFAULT_VOICE
+            && voice != "en_US-lessac-medium"
+        {
+            return Err(Error::Model(format!(
+                "voice `{voice}` is not converted — {DEFAULT_VOICE} is the M-T2 voice; \
                      the tier sweep lands in M-T4"
-                )));
-            }
+            )));
         }
         let loaded = self.load()?;
         let defaults = loaded.vits.defaults;
@@ -163,7 +168,10 @@ impl TtsEngine for PiperCandle {
             // speed is the user knob; length_scale is its reciprocal. The
             // noise knobs default to the voice's own values (`None`).
             length_scale: defaults.length_scale / opts.speed.max(0.1) as f64,
-            noise_scale: opts.noise_scale.map(f64::from).unwrap_or(defaults.noise_scale),
+            noise_scale: opts
+                .noise_scale
+                .map(f64::from)
+                .unwrap_or(defaults.noise_scale),
             noise_w: opts.noise_w.map(f64::from).unwrap_or(defaults.noise_w),
             seed: opts.seed,
         };
@@ -186,7 +194,11 @@ impl TtsEngine for PiperCandle {
                 "piper-candle: {total_unknown} phoneme(s) outside the voice's id map, skipped"
             );
         }
-        Ok(AudioBuffer { samples, sample_rate, channels: 1 })
+        Ok(AudioBuffer {
+            samples,
+            sample_rate,
+            channels: 1,
+        })
     }
 }
 

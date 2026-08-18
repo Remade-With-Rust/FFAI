@@ -48,7 +48,11 @@ impl Phonemizer {
     }
 
     pub fn new(lexicon: Lexicon) -> Self {
-        Phonemizer { lexicon, function_words: function_words(), collocations: collocations() }
+        Phonemizer {
+            lexicon,
+            function_words: function_words(),
+            collocations: collocations(),
+        }
     }
 
     /// Phonemize one sentence. Multi-sentence input is the caller's problem
@@ -88,19 +92,15 @@ impl Phonemizer {
 
                     // Collocation glue: `on the`, `was a`, ... fuse into one
                     // token with espeak's own internal sandhi.
-                    if let Some(Token::Word(w2)) = tokens.get(i + 1) {
-                        if let Some(forms) =
-                            self.collocations.get(&(w.as_str(), w2.as_str()))
-                        {
-                            let vowel_next = next_word(i + 2)
-                                .map(|w| self.starts_with_vowel_sound(w))
-                                .unwrap_or(false);
-                            pieces.push(Piece::Word(
-                                forms[usize::from(vowel_next)].to_string(),
-                            ));
-                            i += 2;
-                            continue;
-                        }
+                    if let Some(Token::Word(w2)) = tokens.get(i + 1)
+                        && let Some(forms) = self.collocations.get(&(w.as_str(), w2.as_str()))
+                    {
+                        let vowel_next = next_word(i + 2)
+                            .map(|w| self.starts_with_vowel_sound(w))
+                            .unwrap_or(false);
+                        pieces.push(Piece::Word(forms[usize::from(vowel_next)].to_string()));
+                        i += 2;
+                        continue;
                     }
 
                     let is_last_word = next_word(i + 1).is_none();
@@ -124,25 +124,24 @@ impl Phonemizer {
                     {
                         ipa.push('ʲ');
                     }
-    // Utterance-final prominence applies to PARTICLES, not
+                    // Utterance-final prominence applies to PARTICLES, not
                     // pronouns: `walking on.` → ˈɔn, `plunge in.` → ˈɪn,
                     // but `moved it.` → ɪt and `faced us.` → ˌʌs. (A
                     // promote-everything rule was tried and was net-wrong.)
                     const FINAL_PROMOTED: &[&str] = &[
-                        "in", "on", "up", "out", "off", "over", "down", "through", "by",
-                        "about", "around",
+                        "in", "on", "up", "out", "off", "over", "down", "through", "by", "about",
+                        "around",
                     ];
                     if is_last_word && FINAL_PROMOTED.contains(&w.as_str()) {
                         if let Some(stripped) = ipa.strip_prefix('ˌ') {
                             ipa = format!("ˈ{stripped}");
-                        } else if !ipa.contains('ˈ') {
-                            if let Some(pos) = ipa
+                        } else if !ipa.contains('ˈ')
+                            && let Some(pos) = ipa
                                 .char_indices()
                                 .find(|(_, c)| "aeiouæɐɑɒɔəɚɛɜɪʊʌᵻ".contains(*c))
                                 .map(|(p, _)| p)
-                            {
-                                ipa.insert(pos, 'ˈ');
-                            }
+                        {
+                            ipa.insert(pos, 'ˈ');
                         }
                     }
                     // Cross-word flapping is narrower still: `it` flaps
@@ -197,10 +196,10 @@ impl Phonemizer {
     /// Does a word BEGIN with a vowel sound (not letter)? Decides ðə/ðɪʲ,
     /// tə/tʊ and linking ɹ. Table + lexicon, falling back to orthography.
     fn starts_with_vowel_sound(&self, word: &str) -> bool {
-        if let Some(forms) = self.function_words.get(word) {
-            if !forms[0].is_empty() {
-                return starts_with_ipa_vowel(forms[0]);
-            }
+        if let Some(forms) = self.function_words.get(word)
+            && !forms[0].is_empty()
+        {
+            return starts_with_ipa_vowel(forms[0]);
         }
         if let Some(phones) = self.lexicon.lookup(word) {
             return phones.first().is_some_and(|p| {
@@ -281,7 +280,9 @@ fn tokenize(text: &str) -> Vec<Token> {
             word.extend(c.to_lowercase());
         } else {
             if !word.is_empty() {
-                out.push(Token::Word(std::mem::take(&mut word).trim_matches('\'').to_string()));
+                out.push(Token::Word(
+                    std::mem::take(&mut word).trim_matches('\'').to_string(),
+                ));
             }
             if matches!(c, '.' | ',' | '?' | '!' | ';' | ':') {
                 out.push(Token::Punct(c));
@@ -414,7 +415,9 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     // only reaches here when the t/d test above declined it.
                     out.push('ɪ');
                 } else if phones[i + 1..].iter().all(|q| !q.is_vowel())
-                    && ["uct", "ucts", "um", "ums", "umn"].iter().any(|s| word.ends_with(s))
+                    && ["uct", "ucts", "um", "ums", "umn"]
+                        .iter()
+                        .any(|s| word.ends_with(s))
                 {
                     // Spelled-u final syllables: `product` → ʌ, `column` → ʌm.
                     // NOT a general u rule — `watchful`/`famous` keep ə.
@@ -450,7 +453,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                         out.push('ɹ');
                     }
                 } else {
-                    out.push_str("ɚ");
+                    out.push('ɚ');
                 }
             }
             "EY" => out.push_str("eɪ"),
@@ -513,7 +516,9 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     && matches!(next_sym, Some("AH"))
                     && next.is_some_and(|n| n.stress == 0)
                     && phones.get(i + 2).is_some_and(|n| n.symbol() == "N")
-                    && phones.get(i + 3).is_none_or(|n| matches!(n.symbol(), "S" | "Z"));
+                    && phones
+                        .get(i + 3)
+                        .is_none_or(|n| matches!(n.symbol(), "S" | "Z"));
                 if glottal {
                     out.push_str("ʔn̩");
                     skip = 2;
@@ -540,9 +545,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
             "R" => {
                 // aɪ + ɹ collapses to aɪɚ when no vowel follows (`admire`
                 // → ɐdmˈaɪɚ) — the r-colored schwa absorbs the ɹ.
-                if prev.is_some_and(|q| q.symbol() == "AY")
-                    && next.is_none_or(|n| !n.is_vowel())
-                {
+                if prev.is_some_and(|q| q.symbol() == "AY") && next.is_none_or(|n| !n.is_vowel()) {
                     out.push('ɚ');
                 } else {
                     out.push('ɹ');
@@ -802,8 +805,10 @@ eyes AY1 Z\n\
 buyer B AY1 ER0\n\
 sand S AE1 N D\n\
 edge EH1 JH\n";
-        let path = std::env::temp_dir()
-            .join(format!("ffai_phonemize_test_{}_{unique}.dict", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "ffai_phonemize_test_{}_{unique}.dict",
+            std::process::id()
+        ));
         std::fs::write(&path, dict).unwrap();
         let lex = Lexicon::load(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -816,7 +821,8 @@ edge EH1 JH\n";
         // the vowel, ðə, glued nothing, final period attached.
         let p = phonemizer();
         assert_eq!(
-            p.phonemize("The birch canoe slid on the smooth planks.").unwrap(),
+            p.phonemize("The birch canoe slid on the smooth planks.")
+                .unwrap(),
             "ðə bˈɜːtʃ kənˈuː slˈɪd ɔnðə smˈuːð plˈæŋks."
         );
     }
@@ -842,7 +848,10 @@ edge EH1 JH\n";
     fn context_dependent_function_words_and_gluing() {
         let p = phonemizer();
         // `the` and glued `in the` take the ðɪʲ form before a vowel sound.
-        assert_eq!(p.phonemize("in the eyes of the girl").unwrap(), "ɪnðɪʲ ˈaɪz ʌvðə ɡˈɜːl");
+        assert_eq!(
+            p.phonemize("in the eyes of the girl").unwrap(),
+            "ɪnðɪʲ ˈaɪz ʌvðə ɡˈɜːl"
+        );
         // `was a` fuses with reduction; `at a` fuses with a flap.
         assert_eq!(p.phonemize("it was a boss").unwrap(), "ɪt wʌzɐ bˈɔs");
         assert_eq!(p.phonemize("at a dogs").unwrap(), "æɾə dˈɑːɡz");

@@ -27,13 +27,17 @@
 
 use ffai_core::engine::{AsrEngine, AsrOptions};
 use ffai_mercury::asr::text_decoder::Precision;
-use ffai_mercury::asr::{knobs, WhisperCandle};
+use ffai_mercury::asr::{WhisperCandle, knobs};
 
 fn held_mib() -> f64 {
-    ffai_bench::footprint::current_self().map(|p| p.mib()).unwrap_or(f64::NAN)
+    ffai_bench::footprint::current_self()
+        .map(|p| p.mib())
+        .unwrap_or(f64::NAN)
 }
 fn peak_mib() -> f64 {
-    ffai_bench::footprint::peak_self().map(|p| p.mib()).unwrap_or(f64::NAN)
+    ffai_bench::footprint::peak_self()
+        .map(|p| p.mib())
+        .unwrap_or(f64::NAN)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,8 +76,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     paths.sort();
     paths.truncate(4);
-    let clips: Vec<_> =
-        paths.iter().map(|p| ffai_media::load_audio(p)).collect::<Result<Vec<_>, _>>()?;
+    let clips: Vec<_> = paths
+        .iter()
+        .map(|p| ffai_media::load_audio(p))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let before = held_mib();
     for c in &clips {

@@ -11,7 +11,7 @@ use ffai_core::candle::{DType, Device};
 use ffai_core::error::{Error, Result};
 use ffai_core::types::TimedSegment;
 
-use super::align::{align_words, CtcAlphabet};
+use super::align::{CtcAlphabet, align_words};
 use super::wav2vec2::{Config, Wav2Vec2Ctc};
 
 /// Default manifest name. English only — the alignment model is per-language
@@ -78,7 +78,11 @@ impl Aligner {
         let mode = std::env::var("FFAI_ALIGN_DTYPE").unwrap_or_default();
         // Weights are read as f32 whatever the mode: Q8_0 quantizes FROM f32,
         // and f16 is only kept as the documented dead end above.
-        let dtype = if mode == "f16" { DType::F16 } else { DType::F32 };
+        let dtype = if mode == "f16" {
+            DType::F16
+        } else {
+            DType::F32
+        };
         let quantized = mode == "q8_0";
 
         // SAFETY: as in `model.rs` — the Hugging Face cache blob is immutable

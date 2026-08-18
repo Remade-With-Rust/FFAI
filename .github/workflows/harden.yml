@@ -48,12 +48,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: clippy }
       - uses: Swatinem/rust-cache@v2
-      # ADVISORY for the same reason: the workspace has pre-existing clippy findings
-      # (e.g. derivable_impls in ffai-core). `-A unsafe_code` is permanent and
-      # deliberate - that lint is an inventory signal, and UNSAFE.md is what enforces it.
-      # TO FLIP: clear the existing findings, then delete continue-on-error. 2026-09-30.
-      continue-on-error: true
-      - run: cargo clippy --workspace --all-targets -- -D warnings -A unsafe_code
+      # BLOCKING for ffai-mercury: its lib is clippy-clean (267 findings -> 0), so
+      # a regression there fails the build. This is the incremental-adoption
+      # pattern - a crate becomes blocking the moment it is clean, instead of
+      # waiting for the whole workspace.
+      # `-A unsafe_code` is permanent and deliberate: that lint is an INVENTORY
+      # signal, and UNSAFE.md plus tools/lint_invariants.py are what enforce it.
+      - name: Clippy (blocking - ffai-mercury)
+        run: cargo clippy -p ffai-mercury --lib -- -D warnings -A unsafe_code
+
+      # ADVISORY for the rest: other crates still carry pre-existing findings.
+      # TO FLIP: clear a crate, move it into the blocking step above. 2026-09-30.
+      - name: Clippy (advisory - workspace)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets -- -D warnings -A unsafe_code
 
   test:
     name: Test

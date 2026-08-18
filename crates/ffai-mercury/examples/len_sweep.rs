@@ -82,8 +82,10 @@ where
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rounds: usize =
-        std::env::var("FFAI_AB_ROUNDS").ok().and_then(|s| s.parse().ok()).unwrap_or(15);
+    let rounds: usize = std::env::var("FFAI_AB_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15);
     let cache = std::env::var("FFAI_CACHE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(std::env::var("LOCALAPPDATA").unwrap()).join("ffai"));
@@ -96,7 +98,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .take(1)
         .map(|c| {
             let t = std::fs::read_to_string(manifest.clip_path(c)).unwrap();
-            vits.id_map.sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap()).0
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap())
+                .0
         })
         .next()
         .unwrap();

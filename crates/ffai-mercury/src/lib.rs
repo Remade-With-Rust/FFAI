@@ -133,7 +133,10 @@ mod tests {
             sample_rate: 16_000,
             channels: 1,
         };
-        let opts = ffai_core::engine::AsrOptions { diarize: true, ..Default::default() };
+        let opts = ffai_core::engine::AsrOptions {
+            diarize: true,
+            ..Default::default()
+        };
         // 160 samples of silence: too short for the speaker model to embed,
         // so this exercises the wiring rather than the network.
         //
@@ -148,15 +151,25 @@ mod tests {
         //
         // What is actually invariant: the flag is HONOURED rather than
         // silently ignored, and the old refusal is gone.
-        match reg.asr(Some("whisper-candle")).unwrap().transcribe(&audio, &opts) {
+        match reg
+            .asr(Some("whisper-candle"))
+            .unwrap()
+            .transcribe(&audio, &opts)
+        {
             Ok(t) => assert!(
                 t.speakers.is_some(),
                 "diarize was requested and the transcript carries no speaker track"
             ),
             Err(e) => {
                 let msg = e.to_string();
-                assert!(!msg.contains("not built yet"), "stale refusal still present: {msg}");
-                assert!(!msg.contains("phase D"), "stale refusal still present: {msg}");
+                assert!(
+                    !msg.contains("not built yet"),
+                    "stale refusal still present: {msg}"
+                );
+                assert!(
+                    !msg.contains("phase D"),
+                    "stale refusal still present: {msg}"
+                );
             }
         }
     }

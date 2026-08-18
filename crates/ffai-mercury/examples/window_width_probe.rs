@@ -14,12 +14,17 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 fn main() {
-    let corpus = std::env::args().nth(1).unwrap_or("corpora/librispeech-longform.toml".into());
+    let corpus = std::env::args()
+        .nth(1)
+        .unwrap_or("corpora/librispeech-longform.toml".into());
     let manifest = Manifest::load(&PathBuf::from(&corpus)).expect("corpus");
     let engine = WhisperCandle::new();
-    let widths: Vec<f32> =
-        std::env::args().nth(2).unwrap_or("30,20,15,10".into())
-            .split(',').filter_map(|s| s.parse().ok()).collect();
+    let widths: Vec<f32> = std::env::args()
+        .nth(2)
+        .unwrap_or("30,20,15,10".into())
+        .split(',')
+        .filter_map(|s| s.parse().ok())
+        .collect();
 
     // Warm-up so the first width is not charged for model load.
     if let Some(c) = manifest.clips.first() {
@@ -28,17 +33,29 @@ fn main() {
         }
     }
 
-    println!("{:>7} {:>8} {:>8} {:>9} {:>8}", "WIDTH", "WER%", "CER%", "WALL_S", "xRT");
+    println!(
+        "{:>7} {:>8} {:>8} {:>9} {:>8}",
+        "WIDTH", "WER%", "CER%", "WALL_S", "xRT"
+    );
     for w in widths {
-        let opts = AsrOptions { vad_chunk_secs: w, ..AsrOptions::default() };
+        let opts = AsrOptions {
+            vad_chunk_secs: w,
+            ..AsrOptions::default()
+        };
         let (mut num, mut den, mut cnum, mut cden, mut secs, mut audio_s) =
             (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         for clip in &manifest.clips {
-            let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
-            let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+            let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else {
+                continue;
+            };
+            let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+                continue;
+            };
             audio_s += audio.duration_secs();
             let t = Instant::now();
-            let Ok(out) = engine.transcribe(&audio, &opts) else { continue };
+            let Ok(out) = engine.transcribe(&audio, &opts) else {
+                continue;
+            };
             secs += t.elapsed().as_secs_f64();
             let text = out.text();
             // Weight per clip by reference length, as the bench harness does.

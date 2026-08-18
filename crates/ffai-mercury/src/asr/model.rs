@@ -177,7 +177,10 @@ impl LoadedWhisper {
     }
 
     /// Build the encoder input tensor from a mel chunk.
-    pub fn mel_tensor(&self, mel: &super::mel::MelChunk) -> CandleResult<ffai_core::candle::Tensor> {
+    pub fn mel_tensor(
+        &self,
+        mel: &super::mel::MelChunk,
+    ) -> CandleResult<ffai_core::candle::Tensor> {
         ffai_core::candle::Tensor::from_slice(
             &mel.data,
             (1, mel.n_mels, mel.n_frames),

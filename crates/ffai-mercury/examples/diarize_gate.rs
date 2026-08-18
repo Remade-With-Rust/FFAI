@@ -20,9 +20,9 @@
 use std::path::PathBuf;
 
 use ffai_bench::corpus::Manifest;
-use ffai_bench::der::{diarization_error_rate, parse_rttm, Turn};
+use ffai_bench::der::{Turn, diarization_error_rate, parse_rttm};
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::{diarize, WhisperCandle};
+use ffai_mercury::asr::{WhisperCandle, diarize};
 
 /// NIST convention, and what pyannote reports by default.
 const COLLAR: f64 = 0.25;
@@ -34,7 +34,9 @@ fn main() {
     let manifest = match Manifest::load(&PathBuf::from(&path)) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("cannot load {path}: {e}\nrun: cargo run --release -p ffai-bench --example prepare_phase_e");
+            eprintln!(
+                "cannot load {path}: {e}\nrun: cargo run --release -p ffai-bench --example prepare_phase_e"
+            );
             std::process::exit(1);
         }
     };
@@ -45,7 +47,10 @@ fn main() {
     // measures, and it has never been tuned. Sweeping it here is what turns
     // DEFAULT_THRESHOLD from a guess into a measurement.
     if std::env::args().any(|a| a == "sweep") {
-        println!("{:>6}  {:>10}  {:>26}", "thresh", "corpus DER", "speakers found / true");
+        println!(
+            "{:>6}  {:>10}  {:>26}",
+            "thresh", "corpus DER", "speakers found / true"
+        );
         println!("{}", "-".repeat(48));
         let mut t = 0.5f32;
         while t <= 1.45 {
@@ -53,8 +58,12 @@ fn main() {
             let mut sum_ref = 0.0;
             let mut counts = Vec::new();
             for clip in &manifest.clips {
-                let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
-                let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+                let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else {
+                    continue;
+                };
+                let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+                    continue;
+                };
                 let reference = parse_rttm(&truth);
                 let true_n = reference
                     .iter()
@@ -67,7 +76,9 @@ fn main() {
                     diarize_threshold: t,
                     ..Default::default()
                 };
-                let Ok(tr) = engine.transcribe(&audio, &opts) else { continue };
+                let Ok(tr) = engine.transcribe(&audio, &opts) else {
+                    continue;
+                };
                 let hyp: Vec<Turn> = tr
                     .speakers
                     .iter()
@@ -117,12 +128,19 @@ fn main() {
                 _ => continue,
             };
             let reference = parse_rttm(&truth_text);
-            let true_speakers =
-                reference.iter().map(|t| t.speaker.as_str()).collect::<std::collections::BTreeSet<_>>().len();
+            let true_speakers = reference
+                .iter()
+                .map(|t| t.speaker.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
 
             let opts = AsrOptions {
                 diarize: true,
-                max_speakers: if mode == "oracle" { Some(true_speakers) } else { None },
+                max_speakers: if mode == "oracle" {
+                    Some(true_speakers)
+                } else {
+                    None
+                },
                 diarize_threshold: diarize::DEFAULT_THRESHOLD,
                 ..Default::default()
             };
@@ -161,7 +179,11 @@ fn main() {
             }
             println!(
                 "{:<10} {:>2}/{:<3} {:>8.1}% {:>8.1}% {:>8.2}s {:>8.2}s",
-                format!("{}:{}", &clip.id[..clip.id.len().min(7)], if mode == "oracle" { "o" } else { "b" }),
+                format!(
+                    "{}:{}",
+                    &clip.id[..clip.id.len().min(7)],
+                    if mode == "oracle" { "o" } else { "b" }
+                ),
                 found,
                 true_speakers,
                 100.0 * collared.der().unwrap_or(f64::NAN),
@@ -170,7 +192,11 @@ fn main() {
                 collared.confusion_secs,
             );
         }
-        let corpus_der = if sum_ref > 0.0 { sum_err / sum_ref } else { f64::NAN };
+        let corpus_der = if sum_ref > 0.0 {
+            sum_err / sum_ref
+        } else {
+            f64::NAN
+        };
         println!(
             "  {mode:<8} CORPUS DER @{COLLAR} collar: {:.2}%\n",
             100.0 * corpus_der

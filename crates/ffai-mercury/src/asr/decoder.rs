@@ -197,8 +197,10 @@ pub fn decode_window(
     cfg: &DecodeConfig,
     window_secs: f64,
 ) -> Result<WindowOutcome> {
-    Ok(decode_window_inner(whisper, chunk, offset_secs, cfg, window_secs, Ladder::Full)?
-        .expect("Ladder::Full always yields a result"))
+    Ok(
+        decode_window_inner(whisper, chunk, offset_secs, cfg, window_secs, Ladder::Full)?
+            .expect("Ladder::Full always yields a result"),
+    )
 }
 
 /// [`decode_window`], but greedy-rung-only: `None` means the confidence or
@@ -213,7 +215,14 @@ pub fn decode_window_strict(
     cfg: &DecodeConfig,
     window_secs: f64,
 ) -> Result<Option<WindowOutcome>> {
-    decode_window_inner(whisper, chunk, offset_secs, cfg, window_secs, Ladder::GreedyOnly)
+    decode_window_inner(
+        whisper,
+        chunk,
+        offset_secs,
+        cfg,
+        window_secs,
+        Ladder::GreedyOnly,
+    )
 }
 
 fn decode_window_inner(
@@ -249,8 +258,7 @@ fn decode_window_inner(
     let audio_features = audio_features
         .to_dtype(whisper.decoder_dtype)
         .map_err(tensor_err)?;
-    let Some((tokens, temperature)) =
-        decode_with_fallback(whisper, &audio_features, cfg, ladder)?
+    let Some((tokens, temperature)) = decode_with_fallback(whisper, &audio_features, cfg, ladder)?
     else {
         return Ok(None);
     };
@@ -273,10 +281,17 @@ fn decode_window_inner(
             .collect();
         eprintln!("[tokens n={}] {}", tokens.len(), rendered.join(" "));
     }
-    let text_tokens: Vec<u32> =
-        tokens.iter().copied().filter(|&t| t < whisper.tokenizer.eot).collect();
+    let text_tokens: Vec<u32> = tokens
+        .iter()
+        .copied()
+        .filter(|&t| t < whisper.tokenizer.eot)
+        .collect();
     let segments = segments_from_tokens(whisper, &tokens, offset_secs, cfg, window_secs)?;
-    Ok(Some(WindowOutcome { segments, text_tokens, temperature }))
+    Ok(Some(WindowOutcome {
+        segments,
+        text_tokens,
+        temperature,
+    }))
 }
 
 /// Whisper's temperature fallback: decode greedily, and if the result looks
@@ -297,7 +312,11 @@ fn decode_with_fallback(
     cfg: &DecodeConfig,
     mode: Ladder,
 ) -> Result<Option<(Vec<u32>, f32)>> {
-    let full: &[f32] = if cfg.temperatures.is_empty() { &[0.0] } else { &cfg.temperatures };
+    let full: &[f32] = if cfg.temperatures.is_empty() {
+        &[0.0]
+    } else {
+        &cfg.temperatures
+    };
     let ladder: &[f32] = match mode {
         Ladder::Full => full,
         Ladder::GreedyOnly => &full[..1],
@@ -353,7 +372,10 @@ fn decode_with_fallback(
         if confident && !looping {
             return Ok(Some((tokens, temperature)));
         }
-        if best.as_ref().is_none_or(|(score, _, _)| avg_logprob > *score) {
+        if best
+            .as_ref()
+            .is_none_or(|(score, _, _)| avg_logprob > *score)
+        {
             best = Some((avg_logprob, tokens, temperature));
         }
     }
@@ -377,8 +399,7 @@ fn decode_with_fallback(
 /// firing means silence is still reaching the model and the detector is
 /// mis-tuned — which is a thing we want to be told, so the gate stays on as
 /// defence in depth rather than being removed once VAD lands.
-pub static NO_SPEECH_DROPS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+pub static NO_SPEECH_DROPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Read the drop counter. See [`NO_SPEECH_DROPS`].
 pub fn no_speech_drops() -> usize {
@@ -446,7 +467,9 @@ fn decode_beam(
 
     const N_TEXT_CTX: usize = 448;
     let initial =
-        whisper.tokenizer.initial_tokens(cfg.language, cfg.translate, cfg.timestamps, english_only);
+        whisper
+            .tokenizer
+            .initial_tokens(cfg.language, cfg.translate, cfg.timestamps, english_only);
     let mut prompt = Vec::new();
     if !cfg.prev_text_tokens.is_empty() {
         let budget = N_TEXT_CTX.saturating_sub(cfg.max_tokens + initial.len() + 1);
@@ -480,7 +503,9 @@ fn decode_beam(
         .map_err(tensor_err)?;
     let no_speech_prob = {
         let denom = logsumexp(&values);
-        values.get(no_speech_tok).map_or(0.0, |&v| (v - denom).exp())
+        values
+            .get(no_speech_tok)
+            .map_or(0.0, |&v| (v - denom).exp())
     };
     apply_logit_filters(&mut values, &[], &whisper.tokenizer, cfg, &non_speech);
     let seed_state = whisper.decoder.save();
@@ -490,7 +515,12 @@ fn decode_beam(
         .map(|(token, lp)| {
             let mut tokens = prompt.clone();
             tokens.push(token);
-            Beam { tokens, logprob: lp, state: seed_state.clone(), done: token == eot }
+            Beam {
+                tokens,
+                logprob: lp,
+                state: seed_state.clone(),
+                done: token == eot,
+            }
         })
         .collect();
 
@@ -519,7 +549,9 @@ fn decode_beam(
             .map_err(|e| Error::Model(format!("decoder forward: {e}")))?;
             let state = whisper.decoder.save();
             let mut values: Vec<f32> = super::profile::timed(&p.sampling, || {
-                logits.to_dtype(ffai_core::candle::DType::F32).and_then(|t| t.to_vec1())
+                logits
+                    .to_dtype(ffai_core::candle::DType::F32)
+                    .and_then(|t| t.to_vec1())
             })
             .map_err(tensor_err)?;
             super::profile::timed(&p.sampling, || {
@@ -555,10 +587,17 @@ fn decode_beam(
         .ok_or_else(|| Error::Model("beam search produced no hypotheses".into()))?;
 
     let generated = best.tokens.len().saturating_sub(prompt_len);
-    let avg_logprob =
-        if generated > 0 { best.logprob / generated as f32 } else { f32::NEG_INFINITY };
+    let avg_logprob = if generated > 0 {
+        best.logprob / generated as f32
+    } else {
+        f32::NEG_INFINITY
+    };
     p.count_tokens(generated);
-    Ok((best.tokens[prompt_len..].to_vec(), avg_logprob, no_speech_prob))
+    Ok((
+        best.tokens[prompt_len..].to_vec(),
+        avg_logprob,
+        no_speech_prob,
+    ))
 }
 
 /// `logprob / len^alpha` — Google NMT-style length normalization.
@@ -611,7 +650,9 @@ fn decode_once(
     // enough to be running with fallback context in the first place.
     const N_TEXT_CTX: usize = 448;
     let initial =
-        whisper.tokenizer.initial_tokens(cfg.language, cfg.translate, cfg.timestamps, english_only);
+        whisper
+            .tokenizer
+            .initial_tokens(cfg.language, cfg.translate, cfg.timestamps, english_only);
     let mut tokens = Vec::new();
     if !cfg.prev_text_tokens.is_empty() {
         let budget = N_TEXT_CTX.saturating_sub(cfg.max_tokens + initial.len() + 1);
@@ -643,7 +684,7 @@ fn decode_once(
     // opened deliberately rather than defaulting open.
     let mut non_speech = if cfg.suppress_non_speech
         || (cfg.annotation_threshold.is_some()
-            && !std::env::var_os("FFAI_ALLOW_NONSPEECH").is_some())
+            && std::env::var_os("FFAI_ALLOW_NONSPEECH").is_none())
     {
         whisper.tokenizer.non_speech_tokens()
     } else if std::env::var_os("FFAI_ALLOW_NONSPEECH").is_some() {
@@ -686,7 +727,11 @@ fn decode_once(
                 .map_err(tensor_err)?
         } else {
             // Fast path: the whole prompt once, then one token per step.
-            let feed: &[u32] = if step == 0 { &tokens } else { &tokens[tokens.len() - 1..] };
+            let feed: &[u32] = if step == 0 {
+                &tokens
+            } else {
+                &tokens[tokens.len() - 1..]
+            };
             super::profile::timed(&p.decoder, || {
                 whisper
                     .decoder
@@ -709,50 +754,52 @@ fn decode_once(
                 .and_then(|t| t.to_vec1())
                 .map_err(tensor_err)?;
             let denom = logsumexp(&values);
-            values.get(no_speech_tok).map_or(0.0, |&v| (v - denom).exp())
+            values
+                .get(no_speech_tok)
+                .map_or(0.0, |&v| (v - denom).exp())
         } else {
             0.0
         };
-        if step == 0 {
-            if let Some(threshold) = cfg.annotation_threshold {
-                // Open the gate only when the model itself says this is not
-                // ordinary speech. Measured on tiny.en: clean speech reads
-                // 0.004-0.032, a cough or laugh 0.29-0.45, silence 0.95 (and
-                // silence never gets here — the no-speech gate drops it).
-                if step0_no_speech >= threshold {
-                    non_speech.clear();
-                }
+        if step == 0
+            && let Some(threshold) = cfg.annotation_threshold
+        {
+            // Open the gate only when the model itself says this is not
+            // ordinary speech. Measured on tiny.en: clean speech reads
+            // 0.004-0.032, a cough or laugh 0.29-0.45, silence 0.95 (and
+            // silence never gets here — the no-speech gate drops it).
+            if step0_no_speech >= threshold {
+                non_speech.clear();
             }
         }
 
         let (next, token_logprob, ns_prob) =
             super::profile::timed(&p.sampling, || -> Result<(u32, f32, f32)> {
-            // Logit filtering and sampling always run in f32, whatever the
-            // weights are stored as: the vocabulary softmax is where
-            // half-precision rounding would actually change a token choice.
-            let mut values: Vec<f32> = logits
-                .to_dtype(ffai_core::candle::DType::F32)
-                .and_then(|t| t.to_vec1())
-                .map_err(tensor_err)?;
-            // `<|nospeech|>` is read for the caller's benefit only when the
-            // conditional gate is off; with it on the value is needed BEFORE
-            // filtering (see the block above this closure) and is passed in.
-            let ns = if step == 0 { step0_no_speech } else { 0.0 };
-            apply_logit_filters(
-                &mut values,
-                &tokens[prompt_len..],
-                &whisper.tokenizer,
-                cfg,
-                &non_speech,
-            );
-            let chosen = if temperature > 0.0 {
-                sample(&values, temperature, &mut rng)
-            } else {
-                argmax(&values)
-            };
-            // log P(chosen) = logit - logsumexp(logits), the quantity the
-            // fallback threshold is defined on.
-            let lp = values[chosen as usize] - logsumexp(&values);
+                // Logit filtering and sampling always run in f32, whatever the
+                // weights are stored as: the vocabulary softmax is where
+                // half-precision rounding would actually change a token choice.
+                let mut values: Vec<f32> = logits
+                    .to_dtype(ffai_core::candle::DType::F32)
+                    .and_then(|t| t.to_vec1())
+                    .map_err(tensor_err)?;
+                // `<|nospeech|>` is read for the caller's benefit only when the
+                // conditional gate is off; with it on the value is needed BEFORE
+                // filtering (see the block above this closure) and is passed in.
+                let ns = if step == 0 { step0_no_speech } else { 0.0 };
+                apply_logit_filters(
+                    &mut values,
+                    &tokens[prompt_len..],
+                    &whisper.tokenizer,
+                    cfg,
+                    &non_speech,
+                );
+                let chosen = if temperature > 0.0 {
+                    sample(&values, temperature, &mut rng)
+                } else {
+                    argmax(&values)
+                };
+                // log P(chosen) = logit - logsumexp(logits), the quantity the
+                // fallback threshold is defined on.
+                let lp = values[chosen as usize] - logsumexp(&values);
                 Ok((chosen, lp, ns))
             })?;
         if step == 0 {
@@ -768,14 +815,19 @@ fn decode_once(
         // clearly under the acceptance bar is headed for rejection — stop
         // paying for it. 14 tokens before judging, so one bad opening word
         // cannot trigger it.
-        if let Some(bar) = cfg.early_abort_logprob {
-            if generated >= 14 && logprob_sum / generated as f32 <= bar {
-                break;
-            }
+        if let Some(bar) = cfg.early_abort_logprob
+            && generated >= 14
+            && logprob_sum / generated as f32 <= bar
+        {
+            break;
         }
     }
     p.count_tokens(tokens.len() - prompt_len);
-    let avg = if generated > 0 { logprob_sum / generated as f32 } else { f32::NEG_INFINITY };
+    let avg = if generated > 0 {
+        logprob_sum / generated as f32
+    } else {
+        f32::NEG_INFINITY
+    };
     Ok((tokens[prompt_len..].to_vec(), avg, no_speech_prob))
 }
 
@@ -786,7 +838,10 @@ fn sample(logits: &[f32], temperature: f32, rng: &mut u64) -> u32 {
     if !max.is_finite() {
         return 0;
     }
-    let weights: Vec<f32> = logits.iter().map(|&l| ((l - max) / temperature).exp()).collect();
+    let weights: Vec<f32> = logits
+        .iter()
+        .map(|&l| ((l - max) / temperature).exp())
+        .collect();
     let total: f32 = weights.iter().sum();
     // xorshift64*: tiny, deterministic, and adequate for token sampling.
     *rng ^= *rng << 13;
@@ -858,8 +913,7 @@ fn apply_logit_filters(
 
     // Timestamps come in pairs, except immediately before end-of-text.
     let last_is_ts = generated.last().is_some_and(|&t| tk.is_timestamp(t));
-    let penultimate_is_ts = generated.len() < 2
-        || tk.is_timestamp(generated[generated.len() - 2]);
+    let penultimate_is_ts = generated.len() < 2 || tk.is_timestamp(generated[generated.len() - 2]);
     if last_is_ts {
         if penultimate_is_ts {
             // A pair just closed: the next token must be text.
@@ -890,8 +944,9 @@ fn apply_logit_filters(
     // mask; timestamps drifting past the real audio is one of the ways a
     // truncated window destabilizes.
     if let Some(max_secs) = cfg.max_timestamp_secs {
-        let last_allowed =
-            tk.timestamp_begin.saturating_add((max_secs / 0.02).floor().max(0.0) as u32);
+        let last_allowed = tk
+            .timestamp_begin
+            .saturating_add((max_secs / 0.02).floor().max(0.0) as u32);
         suppress_range(logits, (last_allowed + 1).min(vocab)..vocab);
     }
 
@@ -910,7 +965,10 @@ fn apply_logit_filters(
     let ts = tk.timestamp_begin as usize;
     if ts < logits.len() {
         let timestamp_mass = logsumexp(&logits[ts..]);
-        let best_text = logits[..ts].iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let best_text = logits[..ts]
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
         if timestamp_mass > best_text {
             suppress_range(logits, 0..tk.timestamp_begin);
         }
@@ -1029,7 +1087,11 @@ mod beam_tests {
     use super::*;
 
     fn cfg_with(beam: usize, penalty: f32) -> DecodeConfig {
-        DecodeConfig { beam_size: beam, length_penalty: penalty, ..DecodeConfig::default() }
+        DecodeConfig {
+            beam_size: beam,
+            length_penalty: penalty,
+            ..DecodeConfig::default()
+        }
     }
 
     /// `top_k` must return LOG-probabilities normalized over the FILTERED
@@ -1049,7 +1111,10 @@ mod beam_tests {
         assert!((got[0].1 - (2.0 - denom)).abs() < 1e-5, "got {}", got[0].1);
         // A normalized distribution's probabilities sum to 1.
         let mass: f32 = got.iter().map(|(_, lp)| lp.exp()).sum();
-        assert!((mass - 1.0).abs() < 1e-5, "probabilities must sum to 1, got {mass}");
+        assert!(
+            (mass - 1.0).abs() < 1e-5,
+            "probabilities must sum to 1, got {mass}"
+        );
     }
 
     /// Length normalization must not change the ranking of equal-length

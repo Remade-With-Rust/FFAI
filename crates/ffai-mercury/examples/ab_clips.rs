@@ -55,7 +55,10 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let limit: usize = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
+    let limit: usize = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(usize::MAX);
 
     let manifest = Manifest::load(&PathBuf::from(&corpus)).expect("corpus loads");
     let engine = WhisperCandle::new();
@@ -67,16 +70,24 @@ fn main() {
 
     let mut rows = Vec::new();
     for clip in manifest.clips.iter().take(limit) {
-        let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
-        let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+        let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else {
+            continue;
+        };
+        let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+            continue;
+        };
 
         // SAFETY: single-threaded, and set between calls rather than during
         // one. The engine reads these when it builds its DecodeConfig, so the
         // two arms genuinely differ by this one knob and nothing else.
         unsafe { std::env::remove_var(key) };
-        let Ok(a) = engine.transcribe(&audio, &opts) else { continue };
+        let Ok(a) = engine.transcribe(&audio, &opts) else {
+            continue;
+        };
         unsafe { std::env::set_var(key, value) };
-        let Ok(b) = engine.transcribe(&audio, &opts) else { continue };
+        let Ok(b) = engine.transcribe(&audio, &opts) else {
+            continue;
+        };
         unsafe { std::env::remove_var(key) };
 
         let (ta, tb) = (a.text(), b.text());
@@ -100,8 +111,16 @@ fn main() {
     }
 
     for (name, get_a, get_b) in [
-        ("WER", (|r: &Row| r.wer_a) as fn(&Row) -> f64, (|r: &Row| r.wer_b) as fn(&Row) -> f64),
-        ("CER", (|r: &Row| r.cer_a) as fn(&Row) -> f64, (|r: &Row| r.cer_b) as fn(&Row) -> f64),
+        (
+            "WER",
+            (|r: &Row| r.wer_a) as fn(&Row) -> f64,
+            (|r: &Row| r.wer_b) as fn(&Row) -> f64,
+        ),
+        (
+            "CER",
+            (|r: &Row| r.cer_a) as fn(&Row) -> f64,
+            (|r: &Row| r.cer_b) as fn(&Row) -> f64,
+        ),
     ] {
         let improved = rows.iter().filter(|r| get_b(r) < get_a(r) - 1e-9).count();
         let worsened = rows.iter().filter(|r| get_b(r) > get_a(r) + 1e-9).count();
@@ -125,11 +144,19 @@ fn main() {
         println!("  improved {improved}   worsened {worsened}   unchanged {unchanged}");
         println!(
             "  sign test  z = {z:+.2}   {}",
-            if z.abs() > 2.0 { "SIGNIFICANT" } else { "not significant (bar is |z| > 2)" }
+            if z.abs() > 2.0 {
+                "SIGNIFICANT"
+            } else {
+                "not significant (bar is |z| > 2)"
+            }
         );
         println!(
             "  net delta {total:+.3}; top 5 clips carry {top5:+.3} ({:.0}% of net)",
-            if total.abs() > 1e-9 { 100.0 * top5 / total } else { 0.0 }
+            if total.abs() > 1e-9 {
+                100.0 * top5 / total
+            } else {
+                0.0
+            }
         );
         if total.abs() > 1e-9 && (100.0 * top5 / total) > 100.0 {
             println!("  NOTE: top-5 share exceeds 100% — the remaining clips are net NEGATIVE");

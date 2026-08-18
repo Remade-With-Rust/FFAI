@@ -46,7 +46,11 @@ pub struct Flag {
 
 impl Flag {
     pub const fn new(name: &'static str, word: &'static str) -> Self {
-        Self { name, word, v: AtomicI64::new(UNSET) }
+        Self {
+            name,
+            word,
+            v: AtomicI64::new(UNSET),
+        }
     }
 
     #[inline]
@@ -82,7 +86,12 @@ pub struct Num {
 
 impl Num {
     pub const fn new(name: &'static str, default: i64, valid: fn(i64) -> bool) -> Self {
-        Self { name, default, valid, v: AtomicI64::new(UNSET) }
+        Self {
+            name,
+            default,
+            valid,
+            v: AtomicI64::new(UNSET),
+        }
     }
 
     #[inline]

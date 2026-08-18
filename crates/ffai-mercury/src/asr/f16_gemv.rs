@@ -92,7 +92,10 @@ impl F16Gemv {
         if in_dim % 8 != 0 {
             return Ok(None);
         }
-        let half = weight.to_dtype(DType::F16)?.flatten_all()?.to_vec1::<half::f16>()?;
+        let half = weight
+            .to_dtype(DType::F16)?
+            .flatten_all()?
+            .to_vec1::<half::f16>()?;
         let w = std::sync::Arc::new(half.into_iter().map(|h| h.to_bits()).collect::<Vec<u16>>());
         Ok(Some(F16Gemv { w, out_dim, in_dim }))
     }
@@ -158,27 +161,29 @@ impl CustomOp1 for F16GemvOp {
 // f16 values. The only call site is guarded by `have_f16c()` and slices a
 // single weight row.
 unsafe fn dot_f16(w: *const u16, x: &[f32], d: usize) -> f32 {
-    let mut acc0 = _mm256_setzero_ps();
-    let mut acc1 = _mm256_setzero_ps();
-    let xp = x.as_ptr();
-    let mut k = 0;
-    while k + 16 <= d {
-        let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
-        acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
-        let w1 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k + 8) as *const __m128i));
-        acc1 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(xp.add(k + 8)), acc1);
-        k += 16;
+    unsafe {
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+        let xp = x.as_ptr();
+        let mut k = 0;
+        while k + 16 <= d {
+            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
+            acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
+            let w1 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k + 8) as *const __m128i));
+            acc1 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(xp.add(k + 8)), acc1);
+            k += 16;
+        }
+        while k + 8 <= d {
+            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
+            acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
+            k += 8;
+        }
+        let acc = _mm256_add_ps(acc0, acc1);
+        let s = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+        let s = _mm_add_ps(s, _mm_movehl_ps(s, s));
+        let s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
+        _mm_cvtss_f32(s)
     }
-    while k + 8 <= d {
-        let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
-        acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
-        k += 8;
-    }
-    let acc = _mm256_add_ps(acc0, acc1);
-    let s = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
-    let s = _mm_add_ps(s, _mm_movehl_ps(s, s));
-    let s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
-    _mm_cvtss_f32(s)
 }
 
 #[cfg(not(target_arch = "x86_64"))]

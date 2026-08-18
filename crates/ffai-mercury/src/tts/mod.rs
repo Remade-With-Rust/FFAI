@@ -49,7 +49,10 @@ impl TtsEngine for AnyTts {
     }
 
     fn synthesize(&self, _text: &str, _opts: &TtsOptions) -> Result<AudioBuffer> {
-        Err(Error::NotImplemented { task: Task::Tts, engine: "any-tts".into() })
+        Err(Error::NotImplemented {
+            task: Task::Tts,
+            engine: "any-tts".into(),
+        })
     }
 }
 
@@ -69,6 +72,9 @@ impl TtsEngine for Voirs {
     }
 
     fn synthesize(&self, _text: &str, _opts: &TtsOptions) -> Result<AudioBuffer> {
-        Err(Error::NotImplemented { task: Task::Tts, engine: "voirs".into() })
+        Err(Error::NotImplemented {
+            task: Task::Tts,
+            engine: "voirs".into(),
+        })
     }
 }

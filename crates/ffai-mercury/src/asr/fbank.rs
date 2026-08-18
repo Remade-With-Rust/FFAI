@@ -224,7 +224,10 @@ mod tests {
         // frequency, which discrete bins essentially never do — so this is a
         // "close to the apex" check, not an equality one.
         let peak = filters[40].iter().copied().fold(0.0f32, f32::max);
-        assert!((0.8..=1.0).contains(&peak), "peak should approach 1.0, got {peak}");
+        assert!(
+            (0.8..=1.0).contains(&peak),
+            "peak should approach 1.0, got {peak}"
+        );
         // Wide (high-frequency) filters must have MORE total weight than
         // narrow ones — which is exactly what normalisation would remove.
         let low: f32 = filters[5].iter().sum();
@@ -248,7 +251,10 @@ mod tests {
         let (feats, frames) = fb.compute(&vec![0.0; SAMPLE_RATE]);
         assert_eq!(frames, Fbank::n_frames(SAMPLE_RATE));
         assert_eq!(feats.len(), frames * 80);
-        assert!(frames >= 100, "1 s at 10 ms hop should be ~101 frames, got {frames}");
+        assert!(
+            frames >= 100,
+            "1 s at 10 ms hop should be ~101 frames, got {frames}"
+        );
     }
 
     #[test]
@@ -256,7 +262,9 @@ mod tests {
         let fb = Fbank::new(80);
         let n = SAMPLE_RATE / 2;
         let tone: Vec<f32> = (0..n)
-            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin() * 0.5)
+            .map(|i| {
+                (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin() * 0.5
+            })
             .collect();
         let (feats, frames) = fb.compute(&tone);
         for m in 0..80 {
@@ -270,7 +278,9 @@ mod tests {
         let fb = Fbank::new(80);
         let n = SAMPLE_RATE / 2;
         let tone: Vec<f32> = (0..n)
-            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / SAMPLE_RATE as f32).sin() * 0.5)
+            .map(|i| {
+                (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / SAMPLE_RATE as f32).sin() * 0.5
+            })
             .collect();
         let (feats, frames) = fb.compute(&tone);
         // Look at a mid-utterance frame; find its argmax band.

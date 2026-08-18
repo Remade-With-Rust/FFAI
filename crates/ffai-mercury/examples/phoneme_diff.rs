@@ -42,7 +42,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let text = v["text"].as_str().unwrap_or("").to_string();
         let ph: Vec<String> = v["phonemes"][0]
             .as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
         rows.push((id, text, ph));
     }
@@ -63,17 +67,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // Word-level: split both on the space symbol so a mismatch can be
         // attributed to the word that produced it rather than to an offset.
-        let ow: Vec<Vec<String>> =
-            ours.split(|s| s == " ").map(|w| w.to_vec()).filter(|w| !w.is_empty()).collect();
-        let ew: Vec<Vec<String>> =
-            esp.split(|s| s == " ").map(|w| w.to_vec()).filter(|w| !w.is_empty()).collect();
+        let ow: Vec<Vec<String>> = ours
+            .split(|s| s == " ")
+            .map(|w| w.to_vec())
+            .filter(|w| !w.is_empty())
+            .collect();
+        let ew: Vec<Vec<String>> = esp
+            .split(|s| s == " ")
+            .map(|w| w.to_vec())
+            .filter(|w| !w.is_empty())
+            .collect();
         let words: Vec<&str> = text.split_whitespace().collect();
         for (i, (a, b)) in ow.iter().zip(&ew).enumerate() {
             total_sym += b.len();
             if a != b {
                 diff_sym += a.len().max(b.len()) - a.iter().zip(b).filter(|(x, y)| x == y).count();
                 if let Some(w) = words.get(i) {
-                    *bad_words.entry(w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+                    *bad_words
+                        .entry(
+                            w.trim_matches(|c: char| !c.is_alphanumeric())
+                                .to_lowercase(),
+                        )
                         .or_insert(0) += 1;
                 }
                 for (x, y) in a.iter().zip(b) {
@@ -99,26 +113,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (espeak's secondary stress, per phonemize.rs's documented rule) shifts
     // every later position and is reported as a substitution it is not.
     // Print the offending words verbatim instead -- no alignment guessing.
-    println!("
-  mismatched words, espeak vs ours:");
+    println!(
+        "
+  mismatched words, espeak vs ours:"
+    );
     let mut shown = 0usize;
     for (_id, text, esp) in &rows {
-        if shown >= 24 { break; }
+        if shown >= 24 {
+            break;
+        }
         let ours_str = phonemizer.phonemize(text)?;
         let ours: Vec<String> = ours_str.chars().map(|c| c.to_string()).collect();
-        if ours == *esp { continue; }
-        let ow: Vec<String> =
-            ours.split(|s| s == " ").map(|w| w.concat()).filter(|w| !w.is_empty()).collect();
-        let ew: Vec<String> =
-            esp.split(|s| s == " ").map(|w| w.concat()).filter(|w| !w.is_empty()).collect();
+        if ours == *esp {
+            continue;
+        }
+        let ow: Vec<String> = ours
+            .split(|s| s == " ")
+            .map(|w| w.concat())
+            .filter(|w| !w.is_empty())
+            .collect();
+        let ew: Vec<String> = esp
+            .split(|s| s == " ")
+            .map(|w| w.concat())
+            .filter(|w| !w.is_empty())
+            .collect();
         let words: Vec<&str> = text.split_whitespace().collect();
         for (i, (a, b)) in ow.iter().zip(&ew).enumerate() {
             if a != b && shown < 24 {
                 let w = words.get(i).copied().unwrap_or("?");
                 let strip = |z: &String| {
-                    z.chars().filter(|c| *c != PRIMARY && *c != SECONDARY).collect::<String>()
+                    z.chars()
+                        .filter(|c| *c != PRIMARY && *c != SECONDARY)
+                        .collect::<String>()
                 };
-                let tag = if strip(a) == strip(b) { "[STRESS ONLY]" } else { "" };
+                let tag = if strip(a) == strip(b) {
+                    "[STRESS ONLY]"
+                } else {
+                    ""
+                };
                 println!("    {w:<12} espeak {b:<24} ours {a:<24} {tag}");
                 shown += 1;
             }

@@ -52,14 +52,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let phonemizer = Phonemizer::from_manifest_dir(Path::new("models"))?;
     let manifest =
         ffai_bench::corpus::Manifest::load(Path::new("corpora/harvard-sentences-v1.toml"))?;
-    let n: usize = std::env::var("FFAI_N").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
+    let n: usize = std::env::var("FFAI_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(40);
     let ids_list: Vec<Vec<i64>> = manifest
         .clips
         .iter()
         .take(n)
         .map(|c| {
             let t = std::fs::read_to_string(manifest.clip_path(c)).unwrap();
-            vits.id_map.sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap()).0
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap())
+                .0
         })
         .collect();
     println!("{} sentences\n", ids_list.len());
@@ -85,13 +90,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Each arm names the knobs left on CANDLE, so exactly one of ours is live.
     let arms: [(&str, Vec<&str>); 4] = [
-        ("GEMM convs only", vec!["FFAI_CANDLE_LN", "FFAI_CANDLE_GELU"]),
-        ("flat LayerNorm only", vec!["FFAI_CANDLE_FFN", "FFAI_CANDLE_GELU"]),
+        (
+            "GEMM convs only",
+            vec!["FFAI_CANDLE_LN", "FFAI_CANDLE_GELU"],
+        ),
+        (
+            "flat LayerNorm only",
+            vec!["FFAI_CANDLE_FFN", "FFAI_CANDLE_GELU"],
+        ),
         ("A&S GELU only", vec!["FFAI_CANDLE_FFN", "FFAI_CANDLE_LN"]),
         ("all three (shipped)", vec![]),
     ];
 
-    println!("  {:<22} {:>12} {:>12} {:>10}", "arm", "max|delta|", "rms", "w_ceil");
+    println!(
+        "  {:<22} {:>12} {:>12} {:>10}",
+        "arm", "max|delta|", "rms", "w_ceil"
+    );
     for (label, candle_on) in &arms {
         configure(candle_on);
         let (mut worst, mut sq, mut cnt) = (0f32, 0f64, 0usize);
@@ -118,7 +132,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rms = (sq / cnt.max(1) as f64).sqrt();
         println!(
             "  {label:<22} {worst:>12.3e} {rms:>12.3e} {:>10}",
-            if wdiff == 0 && lendiff == 0 { "exact".to_string() } else { format!("{wdiff} differ") }
+            if wdiff == 0 && lendiff == 0 {
+                "exact".to_string()
+            } else {
+                format!("{wdiff} differ")
+            }
         );
     }
     configure(&[]);

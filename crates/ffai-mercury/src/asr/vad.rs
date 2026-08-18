@@ -100,7 +100,11 @@ fn frame_energies(samples: &[f32]) -> Vec<f32> {
             let frame = &samples[i * HOP_LENGTH..i * HOP_LENGTH + N_FFT];
             let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
             let rms = (sum_sq / N_FFT as f32).sqrt();
-            if rms <= 0.0 { MIN_DBFS } else { (20.0 * rms.log10()).max(MIN_DBFS) }
+            if rms <= 0.0 {
+                MIN_DBFS
+            } else {
+                (20.0 * rms.log10()).max(MIN_DBFS)
+            }
         })
         .collect()
 }
@@ -164,7 +168,10 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
             start_frame = i;
         } else if in_speech && db < offset {
             in_speech = false;
-            regions.push((start_frame as f64 * secs_per_frame, i as f64 * secs_per_frame));
+            regions.push((
+                start_frame as f64 * secs_per_frame,
+                i as f64 * secs_per_frame,
+            ));
         }
     }
     if in_speech {
@@ -198,7 +205,12 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
         // are non-overlapping.
         match out.last_mut() {
             Some(prev) if s <= prev.end => prev.end = e.max(prev.end),
-            _ => out.push(TimedSegment { start: s, end: e, value: (), confidence: None }),
+            _ => out.push(TimedSegment {
+                start: s,
+                end: e,
+                value: (),
+                confidence: None,
+            }),
         }
     }
     out
@@ -219,7 +231,11 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
 /// the silence that falls *between* windows, which is where the long tails
 /// actually are.
 pub fn pack(regions: &[TimedSegment<()>], chunk_secs: f64) -> Vec<VadWindow> {
-    let chunk = if chunk_secs > 0.0 { chunk_secs } else { DEFAULT_CHUNK_SECS as f64 };
+    let chunk = if chunk_secs > 0.0 {
+        chunk_secs
+    } else {
+        DEFAULT_CHUNK_SECS as f64
+    };
     let mut out = Vec::new();
     let mut cur: Option<(f64, f64)> = None;
 
@@ -304,7 +320,10 @@ mod tests {
         let regions = detect(&audio, DEFAULT_THRESHOLD);
         assert_eq!(regions.len(), 1, "expected one region, got {regions:?}");
         // Padded, so bounds are near the tone rather than exactly on it.
-        assert!(regions[0].start < 2.0 && regions[0].start > 1.5, "{regions:?}");
+        assert!(
+            regions[0].start < 2.0 && regions[0].start > 1.5,
+            "{regions:?}"
+        );
         assert!(regions[0].end > 3.5 && regions[0].end < 4.0, "{regions:?}");
     }
 
@@ -329,13 +348,24 @@ mod tests {
     }
 
     fn seg(start: f64, end: f64) -> TimedSegment<()> {
-        TimedSegment { start, end, value: (), confidence: None }
+        TimedSegment {
+            start,
+            end,
+            value: (),
+            confidence: None,
+        }
     }
 
     #[test]
     fn pack_merges_regions_inside_one_window() {
         let out = pack(&[seg(0.0, 2.0), seg(25.0, 27.0)], 30.0);
-        assert_eq!(out, vec![VadWindow { start: 0.0, end: 27.0 }]);
+        assert_eq!(
+            out,
+            vec![VadWindow {
+                start: 0.0,
+                end: 27.0
+            }]
+        );
     }
 
     #[test]
@@ -345,7 +375,16 @@ mod tests {
         let out = pack(&[seg(0.0, 2.0), seg(40.0, 42.0)], 30.0);
         assert_eq!(
             out,
-            vec![VadWindow { start: 0.0, end: 2.0 }, VadWindow { start: 40.0, end: 42.0 }]
+            vec![
+                VadWindow {
+                    start: 0.0,
+                    end: 2.0
+                },
+                VadWindow {
+                    start: 40.0,
+                    end: 42.0
+                }
+            ]
         );
     }
 
@@ -353,7 +392,10 @@ mod tests {
     fn pack_splits_a_region_longer_than_a_window() {
         let out = pack(&[seg(0.0, 70.0)], 30.0);
         assert_eq!(out.len(), 3);
-        assert!(out.iter().all(|w| w.end - w.start <= 30.0 + 1e-9), "{out:?}");
+        assert!(
+            out.iter().all(|w| w.end - w.start <= 30.0 + 1e-9),
+            "{out:?}"
+        );
         assert_eq!(out[0].start, 0.0);
         assert_eq!(out[2].end, 70.0);
     }

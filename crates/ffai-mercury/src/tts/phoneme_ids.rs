@@ -37,8 +37,12 @@ impl PhonemeIdMap {
             .ok_or_else(|| Error::Model("voice config has no phoneme_id_map".into()))?;
         let mut map = HashMap::new();
         for (k, ids) in obj {
-            let ids: Vec<i64> =
-                ids.as_array().into_iter().flatten().filter_map(|x| x.as_i64()).collect();
+            let ids: Vec<i64> = ids
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.as_i64())
+                .collect();
             map.insert(k.clone(), ids);
         }
         Ok(PhonemeIdMap { map })

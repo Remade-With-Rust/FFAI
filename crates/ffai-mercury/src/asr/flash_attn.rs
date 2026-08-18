@@ -137,7 +137,11 @@ pub fn attend_merged(q: &Tensor, kt: &Tensor, v: &Tensor) -> CandleResult<Option
     if v.dims4()? != (1, heads, keys, HD) || qlen != keys || keys < MIN_SEQ {
         return Ok(None);
     }
-    Ok(Some(q.apply_op3(kt, v, MergedAttnOp { heads, seq: keys })?))
+    Ok(Some(q.apply_op3(
+        kt,
+        v,
+        MergedAttnOp { heads, seq: keys },
+    )?))
 }
 
 struct MergedAttnOp {
@@ -225,7 +229,11 @@ pub fn attend(q: &Tensor, kt: &Tensor, v: &Tensor, masked: bool) -> CandleResult
     if v.dims4()? != (1, heads, keys, HD) {
         return Ok(None);
     }
-    let floor = if qlen == 1 { min_decode_keys() } else { MIN_SEQ };
+    let floor = if qlen == 1 {
+        min_decode_keys()
+    } else {
+        MIN_SEQ
+    };
     if keys < floor {
         return Ok(None);
     }
@@ -265,51 +273,55 @@ impl CustomOp3 for FlashAttnOp {
         // f16 K/V is served at the decode shape only: the cache is read in
         // full every token, so halving it pays there. The encoder shape reads
         // its K/V once per pass and would gain nothing for the precision.
-        if let (CpuStorage::F32(q), CpuStorage::F16(kt), CpuStorage::F16(v)) = (s1, s2, s3) {
-            if self.qlen == 1 && l1.is_contiguous() && l2.is_contiguous() && l3.is_contiguous() {
-                let (heads, keys) = (self.heads, self.keys);
-                let q = &q[l1.start_offset()..l1.start_offset() + heads * HD];
-                // SAFETY: reinterpreting candle's F16 storage as the u16 bit pattern the kernel
-                // consumes. `half::f16` is repr(transparent) over u16, so the cast is
-                // layout-compatible and not a reinterpretation of unrelated types. The length
-                // heads*HD*keys is exactly this tensor's element count, and `l2.is_contiguous()`
-                // was checked above, so start_offset + that length stays inside the allocation.
-                let ktb: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        kt.as_ptr().add(l2.start_offset()) as *const u16,
-                        heads * HD * keys,
-                    )
-                };
-                // SAFETY: as for `ktb` above - repr(transparent) f16 -> u16 over a contiguous
-                // tensor whose length was checked, offset by its own start_offset.
-                let vb: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        v.as_ptr().add(l3.start_offset()) as *const u16,
-                        heads * keys * HD,
-                    )
-                };
-                let mut out = vec![0f32; heads * HD];
-                if par_heads() {
-                    let mut scratch = vec![0f32; heads * keys];
-                    out.par_chunks_mut(HD)
-                        .zip(scratch.par_chunks_mut(keys))
-                        .enumerate()
-                        // SAFETY: two obligations. (1) avx2+fma+f16c: `have_avx2()` and `have_f16c()`
-                        // were both checked at the top of this function, which is the only path here.
-                        // (2) Aliasing: `par_chunks_mut(HD)` hands each task a distinct output chunk and
-                        // `scratch.par_chunks_mut(keys)` a distinct scratch row, so no two tasks write
-                        // the same element.
-                        .for_each(|(h, (o, sc))| unsafe {
-                            xattn_head_f16(
-                                &q[h * HD..(h + 1) * HD],
-                                &ktb[h * HD * keys..(h + 1) * HD * keys],
-                                &vb[h * keys * HD..(h + 1) * keys * HD],
-                                o,
-                                keys,
-                                sc,
-                            );
-                        });
-                } else {
+        if let (CpuStorage::F32(q), CpuStorage::F16(kt), CpuStorage::F16(v)) = (s1, s2, s3)
+            && self.qlen == 1
+            && l1.is_contiguous()
+            && l2.is_contiguous()
+            && l3.is_contiguous()
+        {
+            let (heads, keys) = (self.heads, self.keys);
+            let q = &q[l1.start_offset()..l1.start_offset() + heads * HD];
+            // SAFETY: reinterpreting candle's F16 storage as the u16 bit pattern the kernel
+            // consumes. `half::f16` is repr(transparent) over u16, so the cast is
+            // layout-compatible and not a reinterpretation of unrelated types. The length
+            // heads*HD*keys is exactly this tensor's element count, and `l2.is_contiguous()`
+            // was checked above, so start_offset + that length stays inside the allocation.
+            let ktb: &[u16] = unsafe {
+                std::slice::from_raw_parts(
+                    kt.as_ptr().add(l2.start_offset()) as *const u16,
+                    heads * HD * keys,
+                )
+            };
+            // SAFETY: as for `ktb` above - repr(transparent) f16 -> u16 over a contiguous
+            // tensor whose length was checked, offset by its own start_offset.
+            let vb: &[u16] = unsafe {
+                std::slice::from_raw_parts(
+                    v.as_ptr().add(l3.start_offset()) as *const u16,
+                    heads * keys * HD,
+                )
+            };
+            let mut out = vec![0f32; heads * HD];
+            if par_heads() {
+                let mut scratch = vec![0f32; heads * keys];
+                out.par_chunks_mut(HD)
+                    .zip(scratch.par_chunks_mut(keys))
+                    .enumerate()
+                    // SAFETY: two obligations. (1) avx2+fma+f16c: `have_avx2()` and `have_f16c()`
+                    // were both checked at the top of this function, which is the only path here.
+                    // (2) Aliasing: `par_chunks_mut(HD)` hands each task a distinct output chunk and
+                    // `scratch.par_chunks_mut(keys)` a distinct scratch row, so no two tasks write
+                    // the same element.
+                    .for_each(|(h, (o, sc))| unsafe {
+                        xattn_head_f16(
+                            &q[h * HD..(h + 1) * HD],
+                            &ktb[h * HD * keys..(h + 1) * HD * keys],
+                            &vb[h * keys * HD..(h + 1) * keys * HD],
+                            o,
+                            keys,
+                            sc,
+                        );
+                    });
+            } else {
                 let mut scratch = vec![0f32; keys];
                 for h in 0..heads {
                     // SAFETY: same feature guard as the parallel arm above. This branch is serial,
@@ -326,9 +338,8 @@ impl CustomOp3 for FlashAttnOp {
                         );
                     }
                 }
-                }
-                return Ok((CpuStorage::F32(out), Shape::from_dims(&[1, heads, 1, HD])));
             }
+            return Ok((CpuStorage::F32(out), Shape::from_dims(&[1, heads, 1, HD])));
         }
         let (q, kt, v) = match (s1, s2, s3) {
             (CpuStorage::F32(a), CpuStorage::F32(b), CpuStorage::F32(c)) => (a, b, c),
@@ -463,7 +474,14 @@ fn flash_head_strided(
 // x86 kernel it stands in for, and its body is `unreachable!` - the runtime
 // feature check that guards every call site can never pass on this target,
 // so there is no reachable code here to be unsound.
-unsafe fn xattn_head(_q: &[f32], _k: &[f32], _v: &[f32], _o: &mut [f32], _n: usize, _s: &mut [f32]) {
+unsafe fn xattn_head(
+    _q: &[f32],
+    _k: &[f32],
+    _v: &[f32],
+    _o: &mut [f32],
+    _n: usize,
+    _s: &mut [f32],
+) {
     unreachable!("guarded by have_avx2()")
 }
 
@@ -493,8 +511,8 @@ unsafe fn exp256(x: __m256) -> __m256 {
     let mut p = _mm256_set1_ps(0.001_333_355_8);
     p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.009_618_129));
     p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.055_504_11));
-    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.240_226_51));
-    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.693_147_18));
+    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.240_226_5));
+    p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(0.693_147_2));
     p = _mm256_fmadd_ps(p, f, _mm256_set1_ps(1.0));
 
     let ki = _mm256_cvtps_epi32(k);
@@ -533,83 +551,100 @@ unsafe fn hsum256(v: __m256) -> f32 {
 // SAFETY: avx2+fma required. Caller must also pass `q`/`kt`/`v` of at least
 // `keys`-derived length and an `out` of HD elements; the strided callers above
 // slice exactly those extents.
-unsafe fn xattn_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], keys: usize, s: &mut [f32]) {
-    // ---- scores = q @ K, contraction outermost so the inner loop is an AXPY
-    // over keys with no horizontal reduction ----
-    s[..keys].fill(0.0);
-    for t in 0..HD {
-        let qv = _mm256_set1_ps(*q.get_unchecked(t));
-        let krow = kt.as_ptr().add(t * keys);
-        let sp = s.as_mut_ptr();
+unsafe fn xattn_head(
+    q: &[f32],
+    kt: &[f32],
+    v: &[f32],
+    out: &mut [f32],
+    keys: usize,
+    s: &mut [f32],
+) {
+    // SAFETY: whole-body wrapper inserted by the edition-2024
+    // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
+    // the contract is stated on the `unsafe fn` signature above.
+    unsafe {
+        // ---- scores = q @ K, contraction outermost so the inner loop is an AXPY
+        // over keys with no horizontal reduction ----
+        s[..keys].fill(0.0);
+        for t in 0..HD {
+            let qv = _mm256_set1_ps(*q.get_unchecked(t));
+            let krow = kt.as_ptr().add(t * keys);
+            let sp = s.as_mut_ptr();
+            let mut j = 0;
+            while j + 8 <= keys {
+                let acc =
+                    _mm256_fmadd_ps(qv, _mm256_loadu_ps(krow.add(j)), _mm256_loadu_ps(sp.add(j)));
+                _mm256_storeu_ps(sp.add(j), acc);
+                j += 8;
+            }
+            let qs = *q.get_unchecked(t);
+            for jj in j..keys {
+                *s.get_unchecked_mut(jj) += qs * *krow.add(jj);
+            }
+        }
+
+        // ---- softmax over the whole key axis ----
+        let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
         let mut j = 0;
         while j + 8 <= keys {
-            let acc = _mm256_fmadd_ps(qv, _mm256_loadu_ps(krow.add(j)), _mm256_loadu_ps(sp.add(j)));
-            _mm256_storeu_ps(sp.add(j), acc);
+            vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(s.as_ptr().add(j)));
             j += 8;
         }
-        let qs = *q.get_unchecked(t);
-        for jj in j..keys {
-            *s.get_unchecked_mut(jj) += qs * *krow.add(jj);
+        let mut mx = if keys >= 8 {
+            hmax256(vmax)
+        } else {
+            f32::NEG_INFINITY
+        };
+        for &x in s[j..keys].iter() {
+            mx = mx.max(x);
         }
-    }
+        let vmx = _mm256_set1_ps(mx);
+        let mut vsum = _mm256_setzero_ps();
+        let mut j = 0;
+        while j + 8 <= keys {
+            let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(s.as_ptr().add(j)), vmx));
+            _mm256_storeu_ps(s.as_mut_ptr().add(j), p);
+            vsum = _mm256_add_ps(vsum, p);
+            j += 8;
+        }
+        let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
+        for x in s[j..keys].iter_mut() {
+            *x = (*x - mx).exp();
+            sum += *x;
+        }
+        let inv = 1.0 / sum;
 
-    // ---- softmax over the whole key axis ----
-    let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
-    let mut j = 0;
-    while j + 8 <= keys {
-        vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(s.as_ptr().add(j)));
-        j += 8;
+        // ---- out = weights @ V, AXPY over HD (8 vectors), V read once ----
+        let mut a0 = _mm256_setzero_ps();
+        let mut a1 = _mm256_setzero_ps();
+        let mut a2 = _mm256_setzero_ps();
+        let mut a3 = _mm256_setzero_ps();
+        let mut a4 = _mm256_setzero_ps();
+        let mut a5 = _mm256_setzero_ps();
+        let mut a6 = _mm256_setzero_ps();
+        let mut a7 = _mm256_setzero_ps();
+        for jj in 0..keys {
+            let w = _mm256_set1_ps(*s.get_unchecked(jj) * inv);
+            let vp = v.as_ptr().add(jj * HD);
+            a0 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp), a0);
+            a1 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(8)), a1);
+            a2 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(16)), a2);
+            a3 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(24)), a3);
+            a4 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(32)), a4);
+            a5 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(40)), a5);
+            a6 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(48)), a6);
+            a7 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(56)), a7);
+        }
+        let op = out.as_mut_ptr();
+        _mm256_storeu_ps(op, a0);
+        _mm256_storeu_ps(op.add(8), a1);
+        _mm256_storeu_ps(op.add(16), a2);
+        _mm256_storeu_ps(op.add(24), a3);
+        _mm256_storeu_ps(op.add(32), a4);
+        _mm256_storeu_ps(op.add(40), a5);
+        _mm256_storeu_ps(op.add(48), a6);
+        _mm256_storeu_ps(op.add(56), a7);
     }
-    let mut mx = if keys >= 8 { hmax256(vmax) } else { f32::NEG_INFINITY };
-    for &x in s[j..keys].iter() {
-        mx = mx.max(x);
-    }
-    let vmx = _mm256_set1_ps(mx);
-    let mut vsum = _mm256_setzero_ps();
-    let mut j = 0;
-    while j + 8 <= keys {
-        let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(s.as_ptr().add(j)), vmx));
-        _mm256_storeu_ps(s.as_mut_ptr().add(j), p);
-        vsum = _mm256_add_ps(vsum, p);
-        j += 8;
-    }
-    let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
-    for x in s[j..keys].iter_mut() {
-        *x = (*x - mx).exp();
-        sum += *x;
-    }
-    let inv = 1.0 / sum;
-
-    // ---- out = weights @ V, AXPY over HD (8 vectors), V read once ----
-    let mut a0 = _mm256_setzero_ps();
-    let mut a1 = _mm256_setzero_ps();
-    let mut a2 = _mm256_setzero_ps();
-    let mut a3 = _mm256_setzero_ps();
-    let mut a4 = _mm256_setzero_ps();
-    let mut a5 = _mm256_setzero_ps();
-    let mut a6 = _mm256_setzero_ps();
-    let mut a7 = _mm256_setzero_ps();
-    for jj in 0..keys {
-        let w = _mm256_set1_ps(*s.get_unchecked(jj) * inv);
-        let vp = v.as_ptr().add(jj * HD);
-        a0 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp), a0);
-        a1 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(8)), a1);
-        a2 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(16)), a2);
-        a3 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(24)), a3);
-        a4 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(32)), a4);
-        a5 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(40)), a5);
-        a6 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(48)), a6);
-        a7 = _mm256_fmadd_ps(w, _mm256_loadu_ps(vp.add(56)), a7);
-    }
-    let op = out.as_mut_ptr();
-    _mm256_storeu_ps(op, a0);
-    _mm256_storeu_ps(op.add(8), a1);
-    _mm256_storeu_ps(op.add(16), a2);
-    _mm256_storeu_ps(op.add(24), a3);
-    _mm256_storeu_ps(op.add(32), a4);
-    _mm256_storeu_ps(op.add(40), a5);
-    _mm256_storeu_ps(op.add(48), a6);
-    _mm256_storeu_ps(op.add(56), a7);
 }
 
 /// Decode-shape head with an **f16 K/V cache**, widened on the fly.
@@ -636,60 +671,72 @@ unsafe fn xattn_head_f16(
     keys: usize,
     s: &mut [f32],
 ) {
-    s[..keys].fill(0.0);
-    for t in 0..HD {
-        let qv = _mm256_set1_ps(*q.get_unchecked(t));
-        let krow = kt.as_ptr().add(t * keys);
-        let sp = s.as_mut_ptr();
+    // SAFETY: whole-body wrapper inserted by the edition-2024
+    // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
+    // the contract is stated on the `unsafe fn` signature above.
+    unsafe {
+        s[..keys].fill(0.0);
+        for t in 0..HD {
+            let qv = _mm256_set1_ps(*q.get_unchecked(t));
+            let krow = kt.as_ptr().add(t * keys);
+            let sp = s.as_mut_ptr();
+            let mut j = 0;
+            while j + 8 <= keys {
+                let kf = _mm256_cvtph_ps(_mm_loadu_si128(krow.add(j) as *const __m128i));
+                _mm256_storeu_ps(
+                    sp.add(j),
+                    _mm256_fmadd_ps(qv, kf, _mm256_loadu_ps(sp.add(j))),
+                );
+                j += 8;
+            }
+            let qs = *q.get_unchecked(t);
+            for jj in j..keys {
+                *s.get_unchecked_mut(jj) += qs * f32::from(half::f16::from_bits(*krow.add(jj)));
+            }
+        }
+
+        let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
         let mut j = 0;
         while j + 8 <= keys {
-            let kf = _mm256_cvtph_ps(_mm_loadu_si128(krow.add(j) as *const __m128i));
-            _mm256_storeu_ps(sp.add(j), _mm256_fmadd_ps(qv, kf, _mm256_loadu_ps(sp.add(j))));
+            vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(s.as_ptr().add(j)));
             j += 8;
         }
-        let qs = *q.get_unchecked(t);
-        for jj in j..keys {
-            *s.get_unchecked_mut(jj) += qs * f32::from(half::f16::from_bits(*krow.add(jj)));
+        let mut mx = if keys >= 8 {
+            hmax256(vmax)
+        } else {
+            f32::NEG_INFINITY
+        };
+        for &x in s[j..keys].iter() {
+            mx = mx.max(x);
         }
-    }
-
-    let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
-    let mut j = 0;
-    while j + 8 <= keys {
-        vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(s.as_ptr().add(j)));
-        j += 8;
-    }
-    let mut mx = if keys >= 8 { hmax256(vmax) } else { f32::NEG_INFINITY };
-    for &x in s[j..keys].iter() {
-        mx = mx.max(x);
-    }
-    let vmx = _mm256_set1_ps(mx);
-    let mut vsum = _mm256_setzero_ps();
-    let mut j = 0;
-    while j + 8 <= keys {
-        let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(s.as_ptr().add(j)), vmx));
-        _mm256_storeu_ps(s.as_mut_ptr().add(j), p);
-        vsum = _mm256_add_ps(vsum, p);
-        j += 8;
-    }
-    let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
-    for x in s[j..keys].iter_mut() {
-        *x = (*x - mx).exp();
-        sum += *x;
-    }
-    let inv = 1.0 / sum;
-
-    let mut a: [__m256; 8] = [_mm256_setzero_ps(); 8];
-    for jj in 0..keys {
-        let w = _mm256_set1_ps(*s.get_unchecked(jj) * inv);
-        let vp = v.as_ptr().add(jj * HD);
-        for (c, acc) in a.iter_mut().enumerate() {
-            let vf = _mm256_cvtph_ps(_mm_loadu_si128(vp.add(c * 8) as *const __m128i));
-            *acc = _mm256_fmadd_ps(w, vf, *acc);
+        let vmx = _mm256_set1_ps(mx);
+        let mut vsum = _mm256_setzero_ps();
+        let mut j = 0;
+        while j + 8 <= keys {
+            let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(s.as_ptr().add(j)), vmx));
+            _mm256_storeu_ps(s.as_mut_ptr().add(j), p);
+            vsum = _mm256_add_ps(vsum, p);
+            j += 8;
         }
-    }
-    for (c, acc) in a.iter().enumerate() {
-        _mm256_storeu_ps(out.as_mut_ptr().add(c * 8), *acc);
+        let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
+        for x in s[j..keys].iter_mut() {
+            *x = (*x - mx).exp();
+            sum += *x;
+        }
+        let inv = 1.0 / sum;
+
+        let mut a: [__m256; 8] = [_mm256_setzero_ps(); 8];
+        for jj in 0..keys {
+            let w = _mm256_set1_ps(*s.get_unchecked(jj) * inv);
+            let vp = v.as_ptr().add(jj * HD);
+            for (c, acc) in a.iter_mut().enumerate() {
+                let vf = _mm256_cvtph_ps(_mm_loadu_si128(vp.add(c * 8) as *const __m128i));
+                *acc = _mm256_fmadd_ps(w, vf, *acc);
+            }
+        }
+        for (c, acc) in a.iter().enumerate() {
+            _mm256_storeu_ps(out.as_mut_ptr().add(c * 8), *acc);
+        }
     }
 }
 
@@ -708,65 +755,71 @@ unsafe fn scores_tile(
     cols: usize,
     seq: usize,
 ) {
-    let kbase = kt.as_ptr();
-    let mut i0 = 0;
-    while i0 + 4 <= rows {
-        let mut j0 = 0;
-        while j0 + 16 <= cols {
-            let (mut a00, mut a01) = (_mm256_setzero_ps(), _mm256_setzero_ps());
-            let (mut a10, mut a11) = (_mm256_setzero_ps(), _mm256_setzero_ps());
-            let (mut a20, mut a21) = (_mm256_setzero_ps(), _mm256_setzero_ps());
-            let (mut a30, mut a31) = (_mm256_setzero_ps(), _mm256_setzero_ps());
+    // SAFETY: whole-body wrapper inserted by the edition-2024
+    // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
+    // the contract is stated on the `unsafe fn` signature above.
+    unsafe {
+        let kbase = kt.as_ptr();
+        let mut i0 = 0;
+        while i0 + 4 <= rows {
+            let mut j0 = 0;
+            while j0 + 16 <= cols {
+                let (mut a00, mut a01) = (_mm256_setzero_ps(), _mm256_setzero_ps());
+                let (mut a10, mut a11) = (_mm256_setzero_ps(), _mm256_setzero_ps());
+                let (mut a20, mut a21) = (_mm256_setzero_ps(), _mm256_setzero_ps());
+                let (mut a30, mut a31) = (_mm256_setzero_ps(), _mm256_setzero_ps());
 
-            for t in 0..HD {
-                let kp = kbase.add(t * seq + k0 + j0);
-                let kv0 = _mm256_loadu_ps(kp);
-                let kv1 = _mm256_loadu_ps(kp.add(8));
+                for t in 0..HD {
+                    let kp = kbase.add(t * seq + k0 + j0);
+                    let kv0 = _mm256_loadu_ps(kp);
+                    let kv1 = _mm256_loadu_ps(kp.add(8));
 
-                let q0 = _mm256_set1_ps(*qs.get_unchecked(i0 * HD + t));
-                let q1 = _mm256_set1_ps(*qs.get_unchecked((i0 + 1) * HD + t));
-                let q2 = _mm256_set1_ps(*qs.get_unchecked((i0 + 2) * HD + t));
-                let q3 = _mm256_set1_ps(*qs.get_unchecked((i0 + 3) * HD + t));
+                    let q0 = _mm256_set1_ps(*qs.get_unchecked(i0 * HD + t));
+                    let q1 = _mm256_set1_ps(*qs.get_unchecked((i0 + 1) * HD + t));
+                    let q2 = _mm256_set1_ps(*qs.get_unchecked((i0 + 2) * HD + t));
+                    let q3 = _mm256_set1_ps(*qs.get_unchecked((i0 + 3) * HD + t));
 
-                a00 = _mm256_fmadd_ps(q0, kv0, a00);
-                a01 = _mm256_fmadd_ps(q0, kv1, a01);
-                a10 = _mm256_fmadd_ps(q1, kv0, a10);
-                a11 = _mm256_fmadd_ps(q1, kv1, a11);
-                a20 = _mm256_fmadd_ps(q2, kv0, a20);
-                a21 = _mm256_fmadd_ps(q2, kv1, a21);
-                a30 = _mm256_fmadd_ps(q3, kv0, a30);
-                a31 = _mm256_fmadd_ps(q3, kv1, a31);
+                    a00 = _mm256_fmadd_ps(q0, kv0, a00);
+                    a01 = _mm256_fmadd_ps(q0, kv1, a01);
+                    a10 = _mm256_fmadd_ps(q1, kv0, a10);
+                    a11 = _mm256_fmadd_ps(q1, kv1, a11);
+                    a20 = _mm256_fmadd_ps(q2, kv0, a20);
+                    a21 = _mm256_fmadd_ps(q2, kv1, a21);
+                    a30 = _mm256_fmadd_ps(q3, kv0, a30);
+                    a31 = _mm256_fmadd_ps(q3, kv1, a31);
+                }
+
+                let sp = scores.as_mut_ptr();
+                _mm256_storeu_ps(sp.add(i0 * BK + j0), a00);
+                _mm256_storeu_ps(sp.add(i0 * BK + j0 + 8), a01);
+                _mm256_storeu_ps(sp.add((i0 + 1) * BK + j0), a10);
+                _mm256_storeu_ps(sp.add((i0 + 1) * BK + j0 + 8), a11);
+                _mm256_storeu_ps(sp.add((i0 + 2) * BK + j0), a20);
+                _mm256_storeu_ps(sp.add((i0 + 2) * BK + j0 + 8), a21);
+                _mm256_storeu_ps(sp.add((i0 + 3) * BK + j0), a30);
+                _mm256_storeu_ps(sp.add((i0 + 3) * BK + j0 + 8), a31);
+                j0 += 16;
             }
-
-            let sp = scores.as_mut_ptr();
-            _mm256_storeu_ps(sp.add(i0 * BK + j0), a00);
-            _mm256_storeu_ps(sp.add(i0 * BK + j0 + 8), a01);
-            _mm256_storeu_ps(sp.add((i0 + 1) * BK + j0), a10);
-            _mm256_storeu_ps(sp.add((i0 + 1) * BK + j0 + 8), a11);
-            _mm256_storeu_ps(sp.add((i0 + 2) * BK + j0), a20);
-            _mm256_storeu_ps(sp.add((i0 + 2) * BK + j0 + 8), a21);
-            _mm256_storeu_ps(sp.add((i0 + 3) * BK + j0), a30);
-            _mm256_storeu_ps(sp.add((i0 + 3) * BK + j0 + 8), a31);
-            j0 += 16;
+            for j in j0..cols {
+                for m in 0..4 {
+                    let mut a = 0f32;
+                    for t in 0..HD {
+                        a += qs.get_unchecked((i0 + m) * HD + t)
+                            * kt.get_unchecked(t * seq + k0 + j);
+                    }
+                    *scores.get_unchecked_mut((i0 + m) * BK + j) = a;
+                }
+            }
+            i0 += 4;
         }
-        for j in j0..cols {
-            for m in 0..4 {
+        for i in i0..rows {
+            for j in 0..cols {
                 let mut a = 0f32;
                 for t in 0..HD {
-                    a += qs.get_unchecked((i0 + m) * HD + t) * kt.get_unchecked(t * seq + k0 + j);
+                    a += qs.get_unchecked(i * HD + t) * kt.get_unchecked(t * seq + k0 + j);
                 }
-                *scores.get_unchecked_mut((i0 + m) * BK + j) = a;
+                *scores.get_unchecked_mut(i * BK + j) = a;
             }
-        }
-        i0 += 4;
-    }
-    for i in i0..rows {
-        for j in 0..cols {
-            let mut a = 0f32;
-            for t in 0..HD {
-                a += qs.get_unchecked(i * HD + t) * kt.get_unchecked(t * seq + k0 + j);
-            }
-            *scores.get_unchecked_mut(i * BK + j) = a;
         }
     }
 }
@@ -784,58 +837,63 @@ unsafe fn accum_pv(
     k0: usize,
     cols: usize,
 ) {
-    let vbase = v.as_ptr();
-    let mut i0 = 0;
-    while i0 + 4 <= rows {
-        let mut d0 = 0;
-        while d0 < HD {
-            let ap = acc.as_mut_ptr();
-            let mut a00 = _mm256_loadu_ps(ap.add(i0 * HD + d0));
-            let mut a01 = _mm256_loadu_ps(ap.add(i0 * HD + d0 + 8));
-            let mut a10 = _mm256_loadu_ps(ap.add((i0 + 1) * HD + d0));
-            let mut a11 = _mm256_loadu_ps(ap.add((i0 + 1) * HD + d0 + 8));
-            let mut a20 = _mm256_loadu_ps(ap.add((i0 + 2) * HD + d0));
-            let mut a21 = _mm256_loadu_ps(ap.add((i0 + 2) * HD + d0 + 8));
-            let mut a30 = _mm256_loadu_ps(ap.add((i0 + 3) * HD + d0));
-            let mut a31 = _mm256_loadu_ps(ap.add((i0 + 3) * HD + d0 + 8));
+    // SAFETY: whole-body wrapper inserted by the edition-2024
+    // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
+    // the contract is stated on the `unsafe fn` signature above.
+    unsafe {
+        let vbase = v.as_ptr();
+        let mut i0 = 0;
+        while i0 + 4 <= rows {
+            let mut d0 = 0;
+            while d0 < HD {
+                let ap = acc.as_mut_ptr();
+                let mut a00 = _mm256_loadu_ps(ap.add(i0 * HD + d0));
+                let mut a01 = _mm256_loadu_ps(ap.add(i0 * HD + d0 + 8));
+                let mut a10 = _mm256_loadu_ps(ap.add((i0 + 1) * HD + d0));
+                let mut a11 = _mm256_loadu_ps(ap.add((i0 + 1) * HD + d0 + 8));
+                let mut a20 = _mm256_loadu_ps(ap.add((i0 + 2) * HD + d0));
+                let mut a21 = _mm256_loadu_ps(ap.add((i0 + 2) * HD + d0 + 8));
+                let mut a30 = _mm256_loadu_ps(ap.add((i0 + 3) * HD + d0));
+                let mut a31 = _mm256_loadu_ps(ap.add((i0 + 3) * HD + d0 + 8));
 
-            for j in 0..cols {
-                let vp = vbase.add((k0 + j) * HD + d0);
-                let vv0 = _mm256_loadu_ps(vp);
-                let vv1 = _mm256_loadu_ps(vp.add(8));
+                for j in 0..cols {
+                    let vp = vbase.add((k0 + j) * HD + d0);
+                    let vv0 = _mm256_loadu_ps(vp);
+                    let vv1 = _mm256_loadu_ps(vp.add(8));
 
-                let p0 = _mm256_set1_ps(*scores.get_unchecked(i0 * BK + j));
-                let p1 = _mm256_set1_ps(*scores.get_unchecked((i0 + 1) * BK + j));
-                let p2 = _mm256_set1_ps(*scores.get_unchecked((i0 + 2) * BK + j));
-                let p3 = _mm256_set1_ps(*scores.get_unchecked((i0 + 3) * BK + j));
+                    let p0 = _mm256_set1_ps(*scores.get_unchecked(i0 * BK + j));
+                    let p1 = _mm256_set1_ps(*scores.get_unchecked((i0 + 1) * BK + j));
+                    let p2 = _mm256_set1_ps(*scores.get_unchecked((i0 + 2) * BK + j));
+                    let p3 = _mm256_set1_ps(*scores.get_unchecked((i0 + 3) * BK + j));
 
-                a00 = _mm256_fmadd_ps(p0, vv0, a00);
-                a01 = _mm256_fmadd_ps(p0, vv1, a01);
-                a10 = _mm256_fmadd_ps(p1, vv0, a10);
-                a11 = _mm256_fmadd_ps(p1, vv1, a11);
-                a20 = _mm256_fmadd_ps(p2, vv0, a20);
-                a21 = _mm256_fmadd_ps(p2, vv1, a21);
-                a30 = _mm256_fmadd_ps(p3, vv0, a30);
-                a31 = _mm256_fmadd_ps(p3, vv1, a31);
+                    a00 = _mm256_fmadd_ps(p0, vv0, a00);
+                    a01 = _mm256_fmadd_ps(p0, vv1, a01);
+                    a10 = _mm256_fmadd_ps(p1, vv0, a10);
+                    a11 = _mm256_fmadd_ps(p1, vv1, a11);
+                    a20 = _mm256_fmadd_ps(p2, vv0, a20);
+                    a21 = _mm256_fmadd_ps(p2, vv1, a21);
+                    a30 = _mm256_fmadd_ps(p3, vv0, a30);
+                    a31 = _mm256_fmadd_ps(p3, vv1, a31);
+                }
+
+                _mm256_storeu_ps(ap.add(i0 * HD + d0), a00);
+                _mm256_storeu_ps(ap.add(i0 * HD + d0 + 8), a01);
+                _mm256_storeu_ps(ap.add((i0 + 1) * HD + d0), a10);
+                _mm256_storeu_ps(ap.add((i0 + 1) * HD + d0 + 8), a11);
+                _mm256_storeu_ps(ap.add((i0 + 2) * HD + d0), a20);
+                _mm256_storeu_ps(ap.add((i0 + 2) * HD + d0 + 8), a21);
+                _mm256_storeu_ps(ap.add((i0 + 3) * HD + d0), a30);
+                _mm256_storeu_ps(ap.add((i0 + 3) * HD + d0 + 8), a31);
+                d0 += 16;
             }
-
-            _mm256_storeu_ps(ap.add(i0 * HD + d0), a00);
-            _mm256_storeu_ps(ap.add(i0 * HD + d0 + 8), a01);
-            _mm256_storeu_ps(ap.add((i0 + 1) * HD + d0), a10);
-            _mm256_storeu_ps(ap.add((i0 + 1) * HD + d0 + 8), a11);
-            _mm256_storeu_ps(ap.add((i0 + 2) * HD + d0), a20);
-            _mm256_storeu_ps(ap.add((i0 + 2) * HD + d0 + 8), a21);
-            _mm256_storeu_ps(ap.add((i0 + 3) * HD + d0), a30);
-            _mm256_storeu_ps(ap.add((i0 + 3) * HD + d0 + 8), a31);
-            d0 += 16;
+            i0 += 4;
         }
-        i0 += 4;
-    }
-    for i in i0..rows {
-        for j in 0..cols {
-            let p = *scores.get_unchecked(i * BK + j);
-            for d in 0..HD {
-                *acc.get_unchecked_mut(i * HD + d) += p * v.get_unchecked((k0 + j) * HD + d);
+        for i in i0..rows {
+            for j in 0..cols {
+                let p = *scores.get_unchecked(i * BK + j);
+                for d in 0..HD {
+                    *acc.get_unchecked_mut(i * HD + d) += p * v.get_unchecked((k0 + j) * HD + d);
+                }
             }
         }
     }
@@ -847,35 +905,48 @@ unsafe fn accum_pv(
 // SAFETY: avx2+fma required. `row` must hold at least `cols` elements; the
 // caller slices it to exactly BK and passes `cols <= BK`.
 unsafe fn softmax_row(row: &mut [f32], cols: usize, run_max: f32) -> (f32, f32, f32) {
-    let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
-    let mut j = 0;
-    while j + 8 <= cols {
-        vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(row.as_ptr().add(j)));
-        j += 8;
-    }
-    let mut block_max = if cols >= 8 { hmax256(vmax) } else { f32::NEG_INFINITY };
-    for &s in row[j..cols].iter() {
-        block_max = block_max.max(s);
-    }
+    // SAFETY: whole-body wrapper inserted by the edition-2024
+    // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
+    // the contract is stated on the `unsafe fn` signature above.
+    unsafe {
+        let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
+        let mut j = 0;
+        while j + 8 <= cols {
+            vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(row.as_ptr().add(j)));
+            j += 8;
+        }
+        let mut block_max = if cols >= 8 {
+            hmax256(vmax)
+        } else {
+            f32::NEG_INFINITY
+        };
+        for &s in row[j..cols].iter() {
+            block_max = block_max.max(s);
+        }
 
-    let new_max = run_max.max(block_max);
-    let correction = if run_max.is_finite() { (run_max - new_max).exp() } else { 0.0 };
+        let new_max = run_max.max(block_max);
+        let correction = if run_max.is_finite() {
+            (run_max - new_max).exp()
+        } else {
+            0.0
+        };
 
-    let vnm = _mm256_set1_ps(new_max);
-    let mut vsum = _mm256_setzero_ps();
-    let mut j = 0;
-    while j + 8 <= cols {
-        let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(row.as_ptr().add(j)), vnm));
-        _mm256_storeu_ps(row.as_mut_ptr().add(j), p);
-        vsum = _mm256_add_ps(vsum, p);
-        j += 8;
+        let vnm = _mm256_set1_ps(new_max);
+        let mut vsum = _mm256_setzero_ps();
+        let mut j = 0;
+        while j + 8 <= cols {
+            let p = exp256(_mm256_sub_ps(_mm256_loadu_ps(row.as_ptr().add(j)), vnm));
+            _mm256_storeu_ps(row.as_mut_ptr().add(j), p);
+            vsum = _mm256_add_ps(vsum, p);
+            j += 8;
+        }
+        let mut block_sum = if cols >= 8 { hsum256(vsum) } else { 0.0 };
+        for s in row[j..cols].iter_mut() {
+            *s = (*s - new_max).exp();
+            block_sum += *s;
+        }
+        (new_max, correction, block_sum)
     }
-    let mut block_sum = if cols >= 8 { hsum256(vsum) } else { 0.0 };
-    for s in row[j..cols].iter_mut() {
-        *s = (*s - new_max).exp();
-        block_sum += *s;
-    }
-    (new_max, correction, block_sum)
 }
 
 #[cfg(test)]

@@ -30,8 +30,8 @@ pub mod speaker;
 pub mod text_decoder;
 pub mod tokenizer;
 pub mod vad;
-pub mod wav2vec2;
 pub mod vocab_int8;
+pub mod wav2vec2;
 
 pub mod whisper_candle;
 
@@ -58,6 +58,9 @@ impl AsrEngine for OxiWhisper {
     }
 
     fn transcribe(&self, _audio: &AudioBuffer, _opts: &AsrOptions) -> Result<Transcript> {
-        Err(Error::NotImplemented { task: Task::Asr, engine: "oxiwhisper".into() })
+        Err(Error::NotImplemented {
+            task: Task::Asr,
+            engine: "oxiwhisper".into(),
+        })
     }
 }

@@ -68,10 +68,7 @@ impl Diarizer {
     }
 
     /// Load from an already-parsed manifest.
-    pub fn from_manifest(
-        manifest: &ffai_models::ModelManifest,
-        device: Device,
-    ) -> Result<Self> {
+    pub fn from_manifest(manifest: &ffai_models::ModelManifest, device: Device) -> Result<Self> {
         let resolved = manifest.fetch()?;
         let weights = resolved.file("embedding_model.ckpt")?.to_path_buf();
 
@@ -153,11 +150,10 @@ impl Diarizer {
                 state,
             );
         }
-        let windows =
-            {
-                let (win, hop) = diarize::geometry();
-                diarize::subsegment_at(regions, win, hop, stream_offset_secs)
-            };
+        let windows = {
+            let (win, hop) = diarize::geometry();
+            diarize::subsegment_at(regions, win, hop, stream_offset_secs)
+        };
         if windows.is_empty() {
             return Vec::new();
         }
@@ -238,12 +234,17 @@ impl Diarizer {
         // A backwards jump means a different stream; drop the history rather
         // than silently refuse to embed the new audio.
         if state.note_buffer(buffer_end) {
-            self.trace("incr", &format!("stream rewound to {offset:.2} — history dropped"));
+            self.trace(
+                "incr",
+                &format!("stream rewound to {offset:.2} — history dropped"),
+            );
         }
 
         // Regions in absolute time; the state speaks only absolute.
-        let abs: Vec<(f64, f64)> =
-            regions.iter().map(|r| (offset + r.start, offset + r.end)).collect();
+        let abs: Vec<(f64, f64)> = regions
+            .iter()
+            .map(|r| (offset + r.start, offset + r.end))
+            .collect();
         let pending = state.pending(&abs, win, hop);
 
         // Embed only what is new, converting each absolute window back to a
@@ -259,10 +260,10 @@ impl Diarizer {
             if frames == 0 {
                 continue;
             }
-            if let Ok(e) = self.model.embed(&feats, frames) {
-                if e.iter().all(|v| v.is_finite()) {
-                    fresh.push((ws, we, e));
-                }
+            if let Ok(e) = self.model.embed(&feats, frames)
+                && e.iter().all(|v| v.is_finite())
+            {
+                fresh.push((ws, we, e));
             }
             CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -368,20 +369,22 @@ impl Diarizer {
             // what a hit saves; it does not need to be a fast hash to pay.
             let key = content_key(window);
             let caching = cache_enabled();
-            if caching {
-                if let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
-                    CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    self.trace(
-                        "win",
-                        &format!("{start:.4} {end:.4} len={} key={key:016x} HIT", b - a),
-                    );
-                    kept.push((start, end));
-                    embeddings.push(hit);
-                    continue;
-                }
+            if caching && let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned())
+            {
+                CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.trace(
+                    "win",
+                    &format!("{start:.4} {end:.4} len={} key={key:016x} HIT", b - a),
+                );
+                kept.push((start, end));
+                embeddings.push(hit);
+                continue;
             }
             CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.trace("win", &format!("{start:.4} {end:.4} len={} key={key:016x} MISS", b - a));
+            self.trace(
+                "win",
+                &format!("{start:.4} {end:.4} len={} key={key:016x} MISS", b - a),
+            );
 
             let (feats, frames) = self.fbank.compute(window);
             if frames == 0 {

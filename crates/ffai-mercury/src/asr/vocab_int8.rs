@@ -62,6 +62,7 @@ struct Shared {
     nblocks: usize,
     /// f32 weights, retained ONLY under `FFAI_VOCAB_AUDIT` so each token can be
     /// scored against an exact oracle. Costs ~80 MB; never allocated otherwise.
+    #[allow(dead_code)] // exact-oracle tensor: ~80 MB, allocated only when scoring against it
     oracle: Option<Tensor>,
 }
 
@@ -92,7 +93,10 @@ impl Int8Vocab {
         if d % blk != 0 {
             return Ok(None);
         }
-        let w: Vec<f32> = embeddings.to_dtype(ffai_core::candle::DType::F32)?.flatten_all()?.to_vec1()?;
+        let w: Vec<f32> = embeddings
+            .to_dtype(ffai_core::candle::DType::F32)?
+            .flatten_all()?
+            .to_vec1()?;
 
         let nblocks = d / blk;
         let mut q = vec![0i8; vocab * d];
@@ -240,27 +244,29 @@ fn have_avx2() -> bool {
 // SAFETY: caller must ensure avx2, and that `w`/`bscale`/`xu` are long enough
 // for `nblocks*blk`. Guarded by `have_avx2()` at the single call site.
 unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, blk: usize) -> f32 {
-    let ones = _mm256_set1_epi16(1);
-    let wp = w.as_ptr();
-    let xp = xu.as_ptr();
-    let mut acc = 0f32;
-    for b in 0..nblocks {
-        // One block may span several 32-lane steps when FFAI_VOCAB_BLK > 32.
-        let mut p = _mm256_setzero_si256();
-        let base = b * blk;
-        let mut o = 0;
-        while o < blk {
-            let x0 = _mm256_loadu_si256(xp.add(base + o) as *const __m256i);
-            let w0 = _mm256_loadu_si256(wp.add(base + o) as *const __m256i);
-            p = _mm256_add_epi32(p, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones));
-            o += 32;
+    unsafe {
+        let ones = _mm256_set1_epi16(1);
+        let wp = w.as_ptr();
+        let xp = xu.as_ptr();
+        let mut acc = 0f32;
+        for b in 0..nblocks {
+            // One block may span several 32-lane steps when FFAI_VOCAB_BLK > 32.
+            let mut p = _mm256_setzero_si256();
+            let base = b * blk;
+            let mut o = 0;
+            while o < blk {
+                let x0 = _mm256_loadu_si256(xp.add(base + o) as *const __m256i);
+                let w0 = _mm256_loadu_si256(wp.add(base + o) as *const __m256i);
+                p = _mm256_add_epi32(p, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones));
+                o += 32;
+            }
+            let s = _mm_add_epi32(_mm256_castsi256_si128(p), _mm256_extracti128_si256(p, 1));
+            let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b01_00_11_10));
+            let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b00_01_00_01));
+            acc += _mm_cvtsi128_si32(s) as f32 * *bscale.get_unchecked(b);
         }
-        let s = _mm_add_epi32(_mm256_castsi256_si128(p), _mm256_extracti128_si256(p, 1));
-        let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b01_00_11_10));
-        let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b00_01_00_01));
-        acc += _mm_cvtsi128_si32(s) as f32 * *bscale.get_unchecked(b);
+        acc
     }
-    acc
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -271,7 +277,6 @@ unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, bl
 unsafe fn dot_i8_blocked(_w: &[i8], _b: &[f32], _xu: &[u8], _n: usize, _k: usize) -> f32 {
     unreachable!("guarded by have_avx2()")
 }
-
 
 // ---------------------------------------------------------------------------
 // Argmax-disagreement audit
@@ -337,7 +342,11 @@ pub fn audit_report() -> Option<String> {
   argmax flips vs f32 oracle {flips} ({:.3}%)
            mean oracle top1-top2 margin on flips {:.4}",
         flips as f64 / total as f64 * 100.0,
-        if flips > 0 { margin / flips as f64 } else { 0.0 }
+        if flips > 0 {
+            margin / flips as f64
+        } else {
+            0.0
+        }
     ))
 }
 
@@ -368,7 +377,11 @@ mod tests {
         let want: Vec<f32> = x.matmul(&w.t()?)?.flatten_all()?.to_vec1()?;
 
         let am = |v: &Vec<f32>| {
-            v.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0
+            v.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .unwrap()
+                .0
         };
         let (picked, best) = (am(&ours), am(&want));
         let scale = want.iter().fold(0f32, |m, &v| m.max(v.abs()));
