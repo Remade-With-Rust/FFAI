@@ -83,15 +83,18 @@ unsafe_code = "warn"
 
 [profile.release]
 lto = "thin"
-# Hardening gate H-05. Integer overflow wraps silently in a default release build, and
-# this workspace parses untrusted model files, audio and documents - a wrapped length or
-# index is how a bounds check gets skipped. Keep the checks.
+# NO `overflow-checks` here, and that is a DECISION, not an oversight.
 #
-# PERFORMANCE NOTE, unmeasured as of 2026-08-15: this affects INTEGER arithmetic only.
-# The inference hot paths are f32/f16 and the SIMD kernels use intrinsics, so the
-# exposure is indexing and loop counters rather than the math. That is an argument, not
-# a measurement - re-run the Mercury and Carmenta benchmark gates before merging, and if
-# a gate regresses, record a time-bounded waiver rather than silently dropping the flag.
-overflow-checks = true
-# One codegen unit: better optimisation, and it recovers some of what the checks cost.
+# Hardening gate H-05 asks for it. It was measured on 2026-08-15 and costs
+# 1.060x on the TTS pipeline and 1.094x on the decoder stage (n=22 paired,
+# z=+4.26, null-arm floor 0.995 - see crates/ffai-mercury/docs/plans/
+# use-protection-please.md). The gate's justification is that we parse
+# attacker-controlled model files; we do not - model files come from a trusted
+# source and the deployer owns the cache directory. With that threat retired,
+# the 6% buys nothing and the gate is waived. The waiver is time-bounded and
+# recorded in the plan file's Waivers table.
+#
+# If model files ever become untrusted - user-supplied voice packs, a shared
+# cache, downloads without hash verification - this decision expires WITH them
+# and overflow-checks goes back on.
 codegen-units = 1

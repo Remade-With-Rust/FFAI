@@ -118,7 +118,16 @@ def parse_plan(path: Path):
     phase = "Unfiled"
     seen = set()
 
+    # Gate IDs legitimately appear in OTHER tables - waivers reference a gate, the risk
+    # register cites one. Only rows inside the '## Checklist' section are checklist rows;
+    # without this scoping a waiver row reads as a duplicate gate and voids the parse.
+    in_checklist = False
+
     for line in text.splitlines():
+        if line.startswith('## '):
+            in_checklist = line.strip().lower().startswith('## checklist')
+            continue
+
         heading = HEADING_RE.match(line)
         if heading:
             phase = heading.group(1)
@@ -128,7 +137,7 @@ def parse_plan(path: Path):
         if m and not rows:
             meta.setdefault(m.group("key").strip().lower(), m.group("val"))
 
-        if not ROW_RE.match(line):
+        if not in_checklist or not ROW_RE.match(line):
             continue
 
         cells = split_row(line)

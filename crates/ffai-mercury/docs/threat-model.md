@@ -89,8 +89,15 @@ that the cache is a trust boundary the deployer must protect (this file).
 
 ## 6. Accepted, for now
 
-- **The model cache is trusted.** Documented rather than fixed. Deployers must treat the
-  cache directory as security-relevant and restrict write access to it. Tracked as R-001.
+- **The model cache is trusted — ACCEPTED as a product decision (2026-08-15).** Mercury
+  does not parse hostile model files, because model files are not hostile in any supported
+  deployment: they come from a trusted source and the deployer owns the cache directory.
+  This is now an explicit assumption rather than an unexamined gap, and two things follow
+  from it. First, release builds carry no `overflow-checks` (gate H-05 waived; the flag
+  costs ~6% of synthesis and defends a threat we have retired). Second, the assumption is
+  **load-bearing**: if voice packs ever become user-supplied, or the cache becomes
+  writable by other users, or weights arrive without hash verification, this decision
+  expires and both the flag and the B2 boundary work come back. Tracked as R-001.
 - **No formal proof of the `unsafe` kernels.** They carry SAFETY arguments and an
   inventory; Miri cannot execute most of the x86 intrinsics involved, so a scalar-fallback
   test path is required before that gate can close. Tracked as R-002.

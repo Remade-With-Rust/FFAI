@@ -76,7 +76,7 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 |---|---|---|---|---|
 | H-03 | Toolchain pinned (`rust-toolchain.toml`) | Completed | `rust-toolchain.toml` pins channel 1.95.0 + rustfmt/clippy/rust-src/llvm-tools-preview, profile minimal; matches the workspace `rust-version` | |
 | H-04 | Committed `.cargo/config.toml` hardening defaults | Completed | `.cargo/config.toml` gains a `cfg(all(target_os="linux", target_env="gnu"))` block — full RELRO, `-z now`, noexecstack, frame pointers. Target-scoped deliberately: a blanket `[build]` block would override the existing wasm section and break MSVC | |
-| H-05 | ★ Release profile hardened (overflow-checks, LTO, panic policy) | Completed | `[profile.release]` now `overflow-checks = true`, `codegen-units = 1`, `lto = "thin"`. **Cost MEASURED 2026-08-15: 1.060x on the TTS pipeline, 1.094x on the decoder stage** (n=22 paired, z=+4.26, null-arm floor 0.995). ASR unmeasured — no cached whisper weights. Ship/revert decision is R-005 | |
+| H-05 | ★ Release profile hardened (overflow-checks, LTO, panic policy) | Incomplete | **WAIVED 2026-08-15** (see Waivers). `overflow-checks` deliberately NOT set: measured cost 1.060x TTS pipeline / 1.094x decoder (n=22 paired, z=+4.26, null floor 0.995), and the threat it defends - parsing attacker-controlled model files - is retired by an explicit product decision that model files are trusted (R-001). `[profile.release]` keeps `lto = "thin"` and `codegen-units = 1`. The waiver expires if model files ever become untrusted | |
 | H-06 | Security toolchain available to CI and developers | Completed | `.github/workflows/harden.yml` installs the pinned tool set via `dtolnay/rust-toolchain`, `EmbarkStudios/cargo-deny-action@v2`, `rustsec/audit-check@v2` | |
 
 ### Phase 2 — Supply chain
@@ -219,11 +219,11 @@ have been accepted yet** — that is why H-41 is `Incomplete`.
 
 | ID | Risk | Likelihood | Impact | Mitigation status | Accepted by | Review date |
 |---|---|---|---|---|---|---|
-| R-001 | Model cache is parsed as trusted. Anyone who can write to the cache directory controls ONNX/JSON/lexicon bytes and a live mmap; hash verification is upstream in `ffai-models` and unasserted here | Medium (local write access, or a hole upstream) | High (mmap UB is a memory-safety primitive) | Open — no verification, no fuzzing at this boundary | | |
+| R-001 | Model cache is parsed as trusted: ONNX/JSON/lexicon bytes and a live mmap are taken on faith, and hash verification lives upstream in `ffai-models` | Medium | High (mmap UB is a memory-safety primitive) | **ACCEPTED 2026-08-15** — model files are trusted input by product decision; deployers must restrict write access to the cache. Documented in the crate README and threat model. **Load-bearing**: user-supplied voice packs or a shared cache invalidate it | Tim | 2026-11-15 |
 | R-002 | `SendPtr` disjointness is argued in a comment, not proven. A wrong band calculation is a data race in released code, not a panic | Low | High (UB, silently wrong audio) | Open — no TSan, no Miri, no proof | | |
 | R-003 | 126 `unwrap`/`expect` sites and unreviewed `as` casts on lengths. `overflow-checks` is now ON in release (H-05), so arithmetic no longer wraps silently — but a panic on untrusted input is still a DoS | Medium | Medium | Partly mitigated — checks on; per-callsite triage of the decode path outstanding (H-18) | | 2026-11-15 |
 | R-004 | CI now exists (H-37) but `fmt` and `clippy` are advisory, not blocking, and branch protection is not configured (C-12) — so a regression in either can still land | Medium | Medium | Partly mitigated — test/deny/audit/table-freshness block; fmt+clippy dated to 2026-09-30 | | 2026-09-30 |
-| R-005 | `overflow-checks = true` costs **~6% on the TTS pipeline and ~10% on the decoder stage** (measured 2026-08-15, method below). The **ASR path is unmeasured** — no whisper weights are cached here, and the whisper.cpp comparison is the claim actually at risk | High (measured) | Medium — real throughput loss on a shipped path, no safety impact | **Measured; decision pending** — keep, revert under a time-bounded waiver, or split (explicit `wrapping_*` in the proven-bounded kernels, checks retained on untrusted-input paths) | | 2026-08-22 |
+| R-005 | `overflow-checks` costs ~6% TTS pipeline / ~10% decoder (measured 2026-08-15). **DECIDED: reverted.** The flag defends against hostile model files, which this product does not accept | n/a - closed | n/a | **Closed 2026-08-15** — reverted; H-05 waived; the assumption is documented in the crate README and threat model. Reopens automatically if model files become untrusted | Tim | 2026-11-15 |
 
 ---
 
@@ -281,9 +281,11 @@ stays open regardless of what is decided about TTS.
 
 Time-bounded only. An expired waiver is an `Incomplete` gate, not a `Completed` one.
 
+H-05 is **v1.0.0-blocking**. Waiving it does not make the gate pass — it records that the project lead accepted the residual risk with the numbers in front of them, which is what STANDARD.md §14 requires before a 1.0.0 release with an open ★ gate.
+
 | Gate | Reason | Granted by | Expires |
 |---|---|---|---|
-| | | | |
+| H-05 | `overflow-checks` in release defends against parsing attacker-controlled input. Mercury does not accept hostile model files — they come from a trusted source and the deployer owns the cache. Measured cost 1.060x TTS pipeline / 1.094x decoder stage, so the flag buys nothing against a retired threat. Assumption documented in the crate README and threat model | Tim (project lead) | 2026-11-15, or immediately if model files become untrusted (user-supplied voice packs, shared cache, unverified downloads) |
 
 ---
 
