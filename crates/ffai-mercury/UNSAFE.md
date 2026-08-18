@@ -10,7 +10,11 @@ it sound. **Last audited: 2026-08-15** (survey depth — no Miri, no TSan; see H
 > anywhere, add the site here in the same commit, because nothing else will catch it.
 
 **Totals**: 28 sites — 12 blocks, 11 `unsafe fn`, 2 `unsafe impl`, 3 allow-suppressed.
-**SAFETY comments**: 7. **21 sites have no SAFETY comment.** That is the open work.
+**SAFETY comments**: 27, covering all 28 sites — the adjacent `unsafe impl Send`/`Sync`
+pair at `decoder_kernels.rs:194-195` shares one comment. Each states the invariant *and*
+what upholds it: for Class A the dominating `have_avx2()`/`have_f16c()` check, for Class B
+the index arithmetic that makes the regions disjoint, for Class C the fact that the
+invariant is **not** enforceable from inside this crate.
 
 ## Class A — SIMD kernels (`#[target_feature]`)
 
@@ -20,7 +24,7 @@ without AVX2 is UB. Soundness therefore rests entirely on the runtime dispatch c
 
 | File | Sites | Guard |
 |---|---|---|
-| [`asr/flash_attn.rs`](src/asr/flash_attn.rs) | 15 — lines 186, 272, 278, 290, 303, 347, 409 (blocks); 458, 481, 490, 501, 594, 663, 738, 806 (`fn`) | `have_avx2()` / `have_f16c()`; non-x86 builds get an `unreachable!` stub |
+| [`asr/flash_attn.rs`](src/asr/flash_attn.rs) | 15 — 7 blocks, 8 `fn` | `have_avx2()` / `have_f16c()`; non-x86 builds get an `unreachable!` stub |
 | [`tts/decoder_kernels.rs`](src/tts/decoder_kernels.rs) | 4 — 212, 241, 1341 (blocks); 732 (`fn`) | same dispatch pattern |
 | [`asr/f16_gemv.rs`](src/asr/f16_gemv.rs) | 2 — 141 (block); 153 (`fn`) | `have_f16c()` |
 | [`asr/vocab_int8.rs`](src/asr/vocab_int8.rs) | 2 — 202 (block); 237 (`fn`) | `have_avx2()` |
@@ -29,14 +33,16 @@ without AVX2 is UB. Soundness therefore rests entirely on the runtime dispatch c
 already tested for that feature at runtime. Adding a call site without the check is UB on
 older CPUs and will not fail any current test — the CI machine has AVX2.
 
-**Open**: the blocks that additionally build slices with `from_raw_parts_mut` (flash_attn
-186/272/278, decoder_kernels 212/241) carry a *second* obligation — see Class B.
+Two of these blocks carry a *second* obligation beyond the feature check: `flash_attn`'s
+f16 K/V views reinterpret candle's `F16` storage as `u16`, which is sound only because
+`half::f16` is `repr(transparent)` over `u16` and the tensors were checked contiguous.
+Both say so at the site.
 
 ## Class B — raw-pointer sharing across rayon tasks
 
 | Site | What it does | Argument | Status |
 |---|---|---|---|
-| [`tts/decoder_kernels.rs:194-195`](src/tts/decoder_kernels.rs#L194) | `unsafe impl Send`/`Sync` for `SendPtr(*mut f32)` | Each task writes a disjoint `(co, t)` region, so no two tasks alias | **Comment only. Not proven.** |
+| [`tts/decoder_kernels.rs:194-195`](src/tts/decoder_kernels.rs#L194) | `unsafe impl Send`/`Sync` for `SendPtr(*mut f32)` | Chunk co-ranges partition `[0, c_out)` and block t-ranges partition `[0, l_out)`, so no two tasks address the same element | Documented at the site, **still unproven by tooling** — no TSan |
 | `tts/decoder_kernels.rs:212, 241` | `from_raw_parts_mut` into the output buffer per task | Disjointness as above | SAFETY comment present |
 | `asr/flash_attn.rs:186` | `from_raw_parts_mut` per attention head band | Disjoint column bands | SAFETY comment present |
 
@@ -44,9 +50,9 @@ older CPUs and will not fail any current test — the CI machine has AVX2.
 non-overlapping. This is the crate's highest-risk `unsafe`: a wrong bound is a data race,
 not a panic — silently wrong audio, or memory corruption, with no test failing.
 
-**Open**: no TSan run (H-24), no Miri (H-23). The disjointness argument lives in prose. The
-cheapest real check is TSan on the TTS decode path; that is the single highest-value item
-in this file.
+**Open**: no TSan run (H-24), no Miri (H-23). The disjointness argument is now written at
+the site rather than only in this file, but a comment is not a proof. TSan on the TTS
+decode path remains the single highest-value item here.
 
 ## Class C — memory-mapped model weights (allow-suppressed)
 
@@ -67,7 +73,8 @@ upstream hash verification at this boundary instead of assuming it.
 
 ## Rules for changing anything here
 
-1. Every new `unsafe` gets a `// SAFETY:` comment naming the invariant *and* what upholds it.
+1. Every new `unsafe` gets a `// SAFETY:` comment naming the invariant *and* what upholds
+   it. "Coverage is 28/28" is a gate (H-16) — a new site without a comment breaks it.
 2. Every new site is added to this file in the same commit, including `#[allow]`-ed ones.
 3. Class A: prove the runtime feature check dominates the call site.
 4. Class B: state the disjointness arithmetic explicitly; TSan before merge.

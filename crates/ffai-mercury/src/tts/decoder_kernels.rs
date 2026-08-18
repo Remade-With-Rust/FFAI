@@ -191,6 +191,11 @@ fn conv1d_flat_prepacked_into(
     // co-ranges partition [0, c_out) and block t-ranges partition
     // [0, l_out); no two tasks touch the same (co, t).
     struct SendPtr(*mut f32);
+    // SAFETY: `SendPtr` carries a raw pointer across rayon tasks. Sending it is
+    // sound ONLY because the task decomposition below gives every task a disjoint
+    // (co, t) region: chunk co-ranges partition [0, c_out) and block t-ranges
+    // partition [0, l_out), so no two tasks ever address the same element. If that
+    // index arithmetic changes, this impl becomes unsound - see UNSAFE.md class B.
     unsafe impl Send for SendPtr {}
     unsafe impl Sync for SendPtr {}
     let out_ptr = SendPtr(out.as_mut_ptr());
@@ -729,6 +734,10 @@ pub fn conv1d_depthwise_flat(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[allow(clippy::too_many_arguments)]
+// SAFETY: caller must ensure avx2+fma (dispatched on
+// `is_x86_feature_detected!` above) and must pass only the INTERIOR region,
+// where every tap's input index is in range - the edge columns are handled by
+// the scalar path precisely because this kernel does not bounds-check them.
 unsafe fn conv_quad_avx2(
     xv: &[f32],
     len: usize,

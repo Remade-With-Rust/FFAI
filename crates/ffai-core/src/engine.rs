@@ -343,7 +343,7 @@ impl DepthOutput {
 }
 
 /// Options for a depth run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DepthOptions {
     /// Resize the map to the SOURCE image's resolution and undo the
     /// letterbox, instead of returning the raw network output at stride 4.
@@ -351,12 +351,6 @@ pub struct DepthOptions {
     /// Off by default: the raw map is what the model computed, and resizing
     /// is a lossy convenience the caller may want to do differently.
     pub full_resolution: bool,
-}
-
-impl Default for DepthOptions {
-    fn default() -> Self {
-        Self { full_resolution: false }
-    }
 }
 
 /// Monocular depth estimation.

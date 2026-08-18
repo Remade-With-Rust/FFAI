@@ -269,12 +269,19 @@ impl CustomOp3 for FlashAttnOp {
             if self.qlen == 1 && l1.is_contiguous() && l2.is_contiguous() && l3.is_contiguous() {
                 let (heads, keys) = (self.heads, self.keys);
                 let q = &q[l1.start_offset()..l1.start_offset() + heads * HD];
+                // SAFETY: reinterpreting candle's F16 storage as the u16 bit pattern the kernel
+                // consumes. `half::f16` is repr(transparent) over u16, so the cast is
+                // layout-compatible and not a reinterpretation of unrelated types. The length
+                // heads*HD*keys is exactly this tensor's element count, and `l2.is_contiguous()`
+                // was checked above, so start_offset + that length stays inside the allocation.
                 let ktb: &[u16] = unsafe {
                     std::slice::from_raw_parts(
                         kt.as_ptr().add(l2.start_offset()) as *const u16,
                         heads * HD * keys,
                     )
                 };
+                // SAFETY: as for `ktb` above - repr(transparent) f16 -> u16 over a contiguous
+                // tensor whose length was checked, offset by its own start_offset.
                 let vb: &[u16] = unsafe {
                     std::slice::from_raw_parts(
                         v.as_ptr().add(l3.start_offset()) as *const u16,
@@ -287,6 +294,11 @@ impl CustomOp3 for FlashAttnOp {
                     out.par_chunks_mut(HD)
                         .zip(scratch.par_chunks_mut(keys))
                         .enumerate()
+                        // SAFETY: two obligations. (1) avx2+fma+f16c: `have_avx2()` and `have_f16c()`
+                        // were both checked at the top of this function, which is the only path here.
+                        // (2) Aliasing: `par_chunks_mut(HD)` hands each task a distinct output chunk and
+                        // `scratch.par_chunks_mut(keys)` a distinct scratch row, so no two tasks write
+                        // the same element.
                         .for_each(|(h, (o, sc))| unsafe {
                             xattn_head_f16(
                                 &q[h * HD..(h + 1) * HD],
@@ -300,6 +312,9 @@ impl CustomOp3 for FlashAttnOp {
                 } else {
                 let mut scratch = vec![0f32; keys];
                 for h in 0..heads {
+                    // SAFETY: same feature guard as the parallel arm above. This branch is serial,
+                    // so the `&mut out[..]` slices are exclusive by the borrow checker rather than
+                    // by argument.
                     unsafe {
                         xattn_head_f16(
                             &q[h * HD..(h + 1) * HD],
@@ -344,6 +359,9 @@ impl CustomOp3 for FlashAttnOp {
             // above confirms it.
             let mut scratch = vec![0f32; keys];
             for h in 0..heads {
+                // SAFETY: `have_avx2()` was checked at the top of this function. Serial loop, so
+                // each `&mut out[h*HD..]` borrow is exclusive; `scratch` is reused across heads
+                // and fully overwritten by the callee before it is read.
                 unsafe {
                     xattn_head(
                         &q[h * HD..(h + 1) * HD],
@@ -406,6 +424,10 @@ fn flash_head_strided(
 
         for k0 in (0..seq).step_by(BK) {
             let cols = BK.min(seq - k0);
+            // SAFETY: every callee here (`scores_tile`, `softmax_row`, `accum_pv`) is
+            // avx2+fma-gated, and this function is only reached once `have_avx2()` has
+            // passed. Slice bounds: `rows`/`cols` are clamped to the block size against
+            // `seq` immediately above, so no tile read crosses the end of `q`/`kt`.
             unsafe {
                 scores_tile(qblock, kt, &mut scores, rows, k0, cols, seq);
                 for i in 0..rows {
@@ -455,6 +477,9 @@ fn flash_head(_q: &[f32], _kt: &[f32], _v: &[f32], _out: &mut [f32], _seq: usize
 /// minimax polynomial on [-0.5, 0.5].
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+// SAFETY: caller must ensure avx2+fma are available. Every call site is
+// dominated by a `have_avx2()` check; the non-x86 build replaces this with an
+// `unreachable!` stub.
 unsafe fn exp256(x: __m256) -> __m256 {
     let x = _mm256_max_ps(x, _mm256_set1_ps(-87.0));
     let t = _mm256_mul_ps(x, _mm256_set1_ps(std::f32::consts::LOG2_E));
@@ -478,6 +503,8 @@ unsafe fn exp256(x: __m256) -> __m256 {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+// SAFETY: avx2+fma required; see `exp256`. Pure register shuffle - no memory
+// access, so feature availability is the only obligation.
 unsafe fn hmax256(v: __m256) -> f32 {
     let m = _mm_max_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps(v, 1));
     let m = _mm_max_ps(m, _mm_movehl_ps(m, m));
@@ -487,6 +514,7 @@ unsafe fn hmax256(v: __m256) -> f32 {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+// SAFETY: avx2+fma required; see `exp256`. Pure register reduction.
 unsafe fn hsum256(v: __m256) -> f32 {
     let s = _mm_add_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps(v, 1));
     let s = _mm_add_ps(s, _mm_movehl_ps(s, s));
@@ -498,6 +526,9 @@ unsafe fn hsum256(v: __m256) -> f32 {
 /// major; `v` is (keys, HD). `out` is HD floats.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+// SAFETY: avx2+fma required. Caller must also pass `q`/`kt`/`v` of at least
+// `keys`-derived length and an `out` of HD elements; the strided callers above
+// slice exactly those extents.
 unsafe fn xattn_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], keys: usize, s: &mut [f32]) {
     // ---- scores = q @ K, contraction outermost so the inner loop is an AXPY
     // over keys with no horizontal reduction ----
@@ -591,6 +622,8 @@ unsafe fn xattn_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], keys: us
 /// between the two matmuls ran 82 % slower in half precision.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma,f16c")]
+// SAFETY: avx2+fma+f16c required (this variant widens f16 K/V in-register).
+// Length contract as for `xattn_head`, with `kt`/`v` in f16 bit patterns.
 unsafe fn xattn_head_f16(
     q: &[f32],
     kt: &[u16],
@@ -660,6 +693,8 @@ unsafe fn xattn_head_f16(
 /// across the whole 64-step contraction. Each pair of K loads feeds 8 FMAs.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+// SAFETY: avx2+fma required. `rows`/`cols` must not exceed the caller's tile
+// bounds - the flash loop clamps both against `seq` before calling.
 unsafe fn scores_tile(
     qs: &[f32],
     kt: &[f32],
@@ -735,6 +770,8 @@ unsafe fn scores_tile(
 /// `acc += P_block @ V_block`, 4 rows × 16 head-dims in registers.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+// SAFETY: avx2+fma required. `scores` must hold `rows*BK` elements and `acc`
+// `rows*HD`; both are allocated at those sizes by the flash loop.
 unsafe fn accum_pv(
     scores: &[f32],
     v: &[f32],
@@ -803,6 +840,8 @@ unsafe fn accum_pv(
 /// Online softmax over one score row → (new running max, correction, sum).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+// SAFETY: avx2+fma required. `row` must hold at least `cols` elements; the
+// caller slices it to exactly BK and passes `cols <= BK`.
 unsafe fn softmax_row(row: &mut [f32], cols: usize, run_max: f32) -> (f32, f32, f32) {
     let mut vmax = _mm256_set1_ps(f32::NEG_INFINITY);
     let mut j = 0;

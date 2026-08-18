@@ -199,6 +199,9 @@ impl CustomOp1 for Int8VocabOp {
             let v0 = ci * 512;
             for (i, slot) in o.iter_mut().enumerate() {
                 let v = v0 + i;
+                // SAFETY: avx2 - the op is only built when `have_avx2()` passes (guard above).
+                // The slices handed to the kernel are derived from `nblocks`/`blk`, which
+                // partition the quantized weight buffer exactly.
                 let acc = unsafe {
                     dot_i8_blocked(
                         &q.qw[v * d..(v + 1) * d],
@@ -234,6 +237,8 @@ fn have_avx2() -> bool {
 /// row-scaled version avoided it by reducing once per row.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+// SAFETY: caller must ensure avx2, and that `w`/`bscale`/`xu` are long enough
+// for `nblocks*blk`. Guarded by `have_avx2()` at the single call site.
 unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, blk: usize) -> f32 {
     let ones = _mm256_set1_epi16(1);
     let wp = w.as_ptr();

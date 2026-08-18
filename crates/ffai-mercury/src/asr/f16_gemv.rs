@@ -138,6 +138,10 @@ impl CustomOp1 for F16GemvOp {
         let x = &xf[l.start_offset()..l.start_offset() + d];
         let mut out = vec![0f32; o];
         for (i, slot) in out.iter_mut().enumerate() {
+            // SAFETY: avx2+fma+f16c - the op is only constructed when `have_f16c()` passes
+            // (see the guard above), so this call cannot be reached on a CPU without them.
+            // Pointer bounds: `w` holds out_dim*in_dim f16 weights and `i < out_dim`, so
+            // `w.add(i*d)` addresses a full `d`-element row inside the allocation.
             *slot = unsafe { dot_f16(self.w.as_ptr().add(i * d), x, d) };
         }
         Ok((CpuStorage::F32(out), Shape::from_dims(&[1, o])))
@@ -150,6 +154,9 @@ impl CustomOp1 for F16GemvOp {
 /// reduction happens once per output row, amortized over `d` contractions.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma,f16c")]
+// SAFETY: caller must ensure avx2+fma+f16c, and that `w` points at `d` readable
+// f16 values. The only call site is guarded by `have_f16c()` and slices a
+// single weight row.
 unsafe fn dot_f16(w: *const u16, x: &[f32], d: usize) -> f32 {
     let mut acc0 = _mm256_setzero_ps();
     let mut acc1 = _mm256_setzero_ps();
