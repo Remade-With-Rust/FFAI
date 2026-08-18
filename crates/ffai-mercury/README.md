@@ -269,16 +269,16 @@ crate's [threat model](docs/threat-model.md).
 
 **Tier** critical-path · **Audited** 2026-08-15 (survey) · **v1.0.0 gates** 8/16 · [Full checklist](docs/plans/use-protection-please.md)
 
-`██████████░░░░░░░░░░` **55%** &nbsp;·&nbsp; 23 Completed · 0 Scheduled · 19 Incomplete · 13 N/A
+`███████████░░░░░░░░░` **60%** &nbsp;·&nbsp; 25 Completed · 0 Scheduled · 17 Incomplete · 13 N/A
 
 | Phase | ✅ Completed | 🗓 Scheduled | ⬜ Incomplete | · N/A |
 |---|--:|--:|--:|--:|
 | 0 — Threat modeling | 2 | 0 | 0 | 0 |
 | 1 — Toolchain | 3 | 0 | 1 | 0 |
-| 2 — Supply chain | 5 | 0 | 3 | 0 |
+| 2 — Supply chain | 6 | 0 | 2 | 0 |
 | 3 — Code level | 3 | 0 | 4 | 0 |
 | 4 — Static analysis | 1 | 0 | 0 | 0 |
-| 5 — Dynamic analysis | 0 | 0 | 3 | 0 |
+| 5 — Dynamic analysis | 1 | 0 | 2 | 0 |
 | 6 — Fuzzing and properties | 2 | 0 | 2 | 0 |
 | 7 — Formal verification | 0 | 0 | 1 | 0 |
 | 8 — Build and binary | 0 | 0 | 0 | 2 |
@@ -286,7 +286,7 @@ crate's [threat model](docs/threat-model.md).
 | 10 — Cryptography | 0 | 0 | 0 | 3 |
 | 11 — CI/CD, release, and operations | 3 | 0 | 2 | 0 |
 | 12 — Compliance controls | 4 | 0 | 3 | 7 |
-| **Total** | **23** | **0** | **19** | **13** |
+| **Total** | **25** | **0** | **17** | **13** |
 
 **Compliance** — *technical controls evidenced by this audit. NOT a certification, an attestation, or an auditor's opinion.*
 
