@@ -43,15 +43,25 @@ fn load_png_reference(path: &Path) -> Option<ImageBuffer> {
         }
         png::ColorType::Indexed => return None,
     };
-    Some(ImageBuffer { width: info.width, height: info.height, format, data: buf })
+    Some(ImageBuffer {
+        width: info.width,
+        height: info.height,
+        format,
+        data: buf,
+    })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let dir = args.next().unwrap_or_else(|| "corpora/clips/diana-coco-v3".into());
+    let dir = args
+        .next()
+        .unwrap_or_else(|| "corpora/clips/diana-coco-v3".into());
     let rounds: usize = args.next().and_then(|v| v.parse().ok()).unwrap_or(7);
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap();
     let mut paths: Vec<PathBuf> = std::fs::read_dir(root.join(&dir))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "png"))
@@ -66,8 +76,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bytes = 0usize;
     for p in &paths {
         let a = ffai_media::load_image(p)?;
-        let Some(b) = load_png_reference(p) else { continue };
-        assert!(a.data == b.data && a.format == b.format, "{} differs", p.display());
+        let Some(b) = load_png_reference(p) else {
+            continue;
+        };
+        assert!(
+            a.data == b.data && a.format == b.format,
+            "{} differs",
+            p.display()
+        );
         bytes += a.data.len();
     }
 
@@ -99,10 +115,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         png_best = png_best.min(b);
     }
 
-    println!("{dir} · {} images · {:.1} MiB decoded · best of {rounds}", paths.len(), bytes as f64 / 1048576.0);
-    println!("  rusty_png     : {rff_best:8.2} ms   ({:.1} MiB/s)", bytes as f64 / 1048576.0 / (rff_best / 1e3));
-    println!("  upstream png  : {png_best:8.2} ms   ({:.1} MiB/s)", bytes as f64 / 1048576.0 / (png_best / 1e3));
-    println!("  rusty_png is {:.3}x upstream's time  ({})", rff_best / png_best,
-             if rff_best < png_best { "OURS FASTER" } else { "ours slower" });
+    println!(
+        "{dir} · {} images · {:.1} MiB decoded · best of {rounds}",
+        paths.len(),
+        bytes as f64 / 1048576.0
+    );
+    println!(
+        "  rusty_png     : {rff_best:8.2} ms   ({:.1} MiB/s)",
+        bytes as f64 / 1048576.0 / (rff_best / 1e3)
+    );
+    println!(
+        "  upstream png  : {png_best:8.2} ms   ({:.1} MiB/s)",
+        bytes as f64 / 1048576.0 / (png_best / 1e3)
+    );
+    println!(
+        "  rusty_png is {:.3}x upstream's time  ({})",
+        rff_best / png_best,
+        if rff_best < png_best {
+            "OURS FASTER"
+        } else {
+            "ours slower"
+        }
+    );
     Ok(())
 }

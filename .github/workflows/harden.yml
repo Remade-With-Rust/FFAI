@@ -34,8 +34,8 @@ jobs:
         with: { components: rustfmt }
       # BLOCKING for ffai-mercury: that crate is now rustfmt-clean, so a
       # regression there fails the build.
-      - name: Format (blocking - ffai-mercury)
-        run: cargo fmt -p ffai-mercury --check
+      - name: Format (blocking - clean crates)
+        run: cargo fmt -p ffai-mercury -p ffai-media --check
 
       # ADVISORY for the rest: ~1500 pre-existing rustfmt diffs across the other
       # crates. Blocking today would make the gate red on arrival, which teaches
@@ -60,8 +60,13 @@ jobs:
       # waiting for the whole workspace.
       # `-A unsafe_code` is permanent and deliberate: that lint is an INVENTORY
       # signal, and UNSAFE.md plus tools/lint_invariants.py are what enforce it.
-      - name: Clippy (blocking - ffai-mercury)
-        run: cargo clippy -p ffai-mercury --lib -- -D warnings -A unsafe_code
+      # BLOCKING for every crate that is clean. A crate joins this list the moment
+      # it reaches zero, rather than waiting for the whole workspace - which is
+      # how the debt shrinks without CI ever being red.
+      # Remaining: ffai-bench 8, ffai-diana 30, ffai-carmenta 34, ffai-cli 64.
+      - name: Clippy (blocking - clean crates)
+        run: |
+          cargo clippy -p ffai-core -p ffai-models -p ffai-media -p ffai-argus                        -p ffai-mercury --lib -- -D warnings -A unsafe_code
 
       # ADVISORY for the rest: other crates still carry pre-existing findings.
       # TO FLIP: clear a crate, move it into the blocking step above. 2026-09-30.
@@ -126,6 +131,23 @@ jobs:
       - run: cargo miri test -p ffai-mercury --test miri_safe
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
+
+  kani:
+    name: Kani (bounded proofs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked kani-verifier && cargo kani setup
+      # ADVISORY on arrival: the harnesses in crates/ffai-mercury/src/proofs.rs are
+      # written and compile, but Kani does not run on Windows so they have never
+      # been executed. The first green run on this runner is what flips this to
+      # blocking - claiming a proof nobody has run is worse than no proof.
+      # TO FLIP: delete continue-on-error once this passes. Target 2026-09-30.
+      - name: Verify
+        continue-on-error: true
+        run: cargo kani -p ffai-mercury
 
   invariants:
     name: Project invariants

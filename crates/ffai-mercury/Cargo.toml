@@ -51,6 +51,10 @@ cuda = ["ffai-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 metal = ["ffai-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
 [lints.rust]
+# `cfg(kani)` is set by the Kani verifier, not by cargo, so --check-cfg does not
+# know it exists and warns on src/proofs.rs. Declare it rather than silencing
+# unexpected_cfgs wholesale - the lint is worth keeping for genuine typos.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 # Mirrors [workspace.lints.rust]. Restated because this crate needs its own
 # [lints.clippy] table below, and `[lints] workspace = true` is all-or-nothing:
 # it cannot be combined with local lint tables. If the workspace rule changes,

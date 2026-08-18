@@ -65,7 +65,10 @@ pub fn parse_avcc(extradata: &[u8]) -> Option<AvcC> {
         i += n;
     }
     if i >= extradata.len() {
-        return Some(AvcC { parameter_sets: out, nal_length_size });
+        return Some(AvcC {
+            parameter_sets: out,
+            nal_length_size,
+        });
     }
     let num_pps = extradata[i] as usize;
     i += 1;
@@ -82,7 +85,10 @@ pub fn parse_avcc(extradata: &[u8]) -> Option<AvcC> {
         out.extend_from_slice(&extradata[i..i + n]);
         i += n;
     }
-    Some(AvcC { parameter_sets: out, nal_length_size })
+    Some(AvcC {
+        parameter_sets: out,
+        nal_length_size,
+    })
 }
 
 /// Rewrite one AVCC packet as Annex-B.

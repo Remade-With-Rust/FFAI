@@ -25,6 +25,10 @@
 //! oracle). Synthesis knobs live on [`ffai_core::engine::TtsOptions`], and
 //! `seed` makes output byte-identical run over run.
 
+// Bounded proofs (gate H-30). `cfg(kani)` only, so a normal build never sees it.
+#[cfg(kani)]
+mod proofs;
+
 pub mod asr;
 pub mod manifests;
 pub mod tts;

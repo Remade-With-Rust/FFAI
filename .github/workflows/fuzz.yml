@@ -1,0 +1,77 @@
+# Continuous fuzzing (gate H-27).
+#
+# Coverage-guided fuzzing only counts if it keeps running, so this is a SCHEDULE,
+# not a PR gate: a nightly budget per target, with the corpus carried between runs
+# so coverage accumulates instead of restarting from the seeds every night.
+#
+# LINUX ONLY, and that is a finding rather than a preference. `cargo fuzz` cannot
+# build these targets on Windows/MSVC: `onig_sys` - the C regex library `tokenizers`
+# pulls for its `onig` feature - fails to compile under the fuzzer's sanitizer
+# flags. `tokenizers` offers a pure-Rust `fancy-regex` alternative, which would
+# remove that C dependency and unblock local fuzzing; it is NOT swapped here
+# because the tokenizer oracle skips without cached whisper weights, so the change
+# would be unverified on the ASR correctness path.
+
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "0 3 * * *"      # nightly, off the hardening gate's Monday slot
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes per target"
+        type: string
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # one target crashing must not hide the others
+      matrix:
+        target: [mel_compute, normalize_text, onnx_parse, lexicon_parse]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+
+      # Restore the accumulated corpus. Without this every run starts from the
+      # seeds and re-derives the same shallow coverage forever - which looks like
+      # fuzzing and is not.
+      - name: Restore corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: crates/ffai-mercury/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        working-directory: crates/ffai-mercury
+        run: |
+          MINUTES="${{ inputs.minutes || '10' }}"
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=$((MINUTES * 60)) -print_final_stats=1
+
+      - name: Save corpus
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: crates/ffai-mercury/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      # A crash is the product. Keep it even though the job failed - especially
+      # then - so it can become a regression seed.
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: |
+            crates/ffai-mercury/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
