@@ -5,6 +5,19 @@
 //! it wires stages and manages the loaded model, which is exactly the
 //! division that makes each stage separately testable.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -201,6 +214,10 @@ impl AsrEngine for WhisperCandle {
         }
     }
 
+    // The speaker-table guard is deliberately held across clustering: the table
+    // must not change under it, which is the entire point of persisting speakers
+    // between calls. Tightening the scope would reintroduce the race.
+    #[allow(clippy::significant_drop_tightening)]
     fn transcribe(&self, audio: &AudioBuffer, opts: &AsrOptions) -> Result<Transcript> {
         let mut guard = self.state.lock().map_err(|_| {
             Error::Other("whisper-candle state lock poisoned by an earlier panic".into())
@@ -349,6 +366,10 @@ impl AsrEngine for WhisperCandle {
         let total_secs = mono.samples.len() as f64 / sr;
         let window_secs_max = f64::from(opts.vad_chunk_secs).clamp(1.0, mel::CHUNK_SECONDS as f64);
         let mut point = 0.0f64;
+        // The 1e-6 epsilon is precisely the guard against float accumulation
+        // that makes this loop terminate cleanly at the end of the audio; a
+        // bare `<` is what would be wrong here.
+        #[allow(clippy::while_float)]
         while point < total_secs - 1e-6 {
             let window_start = if vad_on {
                 // First speech at or after `point`; silence between is never

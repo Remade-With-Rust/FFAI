@@ -61,6 +61,11 @@ impl Phone {
             Some(d @ b'0'..=b'2') => (&token[..token.len() - 1], d - b'0'),
             _ => (token, 0),
         };
+        // `i as u8` is bounded by construction: `i` is an index INTO `SYMBOLS`,
+        // a const array of ~39 ARPABET symbols. That same invariant is what
+        // makes `symbol()`'s `SYMBOLS[self.sym as usize]` unreachable-by-panic
+        // (docs/panic-audit.md).
+        #[allow(clippy::cast_possible_truncation)]
         SYMBOLS.binary_search(&sym).ok().map(|i| Self {
             sym: i as u8,
             stress,

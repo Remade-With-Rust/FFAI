@@ -241,6 +241,10 @@ impl Phonemizer {
                     'o' => ("ɑː", 1),
                     'u' => ("ʌ", 1),
                     'y' => ("i", 1),
+                    // Identical bodies on purpose: different graphemes map to
+                    // the same phoneme. Merging the arms would hide which
+                    // letters the table actually covers.
+                    #[allow(clippy::match_same_arms)]
                     'c' => ("k", 1),
                     'g' => ("ɡ", 1),
                     'j' => ("dʒ", 1),

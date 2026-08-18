@@ -160,6 +160,10 @@ pub fn subsegment_at(
         if start <= region.start {
             start = region.start + hop;
         }
+        // Float loop condition, but `start` advances by a positive `hop` every
+        // iteration and the body breaks explicitly once the window reaches
+        // `region.end`, so it cannot stall on rounding.
+        #[allow(clippy::while_float)]
         while start < region.end {
             let end = (start + window).min(region.end);
             out.push((start, end));

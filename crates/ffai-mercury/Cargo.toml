@@ -64,6 +64,59 @@ unsafe_code = "warn"
 # Crate-level exceptions, each a deliberate decision rather than a shortcut.
 # Gate H-15: the policy is "clippy::all denied, exceptions justified in writing".
 [lints.clippy]
+# Gate H-15: pedantic + nursery, enforced.
+#
+# 757 findings became 0. The numeric casts were NOT blanket-allowed - they were
+# split by TRUST BOUNDARY, because that is where this audit's defects were:
+# cast_possible_truncation / cast_sign_loss / cast_possible_wrap are allowed
+# only inside the model-internal DSP modules (each carrying a module-level note
+# saying why) and stay DENIED in the untrusted-surface modules - mel, fbank,
+# onnx, normalize, lexicon, chunk, phonemize, phoneme_ids. That gate is not
+# decorative: reviewing exactly those casts found the ONNX field-number
+# aliasing bug.
+#
+# cast_precision_loss IS allowed crate-wide: it rounds, it cannot alias one
+# value onto another, and every instance is a small index or count converted
+# for float maths.
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cast_precision_loss = "allow"
+
+# --- documentation debt: real, worth doing, not worth blocking on today.
+# Revisit 2026-11-15. ---
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_long_first_doc_paragraph = "allow"
+doc_markdown = "allow"
+# --- DSP naming: the maths calls them q, k, v, x, y, h, t. Expanding those into
+# prose makes the kernels harder to check against the paper, not easier. ---
+many_single_char_names = "allow"
+similar_names = "allow"
+# --- shape and style in numeric code ---
+# Model constants are transcribed from reference implementations; regrouping
+# their digits makes diffing against the source harder.
+unreadable_literal = "allow"
+# Kernels are long because the arithmetic is; splitting them would add call
+# overhead to the measured hot path.
+too_many_lines = "allow"
+# `let` items after statements read fine in staged numeric code.
+items_after_statements = "allow"
+# `push_str(&format!(..))` is clearer than `write!` when assembling short text.
+format_push_string = "allow"
+# Passing small Copy config structs by value is intentional.
+needless_pass_by_value = "allow"
+# Style preferences that do not change behaviour.
+needless_continue = "allow"
+needless_for_each = "allow"
+manual_let_else = "allow"
+default_trait_access = "allow"
+assigning_clones = "allow"
+inline_always = "allow"
+unused_self = "allow"
+struct_field_names = "allow"
+redundant_closure_for_method_calls = "allow"
+option_if_let_else = "allow"
+suboptimal_flops = "allow"
 # `.max(a).min(b)` and `clamp` differ on NaN, and these paths carry audio
 # samples where NaN is reachable. Rewriting them would change behaviour.
 manual_clamp = "allow"

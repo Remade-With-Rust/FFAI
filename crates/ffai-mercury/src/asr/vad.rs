@@ -109,6 +109,15 @@ fn frame_energies(samples: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+// The index cast is guarded twice: the `is_empty` early return below makes
+// `len - 1` safe, and the result is `.min(len - 1)` clamped before indexing, so
+// a NaN or out-of-range `p` cannot escape the slice. Rust also saturates
+// float->int casts rather than wrapping.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 fn percentile(sorted: &[f32], p: f64) -> f32 {
     if sorted.is_empty() {
         return MIN_DBFS;

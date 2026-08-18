@@ -43,6 +43,11 @@
 //! but its error compounds through the residual stream and it failed the
 //! corpus quality gate at 8.39 % WER. f16 keeps ~3 decimal digits.
 
+// `_mm_loadu_si128` is the UNALIGNED load - the `u` is the whole point - so
+// casting a *const u16 to *const __m128i for it is correct, not a latent
+// misalignment. clippy cannot see the consumer.
+#![allow(clippy::cast_ptr_alignment)]
+
 use ffai_core::candle::{
     CpuStorage, CustomOp1, DType, Device, Layout, Result as CandleResult, Shape, Tensor,
 };

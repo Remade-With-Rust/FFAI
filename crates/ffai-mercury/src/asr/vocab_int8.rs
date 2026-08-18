@@ -33,6 +33,22 @@
 //! weight beside it. Block scales cost a per-block horizontal reduction and
 //! ~6 % more bytes, and are why `Q8_0` uses them.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    // `_mm256_loadu_si256` is the UNALIGNED load, so casting a byte pointer to
+    // *const __m256i for it is correct; clippy cannot see the consumer.
+    clippy::cast_ptr_alignment
+)]
+
 use ffai_core::candle::{
     CpuStorage, CustomOp1, Device, Layout, Result as CandleResult, Shape, Tensor,
 };

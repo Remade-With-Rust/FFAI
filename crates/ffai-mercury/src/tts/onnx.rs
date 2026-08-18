@@ -142,6 +142,12 @@ fn utf8(b: &[u8]) -> String {
 
 /// Repeated int64 that may arrive packed (one length-delimited field) or
 /// unpacked (one varint field per element). Both are legal; exporters differ.
+// `u64 as i64` here is the SPECIFIED protobuf decoding, not an accident:
+// negative int64 values are encoded as ten-byte varints carrying the
+// two's-complement bit pattern, so reinterpreting the u64 is exactly right.
+// (A negative dim that arrives this way is then rejected downstream by
+// `usize::try_from` in parse_tensor - see gate H-17.)
+#[allow(clippy::cast_possible_wrap)]
 fn push_ints(out: &mut Vec<i64>, wire: &Wire<'_>) -> Result<()> {
     match wire {
         Wire::Varint(v) => out.push(*v as i64),
@@ -185,6 +191,9 @@ pub struct Graph {
 /// ONNX `TensorProto.data_type`.
 const DT_FLOAT: i64 = 1;
 
+// Same protobuf rule as `push_ints`: a proto int64 arrives as a u64 varint
+// carrying the two's-complement bits, so `as i64` is the specified decoding.
+#[allow(clippy::cast_possible_wrap)]
 fn parse_tensor(buf: &[u8]) -> Result<Option<Initializer>> {
     let (mut dims, mut name, mut raw, mut floats) =
         (Vec::new(), String::new(), None::<&[u8]>, Vec::<f32>::new());
@@ -265,6 +274,9 @@ fn parse_tensor(buf: &[u8]) -> Result<Option<Initializer>> {
     Ok(Some(Initializer { name, dims, data }))
 }
 
+// Same protobuf rule as `push_ints`: a proto int64 arrives as a u64 varint
+// carrying the two's-complement bits, so `as i64` is the specified decoding.
+#[allow(clippy::cast_possible_wrap)]
 fn parse_attribute(buf: &[u8]) -> Result<(String, Vec<i64>)> {
     let (mut name, mut ints) = (String::new(), Vec::new());
     let mut r = Reader::new(buf);

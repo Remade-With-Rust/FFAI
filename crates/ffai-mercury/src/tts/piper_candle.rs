@@ -16,6 +16,19 @@
 //! `corpora/refs/dump_piper_weights.py` into the model cache — see
 //! `models/piper-vits-lessac-medium.toml`. Weights are data, never vendored.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -84,7 +97,11 @@ impl PiperCandle {
                 let onnx = resolved
                     .files
                     .iter()
-                    .find(|(n, _)| n.ends_with(".onnx"))
+                    .find(|(n, _)| {
+                        std::path::Path::new(n.as_str())
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("onnx"))
+                    })
                     .map(|(_, p)| p.clone())
                     .ok_or_else(|| Error::Model("voice manifest lists no .onnx".into()))?;
                 let config = resolved

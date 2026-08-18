@@ -25,6 +25,11 @@
 //! otherwise: CPU, f32, no mask, `head_dim` 64 (every Whisper size), a query
 //! sequence long enough to amortize the tiling, and AVX2+FMA present.
 
+// `_mm_loadu_si128` is the UNALIGNED load - the `u` is the whole point - so
+// casting a *const u16 to *const __m128i for it is correct, not a latent
+// misalignment. clippy cannot see the consumer.
+#![allow(clippy::cast_ptr_alignment)]
+
 use ffai_core::candle::{
     CpuStorage, CustomOp3, DType, Device, Layout, Result as CandleResult, Shape, Tensor,
 };
@@ -454,6 +459,10 @@ fn flash_head_strided(
                         softmax_row(&mut scores[i * BK..(i + 1) * BK], cols, run_max[i]);
                     run_sum[i] = run_sum[i].mul_add(correction, block_sum);
                     run_max[i] = new_max;
+                    // Exact compare on purpose: 1.0 means softmax produced no
+                    // rescale, so the whole accumulator pass is skipped. A near-1.0
+                    // value simply does the (harmless) multiply.
+                    #[allow(clippy::float_cmp)]
                     if correction != 1.0 {
                         for x in &mut acc[i * HD..(i + 1) * HD] {
                             *x *= correction;

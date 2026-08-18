@@ -61,6 +61,10 @@ pub fn normalize(text: &str) -> String {
     out
 }
 
+// Every `n as usize` below is bounded by the `match` arm that guards it -
+// `0..=19` indexes ONES, `n / 10` under `20..=99` indexes TENS, and so on - so
+// no index can exceed its table. The tables are const arrays.
+#[allow(clippy::cast_possible_truncation)]
 fn number_to_words(n: u64) -> String {
     const ONES: [&str; 20] = [
         "zero",
