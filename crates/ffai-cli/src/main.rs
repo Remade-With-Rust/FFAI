@@ -1,6 +1,6 @@
-//! The `ffai` binary — a thin shell over the FFai library crates, in the way
+//! The `ffai` binary — a thin shell over the `FFai` library crates, in the way
 //! the `ffmpeg` binary is a thin shell over libav*. All real logic lives in
-//! the crates so any application can embed FFai without this CLI.
+//! the crates so any application can embed `FFai` without this CLI.
 
 /// The allocator, chosen by measurement.
 ///
@@ -27,19 +27,19 @@
 ///
 /// ## Why `rusty_alloc` and not `mimalloc`
 ///
-/// `mimalloc` is a C library, which is the one thing FFai exists not to depend
+/// `mimalloc` is a C library, which is the one thing `FFai` exists not to depend
 /// on — and it sat here anyway, because 1.64x is not a number you give up for
 /// a principle. `rusty_alloc` is the pure-Rust remake of the same design
 /// (mimalloc v2.4.5), so the principle no longer costs anything. Measured
 /// before switching, ABBA-interleaved with a NULL arm, `examples/alloc_ab.rs`:
 ///
-/// | tier | mimalloc | rusty_alloc | peak RSS mi -> ra |
+/// | tier | mimalloc | `rusty_alloc` | peak RSS mi -> ra |
 /// |---|---|---|---|
 /// | n (N=31) | 38.18 ms | 37.37 ms | 77.5 -> 91.4 MB |
 /// | s (N=9) | 104.81 ms | 103.53 ms | 183.6 -> 152.7 MB |
 /// | m (N=9) | 247.66 ms | 249.92 ms | 299.3 -> 269.4 MB |
 ///
-/// Pooling all 49 paired rounds rusty_alloc wins 33 at **z = +2.43**, against
+/// Pooling all 49 paired rounds `rusty_alloc` wins 33 at **z = +2.43**, against
 /// a null arm (mimalloc against itself) that wins 22 at z = -0.71. So: a real
 /// but small **~1.5 % faster**, and the honest claim is parity-or-better
 /// rather than a speed win.
@@ -76,8 +76,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 /// | arm | RSS median | RSS range | latency |
 /// |---|---|---|---|
 /// | mimalloc | 111.1 MB | 106.7–134.2 | 31.97 ms |
-/// | rusty_alloc, no trim | 195.8 MB | 92.2–403.3 | 30.63 ms |
-/// | rusty_alloc, trim 200 ms | 195.8 MB | 91.2–402.5 | 30.49 ms |
+/// | `rusty_alloc`, no trim | 195.8 MB | 92.2–403.3 | 30.63 ms |
+/// | `rusty_alloc`, trim 200 ms | 195.8 MB | 91.2–402.5 | 30.49 ms |
 ///
 /// **0.1 MB reclaimed, 0 %.** The apparent "405.6 → 195.0 MB, halved for free"
 /// was one sample against another drawn from a distribution spanning
@@ -87,13 +87,18 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 /// range.
 #[cfg(not(feature = "mimalloc"))]
 fn spawn_page_trimmer() {
-    let ms = std::env::var("FFAI_TRIM_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    let ms = std::env::var("FFAI_TRIM_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     if ms == 0 {
         return;
     }
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
-        rusty_alloc::alloc::collect(false);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            rusty_alloc::alloc::collect(false);
+        }
     });
 }
 
@@ -107,8 +112,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ffai_core::engine::{
-    AsrOptions, DepthOptions, DetectEngine, DetectOptions, OcrOptions, Task, TtsOptions,
-    VlmOptions,
+    AsrOptions, DepthOptions, DetectEngine, DetectOptions, OcrOptions, Task, TtsOptions, VlmOptions,
 };
 use ffai_core::registry::EngineRegistry;
 
@@ -262,16 +266,16 @@ enum Cmd {
         /// surveillance, fixed mounts and screen capture.
         #[arg(long)]
         live: bool,
-        /// Follow objects across frames with ByteTrack, adding a stable id to
+        /// Follow objects across frames with `ByteTrack`, adding a stable id to
         /// each detection. Tracking runs on the DETECTIONS and never reaches
         /// inside the model, the same separation `LiveSession` keeps.
         #[arg(long)]
         track: bool,
-        /// ByteTrack: detections at or above this drive the FIRST association
+        /// `ByteTrack`: detections at or above this drive the FIRST association
         /// pass; those below it (down to 0.1) drive the second.
         #[arg(long, default_value_t = 0.5)]
         track_thresh: f32,
-        /// ByteTrack: a NEW identity needs a detection at least this confident.
+        /// `ByteTrack`: a NEW identity needs a detection at least this confident.
         /// Deliberately higher than `--track-thresh` — recovering an existing
         /// track from a weak box is cheap, starting a new one from it creates a
         /// false trajectory that costs IDF1 for as long as it lives.
@@ -306,7 +310,7 @@ enum Cmd {
         /// Minimum confidence to report
         #[arg(long, default_value_t = 0.25)]
         conf: f32,
-        /// Class-wise NMS IoU. Omitted by default: the one2one head is
+        /// Class-wise NMS `IoU`. Omitted by default: the one2one head is
         /// NMS-free by construction, so suppression would only ever drop
         /// legitimately overlapping objects.
         #[arg(long)]
@@ -421,7 +425,7 @@ fn match_candle_threads() {
     if std::env::var_os("RAYON_NUM_THREADS").is_some() {
         return;
     }
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
     let n = std::env::var("FFAI_DIANA_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -447,7 +451,10 @@ fn main() -> Result<()> {
             let filter = task
                 .map(|t| Task::from_str(&t).map_err(anyhow::Error::msg))
                 .transpose()?;
-            println!("{:<6} {:<16} {:<13} DESCRIPTION", "TASK", "ENGINE", "STATUS");
+            println!(
+                "{:<6} {:<16} {:<13} DESCRIPTION",
+                "TASK", "ENGINE", "STATUS"
+            );
             for info in reg.list() {
                 if filter.is_some_and(|t| t != info.task) {
                     continue;
@@ -465,10 +472,9 @@ fn main() -> Result<()> {
             let manifests = ffai_models::load_dir(&dir)
                 .with_context(|| format!("reading manifests from {}", dir.display()))?;
             if let Some(name) = fetch {
-                let manifest = manifests
-                    .iter()
-                    .find(|m| m.name == name)
-                    .with_context(|| format!("no model manifest named `{name}` in {}", dir.display()))?;
+                let manifest = manifests.iter().find(|m| m.name == name).with_context(|| {
+                    format!("no model manifest named `{name}` in {}", dir.display())
+                })?;
                 println!("fetching {} ({})...", manifest.name, manifest.license);
                 let resolved = manifest.fetch()?;
                 for (file, path) in &resolved.files {
@@ -476,7 +482,10 @@ fn main() -> Result<()> {
                 }
                 return Ok(());
             }
-            println!("{:<6} {:<20} {:<14} {:<7} SOURCE", "TASK", "MODEL", "LICENSE", "CACHED");
+            println!(
+                "{:<6} {:<20} {:<14} {:<7} SOURCE",
+                "TASK", "MODEL", "LICENSE", "CACHED"
+            );
             for m in &manifests {
                 println!(
                     "{:<6} {:<20} {:<14} {:<7} {}",
@@ -581,8 +590,10 @@ fn main() -> Result<()> {
                 eprint!("{}", ffai_mercury::asr::profile::profile().report());
             }
             if let Some(audit) = ffai_mercury::asr::vocab_int8::audit_report() {
-                eprintln!("
-{audit}");
+                eprintln!(
+                    "
+{audit}"
+                );
             }
         }
         Cmd::Tts {
@@ -608,8 +619,21 @@ fn main() -> Result<()> {
             ffai_media::save_wav(&output, &audio)?;
             println!("wrote {}", output.display());
         }
-        Cmd::Ocr { input, engine, language, live, fps, change_fraction, sample_every, output, watch } => {
-            let opts = OcrOptions { languages: language, ..Default::default() };
+        Cmd::Ocr {
+            input,
+            engine,
+            language,
+            live,
+            fps,
+            change_fraction,
+            sample_every,
+            output,
+            watch,
+        } => {
+            let opts = OcrOptions {
+                languages: language,
+                ..Default::default()
+            };
             let eng = reg.ocr(engine.as_deref())?;
             if live {
                 if fps <= 0.0 {
@@ -624,7 +648,11 @@ fn main() -> Result<()> {
                     frames.sort();
                     Ok(frames.split_off(seen.min(frames.len())))
                 };
-                let cfg = ffai_carmenta::live::LiveConfig { change_fraction, sample_every, ..Default::default() };
+                let cfg = ffai_carmenta::live::LiveConfig {
+                    change_fraction,
+                    sample_every,
+                    ..Default::default()
+                };
                 let mut session = ffai_carmenta::live::LiveSession::new(eng.clone(), opts, cfg);
                 let mut n = 0usize;
                 let started = std::time::Instant::now();
@@ -646,7 +674,11 @@ fn main() -> Result<()> {
                         let img = ffai_media::load_image(frame)?;
                         // Watch mode timestamps from the wall clock (frames
                         // arrive in real time); batch mode from --fps.
-                        let t = if watch.is_some() { started.elapsed().as_secs_f64() } else { n as f64 / fps };
+                        let t = if watch.is_some() {
+                            started.elapsed().as_secs_f64()
+                        } else {
+                            n as f64 / fps
+                        };
                         session.push_frame(&img, t)?;
                         n += 1;
                     }
@@ -658,7 +690,11 @@ fn main() -> Result<()> {
                 if n == 0 {
                     anyhow::bail!("no .png frames in {}", input.display());
                 }
-                let end_t = if watch.is_some() { started.elapsed().as_secs_f64() } else { n as f64 / fps };
+                let end_t = if watch.is_some() {
+                    started.elapsed().as_secs_f64()
+                } else {
+                    n as f64 / fps
+                };
                 let (segments, stats) = session.finish(end_t);
                 eprintln!(
                     "{n} frames: {} OCR calls, {} change-gated, {} sampled out; \
@@ -669,7 +705,11 @@ fn main() -> Result<()> {
                     stats.percentile(0.50).unwrap_or(0.0) * 1000.0,
                     stats.percentile(0.95).unwrap_or(0.0) * 1000.0,
                 );
-                let body = match output.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+                let body = match output
+                    .as_ref()
+                    .and_then(|p| p.extension())
+                    .and_then(|e| e.to_str())
+                {
                     Some("vtt") => ffai_carmenta::live::to_vtt(&segments),
                     _ => ffai_carmenta::live::to_srt(&segments),
                 };
@@ -772,7 +812,7 @@ fn main() -> Result<()> {
                     for d in &out.detections {
                         lines.push(format!(
                             "{stem}	{}	{:.3}	{:.0}	{:.0}	{:.0}	{:.0}",
-                            names.get(d.class_id as usize).map(String::as_str).unwrap_or("?"),
+                            names.get(d.class_id as usize).map_or("?", String::as_str),
                             d.confidence,
                             d.x0,
                             d.y0,
@@ -794,9 +834,17 @@ fn main() -> Result<()> {
                     st.processed as f64 / wall
                 );
                 if let Some(path) = output {
-                    std::fs::write(&path, format!("{}
-", lines.join("
-")))?;
+                    std::fs::write(
+                        &path,
+                        format!(
+                            "{}
+",
+                            lines.join(
+                                "
+"
+                            )
+                        ),
+                    )?;
                     println!("wrote {} ({} detections)", path.display(), lines.len());
                 }
                 return Ok(());
@@ -805,10 +853,12 @@ fn main() -> Result<()> {
             let image = ffai_media::load_image(&input)?;
             let out = eng.detect(&image, &opts)?;
             let names = eng.class_names();
-            let label = |id: u32| -> &str {
-                names.get(id as usize).map(String::as_str).unwrap_or("?")
-            };
-            let body = match output.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+            let label = |id: u32| -> &str { names.get(id as usize).map_or("?", String::as_str) };
+            let body = match output
+                .as_ref()
+                .and_then(|p| p.extension())
+                .and_then(|e| e.to_str())
+            {
                 Some("jsonl") => out
                     .detections
                     .iter()
@@ -847,15 +897,29 @@ fn main() -> Result<()> {
             match output {
                 Some(path) => {
                     std::fs::write(&path, format!("{body}\n"))?;
-                    println!("wrote {} ({} detections)", path.display(), out.detections.len());
+                    println!(
+                        "wrote {} ({} detections)",
+                        path.display(),
+                        out.detections.len()
+                    );
                 }
                 None => println!("{body}"),
             }
         }
-        Cmd::Depth { input, engine, full_res, output } => {
+        Cmd::Depth {
+            input,
+            engine,
+            full_res,
+            output,
+        } => {
             let image = ffai_media::load_image(&input)?;
             let eng = reg.depth(engine.as_deref())?;
-            let out = eng.depth(&image, &DepthOptions { full_resolution: full_res })?;
+            let out = eng.depth(
+                &image,
+                &DepthOptions {
+                    full_resolution: full_res,
+                },
+            )?;
             let (lo, hi) = out.range().unwrap_or((0.0, 0.0));
             let finite = out.depth.iter().filter(|v| v.is_finite()).count();
             println!(
@@ -867,7 +931,11 @@ fn main() -> Result<()> {
                 finite,
                 out.depth.len()
             );
-            match output.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()) {
+            match output
+                .as_ref()
+                .and_then(|p| p.extension())
+                .and_then(|e| e.to_str())
+            {
                 Some("png") => {
                     // 16-bit grayscale, near = bright. NORMALISED, so the
                     // metres do not survive — this is for looking at, and the
@@ -886,7 +954,10 @@ fn main() -> Result<()> {
                         .collect();
                     let path = output.as_ref().unwrap();
                     ffai_media::save_gray16_png(path, &px, out.width, out.height)?;
-                    println!("wrote {} (16-bit grayscale, normalised {lo:.2}-{hi:.2} m)", path.display());
+                    println!(
+                        "wrote {} (16-bit grayscale, normalised {lo:.2}-{hi:.2} m)",
+                        path.display()
+                    );
                 }
                 Some("bin") => {
                     let path = output.as_ref().unwrap();
@@ -908,13 +979,30 @@ fn main() -> Result<()> {
                 None => {}
             }
         }
-        Cmd::Caption { input, prompt, engine } => {
+        Cmd::Caption {
+            input,
+            prompt,
+            engine,
+        } => {
             let image = ffai_media::load_image(&input)?;
-            let opts = VlmOptions { prompt, max_new_tokens: None };
+            let opts = VlmOptions {
+                prompt,
+                max_new_tokens: None,
+            };
             let caption = reg.vlm(engine.as_deref())?.describe_image(&image, &opts)?;
             println!("{caption}");
         }
-        Cmd::Bench { task, corpus, refs, engine, only, baseline_only, engine_only, runs, ledger } => {
+        Cmd::Bench {
+            task,
+            corpus,
+            refs,
+            engine,
+            only,
+            baseline_only,
+            engine_only,
+            runs,
+            ledger,
+        } => {
             let task = Task::from_str(&task).map_err(anyhow::Error::msg)?;
             if !matches!(task, Task::Asr | Task::Ocr | Task::Tts | Task::Detect) {
                 anyhow::bail!(
@@ -971,7 +1059,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-
 /// Containers the streaming path accepts.
 ///
 /// MUST stay in step with `stream_frames`' own dispatch table. It did not once:
@@ -980,7 +1067,10 @@ fn main() -> Result<()> {
 /// A mismatch here is a wrong error, not a missing feature.
 fn is_video(p: &std::path::Path) -> bool {
     matches!(
-        p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("mp4" | "mov" | "m4v" | "mkv" | "webm" | "mka" | "avi" | "ts" | "m2ts" | "mts")
     )
 }
@@ -1002,7 +1092,7 @@ fn is_video(p: &std::path::Path) -> bool {
 /// same shape of number in the same place.
 ///
 /// The frame TOTAL is only printed when the container declares one. Ultralytics
-/// gets its total from OpenCV's `CAP_PROP_FRAME_COUNT`; where we do not have it
+/// gets its total from `OpenCV`'s `CAP_PROP_FRAME_COUNT`; where we do not have it
 /// we print the index alone rather than a guess, because a wrong total in a
 /// progress line is worse than no total.
 fn detect_video(
@@ -1045,7 +1135,7 @@ fn detect_video(
             tally
                 .iter()
                 .map(|(c, n)| {
-                    let base = names.get(*c as usize).map(String::as_str).unwrap_or("?");
+                    let base = names.get(*c as usize).map_or("?", String::as_str);
                     if *n == 1 {
                         format!("1 {base}")
                     } else {
@@ -1090,8 +1180,11 @@ fn detect_video(
         // MOT-challenge column order (frame, id, x, y, w, h, conf, -1, -1, -1)
         // so the output feeds a scorer directly rather than needing a converter.
         if let Some(tk) = tracker.as_mut() {
-            let bx: Vec<[f32; 4]> =
-                found.detections.iter().map(|d| [d.x0, d.y0, d.x1, d.y1]).collect();
+            let bx: Vec<[f32; 4]> = found
+                .detections
+                .iter()
+                .map(|d| [d.x0, d.y0, d.x1, d.y1])
+                .collect();
             let sc: Vec<f32> = found.detections.iter().map(|d| d.confidence).collect();
             let cl: Vec<u32> = found.detections.iter().map(|d| d.class_id).collect();
             for t in tk.update(&bx, &sc, &cl) {
@@ -1112,7 +1205,7 @@ fn detect_video(
                 lines.push(format!(
                     "{}\t{}\t{:.3}\t{:.0}\t{:.0}\t{:.0}\t{:.0}",
                     i,
-                    names.get(d.class_id as usize).map(String::as_str).unwrap_or("?"),
+                    names.get(d.class_id as usize).map_or("?", String::as_str),
                     d.confidence,
                     d.x0,
                     d.y0,
@@ -1142,12 +1235,11 @@ fn detect_video(
     Ok(())
 }
 
-
 /// Track over a directory of frames, sorted by name.
 ///
 /// Exists so a MOT17 sweep can score the ORIGINAL JPEGs. Routing a benchmark
 /// through an encode/decode round trip changes pixels by a small amount —
-/// measured at mean |diff| 0.66 of 255 against OpenCV — which is enough to flip
+/// measured at mean |diff| 0.66 of 255 against `OpenCV` — which is enough to flip
 /// a detection sitting on the threshold, and a threshold sweep is exactly the
 /// experiment that cannot afford that.
 fn detect_dir_tracked(
@@ -1179,7 +1271,11 @@ fn detect_dir_tracked(
     for (i, f) in frames.iter().enumerate() {
         let image = ffai_media::load_image(f)?;
         let found = eng.detect(&image, &opts)?;
-        let bx: Vec<[f32; 4]> = found.detections.iter().map(|d| [d.x0, d.y0, d.x1, d.y1]).collect();
+        let bx: Vec<[f32; 4]> = found
+            .detections
+            .iter()
+            .map(|d| [d.x0, d.y0, d.x1, d.y1])
+            .collect();
         let sc: Vec<f32> = found.detections.iter().map(|d| d.confidence).collect();
         let cl: Vec<u32> = found.detections.iter().map(|d| d.class_id).collect();
         for t in tk.update(&bx, &sc, &cl) {
@@ -1202,7 +1298,12 @@ fn detect_dir_tracked(
             for l in &lines {
                 writeln!(w, "{l}")?;
             }
-            println!("{} frames, {} tracked boxes -> {}", frames.len(), lines.len(), p.display());
+            println!(
+                "{} frames, {} tracked boxes -> {}",
+                frames.len(),
+                lines.len(),
+                p.display()
+            );
         }
         None => {
             for l in &lines {
@@ -1308,7 +1409,7 @@ fn serve_stdin(
                     d.x1,
                     d.y1,
                     d.class_id,
-                    names.get(d.class_id as usize).map(String::as_str).unwrap_or("?"),
+                    names.get(d.class_id as usize).map_or("?", String::as_str),
                     d.confidence
                 )
             })

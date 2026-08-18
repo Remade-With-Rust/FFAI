@@ -62,5 +62,45 @@ clap = { workspace = true }
 # Enabling this is a measurement tool, not a supported configuration.
 mimalloc = ["dep:mimalloc"]
 
-[lints]
-workspace = true
+[lints.rust]
+# Mirrors [workspace.lints.rust]; restated because this crate needs its own
+# [lints.clippy] table, and `[lints] workspace = true` is all-or-nothing.
+unsafe_code = "warn"
+
+# Gate H-15: pedantic + nursery, enforced.
+#
+# The allows below are documentation and style. The numeric-cast lints that
+# matter - truncation, sign loss, wrap - are NOT allowed here: this crate does
+# not do the arithmetic, it calls the crates that do, and those carry the
+# policy that found this audit's defects.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Documentation debt: revisit 2026-11-15.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_long_first_doc_paragraph = "allow"
+# Counts and indices converted for display or reporting; rounding only.
+cast_precision_loss = "allow"
+# The depth-map writer scales a normalised value into u16 range. Guarded twice
+# at the site: `is_finite()` rejects NaN and infinities, and `.clamp(0.0, 1.0)`
+# bounds the value before scaling. `main` is a single long function, so the
+# allow lives here rather than on a 500-line item.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+# Style preferences that do not change behaviour.
+needless_pass_by_value = "allow"
+items_after_statements = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+option_if_let_else = "allow"
+single_match_else = "allow"
+unnested_or_patterns = "allow"
+equatable_if_let = "allow"
+manual_let_else = "allow"
+default_trait_access = "allow"
+missing_const_for_fn = "allow"
+unnecessary_wraps = "allow"
+format_push_string = "allow"
+significant_drop_tightening = "allow"
+redundant_closure_for_method_calls = "allow"

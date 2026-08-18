@@ -73,12 +73,12 @@ impl Detector {
     /// letterboxes to 640x384 rather than 640x640, which is 30 % less model
     /// work for identical accuracy.
     #[wasm_bindgen(constructor)]
-    pub fn new(safetensors: &[u8], manifest_json: &str, tier: &str) -> Result<Detector, JsValue> {
+    pub fn new(safetensors: &[u8], manifest_json: &str, tier: &str) -> Result<Self, JsValue> {
         console_error_panic_hook();
         let engine = Yolo26::from_bytes(tier, Geometry::Rect, safetensors.to_vec(), manifest_json)
             .map_err(|e| JsValue::from_str(&format!("model load failed: {e}")))?;
         let names = engine.class_names().to_vec();
-        Ok(Detector { engine, names })
+        Ok(Self { engine, names })
     }
 
     /// Detect in an RGBA buffer, the layout `CanvasRenderingContext2D.getImageData`
@@ -103,7 +103,10 @@ impl Detector {
             height,
             format: PixelFormat::Rgba8,
         };
-        let opts = DetectOptions { confidence, ..Default::default() };
+        let opts = DetectOptions {
+            confidence,
+            ..Default::default()
+        };
         let found = self
             .engine
             .detect(&image, &opts)
@@ -117,7 +120,11 @@ impl Detector {
                 x1: d.x1,
                 y1: d.y1,
                 class_id: d.class_id,
-                name: self.names.get(d.class_id as usize).cloned().unwrap_or_default(),
+                name: self
+                    .names
+                    .get(d.class_id as usize)
+                    .cloned()
+                    .unwrap_or_default(),
                 confidence: d.confidence,
             })
             .collect())
@@ -132,6 +139,7 @@ impl Detector {
 
 /// Which allocator this module was built with, so a browser A/B can report it.
 #[wasm_bindgen]
+#[must_use]
 pub fn allocator() -> String {
     #[cfg(feature = "rusty-alloc")]
     {
