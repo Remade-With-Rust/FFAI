@@ -28,6 +28,9 @@ BANNED = {
     "transmute": "prefer a typed conversion; transmute hides layout assumptions",
 }
 LINT_ALLOW = re.compile(r"//\s*LINT-ALLOW:")
+# Everything from the first test marker to EOF is test code: a panic there is a
+# failing test, not a denial of service.
+TEST_START = re.compile(r"\s*(#\[cfg\(test\)\]|mod tests)")
 
 
 def crate_dirs():
@@ -116,11 +119,44 @@ def rule_no_stdout_in_library(crate, viols):
                     f"stdout belongs to the caller (gate C-08)")
 
 
+def rule_no_bare_unwrap(crate, viols):
+    """R5. No bare `.unwrap()` in non-test library code; state the invariant.
+
+    `.expect("why this cannot fail")` and `.unwrap()` panic identically. The
+    difference is that one leaves the invariant on the page for the next reader,
+    and the other leaves them to re-derive it. On an untrusted path a panic is a
+    denial of service, so the invariant is the thing worth auditing.
+
+    ffai-mercury already had ZERO bare unwraps and 18 documented expects when
+    this rule was written - it locks in a discipline already being followed
+    rather than imposing a new one.
+    """
+    if not (crate / "UNSAFE.md").exists():
+        return
+    for f in sorted((crate / "src").rglob("*.rs")):
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        cut = len(lines)
+        for i, line in enumerate(lines):
+            if TEST_START.match(line):
+                cut = i
+                break
+        for i, line in enumerate(lines[:cut]):
+            s = line.lstrip()
+            if s.startswith("//") or LINT_ALLOW.search(line):
+                continue
+            if ".unwrap()" in line:
+                viols.append(
+                    f"{f.relative_to(ROOT)}:{i+1}: bare `.unwrap()` in library code - use "
+                    f"`.expect(\"why this cannot fail\")` so the invariant is on the page "
+                    f"(gate H-18)")
+
+
 RULES = [
     ("R1 unsafe sites carry a SAFETY comment", rule_safety_comments),
     ("R2 #[allow(unsafe_code)] sites are inventoried in UNSAFE.md", rule_allow_unsafe_inventoried),
     ("R3 banned constructs (mem::forget, Box::leak, transmute)", rule_banned_constructs),
     ("R4 no println!/dbg! in library code", rule_no_stdout_in_library),
+    ("R5 no bare .unwrap() in library code", rule_no_bare_unwrap),
 ]
 
 
