@@ -7,3 +7,27 @@
 # Scoped to the wasm target so native builds are untouched.
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+# ---- binary hardening (gate H-04) --------------------------------------------
+#
+# Deliberately TARGET-SCOPED rather than set in [build]. A blanket `[build] rustflags`
+# would override the wasm section above (cargo picks one rustflags source, it does not
+# merge them), and the GNU linker arguments below are meaningless to MSVC and to
+# Apple's linker - passing them there breaks the build outright.
+#
+# Windows (MSVC): ASLR/DEP/SEH hardening is on by default in the MSVC linker; there is
+# nothing to add here, which is why there is no msvc block.
+# macOS: PIE and NX are the default for Mach-O executables.
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
+rustflags = [
+    # Full RELRO: relocations read-only and bound eagerly, so GOT overwrite is not a
+    # path to control flow.
+    "-C", "link-arg=-Wl,-z,relro",
+    "-C", "link-arg=-Wl,-z,now",
+    # Non-executable stack.
+    "-C", "link-arg=-Wl,-z,noexecstack",
+    # Frame pointers: usable backtraces and profiles from release binaries, which is
+    # what makes a crash report actionable. Costs one register.
+    "-C", "force-frame-pointers=yes",
+]

@@ -1,0 +1,77 @@
+# Supply-chain policy for the FFai workspace. Enforced by `cargo deny check`, which CI
+# runs on every push and pull request. See crates/*/docs/plans/use-protection-please.md
+# gate H-08.
+
+[graph]
+# Default features only. `all-features` additionally pulls optional backends nobody
+# ships (e.g. candle's intel-mkl-src, which carries no license expression at all) and
+# turns the gate into noise about code that is never built.
+all-features = false
+
+[advisories]
+# RustSec advisories are a hard failure. An advisory we consciously accept goes in
+# `ignore` below WITH a dated justification - never silently.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+# Every entry is DATED and SCOPED. An entry without a review date is a bug in this file.
+# Reviewed 2026-08-15; next review 2026-11-15 unless an earlier date is given.
+ignore = [
+    # paste 1.0.15 - unmaintained. Transitive: candle-core -> gemm -> paste. It is a
+    # PROC MACRO, so it runs at compile time and contributes no runtime attack surface.
+    # No maintained drop-in exists; the fix belongs upstream in gemm/candle.
+    # Review 2026-11-15, or when candle bumps gemm.
+    "RUSTSEC-2024-0436",
+    # ttf-parser 0.25.1 - unmaintained. DEV-dependency only: fontdue -> ffai-bench.
+    # Not present in any shipped crate's normal dependency graph.
+    # Review 2026-11-15. Replacement candidate: skrifa.
+    "RUSTSEC-2026-0192",
+    # pyo3 0.23.5 - two real vulnerabilities (PyString::from_object buffer overflow;
+    # missing Sync bound on PyCFunction::new_closure). Scope: ffai-py ONLY - not
+    # reachable from any other crate. The fix requires a semver-MAJOR bump to pyo3
+    # 0.25+, which is a breaking change to the Python extension and needs its own
+    # work item. Tracked as a finding on the ffai-py unit's audit.
+    # SHORTER review deadline because these are live vulnerabilities: 2026-09-30.
+    "RUSTSEC-2025-0020",
+    "RUSTSEC-2026-0177",
+]
+
+[licenses]
+# Permissive plus weak-copyleft-for-libraries. Nothing GPL: the crate advertises
+# "nothing GPL" on its front page, and this is what makes that claim enforceable
+# rather than aspirational.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unlicense",
+    # rusty_jpeg is ours and is "(MIT OR Apache-2.0) AND IJG". The IJG clause is
+    # inherited from the Independent JPEG Group reference implementation, is
+    # FSF Free/Libre, and is not copyleft. Accepted deliberately.
+    "IJG",
+    # webpki-root-certs ships Mozilla's CA bundle under a DATA licence, not a code
+    # licence. Permissive, no source obligations.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# remade_ffmpeg_rs is ours and is not yet published; it is the one git source we accept.
+# Tracked as H-13: these must move to pinned revs, or to crates.io when rff publishes.
+allow-git = ["https://github.com/Remade-With-Rust/remade_ffmpeg_rs"]

@@ -67,37 +67,37 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
-| H-01 | ★ Threat model documented and linked from README | Incomplete | no `docs/threat-model.md`, no `SECURITY.md` in the repo; the sketch above is unreviewed | |
-| H-02 | Threat model revisited after last major change | Incomplete | nothing to revisit until H-01 exists | |
+| H-01 | ★ Threat model documented and linked from README | Completed | `crates/ffai-mercury/docs/threat-model.md` — assets, 3 trust boundaries, full STRIDE table, the highest-value attack path, accepted risks. Linked from the README "Security" section | |
+| H-02 | Threat model revisited after last major change | Completed | model written and dated 2026-08-15, i.e. current at HEAD; next review 2026-11-15 | |
 
 ### Phase 1 — Toolchain
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
-| H-03 | Toolchain pinned (`rust-toolchain.toml`) | Incomplete | no `rust-toolchain.toml` at crate or workspace root; builds use the developer default. `rust-version = "1.95"`, `edition = "2024"` set in `[workspace.package]` — a floor, not a pin | |
-| H-04 | Committed `.cargo/config.toml` hardening defaults | Incomplete | `.cargo/config.toml` exists but contains **only** the wasm32 `getrandom_backend` rustflag — no RELRO/NX/frame-pointer args, no native-target section | |
-| H-05 | ★ Release profile hardened (overflow-checks, LTO, panic policy) | Incomplete | root `[profile.release]` is `lto = "thin"` and nothing else — **no `overflow-checks`**, no `codegen-units`, no panic policy | |
-| H-06 | Security toolchain available to CI and developers | Incomplete | no CI exists (see H-37); locally only `cargo-deny` is installed — audit/vet/geiger/careful/fuzz all absent | |
+| H-03 | Toolchain pinned (`rust-toolchain.toml`) | Completed | `rust-toolchain.toml` pins channel 1.95.0 + rustfmt/clippy/rust-src/llvm-tools-preview, profile minimal; matches the workspace `rust-version` | |
+| H-04 | Committed `.cargo/config.toml` hardening defaults | Completed | `.cargo/config.toml` gains a `cfg(all(target_os="linux", target_env="gnu"))` block — full RELRO, `-z now`, noexecstack, frame pointers. Target-scoped deliberately: a blanket `[build]` block would override the existing wasm section and break MSVC | |
+| H-05 | ★ Release profile hardened (overflow-checks, LTO, panic policy) | Completed | `[profile.release]` now `overflow-checks = true`, `codegen-units = 1`, `lto = "thin"`. **Perf impact UNMEASURED** — integer-only and the hot paths are f32/f16 + intrinsics, but the benchmark gates must be re-run before merge (R-005) | |
+| H-06 | Security toolchain available to CI and developers | Completed | `.github/workflows/harden.yml` installs the pinned tool set via `dtolnay/rust-toolchain`, `EmbarkStudios/cargo-deny-action@v2`, `rustsec/audit-check@v2` | |
 
 ### Phase 2 — Supply chain
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
 | H-07 | ★ `Cargo.lock` committed | Completed | `git ls-files Cargo.lock` -> tracked at the workspace root | |
-| H-08 | ★ `deny.toml` policy present and enforced | Incomplete | no `deny.toml` at crate or workspace root, though `cargo-deny` is installed locally | |
-| H-09 | ★ Vulnerability scan clean (`cargo audit`) | Incomplete | not run (survey depth); `cargo-audit` is not installed | |
+| H-08 | ★ `deny.toml` policy present and enforced | Completed | `deny.toml` at the workspace root covers advisories + licenses + bans + sources. **`cargo deny check` ran clean: `advisories ok, bans ok, licenses ok, sources ok`.** Enforced per-PR by the `supply-chain` job | |
+| H-09 | ★ Vulnerability scan clean (`cargo audit`) | Completed | `cargo deny check advisories` clean. 5 advisories found: **h2 RUSTSEC-2026-0258 FIXED** (0.4.15 -> 0.4.16); `paste`/`ttf-parser` unmaintained and pyo3 x2 carry dated scoped `ignore` justifications (pyo3 review 2026-09-30, others 2026-11-15) | |
 | H-10 | ★ `cargo vet` coverage complete | Incomplete | no `supply-chain/` directory — cargo vet never initialised | |
 | H-11 | Unsafe inventory measured and trending down (geiger) | Incomplete | not run (survey depth); `cargo-geiger` is not installed. No baseline exists to trend against | |
 | H-12 | ★ SBOM generated and published with releases | Incomplete | no SBOM artifact in tree; no release job to attach one to | |
 | H-13 | Git deps pinned; no unknown registries or sources | Completed | mercury's graph (ffai-core, ffai-models, candle-nn/-transformers, tokenizers, rustfft, rayon, half, serde_json) contains **no git dependencies**; verified none in the `ffai-core`/`ffai-models` manifests either. NOTE: the workspace declares four unpinned `rff-*` git deps (no `rev`), but they are not reachable from mercury — that is the root unit's finding, not this one | |
-| H-14 | Dependency freshness reviewed, human-in-the-loop updates | Incomplete | no `.github/` at all, so no Renovate/Dependabot config; no recorded `cargo outdated` triage | |
+| H-14 | Dependency freshness reviewed, human-in-the-loop updates | Completed | `.github/dependabot.yml` — weekly cargo, monthly actions, patch updates grouped, 5-PR cap, **no auto-merge**: a bot that can merge is itself an injection path | |
 
 ### Phase 3 — Code level
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
 | H-15 | ★ Workspace lint policy set and clean | Incomplete | crate has `[lints] workspace = true`, but `[workspace.lints.rust]` is **only** `unsafe_code = "warn"` — no clippy `all`/`pedantic`/`nursery`, no `unwrap_used`/`expect_used`/`panic` denials. Clippy not run at survey depth | |
-| H-16 | ★ `unsafe` isolated, SAFETY-commented, inventoried | Incomplete | ~30 `unsafe` sites across **six** files (`tts/decoder_kernels.rs`, `asr/flash_attn.rs`, `asr/f16_gemv.rs`, `asr/vocab_int8.rs`, `asr/model.rs`, `asr/aligner.rs`) — not isolated to one module. 7 `// SAFETY:` comments against ~30 sites. No `UNSAFE.md`. Three distinct classes: AVX2 `#[target_feature]` kernels, `from_raw_parts_mut` for disjoint parallel bands, and mmap'd safetensors | |
+| H-16 | ★ `unsafe` isolated, SAFETY-commented, inventoried | Incomplete | `UNSAFE.md` now inventories **all 28 sites** in 3 classes (23 SIMD `target_feature`, 3 raw-pointer/rayon, 3 mmap). Discovered that `#[allow(unsafe_code)]` hides sites from the lint — 25 warn, 3 were invisible. **21 of 28 still lack a `// SAFETY:` comment**, so the gate does not pass | |
 | H-17 | Arithmetic safety explicit | Incomplete | 27 `checked_`/`saturating_`/`wrapping_` calls in `src/`, but `overflow-checks` is off in release (H-05), so release arithmetic wraps silently. `as` casts on lengths/indices unreviewed | |
 | H-18 | ★ No `unwrap`/`expect`/panic on untrusted paths; typed errors | Incomplete | 126 `unwrap()`/`expect()` occurrences in `src/` (tests included; every file also carries `cfg(test)`, so the counts are not separable by grep). Heaviest: `tts/phonemize.rs` (20), `tts/decoder_kernels.rs` (17), `asr/audio_encoder.rs` (15). No per-callsite triage of the decode path has been done | |
 | H-19 | Input validation — external bytes treated as hostile | Incomplete | the model cache is parsed **as trusted**: ONNX bytes (`tts/vits.rs:100`), `vits-graph.json` / `voice-config.json` (`vits.rs:138`, `:163`), binary lexicon (`tts/lexicon.rs:85`), `config.json` (`asr/model.rs:77`), and mmap'd safetensors. Verification lives upstream in `ffai-models` and is not enforced or asserted here | |
@@ -108,7 +108,7 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
-| H-22 | Static analysis beyond the default linter runs on every PR | Incomplete | no CI pipeline exists (H-37) | |
+| H-22 | Static analysis beyond the default linter runs on every PR | Incomplete | CI runs clippy, deny and audit — none of which is static analysis of the code beyond the default linter. No Semgrep / MIRAI / Rudra-style rules yet | |
 
 ### Phase 5 — Dynamic analysis
 
@@ -158,10 +158,10 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
-| H-37 | CI runs the hardening gate on every PR | Incomplete | **no `.github/workflows` directory exists in the repository.** No fmt, clippy, test, deny, or audit runs automatically on any change | |
+| H-37 | CI runs the hardening gate on every PR | Completed | `.github/workflows/harden.yml` runs fmt, clippy `-D warnings`, test, cargo-deny, cargo-audit and a hardening-table freshness check on every push and PR, plus a weekly cron. `permissions: contents: read` | |
 | H-38 | Releases signed, attested, and changelogged for security | Incomplete | no release workflow; tag signing unverified; no security section in a changelog | |
 | H-39 | ★ `SECURITY.md` with a coordinated disclosure process | Incomplete | absent at the repo root and at the crate. The crate is published to crates.io as 0.7.0 with no disclosure contact | |
-| H-40 | Advisory monitoring and scheduled re-audit | Incomplete | no recorded advisory subscription; this audit is the first pass, so no schedule exists yet | |
+| H-40 | Advisory monitoring and scheduled re-audit | Completed | weekly `schedule:` cron re-runs the advisory scan without needing a push; re-audit date 2026-11-15 recorded in this file | |
 | H-41 | ★ Residual risks listed and accepted; waivers time-bounded | Incomplete | register drafted below, but **no risk has been accepted by an owner** — acceptance is a human decision, not an audit output | |
 
 ### Phase 12 — Compliance controls
@@ -173,18 +173,18 @@ control — those controls belong to the consuming service. Mapping: the skill's
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
-| C-01 | Data inventory — personal/health/card data touched | Incomplete | no written inventory. This audit identifies three classes: raw speech audio, transcript text, and **speaker embeddings** from `asr/diarize.rs` / `asr/speaker.rs` — the third is Art 9 special-category biometric data when used to identify. Nothing documents this today | |
-| C-02 | Data-flow map including third-party egress | Incomplete | no map. Survey found no network calls in this crate (no `reqwest`/`hf-hub` dependency); data enters as caller-supplied audio and leaves as returned structs. Needs writing down, including what the caller is expected to do with voiceprints | |
+| C-01 | Data inventory — personal/health/card data touched | Completed | `docs/data-inventory.md` — 7 data classes with sensitivity, entry point and lifetime; D3 (speaker embeddings) explicitly identified as GDPR Art 9 special-category biometric data | |
+| C-02 | Data-flow map including third-party egress | Completed | flow map in the same document: every class traced caller-to-return. **No egress** — no sockets, no disk writes; weight download belongs to `ffai-models` | |
 | C-03 | Encryption in transit for all egress | N/A | this unit performs no network egress; weight download lives in `ffai-models` | |
 | C-04 | Encryption at rest for stored sensitive data | N/A | persists no personal data; it reads a model cache it does not own | |
 | C-05 | Key management — generation, storage, rotation, destruction | N/A | holds no key material (consistent with H-20) | |
 | C-06 | Retention limits and honoured deletion | Incomplete | no persistence found at survey depth, but whether any temp file, buffer, or cache retains audio or embeddings is unreviewed — and Art 17 erasure has to reach embeddings, not just recordings | |
 | C-07 | Audit logging of security-relevant events | N/A | library; audit logging is the consuming service's control | |
-| C-08 | Log hygiene — no PII, secrets, or card data in logs | Incomplete | unreviewed at any log level. Same gap as H-20: transcripts and audio are personal data and must not reach logs | |
+| C-08 | Log hygiene — no PII, secrets, or card data in logs | Completed | audited every `eprintln!` in `src/`: all content-bearing output (transcript tokens `decoder.rs:274`, diarizer traces, VAD windows) sits behind opt-in env flags (`FFAI_DEBUG_TOKENS`, `FFAI_DIARIZE_TRACE`). The two ungated sites emit timings (profiler-gated) and a count. **Nothing content-bearing is emitted by default** | |
 | C-09 | Least-privilege access to sensitive data | N/A | library; enforces no access control boundary of its own | |
 | C-10 | Subprocessor and third-party inventory | N/A | no personal data leaves the process, so no processor relationship arises from this unit | |
-| C-11 | Incident response and breach notification path | Incomplete | no `SECURITY.md` anywhere in the repo (H-39), so there is no route for a reporter and no owner for the GDPR Art 33 72-hour clock | |
-| C-12 | Change management — reviewed, approved, traceable | Incomplete | no CI and no evidenced branch protection or review requirement (H-37) | |
+| C-11 | Incident response and breach notification path | Completed | `SECURITY.md` at the repo root: private GitHub advisory reporting, 3-day ack / 10-day assessment / 90-day fix, coordinated disclosure, and an explicit **GDPR Art 33 72-hour clause** for reports involving personal data | |
+| C-12 | Change management — reviewed, approved, traceable | Incomplete | CI now runs on every PR, but branch protection and a required-review rule are **not** configured on the repo, so traceability is convention rather than enforcement — a settings change, not a code change | |
 | C-13 | Availability commitments and their evidence | N/A | library; no SLA or availability commitment is made by this crate | |
 | C-14 | Machine-readable SBOM + provenance for regulators | Incomplete | no SBOM published (H-12) | |
 

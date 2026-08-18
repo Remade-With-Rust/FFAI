@@ -1,0 +1,16 @@
+# Gate H-14: dependency freshness with a human in the loop. Updates are PROPOSED
+# automatically and merged by a person - an auto-merging bot is a supply-chain
+# injection path, not a security control.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the patch noise, individual PRs for anything that can break.
+      patch-level:
+        update-types: ["patch"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: monthly }

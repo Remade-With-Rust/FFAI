@@ -83,3 +83,15 @@ unsafe_code = "warn"
 
 [profile.release]
 lto = "thin"
+# Hardening gate H-05. Integer overflow wraps silently in a default release build, and
+# this workspace parses untrusted model files, audio and documents - a wrapped length or
+# index is how a bounds check gets skipped. Keep the checks.
+#
+# PERFORMANCE NOTE, unmeasured as of 2026-08-15: this affects INTEGER arithmetic only.
+# The inference hot paths are f32/f16 and the SIMD kernels use intrinsics, so the
+# exposure is indexing and loop counters rather than the math. That is an argument, not
+# a measurement - re-run the Mercury and Carmenta benchmark gates before merging, and if
+# a gate regresses, record a time-bounded waiver rather than silently dropping the flag.
+overflow-checks = true
+# One codegen unit: better optimisation, and it recovers some of what the checks cost.
+codegen-units = 1
