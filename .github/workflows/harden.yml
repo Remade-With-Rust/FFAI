@@ -32,13 +32,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with: { components: rustfmt }
-      # ADVISORY, not blocking. The workspace currently has ~1539 rustfmt diffs across
-      # 12 crates - pre-existing debt, not introduced here. Blocking on it today would
-      # make the gate red on arrival, which trains people to ignore CI.
-      # TO FLIP: run `cargo fmt --all` in a single mechanical commit when no other work
-      # is in flight, then delete this line. Target: 2026-09-30.
-      continue-on-error: true
-      - run: cargo fmt --all --check
+      # BLOCKING for ffai-mercury: that crate is now rustfmt-clean, so a
+      # regression there fails the build.
+      - name: Format (blocking - ffai-mercury)
+        run: cargo fmt -p ffai-mercury --check
+
+      # ADVISORY for the rest: ~1500 pre-existing rustfmt diffs across the other
+      # crates. Blocking today would make the gate red on arrival, which teaches
+      # people to ignore CI.
+      # TO FLIP a crate: `cargo fmt -p <crate>` in a single mechanical commit when
+      # no other work is in flight, then move it into the blocking step above.
+      - name: Format (advisory - workspace)
+        continue-on-error: true
+        run: cargo fmt --all --check
 
   clippy:
     name: Clippy
