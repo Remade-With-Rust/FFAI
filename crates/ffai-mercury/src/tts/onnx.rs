@@ -99,7 +99,13 @@ impl<'a> Reader<'a> {
                 Wire::Fixed64(u64::from_le_bytes(b.try_into().expect("8 bytes")))
             }
             2 => {
-                let n = self.varint()? as usize;
+                // `as usize` TRUNCATES on 32-bit. This workspace ships
+                // `ffai-wasm`, so wasm32 is a real target: a declared length of
+                // 2^32 + 5 would truncate to 5, sail past the bounds check in
+                // `take`, and hand back a slice that is not the field. Reject
+                // the length instead of narrowing it.
+                let n = usize::try_from(self.varint()?)
+                    .map_err(|_| trunc("length exceeds this platform's usize"))?;
                 Wire::Bytes(self.take(n)?)
             }
             5 => {
@@ -211,8 +217,33 @@ fn parse_tensor(buf: &[u8]) -> Result<Option<Initializer>> {
         }
         None => floats,
     };
-    let dims: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
-    let expected: usize = dims.iter().product();
+    // Dims arrive as i64 from the file. Using them as-is went wrong twice:
+    //
+    //   * a NEGATIVE dim - ONNX's -1 "dynamic" marker, or plain corruption -
+    //     cast to a colossal usize under `as`;
+    //   * `dims.iter().product()` is an UNCHECKED multiply. In debug it panics,
+    //     which is a denial of service on model load. In release, where this
+    //     workspace deliberately carries no overflow-checks (H-05, R-005), it
+    //     WRAPS - and a wrapped product can land exactly on `data.len()`, so a
+    //     tensor whose dims do not describe its data passes validation and
+    //     everything downstream indexes `data` through `dims`.
+    //
+    // Found by tests/properties.rs; `[1<<32, 1<<32]` wraps to 0 and matched an
+    // empty payload.
+    let mut expected: usize = 1;
+    let mut shape: Vec<usize> = Vec::with_capacity(dims.len());
+    for &d in &dims {
+        let d = usize::try_from(d).map_err(|_| {
+            Error::Model(format!("onnx: `{name}` declares a negative dimension {d}"))
+        })?;
+        expected = expected.checked_mul(d).ok_or_else(|| {
+            Error::Model(format!(
+                "onnx: `{name}` declares dimensions whose product overflows: {dims:?}"
+            ))
+        })?;
+        shape.push(d);
+    }
+    let dims = shape;
     if data.len() != expected {
         return Err(Error::Model(format!(
             "onnx: `{name}` declares {dims:?} ({expected} values) but carries {}",
@@ -348,10 +379,14 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
             "Conv" | "ConvTranspose" => {
                 let base = module_path(&node.name, &node.op_type);
                 let first = |k: &str, d: usize| {
+                    // Attribute ints (kernel_shape, strides, pads, dilations,
+                    // group) are i64 straight from the file. `as usize` turns a
+                    // negative value into a colossal one, which then becomes a
+                    // geometry dimension. Fall back to the default instead.
                     node.ints
                         .get(k)
                         .and_then(|v| v.first())
-                        .map(|v| *v as usize)
+                        .and_then(|v| usize::try_from(*v).ok())
                         .unwrap_or(d)
                 };
                 geometry.insert(

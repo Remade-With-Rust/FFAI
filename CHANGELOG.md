@@ -32,6 +32,18 @@ mechanics are in `.github/workflows/release.yml`.
   index in `reflect_pad`. Caller-supplied audio reaches this path, so an empty
   buffer was a denial of service in the embedding process. Found by the new
   property tests; the input is now a permanent fuzz regression seed.
+- **Fixed** — `tts::onnx::parse` accepted tensors whose declared shape did not
+  describe their data. `dims.iter().product()` was an unchecked multiply over
+  `i64 as usize`: `[1<<32, 1<<32]` wrapped to exactly 0 and matched an empty
+  payload, and a negative dim (ONNX's `-1`) became colossal. Debug panicked;
+  release — which carries no `overflow-checks` — accepted the tensor, and
+  downstream code indexes `data` through `dims`.
+- **Fixed** — protobuf length `u64 as usize` truncated on 32-bit targets, and
+  `ffai-wasm` makes wasm32 real: a declared length of 2^32+5 truncated to 5 and
+  passed the bounds check.
+- **Fixed** — `normalize` overflowed `u64` on digit runs longer than 19
+  characters (panic in debug, silent wraparound in release) and dropped leading
+  zeros on the digit-by-digit path.
 - **Fixed** — `h2` `RUSTSEC-2026-0258` (unbounded empty DATA frames), reached
   through `hf-hub → hyper` on the weight-download path. Updated 0.4.15 → 0.4.16.
 - **Changed** — model files are now explicitly **trusted input**. Release builds
