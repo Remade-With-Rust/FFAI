@@ -63,7 +63,11 @@ jobs:
       # BLOCKING for every crate that is clean. A crate joins this list the moment
       # it reaches zero, rather than waiting for the whole workspace - which is
       # how the debt shrinks without CI ever being red.
+      # PEDANTIC + NURSERY tier (enforced by their own manifests, so -D warnings
+      # promotes them): ffai-core, ffai-argus, ffai-models.
+      # clippy::all tier: ffai-media, ffai-bench, ffai-mercury.
       # Remaining: ffai-diana 30, ffai-carmenta 34, ffai-cli 64 (binary-only).
+      # Pedantic debt in the clippy::all tier: media 65, bench 253, mercury 757.
       - name: Clippy (blocking - clean crates)
         run: |
           cargo clippy -p ffai-core -p ffai-models -p ffai-media -p ffai-argus                        -p ffai-mercury -p ffai-bench --lib -- -D warnings -A unsafe_code

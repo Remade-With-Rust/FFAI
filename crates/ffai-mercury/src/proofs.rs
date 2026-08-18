@@ -178,3 +178,70 @@ fn proof_task_regions_are_in_bounds() {
         assert!(highest < c_out * l_out);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Class B, second site: `asr/flash_attn.rs`.
+//
+// This one is subtler than decoder_kernels, and the difference is worth stating
+// because it changes what a proof can claim. The slices handed to each head
+// OVERLAP by construction - head 0 receives a slice covering the whole buffer -
+// so disjointness cannot come from the slice bounds. It comes from the ADDRESSING
+// SCHEME: head `h` writes only `h*HD + row*width + c` for `c < HD`, i.e. a column
+// band of stride `width`.
+//
+// SCOPE OF THIS PROOF, stated plainly: it proves the addressing scheme is
+// disjoint and in-bounds. It ASSUMES `flash_head_strided` writes only at those
+// offsets, which is not proved here - that assumption is what the existing
+// `flash_attn::tests::matches_three_op_path` oracle exercises, by comparing the
+// strided kernel against the three-op path element for element.
+// ---------------------------------------------------------------------------
+
+/// The absolute output index head `h` touches at (`row`, `c`).
+///
+/// Mirrors `from_raw_parts_mut(base.add(h * HD), ...)` followed by a strided
+/// write at `row * width + c`.
+#[cfg(kani)]
+const fn head_write_index(h: usize, row: usize, c: usize, hd: usize, width: usize) -> usize {
+    h * hd + row * width + c
+}
+
+/// Distinct heads never write the same element.
+#[cfg(kani)]
+#[kani::proof]
+fn proof_flash_head_bands_are_disjoint() {
+    let hd: usize = kani::any();
+    let heads: usize = kani::any();
+    let seq: usize = kani::any();
+    kani::assume(hd >= 1 && hd <= 3);
+    kani::assume(heads >= 1 && heads <= 3);
+    kani::assume(seq >= 1 && seq <= 3);
+    let width = heads * hd;
+
+    let (h1, r1, c1): (usize, usize, usize) = (kani::any(), kani::any(), kani::any());
+    let (h2, r2, c2): (usize, usize, usize) = (kani::any(), kani::any(), kani::any());
+    kani::assume(h1 < heads && h2 < heads && h1 != h2);
+    kani::assume(r1 < seq && r2 < seq);
+    kani::assume(c1 < hd && c2 < hd);
+
+    // Different heads, therefore different elements - whatever rows and columns
+    // within their own bands they choose.
+    assert!(head_write_index(h1, r1, c1, hd, width) != head_write_index(h2, r2, c2, hd, width));
+}
+
+/// Every head's writes stay inside the `seq * width` output buffer.
+#[cfg(kani)]
+#[kani::proof]
+fn proof_flash_head_writes_are_in_bounds() {
+    let hd: usize = kani::any();
+    let heads: usize = kani::any();
+    let seq: usize = kani::any();
+    kani::assume(hd >= 1 && hd <= 3);
+    kani::assume(heads >= 1 && heads <= 3);
+    kani::assume(seq >= 1 && seq <= 3);
+    let width = heads * hd;
+
+    let (h, row, c): (usize, usize, usize) = (kani::any(), kani::any(), kani::any());
+    kani::assume(h < heads && row < seq && c < hd);
+
+    assert!(head_write_index(h, row, c, hd, width) < seq * width);
+}

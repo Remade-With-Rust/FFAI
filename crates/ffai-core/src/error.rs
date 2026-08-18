@@ -1,6 +1,6 @@
 use crate::engine::Task;
 
-/// Unified error type across all FFai crates.
+/// Unified error type across all `FFai` crates.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The engine exists in the registry but its implementation hasn't landed.
@@ -11,7 +11,9 @@ pub enum Error {
     )]
     NotImplemented { task: Task, engine: String },
 
-    #[error("no engine named `{name}` registered for task `{task}` — run `ffai engines` to list available engines")]
+    #[error(
+        "no engine named `{name}` registered for task `{task}` — run `ffai engines` to list available engines"
+    )]
     UnknownEngine { task: Task, name: String },
 
     #[error("media error: {0}")]

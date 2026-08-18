@@ -1,10 +1,10 @@
 //! # ffai-core
 //!
-//! The spine of FFai: shared media/AI types, one trait per task, and the
+//! The spine of `FFai`: shared media/AI types, one trait per task, and the
 //! engine registry that makes implementations interchangeable.
 //!
 //! The design borrows ffmpeg's load-bearing idea: `AVCodec` is a registry of
-//! interchangeable implementations selected by name (`-c:v libx264`). FFai's
+//! interchangeable implementations selected by name (`-c:v libx264`). `FFai`'s
 //! equivalent: [`engine::AsrEngine`], [`engine::TtsEngine`],
 //! [`engine::OcrEngine`], and [`engine::VlmEngine`] are traits with many
 //! competing engines behind them, selected with `--engine <name>`.
@@ -27,7 +27,8 @@ pub use error::{Error, Result};
 ///
 /// CPU always works; CUDA/Metal are behind the crate features of the same
 /// name and fall back to CPU when unavailable.
-pub fn best_device() -> candle::Device {
+#[must_use]
+pub const fn best_device() -> candle::Device {
     #[cfg(feature = "cuda")]
     if let Ok(dev) = candle::Device::new_cuda(0) {
         return dev;

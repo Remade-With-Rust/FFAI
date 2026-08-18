@@ -1,10 +1,10 @@
-//! # Argus — FFai's vision-language component
+//! # Argus — `FFai`'s vision-language component
 //!
 //! Named for Argus Panoptes, the all-seeing hundred-eyed watchman: image
 //! captioning, visual Q&A, and video understanding.
 //!
 //! Backend plan (Phase 4): **mistral.rs** — the inference engine built on
-//! candle (FFai's tensor spine, so buffers are shared without conversion) —
+//! candle (`FFai`'s tensor spine, so buffers are shared without conversion) —
 //! running Qwen-VL / LLaVA-class models with quantization. Video
 //! understanding composes `ffai-media::sample_frames` (rff-backed keyframe
 //! sampling) with per-frame or windowed captioning into a timed track.
@@ -30,7 +30,10 @@ impl VlmEngine for MistralRs {
     }
 
     fn describe_image(&self, _image: &ImageBuffer, _opts: &VlmOptions) -> Result<String> {
-        Err(Error::NotImplemented { task: Task::Vlm, engine: "mistralrs".into() })
+        Err(Error::NotImplemented {
+            task: Task::Vlm,
+            engine: "mistralrs".into(),
+        })
     }
 
     fn describe_video(
@@ -38,7 +41,10 @@ impl VlmEngine for MistralRs {
         _frames: &[VideoFrame],
         _opts: &VlmOptions,
     ) -> Result<Vec<TimedSegment<String>>> {
-        Err(Error::NotImplemented { task: Task::Vlm, engine: "mistralrs".into() })
+        Err(Error::NotImplemented {
+            task: Task::Vlm,
+            engine: "mistralrs".into(),
+        })
     }
 }
 

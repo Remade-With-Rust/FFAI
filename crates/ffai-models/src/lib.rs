@@ -1,9 +1,9 @@
 //! # ffai-models
 //!
-//! Weight management for FFai. Core principle: **weights are data, not
+//! Weight management for `FFai`. Core principle: **weights are data, not
 //! code** — the repo holds only TOML *manifests* describing each model (files,
 //! source, checksums, and crucially its *license*, which is often different
-//! from FFai's). Weights are fetched into a local cache, never vendored.
+//! from `FFai`'s). Weights are fetched into a local cache, never vendored.
 //!
 //! Phase 0 ships manifests + cache resolution; the downloader (Hugging Face
 //! hub, resumable, checksum-verified) lands in Phase 1.
@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
     pub name: String,
-    /// The WEIGHTS' license — may be more restrictive than FFai's own.
+    /// The WEIGHTS' license — may be more restrictive than `FFai`'s own.
     pub license: String,
     /// Filename → local path.
     pub files: BTreeMap<String, PathBuf>,
@@ -71,7 +71,10 @@ fn verify_checksum(path: &Path, file: &ModelFile) -> Result<()> {
         return Ok(());
     };
     let bytes = std::fs::read(path)?;
-    let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let actual: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     if actual != expected.to_ascii_lowercase() {
         return Err(Error::Model(format!(
             "checksum mismatch for {}: manifest says {expected}, file is {actual}",
@@ -98,7 +101,7 @@ pub struct ModelManifest {
     pub task: String,
     pub description: Option<String>,
     /// The WEIGHTS' license — surfaced to users because it may be more
-    /// restrictive than FFai's MIT/Apache code license.
+    /// restrictive than `FFai`'s MIT/Apache code license.
     pub license: String,
     /// Hugging Face repo id, e.g. "openai/whisper-tiny".
     pub hf_repo: Option<String>,
@@ -117,19 +120,26 @@ impl ModelManifest {
     }
 
     /// Directory this model's files live in when placed manually.
+    #[must_use]
     pub fn cache_path(&self) -> PathBuf {
         cache_dir().join("models").join(&self.name)
     }
 
     /// True when every listed file already resolves locally — no network.
+    #[must_use]
     pub fn is_cached(&self) -> bool {
-        !self.files.is_empty() && self.files.iter().all(|f| self.local_path(&f.name).is_some())
+        !self.files.is_empty()
+            && self
+                .files
+                .iter()
+                .all(|f| self.local_path(&f.name).is_some())
     }
 
     /// Resolve one file without touching the network: a manual placement
     /// under [`Self::cache_path`] wins, otherwise the shared Hugging Face
     /// cache (the same one `transformers`/`faster-whisper` use, so a model
     /// downloaded by either side is not downloaded twice).
+    #[must_use]
     pub fn local_path(&self, name: &str) -> Option<PathBuf> {
         let manual = self.cache_path().join(name);
         if manual.exists() {
@@ -163,7 +173,11 @@ impl ModelManifest {
             verify_checksum(&path, file)?;
             files.insert(file.name.clone(), path);
         }
-        Ok(ResolvedModel { name: self.name.clone(), license: self.license.clone(), files })
+        Ok(ResolvedModel {
+            name: self.name.clone(),
+            license: self.license.clone(),
+            files,
+        })
     }
 }
 
@@ -180,7 +194,7 @@ pub fn load_dir(dir: &Path) -> Result<Vec<ModelManifest>> {
     Ok(out)
 }
 
-/// The FFai model cache root: `$FFAI_CACHE` or `<os cache dir>/ffai`.
+/// The `FFai` model cache root: `$FFAI_CACHE` or `<os cache dir>/ffai`.
 pub fn cache_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("FFAI_CACHE") {
         return PathBuf::from(dir);
