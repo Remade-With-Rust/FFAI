@@ -272,6 +272,18 @@ pub fn pad_or_trim_to(samples: &[f32], target: usize) -> Vec<f32> {
 /// the edge sample itself is not repeated).
 fn reflect_pad(samples: &[f32], pad: usize) -> Vec<f32> {
     let n = samples.len();
+    // An empty signal has nothing to reflect, and BOTH loops below are unsound
+    // for n == 0: `reflect_index` returns 0, which is not a valid index into an
+    // empty slice, and `n - 1 - i.min(n - 1)` underflows. `compute` produces
+    // zero frames for an empty buffer and never reads this padding, but
+    // `AudioBuffer::samples` is caller-supplied and an empty one must not panic
+    // the library. Silence of the padded length keeps the function TOTAL.
+    //
+    // Found by tests/properties.rs (gate H-28) on its first run; minimal
+    // failing input was `samples = []`.
+    if n == 0 {
+        return vec![0.0; 2 * pad];
+    }
     let mut out = Vec::with_capacity(n + 2 * pad);
     for i in 0..pad {
         out.push(samples[reflect_index(pad - i, n)]);

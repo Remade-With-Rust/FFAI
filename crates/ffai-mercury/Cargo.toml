@@ -28,6 +28,8 @@ half = "2"
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Gate H-28: property tests for the advertised invariants (tests/properties.rs).
+proptest = "1"
 ffai-models = { workspace = true }
 
 [features]
