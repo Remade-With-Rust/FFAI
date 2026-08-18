@@ -9,6 +9,12 @@
 `main`, rendered with `--link` to this file). The crates.io page renders this crate's
 README, so it inherits the block — but **only absolute links resolve there**. All mirrors
 **must be re-rendered in the same pass as this file** (SKILL.md §3.1)
+**Compliance**: `gdpr-pii` — in scope: this unit processes speech audio and transcripts
+(personal data), and its diarizer/speaker modules derive **voiceprints**, which are
+**GDPR Art 9 special-category biometric data** when used to identify a person. Out of
+scope: `pci-dss` (no cardholder data), `hipaa` (no PHI context), `soc2` (library, not a
+service — it inherits the consuming service's controls), `eu-cra` (binds on commercial
+shipment, not on the crate itself)
 **Architect**: [Nick Overlock](https://www.linkedin.com/in/nick-overlock-593235b9/)
 **Audit depth**: survey (static evidence only — no tool probe was executed)
 **Audited**: 2026-08-15 by Claude (pilot) · **Next review**: 2026-11-15
@@ -157,6 +163,30 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 | H-39 | ★ `SECURITY.md` with a coordinated disclosure process | Incomplete | absent at the repo root and at the crate. The crate is published to crates.io as 0.7.0 with no disclosure contact | |
 | H-40 | Advisory monitoring and scheduled re-audit | Incomplete | no recorded advisory subscription; this audit is the first pass, so no schedule exists yet | |
 | H-41 | ★ Residual risks listed and accepted; waivers time-bounded | Incomplete | register drafted below, but **no risk has been accepted by an owner** — acceptance is a human decision, not an audit output | |
+
+### Phase 12 — Compliance controls
+
+Scope declared above: `gdpr-pii`. Rows marked `N/A` are out of scope because this is a
+**library** that performs no network egress, persists nothing, and enforces no access
+control — those controls belong to the consuming service. Mapping: the skill's
+`COMPLIANCE.md`.
+
+| ID | Gate | Status | Evidence | Target |
+|---|---|---|---|---|
+| C-01 | Data inventory — personal/health/card data touched | Incomplete | no written inventory. This audit identifies three classes: raw speech audio, transcript text, and **speaker embeddings** from `asr/diarize.rs` / `asr/speaker.rs` — the third is Art 9 special-category biometric data when used to identify. Nothing documents this today | |
+| C-02 | Data-flow map including third-party egress | Incomplete | no map. Survey found no network calls in this crate (no `reqwest`/`hf-hub` dependency); data enters as caller-supplied audio and leaves as returned structs. Needs writing down, including what the caller is expected to do with voiceprints | |
+| C-03 | Encryption in transit for all egress | N/A | this unit performs no network egress; weight download lives in `ffai-models` | |
+| C-04 | Encryption at rest for stored sensitive data | N/A | persists no personal data; it reads a model cache it does not own | |
+| C-05 | Key management — generation, storage, rotation, destruction | N/A | holds no key material (consistent with H-20) | |
+| C-06 | Retention limits and honoured deletion | Incomplete | no persistence found at survey depth, but whether any temp file, buffer, or cache retains audio or embeddings is unreviewed — and Art 17 erasure has to reach embeddings, not just recordings | |
+| C-07 | Audit logging of security-relevant events | N/A | library; audit logging is the consuming service's control | |
+| C-08 | Log hygiene — no PII, secrets, or card data in logs | Incomplete | unreviewed at any log level. Same gap as H-20: transcripts and audio are personal data and must not reach logs | |
+| C-09 | Least-privilege access to sensitive data | N/A | library; enforces no access control boundary of its own | |
+| C-10 | Subprocessor and third-party inventory | N/A | no personal data leaves the process, so no processor relationship arises from this unit | |
+| C-11 | Incident response and breach notification path | Incomplete | no `SECURITY.md` anywhere in the repo (H-39), so there is no route for a reporter and no owner for the GDPR Art 33 72-hour clock | |
+| C-12 | Change management — reviewed, approved, traceable | Incomplete | no CI and no evidenced branch protection or review requirement (H-37) | |
+| C-13 | Availability commitments and their evidence | N/A | library; no SLA or availability commitment is made by this crate | |
+| C-14 | Machine-readable SBOM + provenance for regulators | Incomplete | no SBOM published (H-12) | |
 
 ---
 

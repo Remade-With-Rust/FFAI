@@ -245,7 +245,7 @@ MIT OR Apache-2.0. Model weights carry their own licenses, surfaced at selection
 
 **Tier** critical-path · **Audited** 2026-08-15 (survey) · **v1.0.0 gates** 1/16 · [Full checklist](docs/plans/use-protection-please.md)
 
-`█░░░░░░░░░░░░░░░░░░░` **6%** &nbsp;·&nbsp; 2 Completed · 0 Scheduled · 33 Incomplete · 6 N/A
+`░░░░░░░░░░░░░░░░░░░░` **5%** &nbsp;·&nbsp; 2 Completed · 0 Scheduled · 40 Incomplete · 13 N/A
 
 | Phase | ✅ Completed | 🗓 Scheduled | ⬜ Incomplete | · N/A |
 |---|--:|--:|--:|--:|
@@ -261,7 +261,14 @@ MIT OR Apache-2.0. Model weights carry their own licenses, surfaced at selection
 | 9 — Runtime privilege | 0 | 0 | 0 | 1 |
 | 10 — Cryptography | 0 | 0 | 0 | 3 |
 | 11 — CI/CD, release, and operations | 0 | 0 | 5 | 0 |
-| **Total** | **2** | **0** | **33** | **6** |
+| 12 — Compliance controls | 0 | 0 | 7 | 7 |
+| **Total** | **2** | **0** | **40** | **13** |
+
+**Compliance** — *technical controls evidenced by this audit. NOT a certification, an attestation, or an auditor's opinion.*
+
+| Framework | Technical controls met | |
+|---|--:|:--|
+| GDPR / PII | 0 / 8 | ⬜ |
 
 **Architect** — [Nick Overlock](https://www.linkedin.com/in/nick-overlock-593235b9/)
 <!-- HARDENING-TABLE:END -->
