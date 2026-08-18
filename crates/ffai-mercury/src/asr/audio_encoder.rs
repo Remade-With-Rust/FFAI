@@ -135,7 +135,7 @@ struct Block {
 
 impl Block {
     fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
-        Ok(Block {
+        Ok(Self {
             attn: EncoderAttention::load(n_state, n_head, vb.pp("self_attn"), p)?,
             attn_ln: layer_norm(n_state, vb.pp("self_attn_layer_norm"))?,
             mlp_ln: layer_norm(n_state, vb.pp("final_layer_norm"))?,
@@ -229,7 +229,7 @@ impl AudioEncoder {
         };
         let conv1_b = vb.pp("conv1").get(n_state, "bias")?;
         let conv2_b = vb.pp("conv2").get(n_state, "bias")?;
-        Ok(AudioEncoder {
+        Ok(Self {
             conv1,
             conv2,
             conv1_wm,
@@ -242,7 +242,7 @@ impl AudioEncoder {
         })
     }
 
-    /// `mel`: (batch, n_mels, frames) → features (batch, frames/2, d_model).
+    /// `mel`: (batch, `n_mels`, frames) → features (batch, frames/2, `d_model`).
     pub fn forward(&self, mel: &Tensor) -> CandleResult<Tensor> {
         let p = super::profile::profile();
         let x = super::profile::timed(&p.enc_conv, || -> CandleResult<Tensor> {

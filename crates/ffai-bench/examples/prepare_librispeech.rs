@@ -221,9 +221,17 @@ impl Args {
 /// Find the directory holding `<speaker>/<chapter>` — i.e. `.../test-clean`.
 fn find_split_root(extracted: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let ls = extracted.join("LibriSpeech");
-    let base = if ls.exists() { ls } else { extracted.to_path_buf() };
+    let base = if ls.exists() {
+        ls
+    } else {
+        extracted.to_path_buf()
+    };
     for dir in sorted_dirs(&base)? {
-        let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         if name.contains("clean") || name.contains("other") {
             return Ok(dir);
         }

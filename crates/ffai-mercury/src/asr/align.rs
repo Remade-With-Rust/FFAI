@@ -12,7 +12,7 @@
 //! alignment of the *known* transcript against those probabilities. Because
 //! the text is already known, this is not recognition: it is a shortest-path
 //! problem over a trellis, solved exactly by dynamic programming. Same
-//! approach as WhisperX (Bain et al., Interspeech 2023) and torchaudio's
+//! approach as `WhisperX` (Bain et al., Interspeech 2023) and torchaudio's
 //! forced-alignment pipeline.
 //!
 //! **This module is deliberately model-free.** It takes emissions as data and
@@ -57,7 +57,7 @@ impl Emissions {
                 data.len()
             ));
         }
-        Ok(Emissions {
+        Ok(Self {
             frames,
             vocab,
             data,
@@ -98,6 +98,7 @@ pub struct CtcAlphabet {
 
 impl CtcAlphabet {
     /// Build from an ordered character list; index in the list is the token id.
+    #[must_use]
     pub fn new(chars: &[char], blank: u32, word_sep: Option<char>) -> Self {
         let lookup: HashMap<char, u32> = chars
             .iter()
@@ -105,7 +106,7 @@ impl CtcAlphabet {
             .map(|(i, &c)| (c, i as u32))
             .collect();
         let word_sep = word_sep.and_then(|c| lookup.get(&c).copied());
-        CtcAlphabet {
+        Self {
             blank,
             word_sep,
             lookup,
@@ -113,6 +114,7 @@ impl CtcAlphabet {
     }
 
     /// The standard wav2vec2 English CTC alphabet, in its canonical order.
+    #[must_use]
     pub fn wav2vec2_english() -> Self {
         let chars: Vec<char> = "<pad><s></s><unk>|ETAONIHSRDLUMWCFGYPBVK'XJQZ"
             .chars()
@@ -132,7 +134,7 @@ impl CtcAlphabet {
             '|', 'E', 'T', 'A', 'O', 'N', 'I', 'H', 'S', 'R', 'D', 'L', 'U', 'M', 'W', 'C', 'F',
             'G', 'Y', 'P', 'B', 'V', 'K', '\'', 'X', 'J', 'Q', 'Z',
         ];
-        CtcAlphabet::new(&table, 0, Some('|'))
+        Self::new(&table, 0, Some('|'))
     }
 
     /// Map text onto token ids, folding case and dropping anything the model
@@ -142,6 +144,7 @@ impl CtcAlphabet {
     /// needs to know which characters survived in order to reassemble words
     /// from the aligned tokens. Silently dropping a character and then
     /// indexing the original string is how word boundaries end up off by one.
+    #[must_use]
     pub fn tokenize(&self, text: &str) -> (Vec<u32>, Vec<char>) {
         let mut ids = Vec::new();
         let mut kept = Vec::new();
@@ -332,6 +335,7 @@ pub fn forced_align(
 /// [`CtcAlphabet::tokenize`] — the two are index-parallel by construction, and
 /// pairing them any other way is how a word ends up carrying its neighbour's
 /// timing.
+#[must_use]
 pub fn words_from_spans(
     spans: &[TokenSpan],
     kept: &[char],
@@ -354,8 +358,8 @@ pub fn words_from_spans(
         if let Some(f) = first.take() {
             if !text.is_empty() {
                 out.push(TimedSegment {
-                    start: time_offset + f as f64 * frame_secs,
-                    end: time_offset + last as f64 * frame_secs,
+                    start: (f as f64).mul_add(frame_secs, time_offset),
+                    end: (last as f64).mul_add(frame_secs, time_offset),
                     value: std::mem::take(text),
                     confidence: (*score_n > 0).then(|| *score_sum / *score_n as f32),
                 });

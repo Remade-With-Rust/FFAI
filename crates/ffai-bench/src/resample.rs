@@ -59,7 +59,11 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
         }
         // Normalizing by the kernel sum keeps unity gain at DC and at the
         // edges where the kernel is truncated by the signal boundary.
-        out.push(if norm.abs() > 1e-12 { (acc / norm) as f32 } else { 0.0 });
+        out.push(if norm.abs() > 1e-12 {
+            (acc / norm) as f32
+        } else {
+            0.0
+        });
     }
     out
 }
@@ -89,9 +93,7 @@ mod tests {
         let n = (rate as f64 * secs) as usize;
         AudioBuffer {
             samples: (0..n)
-                .map(|i| {
-                    (2.0 * std::f64::consts::PI * freq * i as f64 / rate as f64).sin() as f32
-                })
+                .map(|i| (2.0 * std::f64::consts::PI * freq * i as f64 / rate as f64).sin() as f32)
                 .collect(),
             sample_rate: rate,
             channels: 1,
@@ -100,11 +102,18 @@ mod tests {
 
     /// Count sign changes — 2·freq·secs for a clean tone.
     fn zero_crossings(samples: &[f32]) -> usize {
-        samples.windows(2).filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0)).count()
+        samples
+            .windows(2)
+            .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
+            .count()
     }
 
     fn rms(samples: &[f32]) -> f64 {
-        (samples.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>() / samples.len() as f64)
+        (samples
+            .iter()
+            .map(|s| (*s as f64) * (*s as f64))
+            .sum::<f64>()
+            / samples.len() as f64)
             .sqrt()
     }
 
@@ -117,11 +126,18 @@ mod tests {
         let out = to_judge_format(&src, 16_000);
         assert_eq!(out.sample_rate, 16_000);
         assert_eq!(out.channels, 1);
-        assert!((out.samples.len() as f64 - 16_000.0).abs() < 8.0, "{}", out.samples.len());
+        assert!(
+            (out.samples.len() as f64 - 16_000.0).abs() < 8.0,
+            "{}",
+            out.samples.len()
+        );
 
         // Frequency preserved: ~2000 zero crossings for 1 kHz over 1 s.
         let zc = zero_crossings(&out.samples);
-        assert!((1990..=2010).contains(&zc), "zero crossings {zc}, want ~2000");
+        assert!(
+            (1990..=2010).contains(&zc),
+            "zero crossings {zc}, want ~2000"
+        );
 
         // Amplitude preserved: RMS of a unit sine is 1/sqrt(2) ~ 0.707.
         let r = rms(&out.samples);
@@ -157,6 +173,9 @@ mod tests {
             .zip(&mono.samples)
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
-        assert!(max_delta < 1e-6, "downmix changed the signal, max delta {max_delta}");
+        assert!(
+            max_delta < 1e-6,
+            "downmix changed the signal, max delta {max_delta}"
+        );
     }
 }

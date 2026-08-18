@@ -112,7 +112,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&args.manifest, manifest)?;
-    println!("\nwrote {} ({} sentences, {} words)", args.manifest.display(), args.count, total_words);
+    println!(
+        "\nwrote {} ({} sentences, {} words)",
+        args.manifest.display(),
+        args.count,
+        total_words
+    );
     Ok(())
 }
 
@@ -153,17 +158,25 @@ impl Args {
         }
         Ok(Args {
             source: PathBuf::from(
-                map.get("source").cloned().unwrap_or_else(|| "harvard.html".into()),
+                map.get("source")
+                    .cloned()
+                    .unwrap_or_else(|| "harvard.html".into()),
             ),
             out: PathBuf::from(
-                map.get("out").cloned().unwrap_or_else(|| "corpora/texts/harvard".into()),
+                map.get("out")
+                    .cloned()
+                    .unwrap_or_else(|| "corpora/texts/harvard".into()),
             ),
             manifest: PathBuf::from(
                 map.get("manifest")
                     .cloned()
                     .unwrap_or_else(|| "corpora/harvard-sentences-v1.toml".into()),
             ),
-            count: map.get("count").map(|c| c.parse()).transpose()?.unwrap_or(200),
+            count: map
+                .get("count")
+                .map(|c| c.parse())
+                .transpose()?
+                .unwrap_or(200),
         })
     }
 }
@@ -173,8 +186,11 @@ fn rel_from_manifest(manifest: &Path, target: &Path) -> String {
     let base = manifest.parent().unwrap_or(Path::new("."));
     let base: Vec<_> = base.components().collect();
     let target_components: Vec<_> = target.components().collect();
-    let common =
-        base.iter().zip(target_components.iter()).take_while(|(a, b)| a == b).count();
+    let common = base
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
     let mut out = PathBuf::new();
     for _ in common..base.len() {
         out.push("..");

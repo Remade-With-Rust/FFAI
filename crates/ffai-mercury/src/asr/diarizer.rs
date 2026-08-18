@@ -113,7 +113,7 @@ impl Diarizer {
         let cfg = Config::default();
         let fbank = Fbank::new(cfg.n_mels);
         let model = EcapaTdnn::load(cfg, vb, device)?;
-        Ok(Diarizer {
+        Ok(Self {
             model,
             fbank,
             sample_rate: super::fbank::SAMPLE_RATE,
@@ -209,7 +209,7 @@ impl Diarizer {
         }
 
         let local = diarize::cluster(&embeddings, threshold, max_speakers);
-        let n_local = local.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        let n_local = local.iter().copied().max().map_or(0, |m| m + 1);
 
         // Reduce each local cluster to its mean, then resolve that against
         // the persistent identities.
@@ -314,7 +314,7 @@ impl Diarizer {
         }
 
         let local = diarize::cluster(&embeddings, threshold, max_speakers);
-        let n_local = local.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        let n_local = local.iter().copied().max().map_or(0, |m| m + 1);
         let dim = embeddings[0].len();
         let mut sums = vec![vec![0.0f32; dim]; n_local];
         let mut counts = vec![0usize; n_local];
@@ -368,7 +368,7 @@ impl Diarizer {
     /// Shared front half: window -> features -> embedding, dropping whatever
     /// fails rather than substituting a zero vector.
     /// The sample rate the speaker front end expects.
-    pub fn sample_rate(&self) -> usize {
+    pub const fn sample_rate(&self) -> usize {
         self.sample_rate
     }
 

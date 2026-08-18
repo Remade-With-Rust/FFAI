@@ -84,7 +84,9 @@ fn english(text: &str) -> String {
     let s = re(r"[<\[][^>\]]*[>\]]").replace_all(&s, "").into_owned();
     let s = re(r"\(([^)]+?)\)").replace_all(&s, "").into_owned();
     // Fillers Whisper drops outright.
-    let s = re(r"\b(hmm|mm|mhm|mmm|uh|um)\b").replace_all(&s, "").into_owned();
+    let s = re(r"\b(hmm|mm|mhm|mmm|uh|um)\b")
+        .replace_all(&s, "")
+        .into_owned();
     // Standardize a space before an apostrophe ("it 's" -> "it's").
     let s = re(r"\s+'").replace_all(&s, "'").into_owned();
 
@@ -407,7 +409,10 @@ mod tests {
 
     #[test]
     fn titles_expand() {
-        assert_eq!(en("Dr. Smith and Mrs. Jones"), "doctor smith and missus jones");
+        assert_eq!(
+            en("Dr. Smith and Mrs. Jones"),
+            "doctor smith and missus jones"
+        );
     }
 
     #[test]
@@ -449,7 +454,10 @@ mod tests {
 
     #[test]
     fn numbers_survive_surrounding_words() {
-        assert_eq!(en("he had twenty three apples and left"), "he had 23 apples and left");
+        assert_eq!(
+            en("he had twenty three apples and left"),
+            "he had 23 apples and left"
+        );
     }
 
     #[test]

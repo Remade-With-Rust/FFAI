@@ -48,7 +48,11 @@ use ffai_core::candle::{
 };
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use std::arch::x86_64::{
+    __m128i, _mm_add_ps, _mm_add_ss, _mm_cvtss_f32, _mm_loadu_si128, _mm_movehl_ps, _mm_shuffle_ps,
+    _mm256_add_ps, _mm256_castps256_ps128, _mm256_cvtph_ps, _mm256_extractf128_ps, _mm256_fmadd_ps,
+    _mm256_loadu_ps, _mm256_setzero_ps,
+};
 
 /// f16 weights in (out, in) row-major — the layout `QLinear` already stores,
 /// so no transpose is needed.
@@ -96,8 +100,12 @@ impl F16Gemv {
             .to_dtype(DType::F16)?
             .flatten_all()?
             .to_vec1::<half::f16>()?;
-        let w = std::sync::Arc::new(half.into_iter().map(|h| h.to_bits()).collect::<Vec<u16>>());
-        Ok(Some(F16Gemv { w, out_dim, in_dim }))
+        let w = std::sync::Arc::new(
+            half.into_iter()
+                .map(half::f16::to_bits)
+                .collect::<Vec<u16>>(),
+        );
+        Ok(Some(Self { w, out_dim, in_dim }))
     }
 
     /// `x` is (1, in) f32 → (1, out) f32. The activation is never converted.
@@ -167,14 +175,14 @@ unsafe fn dot_f16(w: *const u16, x: &[f32], d: usize) -> f32 {
         let xp = x.as_ptr();
         let mut k = 0;
         while k + 16 <= d {
-            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
+            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k).cast::<__m128i>()));
             acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
-            let w1 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k + 8) as *const __m128i));
+            let w1 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k + 8).cast::<__m128i>()));
             acc1 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(xp.add(k + 8)), acc1);
             k += 16;
         }
         while k + 8 <= d {
-            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
+            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k).cast::<__m128i>()));
             acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
             k += 8;
         }

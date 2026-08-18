@@ -5,7 +5,7 @@
 //! same [`Mode`], so formatting differences (`Mr.` vs `MISTER`, `23` vs
 //! `twenty three`) don't masquerade as recognition errors.
 
-use crate::normalize::{normalize, Mode};
+use crate::normalize::{Mode, normalize};
 
 /// Word error rate under the default (English) normalizer.
 pub fn wer(reference: &str, hypothesis: &str) -> f64 {
@@ -41,7 +41,11 @@ pub fn cer_with(reference: &str, hypothesis: &str, mode: Mode) -> f64 {
 /// convention would hide gross over-generation, so we don't cap).
 fn error_rate<T: PartialEq>(reference: &[T], hypothesis: &[T]) -> f64 {
     if reference.is_empty() {
-        return if hypothesis.is_empty() { 0.0 } else { hypothesis.len() as f64 };
+        return if hypothesis.is_empty() {
+            0.0
+        } else {
+            hypothesis.len() as f64
+        };
     }
     levenshtein(reference, hypothesis) as f64 / reference.len() as f64
 }

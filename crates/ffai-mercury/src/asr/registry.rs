@@ -3,11 +3,11 @@
 //! [`super::diarize`] answers "who spoke when" **inside one call**, and its
 //! labels are arbitrary names for clusters: `SPEAKER_00` is whoever spoke
 //! first in *that* audio. That is the standard definition, it is what DER
-//! measures under an optimal label mapping, and it is what WhisperX does.
+//! measures under an optimal label mapping, and it is what `WhisperX` does.
 //!
 //! It is also useless for a stream. Feed a live microphone in one-second
 //! chunks and the same person becomes `SPEAKER_00` in one chunk and
-//! `SPEAKER_01` in the next, because each call starts from nothing. FFai's
+//! `SPEAKER_01` in the next, because each call starts from nothing. `FFai`'s
 //! principle 5 says *"streaming-first — engines process chunks; whole-file is
 //! the degenerate case"*, and diarization that only works whole-file inverts
 //! that exactly.
@@ -96,6 +96,7 @@ impl SpeakerRegistry {
     /// `batch_threshold` is the same number [`super::diarize::cluster`] uses;
     /// the registry tightens it by [`ENROL_MARGIN`] itself, so callers pass
     /// one threshold and do not have to remember the relationship.
+    #[must_use]
     pub fn new(batch_threshold: f32, max_speakers: Option<usize>) -> Self {
         // FFAI_ENROL_MARGIN overrides the margin for calibration, the same
         // A/B convention the other knobs use. Not a user-facing switch.
@@ -108,19 +109,22 @@ impl SpeakerRegistry {
     }
 
     /// Explicit matching distance, bypassing the margin derivation.
-    pub fn with_match_threshold(match_threshold: f32, max_speakers: Option<usize>) -> Self {
-        SpeakerRegistry {
+    #[must_use]
+    pub const fn with_match_threshold(match_threshold: f32, max_speakers: Option<usize>) -> Self {
+        Self {
             known: Vec::new(),
             match_threshold,
             max_speakers,
         }
     }
 
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.known.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.known.is_empty()
     }
 
@@ -132,6 +136,7 @@ impl SpeakerRegistry {
     /// The distance to the nearest known speaker, if any — exposed so a
     /// caller can see *how* confident an assignment was rather than only
     /// which label came back.
+    #[must_use]
     pub fn nearest(&self, embedding: &[f32]) -> Option<(usize, f32)> {
         self.known
             .iter()
@@ -157,7 +162,7 @@ impl SpeakerRegistry {
                 let k = &mut self.known[i];
                 let total = k.weight + weight;
                 for (c, e) in k.centroid.iter_mut().zip(embedding.iter()) {
-                    *c = (*c * k.weight + *e * weight) / total;
+                    *c = (*c).mul_add(k.weight, *e * weight) / total;
                 }
                 k.weight = total;
                 i

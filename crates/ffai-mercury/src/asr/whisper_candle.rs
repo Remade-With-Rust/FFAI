@@ -22,7 +22,7 @@ use super::registry::SpeakerRegistry;
 use super::text_decoder::Precision;
 use super::vad;
 
-/// OpenAI Whisper running on candle.
+/// `OpenAI` Whisper running on candle.
 ///
 /// The model is loaded lazily on first use and reused across calls, so
 /// per-clip timing measures inference rather than weight loading (see
@@ -128,13 +128,14 @@ impl WhisperCandle {
     /// ([`crate::manifests`]), so this works from any working directory; a
     /// library that resolved them from a relative `models/` path would work
     /// only inside this repo.
+    #[must_use]
     pub fn new() -> Self {
         Self::model("whisper-tiny-en", Precision::F32)
     }
 
     /// A named size/precision, using the compiled-in manifests.
     pub fn model(model_name: impl Into<String>, precision: Precision) -> Self {
-        WhisperCandle {
+        Self {
             manifest_dir: None,
             model_name: model_name.into(),
             precision,
@@ -154,7 +155,7 @@ impl WhisperCandle {
         model_name: impl Into<String>,
         precision: Precision,
     ) -> Self {
-        WhisperCandle {
+        Self {
             manifest_dir: Some(manifest_dir.into()),
             model_name: model_name.into(),
             precision,
@@ -281,7 +282,7 @@ impl AsrEngine for WhisperCandle {
             Vec::new()
         };
         if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() && vad_on {
-            for w in vad::pack(&regions, opts.vad_chunk_secs as f64) {
+            for w in vad::pack(&regions, f64::from(opts.vad_chunk_secs)) {
                 eprintln!(
                     "[vad window] {:.2}-{:.2}s ({:.1}s)",
                     w.start,
@@ -346,7 +347,7 @@ impl AsrEngine for WhisperCandle {
         let adaptive_ctx_on = std::env::var("FFAI_ADAPTIVE_CTX").as_deref() != Ok("off");
         let mut prev_text: Vec<u32> = Vec::new();
         let total_secs = mono.samples.len() as f64 / sr;
-        let window_secs_max = (opts.vad_chunk_secs as f64).clamp(1.0, mel::CHUNK_SECONDS as f64);
+        let window_secs_max = f64::from(opts.vad_chunk_secs).clamp(1.0, mel::CHUNK_SECONDS as f64);
         let mut point = 0.0f64;
         while point < total_secs - 1e-6 {
             let window_start = if vad_on {
@@ -472,22 +473,15 @@ impl AsrEngine for WhisperCandle {
                     }
                 }
             }
-            let outcome = match outcome {
-                Some(o) => o,
-                None => {
-                    // Pad in the sample domain, before the spectrogram — see
-                    // mel::pad_or_trim for why the distinction matters.
-                    let chunk = super::profile::timed(&super::profile::profile().mel, || {
-                        state.front_end.compute(&mel::pad_or_trim(window))
-                    });
-                    decoder::decode_window(
-                        &mut state.whisper,
-                        &chunk,
-                        offset_secs,
-                        &wcfg,
-                        window_secs,
-                    )?
-                }
+            let outcome = if let Some(o) = outcome {
+                o
+            } else {
+                // Pad in the sample domain, before the spectrogram — see
+                // mel::pad_or_trim for why the distinction matters.
+                let chunk = super::profile::timed(&super::profile::profile().mel, || {
+                    state.front_end.compute(&mel::pad_or_trim(window))
+                });
+                decoder::decode_window(&mut state.whisper, &chunk, offset_secs, &wcfg, window_secs)?
             };
             if prev_context_on {
                 if outcome.temperature > 0.5 {

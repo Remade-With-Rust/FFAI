@@ -7,7 +7,7 @@
 //! **Why this is written out by hand.** `candle-transformers` 0.11 ships 125
 //! models and exactly two of them are audio — `whisper` and `encodec`. There
 //! is no wav2vec2, so there is nothing to call. The architecture below is
-//! transcribed from HuggingFace's `Wav2Vec2ForCTC`, using their tensor names
+//! transcribed from `HuggingFace`'s `Wav2Vec2ForCTC`, using their tensor names
 //! so a stock `facebook/wav2vec2-*` checkpoint maps straight onto it.
 //!
 //! **Frame rate is the load-bearing number.** The convolutional front end
@@ -19,7 +19,7 @@
 //! arithmetic are tested here against randomly-initialised weights. That
 //! proves the wiring, *not* the numerics — a transposed projection or a
 //! swapped norm would pass every test in this file. Oracle verification
-//! against HuggingFace outputs on a real checkpoint is Mercury-X §C3 and this
+//! against `HuggingFace` outputs on a real checkpoint is Mercury-X §C3 and this
 //! model is not `stable` until that lands.
 
 use candle_nn::ops::softmax_last_dim;
@@ -58,8 +58,9 @@ pub struct Config {
 
 impl Config {
     /// `facebook/wav2vec2-base-960h`.
+    #[must_use]
     pub fn base_960h() -> Self {
-        Config {
+        Self {
             hidden: 768,
             layers: 12,
             heads: 12,
@@ -77,16 +78,19 @@ impl Config {
     }
 
     /// Total downsampling factor of the convolutional front end.
+    #[must_use]
     pub fn total_stride(&self) -> usize {
         self.conv_stride.iter().product()
     }
 
     /// Seconds of audio per output frame at the given sample rate.
+    #[must_use]
     pub fn frame_secs(&self, sample_rate: usize) -> f64 {
         self.total_stride() as f64 / sample_rate as f64
     }
 
     /// Output frames for an input of `n` samples — each conv layer floors.
+    #[must_use]
     pub fn output_frames(&self, n: usize) -> usize {
         let mut len = n;
         for (k, s) in self.conv_kernel.iter().zip(self.conv_stride.iter()) {
@@ -103,10 +107,10 @@ impl Config {
 /// stays f32. Quantizing 90 % of the weights gets essentially all of the
 /// saving without touching the part whose activations have the widest range.
 ///
-/// **Why Q8_0 and not f16.** f16 was tried first and refuted: the forward
+/// **Why `Q8_0` and not f16.** f16 was tried first and refuted: the forward
 /// pass runs but emissions go degenerate, because wav2vec2-base was not
 /// trained for half precision and its conv-stack activations do not survive
-/// the range. Q8_0 carries a per-32-element scale, so the representable range
+/// the range. `Q8_0` carries a per-32-element scale, so the representable range
 /// follows the data instead of being fixed — which is the property f16 lacked.
 enum Projection {
     Plain(Linear),
@@ -131,13 +135,13 @@ impl Projection {
         let q =
             QTensor::quantize(&weight, GgmlDType::Q8_0).map_err(|e| model_err("quantize", e))?;
         let w = QMatMul::from_qtensor(q).map_err(|e| model_err("qmatmul", e))?;
-        Ok(Projection::Quantized { w, bias })
+        Ok(Self::Quantized { w, bias })
     }
 
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
         match self {
-            Projection::Plain(l) => l.forward(x),
-            Projection::Quantized { w, bias } => {
+            Self::Plain(l) => l.forward(x),
+            Self::Quantized { w, bias } => {
                 let y = w.forward(x)?;
                 match bias {
                     Some(b) => y.broadcast_add(b),
@@ -220,7 +224,7 @@ impl FeatureExtractor {
                 layer_norm,
             });
         }
-        Ok(FeatureExtractor { layers })
+        Ok(Self { layers })
     }
 
     /// `(batch, samples)` → `(batch, channels, frames)`.
@@ -248,7 +252,7 @@ impl Attention {
         let h = cfg.hidden;
         let head_dim = h / cfg.heads;
         let lin = |name: &str, vb: &VarBuilder| Projection::load(h, h, vb.pp(name), quantized);
-        Ok(Attention {
+        Ok(Self {
             q: lin("q_proj", &vb)?,
             k: lin("k_proj", &vb)?,
             v: lin("v_proj", &vb)?,
@@ -291,7 +295,7 @@ struct EncoderLayer {
 
 impl EncoderLayer {
     fn load(cfg: &Config, vb: VarBuilder, quantized: bool) -> Result<Self> {
-        Ok(EncoderLayer {
+        Ok(Self {
             attn: Attention::load(cfg, vb.pp("attention"), quantized)?,
             attn_norm: candle_nn::layer_norm(cfg.hidden, cfg.layer_norm_eps, vb.pp("layer_norm"))
                 .map_err(|e| model_err("layer_norm", e))?,
@@ -408,7 +412,7 @@ impl PosConv {
         // An even kernel with `padding = k/2` returns one frame too many;
         // HF's `Wav2Vec2SamePadLayer` drops the last. Off by one here shifts
         // every timestamp by 20 ms.
-        Ok(PosConv {
+        Ok(Self {
             conv,
             trim_last: cfg.pos_conv_kernel.is_multiple_of(2),
         })
@@ -449,7 +453,7 @@ impl Wav2Vec2Ctc {
         Self::load_with(cfg, vb, device, false)
     }
 
-    /// `quantized` puts the transformer projections through Q8_0.
+    /// `quantized` puts the transformer projections through `Q8_0`.
     pub fn load_with(cfg: Config, vb: VarBuilder, device: Device, quantized: bool) -> Result<Self> {
         let root = vb.pp("wav2vec2");
         let features = FeatureExtractor::load(&cfg, root.pp("feature_extractor"))?;
@@ -484,8 +488,7 @@ impl Wav2Vec2Ctc {
             .map_err(|e| model_err("lm_head", e))?;
 
         let dtype = vb.dtype();
-        Ok(Wav2Vec2Ctc {
-            dtype,
+        Ok(Self {
             cfg,
             features,
             feat_norm,
@@ -495,10 +498,12 @@ impl Wav2Vec2Ctc {
             layers,
             lm_head,
             device,
+            dtype,
         })
     }
 
-    pub fn config(&self) -> &Config {
+    #[must_use]
+    pub const fn config(&self) -> &Config {
         &self.cfg
     }
 

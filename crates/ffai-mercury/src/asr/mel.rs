@@ -74,6 +74,7 @@ pub struct MelFilters {
 impl MelFilters {
     /// Build the librosa-default filterbank (`htk=False`, `norm="slaney"`),
     /// which is what Whisper ships in `mel_filters.npz`.
+    #[must_use]
     pub fn new(n_mels: usize) -> Self {
         let n_bins = N_FFT / 2 + 1;
         let nyquist = SAMPLE_RATE as f32 / 2.0;
@@ -98,7 +99,7 @@ impl MelFilters {
                 weights[m * n_bins + k] = enorm * rising.min(falling).max(0.0);
             }
         }
-        MelFilters {
+        Self {
             n_mels,
             n_bins,
             weights,
@@ -119,19 +120,21 @@ pub struct MelSpectrogram {
 }
 
 impl MelSpectrogram {
+    #[must_use]
     pub fn new(n_mels: usize) -> Self {
         // torch.hann_window defaults to periodic=True: denominator N, not N-1.
         let window: Vec<f32> = (0..N_FFT)
             .map(|n| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / N_FFT as f32).cos()))
             .collect();
-        MelSpectrogram {
+        Self {
             filters: MelFilters::new(n_mels),
             window,
             fft: FftPlanner::new().plan_fft_forward(N_FFT),
         }
     }
 
-    pub fn n_mels(&self) -> usize {
+    #[must_use]
+    pub const fn n_mels(&self) -> usize {
         self.filters.n_mels
     }
 
@@ -154,11 +157,13 @@ impl MelSpectrogram {
     }
 
     /// Frames produced for `n_samples` of audio: `n_samples / HOP_LENGTH`.
-    pub fn n_frames(n_samples: usize) -> usize {
+    #[must_use]
+    pub const fn n_frames(n_samples: usize) -> usize {
         n_samples / HOP_LENGTH
     }
 
     /// Compute the log-mel spectrogram: `(n_mels, n_frames)` row-major.
+    #[must_use]
     pub fn compute(&self, samples: &[f32]) -> MelChunk {
         let n_frames = Self::n_frames(samples.len());
         let n_bins = self.filters.n_bins;
@@ -235,14 +240,15 @@ pub struct MelChunk {
 
 impl MelChunk {
     /// Pad or truncate to `frames`.
-    pub fn resized(&self, frames: usize) -> MelChunk {
+    #[must_use]
+    pub fn resized(&self, frames: usize) -> Self {
         let mut data = vec![0.0f32; self.n_mels * frames];
         for m in 0..self.n_mels {
             let take = self.n_frames.min(frames);
             data[m * frames..m * frames + take]
                 .copy_from_slice(&self.data[m * self.n_frames..m * self.n_frames + take]);
         }
-        MelChunk {
+        Self {
             n_mels: self.n_mels,
             n_frames: frames,
             data,
@@ -258,11 +264,13 @@ impl MelChunk {
 /// is the floor, not 0.0, and the dynamic-range clamp in [`MelSpectrogram::compute`]
 /// takes a *global* max — computing it over only the speech frames and then
 /// appending padding normalizes the window differently than Whisper does.
+#[must_use]
 pub fn pad_or_trim(samples: &[f32]) -> Vec<f32> {
     pad_or_trim_to(samples, N_SAMPLES)
 }
 
 /// Zero-pad or truncate to `target` samples.
+#[must_use]
 pub fn pad_or_trim_to(samples: &[f32], target: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; target];
     let take = samples.len().min(target);

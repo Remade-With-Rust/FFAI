@@ -1,10 +1,10 @@
 //! SpeechBrain-compatible filterbank features, for [`super::speaker`].
 //!
-//! **This is not [`super::mel`].** Whisper's log-mel and SpeechBrain's Fbank
+//! **This is not [`super::mel`].** Whisper's log-mel and `SpeechBrain`'s Fbank
 //! are both "80-dim mel features" and they differ in four places, every one
 //! of which changes the numbers:
 //!
-//! | | Whisper (`mel.rs`) | SpeechBrain (here) |
+//! | | Whisper (`mel.rs`) | `SpeechBrain` (here) |
 //! |---|---|---|
 //! | window | Hann | **Hamming** |
 //! | STFT padding | reflect | **constant (zeros)** |
@@ -34,7 +34,7 @@ pub const HOP_LENGTH: usize = 160;
 
 const AMIN: f32 = 1e-10;
 const TOP_DB: f32 = 80.0;
-/// `power_spectrogram = 2` selects the power spectrum, and SpeechBrain pairs
+/// `power_spectrogram = 2` selects the power spectrum, and `SpeechBrain` pairs
 /// that with a multiplier of 10 (20 is for magnitude).
 const DB_MULTIPLIER: f32 = 10.0;
 
@@ -53,13 +53,18 @@ fn to_hz(mel: f32) -> f32 {
 /// one sample of taper and it is enough to move every coefficient.
 fn hamming(n: usize) -> Vec<f32> {
     (0..n)
-        .map(|i| 0.54 - 0.46 * (2.0 * std::f32::consts::PI * i as f32 / n as f32).cos())
+        .map(|i| {
+            0.46f32.mul_add(
+                -(2.0 * std::f32::consts::PI * i as f32 / n as f32).cos(),
+                0.54,
+            )
+        })
         .collect()
 }
 
 /// Unnormalised triangular mel filterbank.
 ///
-/// SpeechBrain builds `n_mels + 2` mel-spaced points, takes the inner
+/// `SpeechBrain` builds `n_mels + 2` mel-spaced points, takes the inner
 /// `n_mels` as centres and the successive differences as bandwidths, then
 /// forms `max(0, min(slope + 1, -slope + 1))` with `slope = (f - centre) /
 /// band`. Deliberately **not** area-normalised: dividing by filter width here
@@ -105,9 +110,10 @@ pub struct Fbank {
 }
 
 impl Fbank {
+    #[must_use]
     pub fn new(n_mels: usize) -> Self {
         let n_stft = N_FFT / 2 + 1;
-        Fbank {
+        Self {
             n_mels,
             window: hamming(N_FFT),
             filters: filterbank(n_mels, n_stft, 0.0, (SAMPLE_RATE / 2) as f32),
@@ -115,18 +121,20 @@ impl Fbank {
         }
     }
 
-    pub fn n_mels(&self) -> usize {
+    #[must_use]
+    pub const fn n_mels(&self) -> usize {
         self.n_mels
     }
 
     /// Frames produced for `n` samples, with centred framing.
-    pub fn n_frames(n: usize) -> usize {
+    #[must_use]
+    pub const fn n_frames(n: usize) -> usize {
         n / HOP_LENGTH + 1
     }
 
     /// `samples` → `(features, frames)`, row-major `frames × n_mels`.
     ///
-    /// Applies sentence-level mean normalisation, which is SpeechBrain's
+    /// Applies sentence-level mean normalisation, which is `SpeechBrain`'s
     /// `InputNormalization(norm_type="sentence", std_norm=False)` — subtract
     /// the per-utterance mean of each feature, do **not** divide by the
     /// standard deviation. Skipping it leaves a channel offset the network
@@ -169,7 +177,7 @@ impl Fbank {
         let peak = out.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         if peak.is_finite() {
             let floor = peak - TOP_DB;
-            for v in out.iter_mut() {
+            for v in &mut out {
                 *v = v.max(floor);
             }
         }

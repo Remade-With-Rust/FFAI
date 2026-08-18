@@ -129,7 +129,10 @@ fn build_longform_corpus() -> std::io::Result<()> {
         .collect();
     files.sort();
     if files.len() < 40 {
-        eprintln!("skipping long-form corpus: only {} source clips", files.len());
+        eprintln!(
+            "skipping long-form corpus: only {} source clips",
+            files.len()
+        );
         return Ok(());
     }
 
@@ -148,7 +151,11 @@ fn build_longform_corpus() -> std::io::Result<()> {
         for k in 0..count {
             let idx = (n * 23 + k * 7) % files.len();
             let file = &files[idx];
-            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+            let stem = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
             let audio = read_wav(file)?;
             if audio.is_empty() {
                 continue;
@@ -227,11 +234,16 @@ version = 1
 task = \"asr\"
 
 {}",
-        clips.join("
-")
+        clips.join(
+            "
+"
+        )
     );
     fs::write("corpora/librispeech-longform.toml", manifest)?;
-    println!("wrote corpora/librispeech-longform.toml ({} files)", clips.len());
+    println!(
+        "wrote corpora/librispeech-longform.toml ({} files)",
+        clips.len()
+    );
     Ok(())
 }
 
@@ -241,7 +253,11 @@ fn build_silence_corpus() -> std::io::Result<()> {
     let mut clips = Vec::new();
     let mut rng = Rng(0x5EED_1234_5678_9ABC);
 
-    let mut add = |id: &str, samples: Vec<f32>, class: &str, clips: &mut Vec<String>| -> std::io::Result<()> {
+    let mut add = |id: &str,
+                   samples: Vec<f32>,
+                   class: &str,
+                   clips: &mut Vec<String>|
+     -> std::io::Result<()> {
         let audio = root.join("audio").join(format!("{id}.wav"));
         let truth = root.join("truth").join(format!("{id}.txt"));
         write_wav(&audio, &samples)?;
@@ -258,12 +274,26 @@ fn build_silence_corpus() -> std::io::Result<()> {
         Ok(())
     };
 
-    add("digital-silence-5s", vec![0.0; secs(5.0)], "other", &mut clips)?;
-    add("digital-silence-30s", vec![0.0; secs(30.0)], "other", &mut clips)?;
+    add(
+        "digital-silence-5s",
+        vec![0.0; secs(5.0)],
+        "other",
+        &mut clips,
+    )?;
+    add(
+        "digital-silence-30s",
+        vec![0.0; secs(30.0)],
+        "other",
+        &mut clips,
+    )?;
 
     // Room tone at three levels. The quietest is near the noise floor of a
     // good microphone; the loudest is a noisy laptop fan.
-    for (name, amp) in [("room-tone-quiet", 0.0005f32), ("room-tone-mid", 0.004), ("room-tone-loud", 0.02)] {
+    for (name, amp) in [
+        ("room-tone-quiet", 0.0005f32),
+        ("room-tone-mid", 0.004),
+        ("room-tone-loud", 0.02),
+    ] {
         let s: Vec<f32> = (0..secs(8.0)).map(|_| rng.next_f32() * amp * 2.0).collect();
         add(name, s, "other", &mut clips)?;
     }
@@ -308,7 +338,10 @@ fn build_silence_corpus() -> std::io::Result<()> {
         clips.join("\n")
     );
     fs::write("corpora/silence-and-nonspeech.toml", manifest)?;
-    println!("wrote corpora/silence-and-nonspeech.toml ({} clips)", clips.len());
+    println!(
+        "wrote corpora/silence-and-nonspeech.toml ({} clips)",
+        clips.len()
+    );
     Ok(())
 }
 
@@ -331,9 +364,16 @@ fn build_diarization_corpus() -> std::io::Result<()> {
         if path.extension().and_then(|e| e.to_str()) != Some("wav") {
             continue;
         }
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
         if let Some(id) = stem.split('-').next() {
-            by_speaker.entry(id.to_string()).or_default().push(path.clone());
+            by_speaker
+                .entry(id.to_string())
+                .or_default()
+                .push(path.clone());
         }
     }
     let mut speakers: Vec<(String, Vec<PathBuf>)> = by_speaker.into_iter().collect();
@@ -342,7 +382,10 @@ fn build_diarization_corpus() -> std::io::Result<()> {
         v.sort();
     }
     if speakers.len() < 4 {
-        eprintln!("skipping diarization corpus: only {} usable speakers", speakers.len());
+        eprintln!(
+            "skipping diarization corpus: only {} usable speakers",
+            speakers.len()
+        );
         return Ok(());
     }
 
@@ -437,6 +480,9 @@ fn build_diarization_corpus() -> std::io::Result<()> {
         clips.join("\n")
     );
     fs::write("corpora/librispeech-diarization.toml", manifest)?;
-    println!("wrote corpora/librispeech-diarization.toml ({} conversations)", clips.len());
+    println!(
+        "wrote corpora/librispeech-diarization.toml ({} conversations)",
+        clips.len()
+    );
     Ok(())
 }

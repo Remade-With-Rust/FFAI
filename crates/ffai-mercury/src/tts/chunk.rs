@@ -11,6 +11,7 @@
 //! unusual text will over-split, which costs a pause, not words.
 
 /// Split text into synthesizable sentences (with their punctuation).
+#[must_use]
 pub fn sentences(text: &str) -> Vec<String> {
     // Single-token forms only: the lookback collects the alphabetic run
     // before the period, so `e.g.` / `i.e.` surface as their last letter.

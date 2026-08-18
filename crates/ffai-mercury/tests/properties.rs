@@ -275,3 +275,28 @@ fn onnx_rejects_hostile_dims_without_panicking_or_wrapping() {
         }
     }
 }
+
+/// A field number larger than `u32` must be REJECTED, not truncated.
+///
+/// `(tag >> 3) as u32` aliased huge field numbers onto small ones: a tag whose
+/// field number is `2^32 + 1` narrows to `1`, which `parse_tensor` reads as
+/// `dims`. Crafted input could therefore reach a handler it had no right to.
+/// Protobuf caps field numbers at `2^29 - 1`, so anything above that is
+/// malformed and must error rather than be reinterpreted.
+#[test]
+fn onnx_rejects_out_of_range_field_numbers() {
+    for field_num in [1u64 << 32, (1u64 << 32) + 1, u64::MAX >> 3, 1u64 << 29] {
+        let mut buf = Vec::new();
+        varint((field_num << 3) | 2, &mut buf); // wire type 2, length-delimited
+        varint(0, &mut buf); // zero-length payload
+        assert!(
+            ffai_mercury::tts::onnx::parse(&buf).is_err(),
+            "field number {field_num} was accepted; it must be rejected, not truncated"
+        );
+    }
+    // The largest LEGAL field number still parses as a normal unknown field.
+    let mut ok = Vec::new();
+    varint((((1u64 << 29) - 1) << 3) | 2, &mut ok);
+    varint(0, &mut ok);
+    let _ = ffai_mercury::tts::onnx::parse(&ok); // must not panic; may be Ok or Err
+}

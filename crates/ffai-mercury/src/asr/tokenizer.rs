@@ -48,7 +48,7 @@ impl WhisperTokenizer {
                 ))
             })
         };
-        Ok(WhisperTokenizer {
+        Ok(Self {
             sot: id("<|startoftranscript|>")?,
             eot: id("<|endoftext|>")?,
             transcribe: id("<|transcribe|>")?,
@@ -65,13 +65,13 @@ impl WhisperTokenizer {
     }
 
     /// True if `token` encodes a timestamp rather than text.
-    pub fn is_timestamp(&self, token: u32) -> bool {
+    pub const fn is_timestamp(&self, token: u32) -> bool {
         token >= self.timestamp_begin
     }
 
     /// Seconds encoded by a timestamp token.
     pub fn timestamp_secs(&self, token: u32) -> f64 {
-        (token.saturating_sub(self.timestamp_begin)) as f64 * TIMESTAMP_STEP_SECS
+        f64::from(token.saturating_sub(self.timestamp_begin)) * TIMESTAMP_STEP_SECS
     }
 
     /// Whisper's `non_speech_tokens`: punctuation and symbol tokens that
@@ -170,7 +170,7 @@ impl WhisperTokenizer {
     }
 
     /// Everything at or above this id is a control token, not text.
-    fn eot_floor(&self) -> u32 {
+    const fn eot_floor(&self) -> u32 {
         self.eot
     }
 

@@ -69,7 +69,12 @@ pub struct GateResult {
 
 impl GateResult {
     pub fn skipped(kind: GateKind, reason: impl Into<String>) -> Self {
-        GateResult { kind, outcome: GateOutcome::Skipped, metric: None, detail: reason.into() }
+        GateResult {
+            kind,
+            outcome: GateOutcome::Skipped,
+            metric: None,
+            detail: reason.into(),
+        }
     }
 }
 
@@ -106,7 +111,9 @@ impl GateReport {
     /// the bar. This is the rule that keeps public claims honest.
     pub fn all_passed(&self) -> bool {
         GateKind::ALL.iter().all(|&k| {
-            self.get(k).map(|r| r.outcome == GateOutcome::Pass).unwrap_or(false)
+            self.get(k)
+                .map(|r| r.outcome == GateOutcome::Pass)
+                .unwrap_or(false)
         })
     }
 }
@@ -131,7 +138,12 @@ mod tests {
         let mut r = GateReport::new();
         for k in GateKind::ALL {
             assert!(!r.all_passed());
-            r.set(GateResult { kind: k, outcome: GateOutcome::Pass, metric: None, detail: "ok".into() });
+            r.set(GateResult {
+                kind: k,
+                outcome: GateOutcome::Pass,
+                metric: None,
+                detail: "ok".into(),
+            });
         }
         assert!(r.all_passed());
         r.set(GateResult {

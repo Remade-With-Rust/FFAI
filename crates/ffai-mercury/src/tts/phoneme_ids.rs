@@ -41,11 +41,11 @@ impl PhonemeIdMap {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|x| x.as_i64())
+                .filter_map(serde_json::Value::as_i64)
                 .collect();
             map.insert(k.clone(), ids);
         }
-        Ok(PhonemeIdMap { map })
+        Ok(Self { map })
     }
 
     /// One sentence of IPA (one codepoint cluster per char, as
@@ -53,6 +53,7 @@ impl PhonemeIdMap {
     /// Unknown codepoints are skipped, counted, and reported — piper does the
     /// same (logs and drops); a hard error mid-sentence would turn one exotic
     /// character into no audio at all.
+    #[must_use]
     pub fn sentence_to_ids(&self, ipa: &str) -> (Vec<i64>, usize) {
         let pad = self.id_of("_").unwrap_or(0);
         let bos = self.id_of("^").unwrap_or(1);

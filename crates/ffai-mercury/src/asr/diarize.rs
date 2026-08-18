@@ -18,7 +18,7 @@
 //! is pyannote's. It is MIT-licensed and **gated** — a licence that permits
 //! use sitting behind an acceptance wall that prevents fetching, which cannot
 //! go in a manifest under principle 4 ("weights are data, fetched from
-//! manifests that surface each model's own licence"). SpeechBrain's
+//! manifests that surface each model's own licence"). `SpeechBrain`'s
 //! ECAPA-TDNN is Apache-2.0 and ungated, so that is what
 //! [`super::speaker`] targets.
 
@@ -77,6 +77,7 @@ pub struct SpeakerTurn {
 }
 
 /// Conventional label for a cluster index.
+#[must_use]
 pub fn speaker_label(index: usize) -> String {
     format!("SPEAKER_{index:02}")
 }
@@ -89,6 +90,7 @@ pub fn speaker_label(index: usize) -> String {
 ///
 /// A region shorter than one window still yields one window covering it —
 /// dropping it would silently leave that speech unattributed.
+#[must_use]
 pub fn subsegment(regions: &[TimedSegment<()>], window: f64, hop: f64) -> Vec<(f64, f64)> {
     subsegment_at(regions, window, hop, 0.0)
 }
@@ -96,6 +98,7 @@ pub fn subsegment(regions: &[TimedSegment<()>], window: f64, hop: f64) -> Vec<(f
 /// [`subsegment`], with the buffer's absolute position in the stream so the
 /// window grid does not move when the buffer does. See the snapping comment
 /// below for why that matters.
+#[must_use]
 pub fn subsegment_at(
     regions: &[TimedSegment<()>],
     window: f64,
@@ -149,7 +152,7 @@ pub fn subsegment_at(
         out.push((region.start, (region.start + window).min(region.end)));
         let mut start = if snap {
             let abs = offset + region.start;
-            region.start + (((abs / hop).ceil() * hop) - abs)
+            region.start + (abs / hop).ceil().mul_add(hop, -abs)
         } else {
             region.start
         };
@@ -174,6 +177,7 @@ pub fn subsegment_at(
 /// A zero-norm embedding is maximally distant from everything rather than
 /// NaN: a silent or degenerate window should fail to join a cluster, not
 /// poison every comparison it takes part in.
+#[must_use]
 pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -205,6 +209,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// versus 2.89 s when left alone. Extra clusters are cheap under DER's
 /// optimal mapping; a bad merge is not. Supply the count when it is certain,
 /// not as a safety measure.
+#[must_use]
 pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, max_speakers: Option<usize>) -> Vec<usize> {
     let n = embeddings.len();
     if n == 0 {
@@ -276,6 +281,7 @@ pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, max_speakers: Option<usi
 ///
 /// Adjacent windows sharing a label become one turn. Because windows overlap,
 /// a turn's end is the max end seen, not the last window's start plus a hop.
+#[must_use]
 pub fn turns_from_labels(windows: &[(f64, f64)], labels: &[usize]) -> Vec<SpeakerTurn> {
     let mut turns: Vec<SpeakerTurn> = Vec::new();
     for (&(start, end), &speaker) in windows.iter().zip(labels.iter()) {
@@ -299,6 +305,7 @@ pub fn turns_from_labels(windows: &[(f64, f64)], labels: &[usize]) -> Vec<Speake
 /// to whoever holds more of it, and a midpoint test would hand the whole
 /// segment to whoever happened to own one instant. A segment overlapping no
 /// turn gets `None` — unattributed, not guessed.
+#[must_use]
 pub fn assign(segments: &[TimedSegment<String>], turns: &[SpeakerTurn]) -> Vec<Option<usize>> {
     segments
         .iter()
@@ -320,6 +327,7 @@ pub fn assign(segments: &[TimedSegment<String>], turns: &[SpeakerTurn]) -> Vec<O
 }
 
 /// Speaker turns as timed segments, ready to hang on a [`Transcript`].
+#[must_use]
 pub fn labelled_turns(turns: &[SpeakerTurn]) -> Vec<TimedSegment<String>> {
     turns
         .iter()
@@ -594,6 +602,7 @@ mod absolute_grid_tests {
 /// Read per call rather than cached: a sweep changes it between runs in one
 /// process, and the cost of two env reads against a ~172 ms forward is
 /// nothing.
+#[must_use]
 pub fn geometry() -> (f64, f64) {
     let read = |name: &str, default: f64| -> f64 {
         std::env::var(name)
@@ -638,21 +647,25 @@ pub struct StreamState {
 pub const STREAM_HORIZON_SECS: f64 = 30.0;
 
 impl StreamState {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Absolute time already covered.
-    pub fn processed_to(&self) -> f64 {
+    #[must_use]
+    pub const fn processed_to(&self) -> f64 {
         self.processed_to
     }
 
     /// Stored window count — the clustering input size.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.windows.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.windows.is_empty()
     }
 
@@ -664,6 +677,7 @@ impl StreamState {
     /// audio available at the time, and regenerating it would produce a
     /// second embedding of overlapping speech that clustering would then
     /// weigh twice.
+    #[must_use]
     pub fn pending(&self, abs_regions: &[(f64, f64)], window: f64, hop: f64) -> Vec<(f64, f64)> {
         let regions: Vec<TimedSegment<()>> = abs_regions
             .iter()
@@ -723,6 +737,7 @@ impl StreamState {
     }
 
     /// The stored windows and their embeddings, for clustering.
+    #[must_use]
     pub fn parts(&self) -> (Vec<(f64, f64)>, Vec<Vec<f32>>) {
         (
             self.windows.iter().map(|w| (w.0, w.1)).collect(),
@@ -738,6 +753,7 @@ impl StreamState {
 /// Getting this wrong shifts every speaker label by the stream offset — the
 /// kind of error that looks like a diarization bug and is arithmetic. Kept
 /// model-free so it is testable without weights, like the rest of this module.
+#[must_use]
 pub fn clip_to_buffer(turns: Vec<SpeakerTurn>, offset: f64, buffer_end: f64) -> Vec<SpeakerTurn> {
     turns
         .into_iter()

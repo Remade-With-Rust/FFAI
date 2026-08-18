@@ -45,8 +45,9 @@ struct Loaded {
 impl PiperCandle {
     /// The default engine: compiled-in manifests, weights from the cache.
     /// Works from any working directory.
-    pub fn new() -> Self {
-        PiperCandle {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             manifest_dir: None,
             loaded: OnceLock::new(),
         }
@@ -56,7 +57,7 @@ impl PiperCandle {
     /// compiled-in copies — for a caller who ships their own manifests (a
     /// different voice, a relocated cache, a pinned checksum).
     pub fn with_manifest_dir(dir: impl AsRef<Path>) -> Self {
-        PiperCandle {
+        Self {
             manifest_dir: Some(dir.as_ref().to_path_buf()),
             loaded: OnceLock::new(),
         }
@@ -167,12 +168,9 @@ impl TtsEngine for PiperCandle {
         let synth = SynthesisOptions {
             // speed is the user knob; length_scale is its reciprocal. The
             // noise knobs default to the voice's own values (`None`).
-            length_scale: defaults.length_scale / opts.speed.max(0.1) as f64,
-            noise_scale: opts
-                .noise_scale
-                .map(f64::from)
-                .unwrap_or(defaults.noise_scale),
-            noise_w: opts.noise_w.map(f64::from).unwrap_or(defaults.noise_w),
+            length_scale: defaults.length_scale / f64::from(opts.speed.max(0.1)),
+            noise_scale: opts.noise_scale.map_or(defaults.noise_scale, f64::from),
+            noise_w: opts.noise_w.map_or(defaults.noise_w, f64::from),
             seed: opts.seed,
         };
 

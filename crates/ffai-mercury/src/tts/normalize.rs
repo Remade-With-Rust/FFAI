@@ -8,6 +8,7 @@
 
 /// Expand digit runs into words, leaving everything else untouched.
 /// `"route 66"` → `"route sixty six"`.
+#[must_use]
 pub fn normalize(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -47,7 +48,7 @@ pub fn normalize(text: &str) -> String {
                 // digit by digit — the least-wrong default until M-T3 — and now
                 // read the ORIGINAL characters, so leading zeros survive.
                 for d in run.chars() {
-                    let v = d.to_digit(10).unwrap_or(0) as u64;
+                    let v = u64::from(d.to_digit(10).unwrap_or(0));
                     out.push_str(&number_to_words(v));
                     out.push(' ');
                 }

@@ -115,14 +115,19 @@ const TRAIN: Pinned = Pinned {
     split: "train",
     gate_off: 19.90,
     gate_on: 19.71,
-    fixed: &[("omni-0094", -4.54), ("omni-0130", -2.81), ("omni-0070", -2.18)],
+    fixed: &[
+        ("omni-0094", -4.54),
+        ("omni-0130", -2.81),
+        ("omni-0070", -2.18),
+    ],
     blocked: &[],
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let manifest_path =
-        args.next().unwrap_or_else(|| "corpora/carmenta-omnidoc-v1.toml".to_string());
+    let manifest_path = args
+        .next()
+        .unwrap_or_else(|| "corpora/carmenta-omnidoc-v1.toml".to_string());
     let want = args.next().unwrap_or_else(|| "holdout".to_string());
     let (pinned, split) = match want.as_str() {
         "train" => (TRAIN, Split::Train),
@@ -130,8 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let manifest = Manifest::load(Path::new(&manifest_path))?;
-    let clips: Vec<_> =
-        manifest.clips.iter().filter(|c| c.split == split).collect();
+    let clips: Vec<_> = manifest.clips.iter().filter(|c| c.split == split).collect();
 
     println!("The Great Gate — pinned 2026-08-03, carmenta document path");
     println!("  corpus  {manifest_path}");
@@ -179,12 +183,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     if missing.is_empty() {
         println!();
-        println!("  corpus check: all {} named pages present in this split",
-                 pinned.fixed.len() + pinned.blocked.len());
+        println!(
+            "  corpus check: all {} named pages present in this split",
+            pinned.fixed.len() + pinned.blocked.len()
+        );
         Ok(())
     } else {
         eprintln!();
-        eprintln!("  CORPUS DRIFT: named pages absent from {}: {missing:?}", pinned.split);
+        eprintln!(
+            "  CORPUS DRIFT: named pages absent from {}: {missing:?}",
+            pinned.split
+        );
         eprintln!("  The pinned numbers do not describe this corpus. Do not compare against them.");
         std::process::exit(1);
     }

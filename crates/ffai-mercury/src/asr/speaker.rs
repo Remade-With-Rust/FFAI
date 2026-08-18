@@ -4,7 +4,7 @@
 //! identifies a voice. [`super::diarize`] does the rest; this module knows
 //! nothing about clustering and clustering knows nothing about this.
 //!
-//! **Architecture** — transcribed from SpeechBrain's `ECAPA_TDNN` with the
+//! **Architecture** — transcribed from `SpeechBrain`'s `ECAPA_TDNN` with the
 //! `spkrec-ecapa-voxceleb` hyperparameters, so a stock checkpoint maps
 //! straight on:
 //!
@@ -21,7 +21,7 @@
 //!
 //! **Why this one.** The obvious choice is pyannote's embedding model, which
 //! is MIT-licensed and **gated** — access walled behind terms acceptance,
-//! which cannot live in a manifest under principle 4. SpeechBrain's is
+//! which cannot live in a manifest under principle 4. `SpeechBrain`'s is
 //! Apache-2.0 and ungated.
 //!
 //! **Verification status.** Shapes and the tensor-name mapping are tested
@@ -29,7 +29,7 @@
 //! numerics — the wav2vec2 port passed every shape test with a
 //! weight-normalisation axis wrong, and only the real checkpoint caught it.
 //! Two things must land before this is `stable`: a real checkpoint, and a
-//! filterbank front end that matches SpeechBrain's `Fbank` rather than
+//! filterbank front end that matches `SpeechBrain`'s `Fbank` rather than
 //! Whisper's log-mel. **They are not the same features**, and feeding
 //! Whisper's mel into this network produces confident nonsense — embeddings
 //! that cluster, but not by speaker.
@@ -56,7 +56,7 @@ pub struct Config {
     pub dilations: Vec<usize>,
     pub attention_channels: usize,
     pub embedding_dim: usize,
-    /// Res2Net cardinality — how many channel groups the block splits into.
+    /// `Res2Net` cardinality — how many channel groups the block splits into.
     pub res2net_scale: usize,
     pub se_channels: usize,
 }
@@ -64,7 +64,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         // speechbrain/spkrec-ecapa-voxceleb, from its hyperparams.yaml.
-        Config {
+        Self {
             n_mels: 80,
             channels: vec![1024, 1024, 1024, 1024, 3072],
             kernel_sizes: vec![5, 3, 3, 3, 1],
@@ -81,7 +81,7 @@ impl Default for Config {
 ///
 /// Off-by-one here does not error — it shifts every frame, so pooling
 /// statistics come from a window misaligned with the audio.
-fn same_padding(kernel: usize, dilation: usize) -> usize {
+const fn same_padding(kernel: usize, dilation: usize) -> usize {
     dilation * (kernel - 1) / 2
 }
 
@@ -98,7 +98,7 @@ fn batch_norm_1d(size: usize, vb: VarBuilder) -> Result<BatchNorm> {
     .map_err(|e| model_err("batch_norm", e))
 }
 
-/// Conv1d → ReLU → BatchNorm. The unit the whole network is built from.
+/// Conv1d → `ReLU` → `BatchNorm`. The unit the whole network is built from.
 struct TdnnBlock {
     conv: Conv1d,
     norm: BatchNorm,
@@ -129,7 +129,7 @@ impl TdnnBlock {
             vb.pp("conv").pp("conv"),
         )
         .map_err(|e| model_err("tdnn conv", e))?;
-        Ok(TdnnBlock {
+        Ok(Self {
             conv,
             norm: batch_norm_1d(out_ch, vb.pp("norm").pp("norm"))?,
         })
@@ -140,7 +140,7 @@ impl TdnnBlock {
     }
 }
 
-/// Res2Net: split the channels into `scale` groups and process them in a
+/// `Res2Net`: split the channels into `scale` groups and process them in a
 /// cascade, each group summed with the previous group's output. Gives the
 /// block several effective receptive-field sizes for the cost of one.
 struct Res2NetBlock {
@@ -167,7 +167,7 @@ impl Res2NetBlock {
                 vb.pp("blocks").pp(i.to_string()),
             )?);
         }
-        Ok(Res2NetBlock { blocks, scale })
+        Ok(Self { blocks, scale })
     }
 
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
@@ -203,7 +203,7 @@ struct SeBlock {
 
 impl SeBlock {
     fn load(channels: usize, se_channels: usize, vb: VarBuilder) -> Result<Self> {
-        Ok(SeBlock {
+        Ok(Self {
             conv1: candle_nn::conv1d(
                 channels,
                 se_channels,
@@ -249,15 +249,15 @@ impl SeRes2NetBlock {
     ) -> Result<Self> {
         let kernel = cfg.kernel_sizes[index];
         let dilation = cfg.dilations[index];
-        let shortcut = if in_ch != out_ch {
+        let shortcut = if in_ch == out_ch {
+            None
+        } else {
             Some(
                 candle_nn::conv1d(in_ch, out_ch, 1, Default::default(), vb.pp("shortcut"))
                     .map_err(|e| model_err("shortcut", e))?,
             )
-        } else {
-            None
         };
-        Ok(SeRes2NetBlock {
+        Ok(Self {
             // The 1x1 blocks around the Res2Net core are always kernel 1,
             // dilation 1 — the dilation belongs to the core.
             tdnn1: TdnnBlock::load(in_ch, out_ch, 1, 1, vb.pp("tdnn1"))?,
@@ -296,7 +296,7 @@ struct AttentiveStatsPooling {
 
 impl AttentiveStatsPooling {
     fn load(channels: usize, attention_channels: usize, vb: VarBuilder) -> Result<Self> {
-        Ok(AttentiveStatsPooling {
+        Ok(Self {
             // Input is 3x channels: the features plus broadcast global mean
             // and std (SpeechBrain's `global_context=True`, its default).
             tdnn: TdnnBlock::load(channels * 3, attention_channels, 1, 1, vb.pp("tdnn"))?,
@@ -393,7 +393,7 @@ impl EcapaTdnn {
             vb.pp("fc").pp("conv"),
         )
         .map_err(|e| model_err("fc", e))?;
-        Ok(EcapaTdnn {
+        Ok(Self {
             cfg,
             blocks,
             first,
@@ -405,7 +405,8 @@ impl EcapaTdnn {
         })
     }
 
-    pub fn config(&self) -> &Config {
+    #[must_use]
+    pub const fn config(&self) -> &Config {
         &self.cfg
     }
 

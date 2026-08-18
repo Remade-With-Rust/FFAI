@@ -46,7 +46,7 @@ pub struct DecodeConfig {
     /// (`Hah!`), which reads as a transcription error rather than an
     /// annotation.
     ///
-    /// This default is a **priced decision, not a free one**. LibriSpeech
+    /// This default is a **priced decision, not a free one**. `LibriSpeech`
     /// test-clean, 134 clips, tiny.en:
     ///
     ///   suppressed (openai-whisper)   WER 7.77  CER 3.25
@@ -118,7 +118,7 @@ pub struct DecodeConfig {
 
 impl Default for DecodeConfig {
     fn default() -> Self {
-        DecodeConfig {
+        Self {
             language: None,
             translate: false,
             timestamps: true,
@@ -383,8 +383,9 @@ fn decode_with_fallback(
         // No rung was acceptable: hand back the best-scoring one, so a hard
         // segment still yields its most plausible transcription.
         Ladder::Full => Ok(Some(
-            best.map(|(_, tokens, temperature)| (tokens, temperature))
-                .unwrap_or((Vec::new(), 1.0)),
+            best.map_or((Vec::new(), 1.0), |(_, tokens, temperature)| {
+                (tokens, temperature)
+            }),
         )),
         // The greedy rung failed its guards: the caller escalates (to the
         // full context) instead of accepting a rejected transcript.
@@ -410,6 +411,7 @@ pub fn no_speech_drops() -> usize {
 /// total words to *distinct* words. A healthy sentence sits near 1.0-1.5; a
 /// decoder stuck in a loop climbs without bound. This avoids pulling in a
 /// compression dependency to detect something this structural.
+#[must_use]
 pub fn repetition_ratio(text: &str) -> f32 {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() < 8 {

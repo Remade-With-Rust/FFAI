@@ -109,7 +109,7 @@ impl Aligner {
         // the first COMPLETE pass, never before work, "where trimming what you
         // are about to touch again only buys page faults". The Whisper path
         // gets it right; this one had to learn it twice.
-        Ok(Aligner {
+        Ok(Self {
             model,
             alphabet: CtcAlphabet::wav2vec2_english(),
             sample_rate: super::mel::SAMPLE_RATE,
@@ -118,7 +118,7 @@ impl Aligner {
 
     /// Align each segment's own text against its own audio.
     ///
-    /// Per segment rather than whole-file, matching WhisperX: it bounds the
+    /// Per segment rather than whole-file, matching `WhisperX`: it bounds the
     /// trellis (which is `frames × characters`, and quadratic growth on an
     /// hour of audio is not a rounding error), and it keeps a
     /// misrecognised word from dragging every later timestamp with it.

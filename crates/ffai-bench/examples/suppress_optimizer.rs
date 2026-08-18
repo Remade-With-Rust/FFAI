@@ -189,7 +189,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Detect which feature family is present
     if is_generic_input(&rows) {
-        let n_feat = rows.iter().flat_map(|r| r.extras.keys()).collect::<std::collections::BTreeSet<_>>().len();
+        let n_feat = rows
+            .iter()
+            .flat_map(|r| r.extras.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
         println!("=== GENERIC harvest: {n_feat} numeric features the tool was not taught ===");
         println!("    Thresholds are taken from the data's own quantiles, because a");
         println!("    fixed grid cannot know what scale a new feature lives on.\n");
@@ -268,7 +272,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// double-count everything the shipped branches already drop.
 fn shipped(r: &Row) -> bool {
     let by_width = if r.w_p90 <= 0.198 {
-        if r.run_chars <= 59.5 { r.nn_gap > 0.0129 } else { r.w_p90 <= 0.0874 }
+        if r.run_chars <= 59.5 {
+            r.nn_gap > 0.0129
+        } else {
+            r.w_p90 <= 0.0874
+        }
     } else {
         r.y_rel <= 0.0533
     };
@@ -318,15 +326,25 @@ fn run_incremental(rows: &[Row], total_orphans: usize) {
         }
     }
     if let Some((bm, bt, bh, bn)) = base {
-        println!("
-  DELTA vs shipped (this is the number that decides):");
+        println!(
+            "
+  DELTA vs shipped (this is the number that decides):"
+        );
         for (name, pred) in cands.iter().skip(1) {
             let r = evaluate(rows, total_orphans, name, pred.as_ref());
             let (dm, dt, dh) = (r.macro_pp - bm, r.macro_train - bt, r.macro_hold - bh);
-            let verdict = if dt > 0.0 && dh > 0.0 { "BOTH SPLITS" } else { "" };
+            let verdict = if dt > 0.0 && dh > 0.0 {
+                "BOTH SPLITS"
+            } else {
+                ""
+            };
             println!(
                 "    {:<44} {:+7.3} pp macro  ({:+7.3} train, {:+7.3} holdout,                  {:+6.0} chars)  {verdict}",
-                name, dm, dt, dh, r.net_gain - bn
+                name,
+                dm,
+                dt,
+                dh,
+                r.net_gain - bn
             );
         }
     }
@@ -344,7 +362,10 @@ fn run_block_rules(rows: &[Row], total_orphans: usize) {
         ("area_frac < 0.010", Box::new(|r: &Row| r.area_frac < 0.010)),
         ("w_med < 0.30", Box::new(|r: &Row| r.w_med < 0.30)),
         ("n_lines <= 2", Box::new(|r: &Row| r.n_lines <= 2.0)),
-        ("chars_per_line < 20", Box::new(|r: &Row| r.chars_per_line < 20.0)),
+        (
+            "chars_per_line < 20",
+            Box::new(|r: &Row| r.chars_per_line < 20.0),
+        ),
         (
             "small: area<0.004 & n_lines<=2",
             Box::new(|r: &Row| r.area_frac < 0.004 && r.n_lines <= 2.0),
@@ -417,7 +438,9 @@ struct Predicate {
 /// numeric columns of its own.
 fn is_generic_input(rows: &[Row]) -> bool {
     !rows.is_empty()
-        && !rows.iter().any(|r| r.w_p90 > 0.0 || r.run_lines > 0.0 || r.area_frac > 0.0)
+        && !rows
+            .iter()
+            .any(|r| r.w_p90 > 0.0 || r.run_lines > 0.0 || r.area_frac > 0.0)
         && rows.iter().any(|r| !r.extras.is_empty())
 }
 
@@ -434,7 +457,11 @@ fn generic_predicates(rows: &[Row]) -> Vec<Predicate> {
     let words = rows.len().div_ceil(64);
     let mut out = Vec::new();
     for (fi, name) in names.iter().enumerate() {
-        let mut vals: Vec<f64> = rows.iter().filter_map(|r| r.extras.get(name)).copied().collect();
+        let mut vals: Vec<f64> = rows
+            .iter()
+            .filter_map(|r| r.extras.get(name))
+            .copied()
+            .collect();
         if vals.len() < 8 {
             continue;
         }
@@ -484,14 +511,43 @@ fn build_predicates(rows: &[Row]) -> Vec<Predicate> {
     // orphan blocks sit at area_frac 0.001 against body's 0.029, and the
     // high-VALUE orphan blocks sit at 0.0099, so the grid has to resolve both.
     let block_specs: Vec<(&str, Get, Vec<f64>, bool)> = vec![
-        ("area_frac", (|r: &Row| r.area_frac) as Get,
-         vec![0.001, 0.004, 0.010, 0.020, 0.040], true),
-        ("w_med", |r: &Row| r.w_med, vec![0.10, 0.30, 0.55, 0.75, 0.90], true),
-        ("blk_w", |r: &Row| r.blk_w, vec![0.05, 0.12, 0.25, 0.40], true),
+        (
+            "area_frac",
+            (|r: &Row| r.area_frac) as Get,
+            vec![0.001, 0.004, 0.010, 0.020, 0.040],
+            true,
+        ),
+        (
+            "w_med",
+            |r: &Row| r.w_med,
+            vec![0.10, 0.30, 0.55, 0.75, 0.90],
+            true,
+        ),
+        (
+            "blk_w",
+            |r: &Row| r.blk_w,
+            vec![0.05, 0.12, 0.25, 0.40],
+            true,
+        ),
         ("blk_h", |r: &Row| r.blk_h, vec![0.015, 0.04, 0.09], true),
-        ("n_lines", |r: &Row| r.n_lines, vec![1.5, 2.5, 4.5, 8.5], true),
-        ("chars_per_line", |r: &Row| r.chars_per_line, vec![8.0, 20.0, 35.0, 50.0], true),
-        ("isolation", |r: &Row| r.isolation, vec![0.6, 1.2, 2.5, 5.0], false),
+        (
+            "n_lines",
+            |r: &Row| r.n_lines,
+            vec![1.5, 2.5, 4.5, 8.5],
+            true,
+        ),
+        (
+            "chars_per_line",
+            |r: &Row| r.chars_per_line,
+            vec![8.0, 20.0, 35.0, 50.0],
+            true,
+        ),
+        (
+            "isolation",
+            |r: &Row| r.isolation,
+            vec![0.6, 1.2, 2.5, 5.0],
+            false,
+        ),
         ("aspect", |r: &Row| r.aspect, vec![1.0, 2.5, 6.0], false),
         ("w_cv", |r: &Row| r.w_cv, vec![0.02, 0.10, 0.20], true),
         ("left_cv", |r: &Row| r.left_cv, vec![0.002, 0.02], true),
@@ -499,26 +555,61 @@ fn build_predicates(rows: &[Row]) -> Vec<Predicate> {
         ("digit", |r: &Row| r.digit, vec![0.05, 0.15, 0.30], false),
         ("word_len", |r: &Row| r.word_len, vec![3.0, 4.5], true),
         ("y_rel", |r: &Row| r.y_rel, vec![0.10, 0.35, 0.65], true),
-        ("left_rel", |r: &Row| r.left_rel, vec![0.15, 0.35, 0.55], false),
+        (
+            "left_rel",
+            |r: &Row| r.left_rel,
+            vec![0.15, 0.35, 0.55],
+            false,
+        ),
         ("conf", |r: &Row| r.conf, vec![0.90, 0.96], true),
     ];
     let specs: Vec<(&str, Get, Vec<f64>, bool)> = if is_block_input(rows) {
         block_specs
     } else {
-    vec![
-        ("w_p90", (|r: &Row| r.w_p90) as Get, vec![0.20, 0.25, 0.30, 0.35, 0.45], true),
-        ("same_left", |r: &Row| r.same_left, vec![3.0, 5.0, 8.0, 14.0], true),
-        ("run_lines", |r: &Row| r.run_lines, vec![2.0, 3.0, 5.0, 8.0], true),
-        ("run_chars", |r: &Row| r.run_chars, vec![60.0, 150.0, 400.0], true),
-        ("nchars", |r: &Row| r.nchars, vec![15.0, 30.0, 60.0], true),
-        ("words", |r: &Row| r.words, vec![3.0, 6.0, 12.0], true),
-        ("conf", |r: &Row| r.conf, vec![0.90, 0.96], true),
-        ("mean_word_len", |r: &Row| r.mean_word_len, vec![3.0, 4.0], true),
-        ("digit", |r: &Row| r.digit, vec![0.05, 0.15, 0.30], false),
-        ("sym", |r: &Row| r.sym, vec![0.10, 0.25], false),
-        ("caps_word_frac", |r: &Row| r.caps_word_frac, vec![0.40, 0.60], false),
-        ("nn_gap", |r: &Row| r.nn_gap, vec![0.20, 0.60], false),
-    ]
+        vec![
+            (
+                "w_p90",
+                (|r: &Row| r.w_p90) as Get,
+                vec![0.20, 0.25, 0.30, 0.35, 0.45],
+                true,
+            ),
+            (
+                "same_left",
+                |r: &Row| r.same_left,
+                vec![3.0, 5.0, 8.0, 14.0],
+                true,
+            ),
+            (
+                "run_lines",
+                |r: &Row| r.run_lines,
+                vec![2.0, 3.0, 5.0, 8.0],
+                true,
+            ),
+            (
+                "run_chars",
+                |r: &Row| r.run_chars,
+                vec![60.0, 150.0, 400.0],
+                true,
+            ),
+            ("nchars", |r: &Row| r.nchars, vec![15.0, 30.0, 60.0], true),
+            ("words", |r: &Row| r.words, vec![3.0, 6.0, 12.0], true),
+            ("conf", |r: &Row| r.conf, vec![0.90, 0.96], true),
+            (
+                "mean_word_len",
+                |r: &Row| r.mean_word_len,
+                vec![3.0, 4.0],
+                true,
+            ),
+            ("digit", |r: &Row| r.digit, vec![0.05, 0.15, 0.30], false),
+            ("sym", |r: &Row| r.sym, vec![0.10, 0.25], false),
+            (
+                "caps_word_frac",
+                |r: &Row| r.caps_word_frac,
+                vec![0.40, 0.60],
+                false,
+            ),
+            ("nn_gap", |r: &Row| r.nn_gap, vec![0.20, 0.60], false),
+        ]
     };
     let words = rows.len().div_ceil(64);
     let mut out = Vec::new();
@@ -553,7 +644,12 @@ struct Cand {
 }
 
 fn score_mask(
-    rows: &[Row], mask: &[u64], keep: &[u64], n_pages: usize, n_tr: usize, n_ho: usize,
+    rows: &[Row],
+    mask: &[u64],
+    keep: &[u64],
+    n_pages: usize,
+    n_tr: usize,
+    n_ho: usize,
 ) -> Cand {
     let (mut n, mut net, mut mac, mut mt, mut mh, mut hits) =
         (0usize, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
@@ -582,9 +678,21 @@ fn score_mask(
         label: String::new(),
         n,
         net,
-        macro_pp: if n_pages > 0 { 100.0 * mac / n_pages as f64 } else { 0.0 },
-        train: if n_tr > 0 { 100.0 * mt / n_tr as f64 } else { 0.0 },
-        hold: if n_ho > 0 { 100.0 * mh / n_ho as f64 } else { 0.0 },
+        macro_pp: if n_pages > 0 {
+            100.0 * mac / n_pages as f64
+        } else {
+            0.0
+        },
+        train: if n_tr > 0 {
+            100.0 * mt / n_tr as f64
+        } else {
+            0.0
+        },
+        hold: if n_ho > 0 {
+            100.0 * mh / n_ho as f64
+        } else {
+            0.0
+        },
         top3: top3_share(&per),
         prec: if n > 0 { hits as f64 / n as f64 } else { 0.0 },
     }
@@ -592,10 +700,18 @@ fn score_mask(
 
 #[allow(clippy::too_many_arguments)]
 fn rec(
-    start: usize, slot: usize, depth: usize, combo: &mut Vec<usize>,
-    preds: &[Predicate], rows: &[Row], keep: &[u64],
-    n_pages: usize, n_tr: usize, n_ho: usize,
-    best: &mut Vec<Cand>, tried: &mut usize,
+    start: usize,
+    slot: usize,
+    depth: usize,
+    combo: &mut Vec<usize>,
+    preds: &[Predicate],
+    rows: &[Row],
+    keep: &[u64],
+    n_pages: usize,
+    n_tr: usize,
+    n_ho: usize,
+    best: &mut Vec<Cand>,
+    tried: &mut usize,
 ) {
     if slot == depth {
         let mut m = preds[combo[0]].mask.clone();
@@ -618,12 +734,27 @@ fn rec(
         return;
     }
     for p in start..preds.len() {
-        if combo[..slot].iter().any(|&c| preds[c].feature == preds[p].feature) {
+        if combo[..slot]
+            .iter()
+            .any(|&c| preds[c].feature == preds[p].feature)
+        {
             continue;
         }
         combo[slot] = p;
-        rec(p + 1, slot + 1, depth, combo, preds, rows, keep,
-            n_pages, n_tr, n_ho, best, tried);
+        rec(
+            p + 1,
+            slot + 1,
+            depth,
+            combo,
+            preds,
+            rows,
+            keep,
+            n_pages,
+            n_tr,
+            n_ho,
+            best,
+            tried,
+        );
     }
 }
 
@@ -657,8 +788,9 @@ fn run_search(rows: &[Row], depth: usize) {
     let mut best: Vec<Cand> = Vec::new();
     let mut tried = 0usize;
     let mut combo = vec![0usize; depth];
-    rec(0, 0, depth, &mut combo, &preds, rows, &keep,
-        n_pages, n_tr, n_ho, &mut best, &mut tried);
+    rec(
+        0, 0, depth, &mut combo, &preds, rows, &keep, n_pages, n_tr, n_ho, &mut best, &mut tried,
+    );
 
     best.sort_by(|a, b| b.macro_pp.partial_cmp(&a.macro_pp).unwrap());
     println!(
@@ -667,18 +799,30 @@ fn run_search(rows: &[Row], depth: usize) {
     );
     println!(
         "  {:<50} {:>5} {:>8} {:>8} {:>8} {:>6} {:>6} {:>8}",
-        "Rule (incremental, on top of shipped)", "n", "MACRO", "train", "holdout",
-        "top3", "prec", "chars"
+        "Rule (incremental, on top of shipped)",
+        "n",
+        "MACRO",
+        "train",
+        "holdout",
+        "top3",
+        "prec",
+        "chars"
     );
     println!("  {}", "-".repeat(108));
     for c in best.iter().take(12) {
         println!(
             "  {:<50} {:>5} {:>+8.3} {:>+8.3} {:>+8.3} {:>6} {:>6.3} {:>+8.0}",
-            c.label, c.n, c.macro_pp, c.train, c.hold, fmt_top3(c.top3), c.prec, c.net
+            c.label,
+            c.n,
+            c.macro_pp,
+            c.train,
+            c.hold,
+            fmt_top3(c.top3),
+            c.prec,
+            c.net
         );
     }
 }
-
 
 /// The rules proposed by the external spreadsheet analysis, scored under the
 /// full discipline rather than on net characters alone.
@@ -737,12 +881,18 @@ fn run_calculator_rules(rows: &[Row], total_orphans: usize) {
         "  {:<48} {:>9} {:>9} {:>8} {:>8}",
         "", "macro pp", "vs ship", "train", "holdout"
     );
-    println!("  {:<48} {:>+9.3} {:>9} {:>+8.3} {:>+8.3}",
-             "SHIPPED", base.macro_pp, "-", base.macro_train, base.macro_hold);
+    println!(
+        "  {:<48} {:>+9.3} {:>9} {:>+8.3} {:>+8.3}",
+        "SHIPPED", base.macro_pp, "-", base.macro_train, base.macro_hold
+    );
     for r in &results {
         println!(
             "  {:<48} {:>+9.3} {:>+9.3} {:>+8.3} {:>+8.3}",
-            r.name, r.macro_pp, r.macro_pp - base.macro_pp, r.macro_train, r.macro_hold
+            r.name,
+            r.macro_pp,
+            r.macro_pp - base.macro_pp,
+            r.macro_train,
+            r.macro_hold
         );
     }
 }
@@ -1001,9 +1151,21 @@ fn evaluate(
         name: name.to_string(),
         n,
         net_gain: net,
-        macro_pp: if n_pages > 0 { 100.0 * mac / n_pages as f64 } else { 0.0 },
-        macro_train: if n_tr > 0 { 100.0 * mac_tr / n_tr as f64 } else { 0.0 },
-        macro_hold: if n_ho > 0 { 100.0 * mac_ho / n_ho as f64 } else { 0.0 },
+        macro_pp: if n_pages > 0 {
+            100.0 * mac / n_pages as f64
+        } else {
+            0.0
+        },
+        macro_train: if n_tr > 0 {
+            100.0 * mac_tr / n_tr as f64
+        } else {
+            0.0
+        },
+        macro_hold: if n_ho > 0 {
+            100.0 * mac_ho / n_ho as f64
+        } else {
+            0.0
+        },
         top3: top3_share(&per_page),
         precision,
         recall,
@@ -1017,7 +1179,11 @@ fn split_pages(rows: &[Row]) -> (usize, usize) {
     let mut tr = std::collections::HashSet::new();
     let mut ho = std::collections::HashSet::new();
     for r in rows {
-        if r.split == "train" { tr.insert(r.page.as_str()); } else { ho.insert(r.page.as_str()); }
+        if r.split == "train" {
+            tr.insert(r.page.as_str());
+        } else {
+            ho.insert(r.page.as_str());
+        }
     }
     (tr.len(), ho.len())
 }
@@ -1041,12 +1207,19 @@ fn top3_share(per_page: &HashMap<&str, f64>) -> f64 {
 
 /// `top3` as a column: `n/a` when the net is a near-cancellation.
 fn fmt_top3(v: f64) -> String {
-    if v.is_nan() { "  n/a".into() } else { format!("{v:4.0}%") }
+    if v.is_nan() {
+        "  n/a".into()
+    } else {
+        format!("{v:4.0}%")
+    }
 }
 
 /// Macro's denominator: a page counts once, whatever its length.
 fn n_pages(rows: &[Row]) -> usize {
-    rows.iter().map(|r| r.page.as_str()).collect::<std::collections::HashSet<_>>().len()
+    rows.iter()
+        .map(|r| r.page.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len()
 }
 
 fn print_header() {
@@ -1068,8 +1241,14 @@ fn print_header_short() {
 fn print_result(r: &RuleResult) {
     println!(
         "{:<48} {:>5} {:>+9.0} {:>+9.3} {:>+8.3} {:>+8.3} {:>6} {:>6.3}",
-        r.name, r.n, r.net_gain, r.macro_pp, r.macro_train, r.macro_hold,
-        fmt_top3(r.top3), r.precision
+        r.name,
+        r.n,
+        r.net_gain,
+        r.macro_pp,
+        r.macro_train,
+        r.macro_hold,
+        fmt_top3(r.top3),
+        r.precision
     );
 }
 
@@ -1116,8 +1295,15 @@ fn print_best(results: &[RuleResult]) {
     if !flips.is_empty() {
         println!("\n  SIGN FLIPS between micro and macro ({}):", flips.len());
         for r in flips {
-            let dir = if r.macro_pp > 0.0 { "macro WINS" } else { "macro LOSES" };
-            println!("    {:<48} {:+8.0} chars  {:+7.3} pp   {dir}", r.name, r.net_gain, r.macro_pp);
+            let dir = if r.macro_pp > 0.0 {
+                "macro WINS"
+            } else {
+                "macro LOSES"
+            };
+            println!(
+                "    {:<48} {:+8.0} chars  {:+7.3} pp   {dir}",
+                r.name, r.net_gain, r.macro_pp
+            );
         }
     }
 
@@ -1130,7 +1316,10 @@ fn print_best(results: &[RuleResult]) {
     for r in ok {
         println!(
             "    {:<48} train {:+7.3}  holdout {:+7.3}  top3 {}",
-            r.name, r.macro_train, r.macro_hold, fmt_top3(r.top3)
+            r.name,
+            r.macro_train,
+            r.macro_hold,
+            fmt_top3(r.top3)
         );
     }
     println!(
@@ -1157,26 +1346,99 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
 
     let idx_orphan = idx("orphan").ok_or("Missing column: orphan")?;
     let idx_page = idx("page");
-    let bf: Vec<Option<usize>> = ["area_frac", "w_med", "blk_w", "blk_h", "aspect",
-        "n_lines", "chars_per_line", "isolation", "w_cv", "left_cv", "h_cv",
-        "conf_cv", "word_len", "lh_rel", "x_rel", "y_rel", "left_rel"]
-        .iter().map(|n| idx(n)).collect();
+    let bf: Vec<Option<usize>> = [
+        "area_frac",
+        "w_med",
+        "blk_w",
+        "blk_h",
+        "aspect",
+        "n_lines",
+        "chars_per_line",
+        "isolation",
+        "w_cv",
+        "left_cv",
+        "h_cv",
+        "conf_cv",
+        "word_len",
+        "lh_rel",
+        "x_rel",
+        "y_rel",
+        "left_rel",
+    ]
+    .iter()
+    .map(|n| idx(n))
+    .collect();
     let idx_split = idx("split");
     // Everything numeric that is not already a named feature or a bookkeeping
     // column. Sorted by name so a run is reproducible.
     const KNOWN: &[&str] = &[
-        "orphan", "net_gain_if_dropped", "macro_gain", "page", "split", "chars",
-        "page_chars", "orphan_chars", "label", "text", "line", "run",
-        "w_p90", "run_chars", "run_lines", "same_left", "same_left_frac", "nchars",
-        "words", "digit", "alpha", "sym", "conf", "y_rel", "x_rel", "h_rel",
-        "year_paren", "page_year_hits", "et_al", "lead_num", "initials",
-        "journal_abbr", "doi_url", "page_range", "org_word", "ends_hyphen",
-        "semicolon_pct", "comma_pct", "period_pct", "digit_pct", "caps_word_frac",
-        "mean_word_len", "nn_gap", "area_frac", "w_med", "blk_w", "blk_h", "aspect",
-        "n_lines", "chars_per_line", "isolation", "w_cv", "left_cv", "h_cv",
-        "conf_cv", "word_len", "lh_rel", "left_rel", "doc_class", "shipped_drops",
-        "page_cer", "page_cer_body", "page_cer_default", "rule_A", "rule_B",
-        "rule_AB", "missed",
+        "orphan",
+        "net_gain_if_dropped",
+        "macro_gain",
+        "page",
+        "split",
+        "chars",
+        "page_chars",
+        "orphan_chars",
+        "label",
+        "text",
+        "line",
+        "run",
+        "w_p90",
+        "run_chars",
+        "run_lines",
+        "same_left",
+        "same_left_frac",
+        "nchars",
+        "words",
+        "digit",
+        "alpha",
+        "sym",
+        "conf",
+        "y_rel",
+        "x_rel",
+        "h_rel",
+        "year_paren",
+        "page_year_hits",
+        "et_al",
+        "lead_num",
+        "initials",
+        "journal_abbr",
+        "doi_url",
+        "page_range",
+        "org_word",
+        "ends_hyphen",
+        "semicolon_pct",
+        "comma_pct",
+        "period_pct",
+        "digit_pct",
+        "caps_word_frac",
+        "mean_word_len",
+        "nn_gap",
+        "area_frac",
+        "w_med",
+        "blk_w",
+        "blk_h",
+        "aspect",
+        "n_lines",
+        "chars_per_line",
+        "isolation",
+        "w_cv",
+        "left_cv",
+        "h_cv",
+        "conf_cv",
+        "word_len",
+        "lh_rel",
+        "left_rel",
+        "doc_class",
+        "shipped_drops",
+        "page_cer",
+        "page_cer_body",
+        "page_cer_default",
+        "rule_A",
+        "rule_B",
+        "rule_AB",
+        "missed",
     ];
     let extra_cols: Vec<(String, usize)> = col
         .iter()
@@ -1274,12 +1536,21 @@ fn load_csv(path: &PathBuf) -> Result<Vec<Row>, Box<dyn Error>> {
             lh_rel: get_f64(bf[13]),
             x_rel: get_f64(bf[14]),
             left_rel: get_f64(bf[16]),
-            page: idx_page.and_then(|i| record.get(i)).unwrap_or("").to_string(),
-            split: idx_split.and_then(|i| record.get(i)).unwrap_or("holdout").to_string(),
+            page: idx_page
+                .and_then(|i| record.get(i))
+                .unwrap_or("")
+                .to_string(),
+            split: idx_split
+                .and_then(|i| record.get(i))
+                .unwrap_or("holdout")
+                .to_string(),
             extras: extra_cols
                 .iter()
                 .filter_map(|(k, i)| {
-                    record.get(*i).and_then(|v| v.parse::<f64>().ok()).map(|v| (k.clone(), v))
+                    record
+                        .get(*i)
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .map(|v| (k.clone(), v))
                 })
                 .collect(),
             run_lines: get_f64(idx_run_lines),

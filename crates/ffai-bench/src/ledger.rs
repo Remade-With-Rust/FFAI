@@ -122,8 +122,14 @@ impl Environment {
 }
 
 fn rustc_version() -> Option<String> {
-    let out = std::process::Command::new("rustc").arg("--version").output().ok()?;
-    String::from_utf8_lossy(&out.stdout).lines().next().map(|s| s.trim().to_string())
+    let out = std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
 }
 
 /// One bench run: our engine vs the world standards on a pinned corpus.
@@ -167,7 +173,10 @@ pub fn append(path: &Path, record: &BenchRecord) -> Result<()> {
     let mut line =
         serde_json::to_string(record).map_err(|e| Error::Other(format!("ledger encode: {e}")))?;
     line.push('\n');
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     file.write_all(line.as_bytes())?;
     Ok(())
 }

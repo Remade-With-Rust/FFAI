@@ -45,6 +45,7 @@ pub struct Flag {
 }
 
 impl Flag {
+    #[must_use]
     pub const fn new(name: &'static str, word: &'static str) -> Self {
         Self {
             name,
@@ -60,13 +61,13 @@ impl Flag {
             return cur != 0;
         }
         let on = std::env::var(self.name).as_deref() == Ok(self.word);
-        self.v.store(on as i64, Ordering::Relaxed);
+        self.v.store(i64::from(on), Ordering::Relaxed);
         on
     }
 
     /// Override for the duration of a measurement. Not for shipped code paths.
     pub fn set(&self, on: bool) {
-        self.v.store(on as i64, Ordering::Relaxed);
+        self.v.store(i64::from(on), Ordering::Relaxed);
     }
 
     /// Drop back to whatever the environment says.

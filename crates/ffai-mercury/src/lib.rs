@@ -1,4 +1,4 @@
-//! # Mercury — FFai's voice component
+//! # Mercury — `FFai`'s voice component
 //!
 //! Named for the Roman god of language and messages (Greek: Hermes).
 //! Mercury owns both directions of speech: **ASR** (speech → text) and
@@ -8,19 +8,19 @@
 //!
 //! | Engine | Task | Status |
 //! |---|---|---|
-//! | `whisper-candle` | asr | **live** — OpenAI Whisper on candle: our own mel front-end, tokenizer grammar, decode loop, audio encoder, AVX2 kernels. Sizes and q8_0 variants are named configurations of the same engine |
+//! | `whisper-candle` | asr | **live** — `OpenAI` Whisper on candle: our own mel front-end, tokenizer grammar, decode loop, audio encoder, AVX2 kernels. Sizes and `q8_0` variants are named configurations of the same engine |
 //! | `piper-candle` | tts | **live** — the full VITS stack on candle, running piper's own voice files; deterministic, oracle-exact against piper's runtime |
 //! | `oxiwhisper` | asr | stub — cool-japan's pure-Rust GGUF Whisper, on the watchlist |
-//! | `any-tts` | tts | stub — trait-based candle TTS (Kokoro, Qwen3-TTS, VibeVoice, …) |
+//! | `any-tts` | tts | stub — trait-based candle TTS (Kokoro, Qwen3-TTS, `VibeVoice`, …) |
 //! | `voirs` | tts | stub — alternative G2P→acoustic→vocoder lineage |
 //!
-//! The WhisperX layer (energy VAD, wav2vec2 forced alignment for word
+//! The `WhisperX` layer (energy VAD, wav2vec2 forced alignment for word
 //! timestamps, ECAPA-TDNN diarization with cross-call speaker persistence) is
 //! exposed through [`ffai_core::engine::AsrOptions`] — `word_timestamps`,
 //! `diarize`, `persist_speakers` — as flags on any ASR engine, not a fork.
 //!
 //! TTS is decomposed the same way ([`tts`]): [`tts::phonemize`] is a
-//! clean-room pure-Rust G2P over CMUdict, so nothing GPL is linked (espeak-ng
+//! clean-room pure-Rust G2P over `CMUdict`, so nothing GPL is linked (espeak-ng
 //! — the reason piper itself is GPL — serves only as an out-of-process test
 //! oracle). Synthesis knobs live on [`ffai_core::engine::TtsOptions`], and
 //! `seed` makes output byte-identical run over run.

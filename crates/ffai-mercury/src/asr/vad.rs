@@ -85,8 +85,8 @@ pub struct VadWindow {
 /// not the same kind of thing. A learned VAD's threshold is a probability;
 /// this one is a decibel margin. Phase B's model replaces this function with
 /// a real probability and the flag keeps its meaning.
-fn margin_db(threshold: f32) -> f32 {
-    2.0 + 16.0 * threshold.clamp(0.0, 1.0)
+const fn margin_db(threshold: f32) -> f32 {
+    16.0f32.mul_add(threshold.clamp(0.0, 1.0), 2.0)
 }
 
 /// Per-frame RMS energy in dBFS, on the mel front-end's frame geometry.
@@ -124,6 +124,7 @@ fn percentile(sorted: &[f32], p: f64) -> f32 {
 /// encoder pass it helps route, so the adaptive-context dispatcher can send
 /// low-contrast (noisy) windows straight to the full 30 s context without
 /// paying for a doomed short-context attempt first.
+#[must_use]
 pub fn energy_contrast_db(samples: &[f32]) -> f32 {
     let energies = frame_energies(samples);
     if energies.is_empty() {
@@ -139,6 +140,7 @@ pub fn energy_contrast_db(samples: &[f32]) -> f32 {
 /// Returns non-overlapping, ascending regions. An empty result means "no
 /// speech here" and is a valid, common answer — silence, room tone, and a
 /// closed microphone all produce it.
+#[must_use]
 pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
     let energies = frame_energies(samples);
     if energies.is_empty() {
@@ -153,7 +155,7 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
     let onset = (floor + margin).max(ABS_SILENCE_DBFS);
     // Hysteresis: release lower than we trigger, so a frame hovering at the
     // boundary does not chop one utterance into a stutter of regions.
-    let offset = (floor + margin * 0.6).max(ABS_SILENCE_DBFS);
+    let offset = margin.mul_add(0.6, floor).max(ABS_SILENCE_DBFS);
 
     let secs_per_frame = HOP_LENGTH as f64 / SAMPLE_RATE as f64;
     let total_secs = samples.len() as f64 / SAMPLE_RATE as f64;
@@ -218,7 +220,7 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
 
 /// Pack speech regions into contiguous windows of at most `chunk_secs`.
 ///
-/// Follows WhisperX's `merge_chunks`: a window closes when *adding* the next
+/// Follows `WhisperX`'s `merge_chunks`: a window closes when *adding* the next
 /// region would make it exceed `chunk_secs`, so regions are packed together
 /// rather than cut at a fixed grid. A region longer than `chunk_secs` — a
 /// monologue with no pause — is split, because the encoder's context is fixed
@@ -230,11 +232,12 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
 /// feeds Whisper discontinuities it was never trained on. The saving here is
 /// the silence that falls *between* windows, which is where the long tails
 /// actually are.
+#[must_use]
 pub fn pack(regions: &[TimedSegment<()>], chunk_secs: f64) -> Vec<VadWindow> {
     let chunk = if chunk_secs > 0.0 {
         chunk_secs
     } else {
-        DEFAULT_CHUNK_SECS as f64
+        f64::from(DEFAULT_CHUNK_SECS)
     };
     let mut out = Vec::new();
     let mut cur: Option<(f64, f64)> = None;

@@ -68,6 +68,7 @@ pub const EMBEDDED: &[(&str, &str)] = &[
 ];
 
 /// The embedded TOML for `name`, if Mercury ships one.
+#[must_use]
 pub fn embedded(name: &str) -> Option<&'static str> {
     EMBEDDED
         .iter()

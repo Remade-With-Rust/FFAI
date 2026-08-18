@@ -50,11 +50,11 @@ enum Wire<'a> {
 }
 
 impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
+    const fn new(buf: &'a [u8]) -> Self {
         Reader { buf, pos: 0 }
     }
 
-    fn done(&self) -> bool {
+    const fn done(&self) -> bool {
         self.pos >= self.buf.len()
     }
 
@@ -64,7 +64,7 @@ impl<'a> Reader<'a> {
         loop {
             let b = *self.buf.get(self.pos).ok_or_else(|| trunc("varint"))?;
             self.pos += 1;
-            out |= ((b & 0x7f) as u64) << shift;
+            out |= u64::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
                 return Ok(out);
             }
@@ -91,7 +91,19 @@ impl<'a> Reader<'a> {
             return Ok(None);
         }
         let tag = self.varint()?;
-        let field = (tag >> 3) as u32;
+        // Protobuf field numbers are 1..=2^29-1. `as u32` would TRUNCATE a larger
+        // one and alias it onto a small field this parser handles: a tag whose
+        // field number is 2^32 + 1 narrows to 1, which `parse_tensor` reads as
+        // `dims`. Reject the tag instead of narrowing it.
+        let field_num = tag >> 3;
+        const MAX_FIELD: u64 = (1 << 29) - 1;
+        if field_num == 0 || field_num > MAX_FIELD {
+            return Err(Error::Model(format!(
+                "onnx: field number {field_num} outside protobuf's 1..={MAX_FIELD}"
+            )));
+        }
+        #[allow(clippy::cast_possible_truncation)] // bounded to 2^29-1 above
+        let field = field_num as u32;
         let wire = match tag & 7 {
             0 => Wire::Varint(self.varint()?),
             1 => {
@@ -331,7 +343,7 @@ pub fn parse(bytes: &[u8]) -> Result<Graph> {
 // ---------------------------------------------------------------------------
 
 /// Convolution geometry, read from the graph rather than assumed.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Geometry {
     pub transpose: bool,
     pub stride: usize,

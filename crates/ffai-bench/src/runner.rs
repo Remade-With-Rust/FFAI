@@ -18,7 +18,7 @@ use ffai_core::registry::EngineRegistry;
 
 use crate::corpus::{ClipEntry, Manifest};
 use crate::gate::{GateKind, GateOutcome, GateReport, GateResult};
-use crate::ledger::{append, BenchRecord, Environment, RunSummary, LEDGER_SCHEMA};
+use crate::ledger::{BenchRecord, Environment, LEDGER_SCHEMA, RunSummary, append};
 use crate::metrics::{cer_with, wer_with};
 use crate::normalize::Mode;
 use crate::reference::ReferenceSpec;
@@ -89,7 +89,9 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     }
     let holdout: Vec<&ClipEntry> = manifest.holdout().collect();
     if holdout.is_empty() {
-        return Err(Error::Other("corpus has no holdout clips — nothing to measure".into()));
+        return Err(Error::Other(
+            "corpus has no holdout clips — nothing to measure".into(),
+        ));
     }
     let paths: Vec<PathBuf> = holdout.iter().map(|c| manifest.clip_path(c)).collect();
     let media_secs: f64 = paths
@@ -100,9 +102,21 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
 
     let mut references = Vec::new();
     for spec in cfg.references.iter().filter(|_| !cfg.skip_references) {
-        eprintln!("running reference `{}` over {} clips ...", spec.name, holdout.len());
-        match run_reference(spec, &manifest, &holdout, &paths, media_secs, cfg.runs, Mode::English, None)
-        {
+        eprintln!(
+            "running reference `{}` over {} clips ...",
+            spec.name,
+            holdout.len()
+        );
+        match run_reference(
+            spec,
+            &manifest,
+            &holdout,
+            &paths,
+            media_secs,
+            cfg.runs,
+            Mode::English,
+            None,
+        ) {
             Ok(summary) => references.push(summary),
             Err(e) => {
                 eprintln!("  reference `{}` failed: {e}", spec.name);
@@ -133,11 +147,23 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     let engine_summary = if cfg.skip_engine {
         None
     } else {
-        Some(run_engine(reg, cfg.engine.as_deref(), &manifest, &holdout, media_secs, cfg.runs)?)
+        Some(run_engine(
+            reg,
+            cfg.engine.as_deref(),
+            &manifest,
+            &holdout,
+            media_secs,
+            cfg.runs,
+        )?)
     };
 
     let mut gates = GateReport::new();
-    fill_gates(&mut gates, engine_summary.as_ref(), &references, QualityMetric::Wer);
+    fill_gates(
+        &mut gates,
+        engine_summary.as_ref(),
+        &references,
+        QualityMetric::Wer,
+    );
 
     let (id, appended_at) = BenchRecord::now_id("asr");
     let record = BenchRecord {
@@ -187,16 +213,30 @@ pub fn run_ocr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     }
     let holdout: Vec<&ClipEntry> = manifest.holdout().collect();
     if holdout.is_empty() {
-        return Err(Error::Other("corpus has no holdout clips — nothing to measure".into()));
+        return Err(Error::Other(
+            "corpus has no holdout clips — nothing to measure".into(),
+        ));
     }
     let paths: Vec<PathBuf> = holdout.iter().map(|c| manifest.clip_path(c)).collect();
     let pages = holdout.len() as f64;
 
     let mut references = Vec::new();
     for spec in cfg.references.iter().filter(|_| !cfg.skip_references) {
-        eprintln!("running reference `{}` over {} pages ...", spec.name, holdout.len());
-        match run_reference(spec, &manifest, &holdout, &paths, pages, cfg.runs, Mode::Ocr, Some("page"))
-        {
+        eprintln!(
+            "running reference `{}` over {} pages ...",
+            spec.name,
+            holdout.len()
+        );
+        match run_reference(
+            spec,
+            &manifest,
+            &holdout,
+            &paths,
+            pages,
+            cfg.runs,
+            Mode::Ocr,
+            Some("page"),
+        ) {
             Ok(summary) => references.push(summary),
             Err(e) => {
                 eprintln!("  reference `{}` failed: {e}", spec.name);
@@ -227,11 +267,23 @@ pub fn run_ocr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     let engine_summary = if cfg.skip_engine {
         None
     } else {
-        Some(run_ocr_engine(reg, cfg.engine.as_deref(), &manifest, &holdout, pages, cfg.runs)?)
+        Some(run_ocr_engine(
+            reg,
+            cfg.engine.as_deref(),
+            &manifest,
+            &holdout,
+            pages,
+            cfg.runs,
+        )?)
     };
 
     let mut gates = GateReport::new();
-    fill_gates(&mut gates, engine_summary.as_ref(), &references, QualityMetric::Cer);
+    fill_gates(
+        &mut gates,
+        engine_summary.as_ref(),
+        &references,
+        QualityMetric::Cer,
+    );
 
     let (id, appended_at) = BenchRecord::now_id("ocr");
     let record = BenchRecord {
@@ -283,14 +335,20 @@ pub fn run_detect(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord
     }
     let holdout: Vec<&ClipEntry> = manifest.holdout().collect();
     if holdout.is_empty() {
-        return Err(Error::Other("corpus has no holdout clips — nothing to measure".into()));
+        return Err(Error::Other(
+            "corpus has no holdout clips — nothing to measure".into(),
+        ));
     }
     let paths: Vec<PathBuf> = holdout.iter().map(|c| manifest.clip_path(c)).collect();
     let images = holdout.len() as f64;
 
     let mut references = Vec::new();
     for spec in cfg.references.iter().filter(|_| !cfg.skip_references) {
-        eprintln!("running reference `{}` over {} images ...", spec.name, holdout.len());
+        eprintln!(
+            "running reference `{}` over {} images ...",
+            spec.name,
+            holdout.len()
+        );
         match run_detect_reference(spec, &manifest, &holdout, &paths, images, cfg.runs) {
             Ok(summary) => references.push(summary),
             Err(e) => {
@@ -322,11 +380,23 @@ pub fn run_detect(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord
     let engine_summary = if cfg.skip_engine {
         None
     } else {
-        Some(run_detect_engine(reg, cfg.engine.as_deref(), &manifest, &holdout, images, cfg.runs)?)
+        Some(run_detect_engine(
+            reg,
+            cfg.engine.as_deref(),
+            &manifest,
+            &holdout,
+            images,
+            cfg.runs,
+        )?)
     };
 
     let mut gates = GateReport::new();
-    fill_gates(&mut gates, engine_summary.as_ref(), &references, QualityMetric::Map50);
+    fill_gates(
+        &mut gates,
+        engine_summary.as_ref(),
+        &references,
+        QualityMetric::Map50,
+    );
 
     let (id, appended_at) = BenchRecord::now_id("detect");
     let record = BenchRecord {
@@ -418,13 +488,19 @@ fn run_detect_reference(
                 }
                 Err(e) => summary.notes.push(format!("{}: bad payload: {e}", clip.id)),
             },
-            None => summary.notes.push(format!("{}: no result returned", clip.id)),
+            None => summary
+                .notes
+                .push(format!("{}: no result returned", clip.id)),
         }
     }
     summary.map50 = acc.map50();
     summary.map5095 = acc.map5095();
 
-    let mut times: Vec<f64> = batch.clips.iter().filter_map(|c| c.transcribe_secs).collect();
+    let mut times: Vec<f64> = batch
+        .clips
+        .iter()
+        .filter_map(|c| c.transcribe_secs)
+        .collect();
     if !times.is_empty() {
         times.sort_by(|a, b| a.total_cmp(b));
         let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
@@ -516,7 +592,11 @@ fn run_detect_engine(
             // else is precisely the M-D0 defect: two rows that look matched
             // and are not.
             let name = det.info().name;
-            let geometry = if name.ends_with("-square") { "sq" } else { "rect" };
+            let geometry = if name.ends_with("-square") {
+                "sq"
+            } else {
+                "rect"
+            };
             let tier = name.trim_end_matches("-square").to_string();
             c.insert(DECODE_KEY.to_string(), format!("{tier}/e2e-640{geometry}"));
             c
@@ -691,7 +771,9 @@ fn run_detect_engine(
     if decoded_bytes > 0 {
         let raw_peak = summary.peak_bytes;
         summary.peak_bytes = summary.peak_bytes.map(|p| p.saturating_sub(decoded_bytes));
-        summary.steady_bytes = summary.steady_bytes.map(|s| s.saturating_sub(decoded_bytes));
+        summary.steady_bytes = summary
+            .steady_bytes
+            .map(|s| s.saturating_sub(decoded_bytes));
         if let Some(raw) = raw_peak {
             summary.notes.push(format!(
                 "footprint EXCLUDES {:.1} MiB of pre-decoded images held by the harness, \
@@ -740,7 +822,9 @@ fn run_detect_engine(
         // cause, which read as a harness quirk rather than a real error and
         // left two engines wrongly described as "unmeasured rather than
         // broken". The error goes where the gate actually looks.
-        Err(e) => summary.notes.insert(0, first_error.unwrap_or_else(|| e.to_string())),
+        Err(e) => summary
+            .notes
+            .insert(0, first_error.unwrap_or_else(|| e.to_string())),
     }
     Ok(summary)
 }
@@ -866,7 +950,9 @@ fn run_ocr_engine(
     if decoded_bytes > 0 {
         let raw_peak = summary.peak_bytes;
         summary.peak_bytes = summary.peak_bytes.map(|p| p.saturating_sub(decoded_bytes));
-        summary.steady_bytes = summary.steady_bytes.map(|s| s.saturating_sub(decoded_bytes));
+        summary.steady_bytes = summary
+            .steady_bytes
+            .map(|s| s.saturating_sub(decoded_bytes));
         if let Some(raw) = raw_peak {
             summary.notes.push(format!(
                 "footprint EXCLUDES {:.1} MiB of pre-decoded images held by the harness, \
@@ -998,7 +1084,9 @@ fn run_reference(
                     cers.push(cer_with(&truth, hypothesis, mode));
                 }
             }
-            None => summary.notes.push(format!("{}: no result returned", clip.id)),
+            None => summary
+                .notes
+                .push(format!("{}: no result returned", clip.id)),
         }
     }
 
@@ -1006,7 +1094,11 @@ fn run_reference(
     summary.cer = mean(&cers);
 
     if let Some(unit) = per_item_unit {
-        let mut times: Vec<f64> = batch.clips.iter().filter_map(|c| c.transcribe_secs).collect();
+        let mut times: Vec<f64> = batch
+            .clips
+            .iter()
+            .filter_map(|c| c.transcribe_secs)
+            .collect();
         if !times.is_empty() {
             times.sort_by(|a, b| a.total_cmp(b));
             let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
@@ -1147,10 +1239,11 @@ fn run_engine(
             for (id, text) in &texts {
                 let clip = holdout.iter().find(|c| &c.id == id);
                 if let Some(clip) = clip
-                    && let Some(truth) = manifest.ground_truth(clip)? {
-                        wers.push(wer_with(&truth, text, Mode::English));
-                        cers.push(cer_with(&truth, text, Mode::English));
-                    }
+                    && let Some(truth) = manifest.ground_truth(clip)?
+                {
+                    wers.push(wer_with(&truth, text, Mode::English));
+                    cers.push(cer_with(&truth, text, Mode::English));
+                }
             }
             summary.wer = mean(&wers);
             summary.cer = mean(&cers);
@@ -1162,7 +1255,9 @@ fn run_engine(
         // cause, which read as a harness quirk rather than a real error and
         // left two engines wrongly described as "unmeasured rather than
         // broken". The error goes where the gate actually looks.
-        Err(e) => summary.notes.insert(0, first_error.unwrap_or_else(|| e.to_string())),
+        Err(e) => summary
+            .notes
+            .insert(0, first_error.unwrap_or_else(|| e.to_string())),
     }
 
     // Peak resident memory for our process. Taken after the timed loop so it
@@ -1175,8 +1270,10 @@ fn run_engine(
     // and it inflates OUR side only. It is recorded next to the peak so the
     // number can be read honestly — a footprint claim that quietly counted the
     // harness would be the memory version of the `-nt` flag.
-    let decoded_bytes: u64 =
-        decoded.iter().map(|(_, a)| (a.samples.len() * size_of::<f32>()) as u64).sum();
+    let decoded_bytes: u64 = decoded
+        .iter()
+        .map(|(_, a)| (a.samples.len() * size_of::<f32>()) as u64)
+        .sum();
     sampling.store(false, std::sync::atomic::Ordering::Relaxed);
     sampler.join().ok();
     summary.steady_bytes = our_samples.lock().ok().and_then(|mut v| {
@@ -1229,7 +1326,10 @@ pub(crate) fn fill_gates(
             kind: GateKind::Correctness,
             outcome: GateOutcome::Pass,
             metric: None,
-            detail: format!("{}/{} holdout clips processed", eng.clips_ok, eng.clips_total),
+            detail: format!(
+                "{}/{} holdout clips processed",
+                eng.clips_ok, eng.clips_total
+            ),
         }
     } else {
         GateResult {
@@ -1319,7 +1419,11 @@ pub(crate) fn fill_gates(
     gates.set(match (eng.rtf_warm, best_ref_rtf) {
         (Some(er), Some((rname, rr))) => GateResult {
             kind: GateKind::Speed,
-            outcome: if er >= rr { GateOutcome::Pass } else { GateOutcome::Fail },
+            outcome: if er >= rr {
+                GateOutcome::Pass
+            } else {
+                GateOutcome::Fail
+            },
             metric: Some(er),
             detail: format!(
                 "engine {er:.1}x realtime (warm) vs fastest reference {rname} {rr:.1}x; \
@@ -1358,7 +1462,11 @@ pub(crate) fn fill_gates(
     // whether it FITS, steady decides what it COSTS to keep running.
     let leanest = references
         .iter()
-        .filter_map(|r| r.steady_bytes.or(r.peak_bytes).map(|b| (r.name.as_str(), b)))
+        .filter_map(|r| {
+            r.steady_bytes
+                .or(r.peak_bytes)
+                .map(|b| (r.name.as_str(), b))
+        })
         .min_by_key(|(_, b)| *b);
     const MIB: f64 = 1024.0 * 1024.0;
     let ours = eng.steady_bytes.or(eng.peak_bytes);
@@ -1463,17 +1571,31 @@ pub fn render(record: &BenchRecord) -> String {
         "PEAK_MiB",
         "CLIPS"
     ));
-    let rate = |r: f64| if ocr || detect { format!("{r:.2}") } else { format!("{r:.1}x") };
+    let rate = |r: f64| {
+        if ocr || detect {
+            format!("{r:.2}")
+        } else {
+            format!("{r:.1}x")
+        }
+    };
     let mut row = |s: &RunSummary, marker: &str| {
-        let (q1, q2) = if detect { (s.map50, s.map5095) } else { (s.wer, s.cer) };
+        let (q1, q2) = if detect {
+            (s.map50, s.map5095)
+        } else {
+            (s.wer, s.cer)
+        };
         out.push_str(&format!(
             "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
             format!("{marker}{}", s.name),
-            q1.map(|w| format!("{:.2}", w * 100.0)).unwrap_or_else(|| "-".into()),
-            q2.map(|c| format!("{:.2}", c * 100.0)).unwrap_or_else(|| "-".into()),
+            q1.map(|w| format!("{:.2}", w * 100.0))
+                .unwrap_or_else(|| "-".into()),
+            q2.map(|c| format!("{:.2}", c * 100.0))
+                .unwrap_or_else(|| "-".into()),
             s.rtf_warm.map(&rate).unwrap_or_else(|| "-".into()),
             s.rtf_e2e.map(&rate).unwrap_or_else(|| "-".into()),
-            s.load_secs.map(|l| format!("{l:.2}")).unwrap_or_else(|| "-".into()),
+            s.load_secs
+                .map(|l| format!("{l:.2}"))
+                .unwrap_or_else(|| "-".into()),
             s.peak_bytes
                 .map(|b| format!("{:.0}", b as f64 / (1024.0 * 1024.0)))
                 .unwrap_or_else(|| "-".into()),
@@ -1493,11 +1615,20 @@ pub fn render(record: &BenchRecord) -> String {
     }
     out.push('\n');
     for g in &record.gates.results {
-        out.push_str(&format!("{:<12} {}  {}\n", g.kind.label(), g.outcome, g.detail));
+        out.push_str(&format!(
+            "{:<12} {}  {}\n",
+            g.kind.label(),
+            g.outcome,
+            g.detail
+        ));
     }
     out.push_str(&format!(
         "\nverdict: {}\n",
-        if record.gates.all_passed() { "ALL GATES PASS — claimable" } else { "not claimable yet" }
+        if record.gates.all_passed() {
+            "ALL GATES PASS — claimable"
+        } else {
+            "not claimable yet"
+        }
     ));
     out
 }
@@ -1522,9 +1653,18 @@ pub fn render(record: &BenchRecord) -> String {
 fn engine_config(opts: &AsrOptions) -> std::collections::BTreeMap<String, String> {
     let mut config = std::collections::BTreeMap::new();
     config.insert("vad".to_string(), opts.vad.to_string());
-    config.insert("vad_threshold".to_string(), format!("{:.3}", opts.vad_threshold));
-    config.insert("vad_chunk_secs".to_string(), format!("{:.1}", opts.vad_chunk_secs));
-    config.insert("word_timestamps".to_string(), opts.word_timestamps.to_string());
+    config.insert(
+        "vad_threshold".to_string(),
+        format!("{:.3}", opts.vad_threshold),
+    );
+    config.insert(
+        "vad_chunk_secs".to_string(),
+        format!("{:.1}", opts.vad_chunk_secs),
+    );
+    config.insert(
+        "word_timestamps".to_string(),
+        opts.word_timestamps.to_string(),
+    );
     config.insert("diarize".to_string(), opts.diarize.to_string());
     config.insert("translate".to_string(), opts.translate.to_string());
     config.insert(
@@ -1566,8 +1706,14 @@ mod config_tests {
     fn records_the_setting_that_was_missing() {
         // The specific regression this field exists to prevent: two runs whose
         // only difference is segmentation must not serialise identically.
-        let on = engine_config(&AsrOptions { vad: true, ..Default::default() });
-        let off = engine_config(&AsrOptions { vad: false, ..Default::default() });
+        let on = engine_config(&AsrOptions {
+            vad: true,
+            ..Default::default()
+        });
+        let off = engine_config(&AsrOptions {
+            vad: false,
+            ..Default::default()
+        });
         assert_eq!(on["vad"], "true");
         assert_eq!(off["vad"], "false");
         assert_ne!(on, off);
@@ -1584,7 +1730,10 @@ mod config_tests {
     fn thresholds_are_recorded_not_just_the_on_off() {
         // "vad: true" is not reproducible on its own — the threshold changes
         // which audio survives.
-        let config = engine_config(&AsrOptions { vad_threshold: 0.25, ..Default::default() });
+        let config = engine_config(&AsrOptions {
+            vad_threshold: 0.25,
+            ..Default::default()
+        });
         assert_eq!(config["vad_threshold"], "0.250");
     }
 }
@@ -1692,17 +1841,28 @@ mod gate_split_tests {
     #[test]
     fn a_matched_reference_can_still_fail_us() {
         // The gate must retain its teeth against comparable implementations.
-        let refs = vec![summary("whisper-cpp-tiny-greedy", 0.0600, Some("tiny.en/greedy"))];
+        let refs = vec![summary(
+            "whisper-cpp-tiny-greedy",
+            0.0600,
+            Some("tiny.en/greedy"),
+        )];
         let mut gates = GateReport::new();
         fill_gates(&mut gates, Some(&engine(0.0900)), &refs, QualityMetric::Wer);
-        assert_eq!(gates.get(GateKind::Quality).expect("set").outcome, GateOutcome::Fail);
+        assert_eq!(
+            gates.get(GateKind::Quality).expect("set").outcome,
+            GateOutcome::Fail
+        );
     }
 
     #[test]
     fn no_matched_reference_skips_rather_than_passes() {
         // A skipped gate is never a pass — and must not fall back to the open
         // field, which would restore the defect.
-        let refs = vec![summary("openai-whisper-base", 0.0596, Some("base.en/beam5"))];
+        let refs = vec![summary(
+            "openai-whisper-base",
+            0.0596,
+            Some("base.en/beam5"),
+        )];
         let mut gates = GateReport::new();
         fill_gates(&mut gates, Some(&engine(0.0679)), &refs, QualityMetric::Wer);
         let q = gates.get(GateKind::Quality).expect("set");
@@ -1712,8 +1872,14 @@ mod gate_split_tests {
 
     #[test]
     fn precision_variants_compare_against_the_same_references() {
-        assert_eq!(engine_comparison_key("whisper-candle-q8_0").as_deref(), Some("tiny.en/greedy"));
-        assert_eq!(engine_comparison_key("whisper-candle-base").as_deref(), Some("base.en/greedy"));
+        assert_eq!(
+            engine_comparison_key("whisper-candle-q8_0").as_deref(),
+            Some("tiny.en/greedy")
+        );
+        assert_eq!(
+            engine_comparison_key("whisper-candle-base").as_deref(),
+            Some("base.en/greedy")
+        );
         assert_eq!(engine_comparison_key("oxi-whisper"), None);
     }
 }

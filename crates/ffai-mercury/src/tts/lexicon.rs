@@ -1,4 +1,4 @@
-//! CMUdict: word → ARPABET pronunciations.
+//! `CMUdict`: word → ARPABET pronunciations.
 //!
 //! The permissively-licensed (BSD-2-Clause) lexicon backbone of Mercury's
 //! G2P. The dictionary is DATA, not code — fetched into the model cache and
@@ -29,11 +29,13 @@ pub const SYMBOLS: &[&str] = &[
 ];
 
 impl Phone {
+    #[must_use]
     pub fn symbol(&self) -> &'static str {
         SYMBOLS[self.sym as usize]
     }
 
     /// ARPABET vowels are exactly the symbols that carry stress digits.
+    #[must_use]
     pub fn is_vowel(&self) -> bool {
         matches!(
             self.symbol(),
@@ -54,12 +56,12 @@ impl Phone {
         )
     }
 
-    fn parse(token: &str) -> Option<Phone> {
+    fn parse(token: &str) -> Option<Self> {
         let (sym, stress) = match token.as_bytes().last() {
             Some(d @ b'0'..=b'2') => (&token[..token.len() - 1], d - b'0'),
             _ => (token, 0),
         };
-        SYMBOLS.binary_search(&sym).ok().map(|i| Phone {
+        SYMBOLS.binary_search(&sym).ok().map(|i| Self {
             sym: i as u8,
             stress,
         })
@@ -68,7 +70,7 @@ impl Phone {
 
 /// The dictionary: lowercase word → first-listed pronunciation.
 ///
-/// CMUdict orders variants by frequency of use; espeak likewise picks one
+/// `CMUdict` orders variants by frequency of use; espeak likewise picks one
 /// form per word. Only the first is kept — variant selection by context is
 /// out of scope until a corpus shows it costing intelligibility.
 pub struct Lexicon {
@@ -128,17 +130,19 @@ impl Lexicon {
                 path.display()
             )));
         }
-        Ok(Lexicon { entries })
+        Ok(Self { entries })
     }
 
     pub fn lookup(&self, word: &str) -> Option<&[Phone]> {
         self.entries.get(word).map(Vec::as_slice)
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

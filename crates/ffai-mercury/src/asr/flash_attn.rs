@@ -22,7 +22,7 @@
 //! window, enough to rival the rest of the kernel — with a vectorized one.
 //!
 //! Applies only where all of these hold, falling back to the three-op path
-//! otherwise: CPU, f32, no mask, head_dim 64 (every Whisper size), a query
+//! otherwise: CPU, f32, no mask, `head_dim` 64 (every Whisper size), a query
 //! sequence long enough to amortize the tiling, and AVX2+FMA present.
 
 use ffai_core::candle::{
@@ -31,7 +31,14 @@ use ffai_core::candle::{
 use rayon::prelude::*;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use std::arch::x86_64::{
+    __m128i, __m256, _MM_FROUND_NO_EXC, _MM_FROUND_TO_NEAREST_INT, _mm_add_ps, _mm_add_ss,
+    _mm_cvtss_f32, _mm_loadu_si128, _mm_max_ps, _mm_max_ss, _mm_movehl_ps, _mm_shuffle_ps,
+    _mm256_add_epi32, _mm256_add_ps, _mm256_castps256_ps128, _mm256_castsi256_ps, _mm256_cvtph_ps,
+    _mm256_cvtps_epi32, _mm256_extractf128_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_max_ps,
+    _mm256_mul_ps, _mm256_round_ps, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setzero_ps,
+    _mm256_slli_epi32, _mm256_storeu_ps, _mm256_sub_ps,
+};
 
 const BQ: usize = 64;
 const BK: usize = 256;
@@ -88,6 +95,7 @@ fn have_avx2() -> bool {
 ///
 /// Callers use this to decide the cache dtype *before* building it: keeping
 /// the cache f32 is only right if the kernel will actually read it.
+#[must_use]
 pub fn serves(kt: &Tensor, v: &Tensor) -> bool {
     if !have_avx2() || !matches!(kt.device(), Device::Cpu) {
         return false;
@@ -288,7 +296,7 @@ impl CustomOp3 for FlashAttnOp {
             // was checked above, so start_offset + that length stays inside the allocation.
             let ktb: &[u16] = unsafe {
                 std::slice::from_raw_parts(
-                    kt.as_ptr().add(l2.start_offset()) as *const u16,
+                    kt.as_ptr().add(l2.start_offset()).cast::<u16>(),
                     heads * HD * keys,
                 )
             };
@@ -296,7 +304,7 @@ impl CustomOp3 for FlashAttnOp {
             // tensor whose length was checked, offset by its own start_offset.
             let vb: &[u16] = unsafe {
                 std::slice::from_raw_parts(
-                    v.as_ptr().add(l3.start_offset()) as *const u16,
+                    v.as_ptr().add(l3.start_offset()).cast::<u16>(),
                     heads * keys * HD,
                 )
             };
@@ -401,7 +409,7 @@ impl CustomOp3 for FlashAttnOp {
 
 #[cfg(target_arch = "x86_64")]
 fn flash_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], seq: usize) {
-    flash_head_strided(q, kt, v, out, seq, HD)
+    flash_head_strided(q, kt, v, out, seq, HD);
 }
 
 /// `out_stride` is the distance between consecutive query rows in `out`.
@@ -444,10 +452,10 @@ fn flash_head_strided(
                 for i in 0..rows {
                     let (new_max, correction, block_sum) =
                         softmax_row(&mut scores[i * BK..(i + 1) * BK], cols, run_max[i]);
-                    run_sum[i] = run_sum[i] * correction + block_sum;
+                    run_sum[i] = run_sum[i].mul_add(correction, block_sum);
                     run_max[i] = new_max;
                     if correction != 1.0 {
-                        for x in acc[i * HD..(i + 1) * HD].iter_mut() {
+                        for x in &mut acc[i * HD..(i + 1) * HD] {
                             *x *= correction;
                         }
                     }
@@ -595,7 +603,7 @@ unsafe fn xattn_head(
         } else {
             f32::NEG_INFINITY
         };
-        for &x in s[j..keys].iter() {
+        for &x in &s[j..keys] {
             mx = mx.max(x);
         }
         let vmx = _mm256_set1_ps(mx);
@@ -608,7 +616,7 @@ unsafe fn xattn_head(
             j += 8;
         }
         let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
-        for x in s[j..keys].iter_mut() {
+        for x in &mut s[j..keys] {
             *x = (*x - mx).exp();
             sum += *x;
         }
@@ -682,7 +690,7 @@ unsafe fn xattn_head_f16(
             let sp = s.as_mut_ptr();
             let mut j = 0;
             while j + 8 <= keys {
-                let kf = _mm256_cvtph_ps(_mm_loadu_si128(krow.add(j) as *const __m128i));
+                let kf = _mm256_cvtph_ps(_mm_loadu_si128(krow.add(j).cast::<__m128i>()));
                 _mm256_storeu_ps(
                     sp.add(j),
                     _mm256_fmadd_ps(qv, kf, _mm256_loadu_ps(sp.add(j))),
@@ -706,7 +714,7 @@ unsafe fn xattn_head_f16(
         } else {
             f32::NEG_INFINITY
         };
-        for &x in s[j..keys].iter() {
+        for &x in &s[j..keys] {
             mx = mx.max(x);
         }
         let vmx = _mm256_set1_ps(mx);
@@ -719,7 +727,7 @@ unsafe fn xattn_head_f16(
             j += 8;
         }
         let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
-        for x in s[j..keys].iter_mut() {
+        for x in &mut s[j..keys] {
             *x = (*x - mx).exp();
             sum += *x;
         }
@@ -730,7 +738,7 @@ unsafe fn xattn_head_f16(
             let w = _mm256_set1_ps(*s.get_unchecked(jj) * inv);
             let vp = v.as_ptr().add(jj * HD);
             for (c, acc) in a.iter_mut().enumerate() {
-                let vf = _mm256_cvtph_ps(_mm_loadu_si128(vp.add(c * 8) as *const __m128i));
+                let vf = _mm256_cvtph_ps(_mm_loadu_si128(vp.add(c * 8).cast::<__m128i>()));
                 *acc = _mm256_fmadd_ps(w, vf, *acc);
             }
         }
@@ -920,7 +928,7 @@ unsafe fn softmax_row(row: &mut [f32], cols: usize, run_max: f32) -> (f32, f32, 
         } else {
             f32::NEG_INFINITY
         };
-        for &s in row[j..cols].iter() {
+        for &s in &row[j..cols] {
             block_max = block_max.max(s);
         }
 
@@ -941,7 +949,7 @@ unsafe fn softmax_row(row: &mut [f32], cols: usize, run_max: f32) -> (f32, f32, 
             j += 8;
         }
         let mut block_sum = if cols >= 8 { hsum256(vsum) } else { 0.0 };
-        for s in row[j..cols].iter_mut() {
+        for s in &mut row[j..cols] {
             *s = (*s - new_max).exp();
             block_sum += *s;
         }

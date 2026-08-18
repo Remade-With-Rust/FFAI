@@ -5,7 +5,7 @@
 //! f16 path moves 39.8 MB/token at ~24 GB/s, already close to what this
 //! machine's memory system gives a read-only stream.
 //!
-//! candle's Q8_0 halves the bytes and measured **no faster** (20/41,
+//! candle's `Q8_0` halves the bytes and measured **no faster** (20/41,
 //! z = -0.2) — it spends on dequantization what it saves on traffic, turning
 //! a memory-bound op into a compute-bound one. That is a verdict on that
 //! kernel, not on int8: AVX2's `_mm256_maddubs_epi16` + `_mm256_madd_epi16`
@@ -31,7 +31,7 @@
 //! first and shipped 4.34x, but corpus WER moved 7.87 -> 7.93 %, leaving only
 //! 0.027 pp of gate margin: one outlier sets the row scale and coarsens every
 //! weight beside it. Block scales cost a per-block horizontal reduction and
-//! ~6 % more bytes, and are why Q8_0 uses them.
+//! ~6 % more bytes, and are why `Q8_0` uses them.
 
 use ffai_core::candle::{
     CpuStorage, CustomOp1, Device, Layout, Result as CandleResult, Shape, Tensor,
@@ -39,7 +39,11 @@ use ffai_core::candle::{
 use rayon::prelude::*;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use std::arch::x86_64::{
+    __m256i, _mm_add_epi32, _mm_cvtsi128_si32, _mm_shuffle_epi32, _mm256_add_epi32,
+    _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_madd_epi16,
+    _mm256_maddubs_epi16, _mm256_set1_epi16, _mm256_setzero_si256,
+};
 
 /// Block-symmetric int8 vocabulary weights.
 pub struct Int8Vocab {
@@ -51,7 +55,7 @@ struct Shared {
     /// One scale per 32-weight BLOCK, not per row. A single row scale is set
     /// by that row's largest magnitude, so one outlier coarsens all 384
     /// weights beside it; corpus WER moved 7.87 -> 7.93 % and left only
-    /// 0.027 pp of gate margin. Per-block scales are why Q8_0 uses them.
+    /// 0.027 pp of gate margin. Per-block scales are why `Q8_0` uses them.
     bscale: Vec<f32>,
     /// Per-row activation-offset correction, `64 * sum_b scale_b * blocksum_b`.
     /// Independent of the activation, so it is folded once at load rather than
@@ -114,7 +118,7 @@ impl Int8Vocab {
                 for k in 0..blk {
                     let qi = (bw[k] / sc).round().clamp(-127.0, 127.0) as i8;
                     q[v * d + b * blk + k] = qi;
-                    bsum += qi as i32;
+                    bsum += i32::from(qi);
                 }
                 c += sc * bsum as f32;
             }
@@ -126,7 +130,7 @@ impl Int8Vocab {
             None
         };
         let _ = &oracle;
-        Ok(Some(Int8Vocab {
+        Ok(Some(Self {
             shared: std::sync::Arc::new(Shared {
                 qw: q,
                 bscale,
@@ -255,8 +259,8 @@ unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, bl
             let base = b * blk;
             let mut o = 0;
             while o < blk {
-                let x0 = _mm256_loadu_si256(xp.add(base + o) as *const __m256i);
-                let w0 = _mm256_loadu_si256(wp.add(base + o) as *const __m256i);
+                let x0 = _mm256_loadu_si256(xp.add(base + o).cast::<__m256i>());
+                let w0 = _mm256_loadu_si256(wp.add(base + o).cast::<__m256i>());
                 p = _mm256_add_epi32(p, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones));
                 o += 32;
             }
@@ -312,8 +316,7 @@ pub fn audit_record(ours: &[f32], oracle: &[f32]) {
         v.iter()
             .enumerate()
             .max_by(|a, b| a.1.total_cmp(b.1))
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+            .map_or(0, |(i, _)| i)
     };
     let (a, b) = (top(ours), top(oracle));
     AUDIT_TOTAL.fetch_add(1, Ordering::Relaxed);

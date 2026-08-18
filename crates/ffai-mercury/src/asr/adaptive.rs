@@ -45,6 +45,7 @@ pub struct Choice {
 
 impl Choice {
     /// How much the winner beat the loser by.
+    #[must_use]
     pub fn speedup(&self) -> f64 {
         let (win, lose) = if self.dtype == DType::F16 {
             (self.f16_secs, self.f32_secs)
@@ -94,6 +95,7 @@ fn time_matmul(m: usize, k: usize, n: usize, dtype: DType, device: &Device) -> O
 ///
 /// Falls back to f32 when either candidate cannot be built or timed — a
 /// device without f16 support gets the safe answer rather than an error.
+#[must_use]
 pub fn matmul_dtype(m: usize, k: usize, n: usize, device: &Device) -> DType {
     if let Some(forced) = forced() {
         return forced;

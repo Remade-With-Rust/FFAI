@@ -15,7 +15,7 @@
 //! Gate: candle's own conv is the scalar twin. `conv1d_direct` must match it
 //! to float-reassociation tolerance on every shape the decoder uses
 //! (`kernels_match_candle`), and `FFAI_CANDLE_CONV=1` switches the engine
-//! back for A/B. ConvTranspose is decomposed by output phase — with stride s
+//! back for A/B. `ConvTranspose` is decomposed by output phase — with stride s
 //! and kernel k, each output sample touches exactly k/s taps, so the
 //! upsamplers cost k/s MACs per output instead of k.
 
@@ -50,6 +50,7 @@ pub fn conv1d_direct(
 
 /// The flat core: channel-major `&[f32]` in, channel-major `Vec<f32>` out.
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn conv1d_flat(
     xv: &[f32],
     c_in: usize,
@@ -112,7 +113,7 @@ pub fn conv1d_flat_into(
     dilation: usize,
     out: &mut [f32],
 ) {
-    conv1d_flat_prepacked_into(xv, c_in, len, wv, None, bv, c_out, k, pad, dilation, out)
+    conv1d_flat_prepacked_into(xv, c_in, len, wv, None, bv, c_out, k, pad, dilation, out);
 }
 
 /// Quad-major weight repack: [co/4][ci][j][4 lanes].
@@ -203,12 +204,11 @@ fn conv1d_flat_prepacked_into(
     // measured 2.2× existence proof): prefer the caller's once-packed copy;
     // pack per call only on the wrapper path where no cache exists.
     let packed_local;
-    let wp: &[f32] = match prepacked {
-        Some(p) => p,
-        None => {
-            packed_local = pack_quads(wv, c_out, c_in, k);
-            &packed_local
-        }
+    let wp: &[f32] = if let Some(p) = prepacked {
+        p
+    } else {
+        packed_local = pack_quads(wv, c_out, c_in, k);
+        &packed_local
     };
 
     // Tasks write DIRECTLY into `out`: each (channel-chunk × time-block)
@@ -357,7 +357,7 @@ fn conv1d_flat_prepacked_into(
         for (co_i, co) in (co0..co1).enumerate() {
             let dst = row(co);
             let src = &tile[co_i * bt..(co_i + 1) * bt];
-            let bias = bv.map(|b| b[co]).unwrap_or(0.0);
+            let bias = bv.map_or(0.0, |b| b[co]);
             for (o, &v) in dst.iter_mut().zip(src) {
                 *o += v + bias;
             }
@@ -365,7 +365,7 @@ fn conv1d_flat_prepacked_into(
     });
 }
 
-/// ConvTranspose1d by phase decomposition, `[1, C_in, L] -> [1, C_out, L*s]`
+/// `ConvTranspose1d` by phase decomposition, `[1, C_in, L] -> [1, C_out, L*s]`
 /// (stride s, kernel k, `pad` as exported). Each output phase p uses only
 /// the taps `j ≡ (p + pad) mod s`, i.e. k/s taps per output sample.
 pub fn conv_transpose1d_direct(
@@ -390,7 +390,7 @@ pub fn conv_transpose1d_direct(
 
 /// Flat transpose core, phase-decomposed for CONTIGUOUS inner loops.
 ///
-/// out[co][t] = Σ_ci Σ_j w[ci][co][j]·x[ci][i] where i·s + j − pad = t.
+/// out[co][t] = `Σ_ci` `Σ_j` w[ci][co][j]·x[ci][i] where i·s + j − pad = t.
 /// Fix the output phase p = t mod s: the contributing taps are exactly the
 /// j with (j − pad) ≡ p (mod s) — k/s of them — and for each such j the map
 /// t → i is t = n·s + p, i = n + (p + pad − j)/s: a CONTIGUOUS run over n.
@@ -398,6 +398,7 @@ pub fn conv_transpose1d_direct(
 /// end. (The first version iterated t with stride-s writes — unvectorizable
 /// and cache-hostile.)
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn conv_transpose1d_flat(
     xv: &[f32],
     c_in: usize,
@@ -413,7 +414,7 @@ pub fn conv_transpose1d_flat(
     let out: Vec<Vec<f32>> = (0..c_out)
         .into_par_iter()
         .map(|co| {
-            let mut row = vec![bv.map(|b| b[co]).unwrap_or(0.0); l_out];
+            let mut row = vec![bv.map_or(0.0, |b| b[co]); l_out];
             let mut phase_acc = vec![0f32; l_out / stride + 1];
             for phase in 0..stride {
                 // Output positions t = phase, phase+s, ... : n_phase of them.
@@ -492,7 +493,7 @@ impl FlatConv {
         dilation: usize,
     ) -> Self {
         let wp = pack_quads(&w, c_out, c_in, k);
-        FlatConv {
+        Self {
             w,
             wp,
             b,
@@ -512,7 +513,7 @@ impl FlatConv {
         (out, l_out)
     }
 
-    /// Accumulate `out += conv(x)` — same-pad convs only (l_out == len).
+    /// Accumulate `out += conv(x)` — same-pad convs only (`l_out` == len).
     fn conv_into(&self, x: &[f32], len: usize, out: &mut [f32]) {
         conv1d_flat_prepacked_into(
             x,
@@ -526,7 +527,7 @@ impl FlatConv {
             self.pad,
             self.dilation,
             out,
-        )
+        );
     }
 
     fn transpose(&self, x: &[f32], len: usize) -> (Vec<f32>, usize) {
@@ -544,8 +545,8 @@ impl FlatConv {
     }
 }
 
-/// piper's compact HiFi-GAN, flat: conv_pre → 3×(leaky → up → resblock
-/// average) → leaky(0.01) → conv_post → tanh. Activations are single passes;
+/// piper's compact HiFi-GAN, flat: `conv_pre` → 3×(leaky → up → resblock
+/// average) → leaky(0.01) → `conv_post` → tanh. Activations are single passes;
 /// tensors exist only at the boundary.
 pub struct FlatDecoder {
     conv_pre: FlatConv,
@@ -603,7 +604,7 @@ impl FlatDecoder {
         }
         conv_post.w.iter_mut().for_each(|w| *w /= 3.0);
         conv_post.wp.iter_mut().for_each(|w| *w /= 3.0);
-        Ok(FlatDecoder {
+        Ok(Self {
             conv_pre: load("dec.conv_pre", false)?,
             ups,
             resblocks,
@@ -613,6 +614,7 @@ impl FlatDecoder {
 
     /// z (channel-major, 192×len) → waveform. `FFAI_PROFILE=1` prints a
     /// per-op breakdown (the ASR convention).
+    #[must_use]
     pub fn run(&self, z: &[f32], len: usize) -> Vec<f32> {
         let profile = std::env::var("FFAI_PROFILE").is_ok();
         let mut t_up = 0f64;
@@ -734,6 +736,7 @@ impl FlatDecoder {
 /// Depthwise conv1d (`groups == C`): each channel convolves independently
 /// with its own k-tap filter — the duration predictor's separable convs.
 /// Serial: the whole op is ~C·k·L ≈ 100k MACs.
+#[must_use]
 pub fn conv1d_depthwise_flat(
     xv: &[f32],
     channels: usize,
@@ -770,7 +773,7 @@ pub fn conv1d_depthwise_flat(
 }
 
 /// The AVX2+FMA conv micro-kernel: four output channels × 32 output lanes
-/// held in 16 ymm accumulators across the whole (c_in × k) reduction — one
+/// held in 16 ymm accumulators across the whole (`c_in` × k) reduction — one
 /// broadcast + four loads feed sixteen FMAs. Only runs on the interior
 /// region (every tap in-range) at strip granularity; the tail of the
 /// interior falls back to 8-lane strips then scalar.
@@ -804,7 +807,10 @@ unsafe fn conv_quad_avx2(
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
     // the contract is stated on the `unsafe fn` signature above.
     unsafe {
-        use std::arch::x86_64::*;
+        use std::arch::x86_64::{
+            _mm256_add_ps, _mm256_broadcast_ss, _mm256_fmadd_ps, _mm256_loadu_ps,
+            _mm256_setzero_ps, _mm256_storeu_ps,
+        };
         let x = xv.as_ptr();
         let w = wp.as_ptr();
         let mut t = int_lo;
@@ -884,8 +890,8 @@ unsafe fn conv_quad_avx2(
 }
 
 /// Vectorizable exp: exponent-field construction + degree-5 minimax for the
-/// fraction — the flash_attn.rs recipe. Relative error ~2e-7: THREE orders
-/// tighter than the Padé tanh that failed the dec_in oracle (1.8e-4
+/// fraction — the `flash_attn.rs` recipe. Relative error ~2e-7: THREE orders
+/// tighter than the Padé tanh that failed the `dec_in` oracle (1.8e-4
 /// compounding to 7e-2 over 16 coupled gates). Pure float/int ops, no libm,
 /// autovectorizes.
 #[inline(always)]
@@ -921,7 +927,7 @@ fn fast_sigmoid(x: f32) -> f32 {
 fn leaky_inplace(x: &mut [f32], slope: f32) {
     x.par_chunks_mut(1 << 16).for_each(|c| {
         for v in c {
-            *v = v.max(0.0) + slope * v.min(0.0);
+            *v = slope.mul_add(v.min(0.0), v.max(0.0));
         }
     });
 }
@@ -935,7 +941,7 @@ fn leaky_inplace(x: &mut [f32], slope: f32) {
 /// dispatch and gate plumbing (narrow/tanh/sigmoid/mul per WN layer) than
 /// on its convolutions; here the gate is one fused pass.
 struct FlatCoupling {
-    /// GEMM-shaped weight tensors ([C_out, C_in·K]), built ONCE — the
+    /// GEMM-shaped weight tensors ([`C_out`, `C_in·K`]), built ONCE — the
     /// per-call `from_slice` was copying ~25 MB of weights per sentence,
     /// and caching these was the change that took the flow from a wash to
     /// 42/45 paired wins. ONLY the tensors are stored (plus biases): a
@@ -1009,10 +1015,10 @@ impl FlatFlow {
                 pad,
             });
         }
-        Ok(FlatFlow { couplings, hidden })
+        Ok(Self { couplings, hidden })
     }
 
-    /// z_p (channel-major, hidden×len) → z, in place.
+    /// `z_p` (channel-major, hidden×len) → z, in place.
     ///
     /// v4. The verdict trail matters here: v1 (flat de-plumbing) washed at
     /// 0.99×; v2 (candle-GEMM shaping) lost at 0.83×; then ORT's per-node
@@ -1114,12 +1120,12 @@ impl FlatFlow {
                 let rb = coupling.rs_b[i].as_deref();
                 if i < n_layers - 1 {
                     for ch in 0..c {
-                        let bias = rb.map(|b| b[ch]).unwrap_or(0.0);
+                        let bias = rb.map_or(0.0, |b| b[ch]);
                         let hr = &mut h[ch * len..(ch + 1) * len];
                         for (hv, rv) in hr.iter_mut().zip(&r[ch * len..(ch + 1) * len]) {
                             *hv += rv + bias;
                         }
-                        let bias2 = rb.map(|b| b[c + ch]).unwrap_or(0.0);
+                        let bias2 = rb.map_or(0.0, |b| b[c + ch]);
                         let sk = &mut skip[ch * len..(ch + 1) * len];
                         for (sv, rv) in sk.iter_mut().zip(&r[(c + ch) * len..(c + ch + 1) * len]) {
                             *sv += rv + bias2;
@@ -1127,7 +1133,7 @@ impl FlatFlow {
                     }
                 } else {
                     for ch in 0..c {
-                        let bias = rb.map(|b| b[ch]).unwrap_or(0.0);
+                        let bias = rb.map_or(0.0, |b| b[ch]);
                         let sk = &mut skip[ch * len..(ch + 1) * len];
                         for (sv, rv) in sk.iter_mut().zip(&r[ch * len..(ch + 1) * len]) {
                             *sv += rv + bias;
@@ -1141,7 +1147,7 @@ impl FlatFlow {
             let m = mm(&coupling.post_t, c, &skip)?;
             let pb = coupling.post_b.as_deref();
             for ch in 0..half {
-                let bias = pb.map(|b| b[ch]).unwrap_or(0.0);
+                let bias = pb.map_or(0.0, |b| b[ch]);
                 let xr = &mut x1[ch * len..(ch + 1) * len];
                 for (x, mv) in xr.iter_mut().zip(&m[ch * len..(ch + 1) * len]) {
                     *x -= mv + bias;
@@ -1167,7 +1173,7 @@ fn leaky_into(x: &[f32], out: &mut [f32], slope: f32) {
         .zip(x.par_chunks(1 << 16))
         .for_each(|(oc, xc)| {
             for (o, &v) in oc.iter_mut().zip(xc) {
-                *o = v.max(0.0) + slope * v.min(0.0);
+                *o = slope.mul_add(v.min(0.0), v.max(0.0));
             }
         });
 }
@@ -1353,13 +1359,13 @@ pub fn conv1d_k1_gemm(
     e(y.reshape((1, c_out, t)))
 }
 
-/// Channel-wise LayerNorm over `[1, C, T]`, in one pass instead of nine
+/// Channel-wise `LayerNorm` over `[1, C, T]`, in one pass instead of nine
 /// allocating tensor ops.
 ///
 /// The tensor spelling is `mean_keepdim -> broadcast_sub -> sqr ->
 /// mean_keepdim -> add -> sqrt -> broadcast_div -> broadcast_mul ->
 /// broadcast_add`: nine intermediates, each a fresh `[1, C, T]` allocation.
-/// The duration predictor runs 24 LayerNorms per sentence (4 DDS stacks x 3
+/// The duration predictor runs 24 `LayerNorms` per sentence (4 DDS stacks x 3
 /// layers x 2) and the text encoder 12 more, so that is ~216 allocations per
 /// utterance for an operation that is two passes over 66 KB.
 ///
@@ -1369,6 +1375,7 @@ pub fn conv1d_k1_gemm(
 ///
 /// Matches the tensor path to float-reassociation tolerance, not bit-exactly:
 /// the variance is accumulated in a different order.
+#[must_use]
 pub fn layer_norm_flat(
     xv: &[f32],
     c: usize,
@@ -1396,16 +1403,16 @@ pub fn layer_norm_flat(
     // f64 accumulation costs 192 adds per column on a stage that is bandwidth-
     // bound, and the divide is one per element. Both are gated on the paired
     // CPU-time A/B rather than assumed free.
-    let eps = eps as f64;
+    let eps = f64::from(eps);
     (0..t).into_par_iter().for_each(|i| {
         let mut mean = 0f64;
         for ci in 0..c {
-            mean += xv[ci * t + i] as f64;
+            mean += f64::from(xv[ci * t + i]);
         }
         mean /= c as f64;
         let mut var = 0f64;
         for ci in 0..c {
-            let d = xv[ci * t + i] as f64 - mean;
+            let d = f64::from(xv[ci * t + i]) - mean;
             var += d * d;
         }
         var /= c as f64;
@@ -1415,8 +1422,8 @@ pub fn layer_norm_flat(
         let o = ptr as *mut f32;
         for ci in 0..c {
             unsafe {
-                *o.add(ci * t + i) =
-                    (((xv[ci * t + i] as f64 - mean) / denom) as f32) * gamma[ci] + beta[ci];
+                *o.add(ci * t + i) = (((f64::from(xv[ci * t + i]) - mean) / denom) as f32)
+                    .mul_add(gamma[ci], beta[ci]);
             }
         }
     });
@@ -1437,6 +1444,7 @@ pub fn layer_norm_flat(
 /// the integer contract. A hand-rolled libm-style f64 erf was also measured and
 /// was SLOWER than candle (10.4 ns/element) — the win is the approximation, not
 /// the flattening.
+#[must_use]
 pub fn gelu_erf_flat(xv: &[f32]) -> Vec<f32> {
     let mut out = vec![0f32; xv.len()];
     out.par_chunks_mut(4096)
@@ -1454,9 +1462,12 @@ pub fn gelu_erf_flat(xv: &[f32]) -> Vec<f32> {
 fn erf_as(x: f32) -> f32 {
     let s = if x < 0.0 { -1.0f32 } else { 1.0f32 };
     let x = x.abs();
-    let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let poly = ((((1.061_405_4 * t - 1.453_152_1) * t + 1.421_413_8) * t - 0.284_496_72) * t
-        + 0.254_829_6)
+    let t = 1.0 / 0.327_591_1f32.mul_add(x, 1.0);
+    let poly = 1.061_405_4f32
+        .mul_add(t, -1.453_152_1)
+        .mul_add(t, 1.421_413_8)
+        .mul_add(t, -0.284_496_72)
+        .mul_add(t, 0.254_829_6)
         * t;
     s * (1.0 - poly * (-x * x).exp())
 }
@@ -1465,7 +1476,7 @@ fn erf_as(x: f32) -> f32 {
 /// `[C][T]` -> `[C*3][T]`.
 ///
 /// Three `copy_from_slice` memcpys per channel. Candle's equivalent
-/// (`Im2Col1D`, cpu_backend) walks element by element with the padding test
+/// (`Im2Col1D`, `cpu_backend`) walks element by element with the padding test
 /// inside the innermost loop — that, plus a full extra output transpose it
 /// performs afterwards, is where its 1.71x wrapper tax lives. Measured NOT to
 /// be about GEMM orientation: candle's `[T,K]x[K,Co]` against our

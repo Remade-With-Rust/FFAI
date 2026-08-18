@@ -443,7 +443,10 @@ mod tests {
     #[test]
     fn our_own_peak_is_plausible() {
         let Some(p) = peak_self() else {
-            assert!(!supported(), "peak_self returned None on a supported platform");
+            assert!(
+                !supported(),
+                "peak_self returned None on a supported platform"
+            );
             return;
         };
         // A running test process holds at least a megabyte and nothing like a

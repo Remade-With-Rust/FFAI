@@ -8,7 +8,7 @@
 //!
 //! Clean-room boundary: espeak-ng is GPL and is consulted only as an
 //! out-of-process ORACLE (its output on the pinned corpus). The rules below
-//! come from CMUdict (BSD) plus conventions inferred from the TRAIN split of
+//! come from `CMUdict` (BSD) plus conventions inferred from the TRAIN split of
 //! those fixtures — the closed-class function-word table, the collocation
 //! glue table, and the vowel-context rules. Holdout sentences were never
 //! read while writing this file (holdout discipline).
@@ -47,8 +47,9 @@ impl Phonemizer {
         Ok(Self::new(Lexicon::from_manifest(manifest)?))
     }
 
+    #[must_use]
     pub fn new(lexicon: Lexicon) -> Self {
-        Phonemizer {
+        Self {
             lexicon,
             function_words: function_words(),
             collocations: collocations(),
@@ -95,18 +96,16 @@ impl Phonemizer {
                     if let Some(Token::Word(w2)) = tokens.get(i + 1)
                         && let Some(forms) = self.collocations.get(&(w.as_str(), w2.as_str()))
                     {
-                        let vowel_next = next_word(i + 2)
-                            .map(|w| self.starts_with_vowel_sound(w))
-                            .unwrap_or(false);
+                        let vowel_next =
+                            next_word(i + 2).is_some_and(|w| self.starts_with_vowel_sound(w));
                         pieces.push(Piece::Word(forms[usize::from(vowel_next)].to_string()));
                         i += 2;
                         continue;
                     }
 
                     let is_last_word = next_word(i + 1).is_none();
-                    let vowel_next = next_word(i + 1)
-                        .map(|w| self.starts_with_vowel_sound(w))
-                        .unwrap_or(false);
+                    let vowel_next =
+                        next_word(i + 1).is_some_and(|w| self.starts_with_vowel_sound(w));
                     let mut ipa = self.word_ipa(w, vowel_next)?;
                     // Linking sounds before a vowel-initial word: ɚ surfaces
                     // its r (`buyer at` → bˈaɪɚɹ æ...), happY-final i grows
@@ -176,7 +175,7 @@ impl Phonemizer {
         Ok(out)
     }
 
-    /// One word to IPA: function table → CMUdict → letter-to-sound fallback.
+    /// One word to IPA: function table → `CMUdict` → letter-to-sound fallback.
     fn word_ipa(&self, word: &str, vowel_next: bool) -> Result<String> {
         if let Some(forms) = self.function_words.get(word) {
             let form = forms[usize::from(vowel_next)];
@@ -302,7 +301,7 @@ fn starts_with_ipa_vowel(ipa: &str) -> bool {
         .is_some_and(|c| "aeiouæɐɑɒɔəɚɛɜɪʊʌᵻ".contains(c))
 }
 
-/// Map one CMUdict pronunciation to espeak en-us IPA conventions.
+/// Map one `CMUdict` pronunciation to espeak en-us IPA conventions.
 ///
 /// The conventions, each inferred from the train fixtures:
 /// - stress marks sit immediately BEFORE the stressed vowel (`kənˈuː`);
@@ -316,7 +315,7 @@ fn starts_with_ipa_vowel(ipa: &str) -> bool {
 /// - sibilant plural `-es` → ᵻz (`busses` → bˈʌsᵻz), `-ed` after t/d → ᵻd;
 /// - flapping: T between a vowel/R and an unstressed vowel → ɾ (`water`);
 /// - ɡ is U+0261, ɹ not r — espeak's exact codepoints, which is what the
-///   voice's phoneme_id_map keys on.
+///   voice's `phoneme_id_map` keys on.
 fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
     let primary_idx = phones.iter().position(|p| p.stress == 1);
     let mut out = String::new();
@@ -329,7 +328,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
         }
         let prev = i.checked_sub(1).map(|j| phones[j]);
         let next = phones.get(i + 1);
-        let next_sym = next.map(|n| n.symbol());
+        let next_sym = next.map(super::lexicon::Phone::symbol);
 
         if p.is_vowel() && p.stress == 1 {
             out.push('ˈ');
@@ -383,8 +382,10 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     || (is_suffix_vowel(word, phones, i, "ed")
                         && next_sym == Some("D")
                         && matches!(
-                            phones.get(i.wrapping_sub(1)).map(|q| q.symbol()),
-                            Some("T") | Some("D")
+                            phones
+                                .get(i.wrapping_sub(1))
+                                .map(super::lexicon::Phone::symbol),
+                            Some("T" | "D")
                         ))
                 {
                     // `-es` after sibilants and `-ed` after t/d: espeak ᵻ
@@ -434,7 +435,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
             "AY" => out.push_str("aɪ"),
             "EH" => out.push('ɛ'),
             "ER" => {
-                if p.stress == 0 && next.is_some_and(|n| n.is_vowel()) {
+                if p.stress == 0 && next.is_some_and(super::lexicon::Phone::is_vowel) {
                     // ER0 before a vowel: word-initially it keeps its vowel
                     // (`around` ER0 AW1.. → ɚɹˈaʊnd); mid-word it elides to
                     // plain ɹ (`every` → ˈɛvɹi). The elide-always version
@@ -449,7 +450,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     // Stressed ER keeps its ɹ word-finally and before a
                     // vowel (`fur` → fˈɜːɹ, `courage` → kˈɜːɹɪdʒ) — but not
                     // before a consonant (`girl` → ɡˈɜːl).
-                    if next.is_none_or(|n| n.is_vowel()) {
+                    if next.is_none_or(super::lexicon::Phone::is_vowel) {
                         out.push('ɹ');
                     }
                 } else {
@@ -477,7 +478,10 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                 if next_sym == Some("R") {
                     // Before R: ɪ when the R closes the syllable (`here` →
                     // hˈɪɹ), iə when a vowel follows (`hero` → hˈiəɹoʊ).
-                    if phones.get(i + 2).is_some_and(|q| q.is_vowel()) {
+                    if phones
+                        .get(i + 2)
+                        .is_some_and(super::lexicon::Phone::is_vowel)
+                    {
                         out.push_str("iə");
                     } else {
                         out.push('ɪ');
@@ -565,7 +569,7 @@ fn is_suffix_vowel(word: &str, phones: &[Phone], i: usize, suffix: &str) -> bool
     i + 2 == phones.len() && word.ends_with(suffix)
 }
 
-/// Words where espeak's lexicon disagrees with CMUdict's first variant or
+/// Words where espeak's lexicon disagrees with `CMUdict`'s first variant or
 /// with the mapping rules — each observed in the train fixtures, none
 /// generalized. (`read`: CMU lists the past-tense form first, espeak says
 /// ɹˈiːd; `faced`/`thirty`/`sixteen` are espeak's own quirks.)

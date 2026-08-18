@@ -27,7 +27,7 @@ pub struct Stage {
 
 impl Stage {
     const fn new() -> Self {
-        Stage {
+        Self {
             nanos: AtomicU64::new(0),
             calls: AtomicU64::new(0),
         }
@@ -104,7 +104,7 @@ pub struct Profile {
 
 impl Profile {
     const fn new() -> Self {
-        Profile {
+        Self {
             mel: Stage::new(),
             encoder: Stage::new(),
             decoder: Stage::new(),
@@ -274,6 +274,7 @@ impl Profile {
 
 /// The process-wide profile. One transcription run is the unit of interest,
 /// so the CLI prints and this is not reset between clips.
+#[must_use]
 pub fn profile() -> &'static Profile {
     static PROFILE: Profile = Profile::new();
     &PROFILE
@@ -281,6 +282,7 @@ pub fn profile() -> &'static Profile {
 
 /// True when `FFAI_PROFILE` is set — the CLI checks this to decide whether to
 /// print a report.
+#[must_use]
 pub fn is_enabled() -> bool {
     enabled()
 }
