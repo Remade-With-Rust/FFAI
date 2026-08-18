@@ -1,8 +1,8 @@
 //! # ffai-media
 //!
-//! Media ingest/egress for FFai — the `libavformat` seat.
+//! Media ingest/egress for `FFai` — the `libavformat` seat.
 //!
-//! Policy: all container/codec work routes through **remade_ffmpeg_rs**
+//! Policy: all container/codec work routes through **`remade_ffmpeg_rs`**
 //! (`rff-*` crates) as the default backend — we own it, it is pure Rust, and
 //! it keeps the zero-C/C++ promise. Phase 0 ships native WAV support (the one
 //! format every ASR/TTS engine needs on day one); everything else returns a
@@ -18,7 +18,7 @@ use ffai_core::types::{AudioBuffer, ImageBuffer, VideoFrame};
 /// Load an audio file into a normalized f32 [`AudioBuffer`].
 ///
 /// Phase 0: WAV only (PCM int/float). Other containers/codecs land with the
-/// remade_ffmpeg_rs integration in Phase 1.
+/// `remade_ffmpeg_rs` integration in Phase 1.
 pub fn load_audio(path: &Path) -> Result<AudioBuffer> {
     let ext = path
         .extension()
@@ -35,6 +35,11 @@ pub fn load_audio(path: &Path) -> Result<AudioBuffer> {
     }
 }
 
+// `v as f32` widens an i32 PCM sample. Beyond 2^24 the mantissa rounds, which
+// is inherent to representing 32-bit PCM as f32 at all - the whole pipeline is
+// f32 audio - and is a rounding difference of one LSB at full scale, not a
+// correctness issue.
+#[allow(clippy::cast_precision_loss)]
 fn load_wav(path: &Path) -> Result<AudioBuffer> {
     let mut reader =
         hound::WavReader::open(path).map_err(|e| Error::Media(format!("WAV open failed: {e}")))?;
@@ -45,7 +50,20 @@ fn load_wav(path: &Path) -> Result<AudioBuffer> {
             .collect::<std::result::Result<_, _>>()
             .map_err(|e| Error::Media(format!("WAV read failed: {e}")))?,
         hound::SampleFormat::Int => {
-            let scale = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            // `bits_per_sample` comes from the file's fmt chunk, i.e. from
+            // untrusted bytes. hound validates the formats IT supports, but this
+            // arithmetic must not rest on that: 0 underflows `- 1` (u16), and
+            // anything >= 65 overflows the shift. In debug both panic; in
+            // release - where this workspace deliberately carries no
+            // overflow-checks - the shift is masked and `scale` comes out
+            // silently wrong, which quietly rescales every sample.
+            let bits = spec.bits_per_sample;
+            if !(1..=32).contains(&bits) {
+                return Err(Error::Media(format!(
+                    "WAV declares {bits} bits per sample; supported range is 1..=32"
+                )));
+            }
+            let scale = (1u32 << (bits - 1)) as f32;
             reader
                 .samples::<i32>()
                 .map(|s| s.map(|v| v as f32 / scale))
@@ -95,7 +113,7 @@ pub fn save_wav(path: &Path, audio: &AudioBuffer) -> Result<()> {
 /// standalone crates give back:
 ///
 /// * **Publication.** rff is a git dependency and `cargo publish` refuses
-///   one, which made every FFai crate downstream of this one unpublishable.
+///   one, which made every `FFai` crate downstream of this one unpublishable.
 ///   `cargo publish --dry-run -p ffai-media` passes again.
 /// * **Grayscale.** `rff_core::PixelFormat` has no single-channel variant,
 ///   so a gray PNG had to expand to `Rgb24` and contract back — measured
@@ -175,7 +193,18 @@ fn decode_jpeg(data: Vec<u8>) -> Result<ImageBuffer> {
     let (data, format) = match info.pixel_format {
         JpegFormat::RGB24 => (pixels, PixelFormat::Rgb8),
         JpegFormat::L8 => {
-            let mut rgb = vec![0u8; w * h * 3];
+            // `w * h * 3` is unchecked multiplication on dimensions that came from a
+            // decoded bitstream. On 64-bit it merely asks for an absurd allocation; on
+            // 32-bit - and `ffai-wasm` makes wasm32 a real target - it WRAPS to a small
+            // buffer, and the row/column indexing below then runs past it. Same defect
+            // class as the ONNX dims product (see ffai-mercury's audit, gate H-17).
+            let size = w
+                .checked_mul(h)
+                .and_then(|n| n.checked_mul(3))
+                .ok_or_else(|| {
+                    Error::Media(format!("frame {w}x{h} overflows this platform's usize"))
+                })?;
+            let mut rgb = vec![0u8; size];
             for (i, &g) in pixels.iter().take(w * h).enumerate() {
                 rgb[i * 3..i * 3 + 3].copy_from_slice(&[g, g, g]);
             }
@@ -188,8 +217,8 @@ fn decode_jpeg(data: Vec<u8>) -> Result<ImageBuffer> {
         }
     };
     Ok(ImageBuffer {
-        width: info.width as u32,
-        height: info.height as u32,
+        width: u32::from(info.width),
+        height: u32::from(info.height),
         format,
         data,
     })
@@ -204,7 +233,7 @@ fn decode_jpeg(data: Vec<u8>) -> Result<ImageBuffer> {
 /// 1. The `png` crate. Worked; not ours.
 /// 2. `rff-codec-png` through rff's `CodecRegistry`. Ours, and the registry
 ///    seam is genuinely nice — but it forced two costs. rff is a GIT
-///    dependency, and `cargo publish` refuses those outright, so every FFai
+///    dependency, and `cargo publish` refuses those outright, so every `FFai`
 ///    crate downstream became unpublishable. And `rff_core::PixelFormat` has
 ///    no single-channel variant, so grayscale had to expand to `Rgb24` and
 ///    contract back: measured **2.36x slower** on Carmenta's 32/32-grayscale
@@ -297,7 +326,8 @@ impl VideoStream {
     /// Frames the container claims, when it says. `None` means unknown —
     /// report it as unknown rather than guessing, since a wrong total in a
     /// progress line is worse than no total.
-    pub fn frame_count_hint(&self) -> Option<usize> {
+    #[must_use]
+    pub const fn frame_count_hint(&self) -> Option<usize> {
         None
     }
 }
@@ -305,6 +335,9 @@ impl VideoStream {
 impl Iterator for VideoStream {
     type Item = Result<VideoFrame>;
 
+    // `pts as f64` for a presentation timestamp: an i64 pts beyond 2^53 is
+    // centuries of video at any real time base.
+    #[allow(clippy::cast_precision_loss)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             return None;
@@ -355,7 +388,7 @@ impl Iterator for VideoStream {
                 continue;
             }
             let ts = packet.pts.map_or(0.0, |p| {
-                p as f64 * self.tb.num as f64 / self.tb.den.max(1) as f64
+                p as f64 * f64::from(self.tb.num) / f64::from(self.tb.den.max(1))
             });
             return Some(from_rusty_frame(&v, ts));
         }
@@ -366,6 +399,14 @@ impl Iterator for VideoStream {
 ///
 /// Demuxes with `rff-format-mp4` and decodes with `rusty_h264` — the whole path
 /// is Remade-With-Rust, no libavformat and no libavcodec.
+// `(src_fps / fps).round().max(1.0) as usize`: `.max(1.0)` fixes the low end
+// AND absorbs NaN (f64::max returns the non-NaN operand), and Rust saturates
+// float->int casts rather than wrapping.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
     use rff_format::FormatRegistry;
 
@@ -432,7 +473,7 @@ pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
 
     let tb = vstream.time_base;
     let src_fps = if tb.num > 0 {
-        tb.den as f64 / tb.num as f64
+        f64::from(tb.den) / f64::from(tb.num)
     } else {
         0.0
     };
@@ -458,30 +499,54 @@ pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
 
 /// Every frame at once. Prefer [`stream_frames`] — this holds the whole video
 /// in memory and exists for callers that genuinely want a `Vec`.
+// `(src_fps / fps).round().max(1.0) as usize`: `.max(1.0)` fixes the low end
+// AND absorbs NaN (f64::max returns the non-NaN operand), and Rust saturates
+// float->int casts. A ratio large enough to truncate needs an fps of ~1e-19.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 pub fn sample_frames(path: &Path, fps: f64) -> Result<Vec<VideoFrame>> {
     stream_frames(path, fps)?.collect()
 }
 
-/// `rusty_h264`'s YUV420p frame to RGB8, the format every FFai engine consumes.
+/// `rusty_h264`'s `YUV420p` frame to RGB8, the format every `FFai` engine consumes.
 ///
-/// BT.601 limited range, matching OpenCV's `COLOR_YUV2RGB_I420` — so frames
+/// BT.601 limited range, matching `OpenCV`'s `COLOR_YUV2RGB_I420` — so frames
 /// decoded here and frames extracted by the Python tooling agree, and a
 /// comparison between two engines is not secretly a comparison between two
 /// colour conversions.
+// Every `as u8` here is preceded by `.clamp(0.0, 255.0)` on the same
+// expression, so truncation and sign loss are impossible by construction -
+// the clamp IS the guard, not an afterthought. `width/height as u32` round-trip
+// dimensions that arrived as u32 from the decoder.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn from_rusty_frame(v: &rusty_h264::YuvFrame, ts: f64) -> Result<VideoFrame> {
     let (w, h) = (v.width, v.height);
-    let mut rgb = vec![0u8; w * h * 3];
+    // `w * h * 3` is unchecked multiplication on dimensions that came from a
+    // decoded bitstream. On 64-bit it merely asks for an absurd allocation; on
+    // 32-bit - and `ffai-wasm` makes wasm32 a real target - it WRAPS to a small
+    // buffer, and the row/column indexing below then runs past it. Same defect
+    // class as the ONNX dims product (see ffai-mercury's audit, gate H-17).
+    let size = w
+        .checked_mul(h)
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| Error::Media(format!("frame {w}x{h} overflows this platform's usize")))?;
+    let mut rgb = vec![0u8; size];
     let (ys, us, vs) = (w, w.div_ceil(2), w.div_ceil(2));
     for row in 0..h {
         for col in 0..w {
-            let y = v.y[row * ys + col] as f32;
-            let cu = v.u[(row / 2) * us + col / 2] as f32 - 128.0;
-            let cv = v.v[(row / 2) * vs + col / 2] as f32 - 128.0;
+            let y = f32::from(v.y[row * ys + col]);
+            let cu = f32::from(v.u[(row / 2) * us + col / 2]) - 128.0;
+            let cv = f32::from(v.v[(row / 2) * vs + col / 2]) - 128.0;
             let yy = 1.164 * (y - 16.0);
             let o = (row * w + col) * 3;
-            rgb[o] = (yy + 1.596 * cv).clamp(0.0, 255.0) as u8;
-            rgb[o + 1] = (yy - 0.813 * cv - 0.391 * cu).clamp(0.0, 255.0) as u8;
-            rgb[o + 2] = (yy + 2.018 * cu).clamp(0.0, 255.0) as u8;
+            rgb[o] = 1.596f32.mul_add(cv, yy).clamp(0.0, 255.0) as u8;
+            rgb[o + 1] = 0.391f32
+                .mul_add(-cu, 0.813f32.mul_add(-cv, yy))
+                .clamp(0.0, 255.0) as u8;
+            rgb[o + 2] = 2.018f32.mul_add(cu, yy).clamp(0.0, 255.0) as u8;
         }
     }
     Ok(VideoFrame {
@@ -495,9 +560,9 @@ fn from_rusty_frame(v: &rusty_h264::YuvFrame, ts: f64) -> Result<VideoFrame> {
     })
 }
 
-/// YUV420p to RGB8, the format every FFai engine consumes.
+/// `YUV420p` to RGB8, the format every `FFai` engine consumes.
 ///
-/// BT.601 limited range, matching OpenCV's `COLOR_YUV2RGB_I420` — so frames
+/// BT.601 limited range, matching `OpenCV`'s `COLOR_YUV2RGB_I420` — so frames
 /// extracted here and frames extracted by the Python tooling agree, and a
 /// comparison between the two engines is not secretly a comparison between
 /// two colour conversions.
@@ -507,6 +572,11 @@ fn from_rusty_frame(v: &rusty_h264::YuvFrame, ts: f64) -> Result<VideoFrame> {
 // the colour-conversion contract above is the hard part and would have to be
 // rewritten identically.
 #[allow(dead_code)]
+// Every `as u8` here is preceded by `.clamp(0.0, 255.0)` on the same
+// expression, so truncation and sign loss are impossible by construction -
+// the clamp IS the guard, not an afterthought. `width/height as u32` round-trip
+// dimensions that arrived as u32 from the decoder.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn from_rff_frame(v: &rff_core::VideoFrame, ts: f64) -> Result<VideoFrame> {
     let (w, h) = (v.width as usize, v.height as usize);
     if v.planes.len() < 3 || v.strides.len() < 3 {
@@ -517,16 +587,27 @@ fn from_rff_frame(v: &rff_core::VideoFrame, ts: f64) -> Result<VideoFrame> {
     }
     let (yp, up, vp) = (&v.planes[0], &v.planes[1], &v.planes[2]);
     let (ys, us, vs) = (v.strides[0], v.strides[1], v.strides[2]);
-    let mut rgb = vec![0u8; w * h * 3];
+    // `w * h * 3` is unchecked multiplication on dimensions that came from a
+    // decoded bitstream. On 64-bit it merely asks for an absurd allocation; on
+    // 32-bit - and `ffai-wasm` makes wasm32 a real target - it WRAPS to a small
+    // buffer, and the row/column indexing below then runs past it. Same defect
+    // class as the ONNX dims product (see ffai-mercury's audit, gate H-17).
+    let size = w
+        .checked_mul(h)
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| Error::Media(format!("frame {w}x{h} overflows this platform's usize")))?;
+    let mut rgb = vec![0u8; size];
     for row in 0..h {
         for col in 0..w {
-            let yv = yp[row * ys + col] as f32 - 16.0;
-            let uv = up[(row / 2) * us + col / 2] as f32 - 128.0;
-            let vv = vp[(row / 2) * vs + col / 2] as f32 - 128.0;
+            let yv = f32::from(yp[row * ys + col]) - 16.0;
+            let uv = f32::from(up[(row / 2) * us + col / 2]) - 128.0;
+            let vv = f32::from(vp[(row / 2) * vs + col / 2]) - 128.0;
             let o = (row * w + col) * 3;
-            rgb[o] = (1.164 * yv + 1.596 * vv).clamp(0.0, 255.0) as u8;
-            rgb[o + 1] = (1.164 * yv - 0.813 * vv - 0.391 * uv).clamp(0.0, 255.0) as u8;
-            rgb[o + 2] = (1.164 * yv + 2.018 * uv).clamp(0.0, 255.0) as u8;
+            rgb[o] = 1.164f32.mul_add(yv, 1.596 * vv).clamp(0.0, 255.0) as u8;
+            rgb[o + 1] = 0.391f32
+                .mul_add(-uv, 1.164f32.mul_add(yv, -(0.813 * vv)))
+                .clamp(0.0, 255.0) as u8;
+            rgb[o + 2] = 1.164f32.mul_add(yv, 2.018 * uv).clamp(0.0, 255.0) as u8;
         }
     }
     Ok(VideoFrame {
@@ -751,6 +832,9 @@ mod png_oracle {
 /// samples BIG-endian regardless of host order, which is the one detail
 /// easy to get wrong and impossible to see afterwards: a byte-swapped map
 /// still renders, as noise.
+// Dimensions cast to u32 for the PNG header. A width or height beyond u32 is
+// not representable in PNG at all, and the encoder rejects it downstream.
+#[allow(clippy::cast_possible_truncation)]
 pub fn save_gray16_png(path: &Path, pixels: &[u16], width: usize, height: usize) -> Result<()> {
     if pixels.len() != width * height {
         return Err(Error::Other(format!(

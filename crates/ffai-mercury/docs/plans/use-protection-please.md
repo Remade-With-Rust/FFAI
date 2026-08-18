@@ -96,7 +96,7 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
-| H-15 | ★ Workspace lint policy set and clean | Incomplete | **three crates now under PEDANTIC + NURSERY** — ffai-core, ffai-argus, ffai-models — enforced by their own manifests, plus three more at clippy::all (media, bench, mercury). ffai-core went 94 -> 0: `--fix` cleared 63 mechanical ones, and the **safety-relevant residue was reviewed individually and allowed AT THE SITE with reasoning** — eight numeric casts (all provably in range: 4 PB of audio, a 16.7M-pixel image, `.max(0.0)` absorbing NaN before a saturating cast) and one `suspicious_operation_groupings` that is a **false positive** where clippy's suggestion would be a real bug (a caption word belongs to the cue containing its START; testing `w.end` would drop or duplicate words across boundaries). ffai-argus needed no allows at all. **Measurement correction**: passing `-W clippy::pedantic` on the command line re-lints DEPENDENCIES and overrides their manifest allows, so my first per-crate numbers were counting ffai-core's findings three times. Real remaining pedantic debt: media 65, bench 253, mercury 757; and diana/carmenta/cli are not yet at clippy::all | |
+| H-15 | ★ Workspace lint policy set and clean | Incomplete | **four crates under PEDANTIC + NURSERY** — ffai-core, ffai-argus, ffai-models, ffai-media — plus ffai-bench and ffai-mercury at clippy::all; all six blocking in CI. ffai-media went 159 -> 0, and reviewing its casts rather than blanket-allowing them **found two more real defects of the audit's recurring class** (recorded in the audit log below): an unguarded shift by `bits_per_sample - 1` straight from a WAV fmt chunk, and three `vec![0u8; w * h * 3]` allocations computed by unchecked multiplication on decoded frame dimensions. Every cast that remains is allowed AT ITS FUNCTION with the guard written down — `.clamp(0.0, 255.0)` before each `as u8`, `.max(1.0)` absorbing NaN before a saturating cast, and dimension ranges that need centuries of video or a 16.7M-pixel image to matter. Remaining pedantic debt: bench 253, mercury 757; diana/carmenta/cli not yet at clippy::all | |
 | H-16 | ★ `unsafe` isolated, SAFETY-commented, inventoried | Completed | `UNSAFE.md` inventories **all 31 sites** in 3 classes; all 31 carry a `// SAFETY:` comment. The count was 28 until `tools/lint_invariants.py` found 3 more: `#[cfg(not(target_arch = "x86_64"))]` fallback stubs, invisible to the compiler on an x86 machine. Combined with the 3 `#[allow(unsafe_code)]` sites the lint also hides, that is **two independent blind spots in a compiler-warning-derived inventory** — both now closed by R1/R2 in CI | |
 | H-17 | Arithmetic safety explicit | Completed | audited every narrowing cast on the untrusted paths (`tts/onnx.rs`, `asr/mel.rs`, `tts/normalize.rs`, `tts/lexicon.rs`) and **fixed three real defects**, all of the same class — unchecked arithmetic on attacker-chosen values. (1) `dims.iter().product()` was an unchecked multiply over `i64 as usize`: a negative dim became colossal and `[1<<32, 1<<32]` wrapped to exactly 0, matching an empty payload — panic in debug, **validation bypass in release** where this workspace carries no `overflow-checks`. Now `usize::try_from` + `checked_mul`. (2) protobuf length `u64 as usize` **truncates on 32-bit**, and `ffai-wasm` makes wasm32 a real target — 2^32+5 would truncate to 5 and pass the bounds check. Now `usize::try_from`. (3) attribute ints (`kernel_shape`, `strides`, `pads`) cast negatives into geometry dimensions; now fall back to the default. Remaining casts in `normalize`/`lexicon` are bounded by their enclosing `match` arms and the symbol table. Regression seeds in `fuzz/corpus/onnx_parse/` | |
 | H-18 | ★ No `unwrap`/`expect`/panic on untrusted paths; typed errors | Completed | audited every panic site reachable from a public entry point — recorded per-site with its invariant in `docs/panic-audit.md`. **Non-test library code has 0 bare `.unwrap()` and 18 `.expect("...")`**, each stating why it cannot fail; all 17 reachable sites are provably unreachable (`bridged` seeded behind an `is_empty` guard, clusters seeded one-member-each, `take(4)`/`chunks_exact(4)` length guarantees, or model-derived architecture constants that R-001 puts out of scope). The earlier "126 unwrap/expect" figure was misleading: it counted test code and trusted-model paths. **Reinforced**: `tools/lint_invariants.py` R5 now fails CI on any bare `.unwrap()` in library code, locking in a discipline the crate already followed. Note the real panics found by this audit were ARITHMETIC, not unwraps (H-17) | |
@@ -301,6 +301,28 @@ Cargo forbids `default-features = false` on an inherited workspace dependency, s
 `ffai-models` is now declared by path in `ffai-mercury` exactly as `ffai-diana` declares
 it. **Maintenance trap that creates**: the `version = "0.6.1"` requirement is now written
 in two places and will not follow a workspace bump automatically.
+
+### Pass 4 — pedantic review finds two more arithmetic defects, 2026-08-15
+
+Bringing `ffai-media` under pedantic + nursery meant reviewing 21 numeric casts
+instead of allowing them wholesale. Two were not merely noisy:
+
+1. **`load_wav` shifted by `bits_per_sample - 1`** taken straight from the file's
+   fmt chunk. `0` underflows the `u16` subtraction; `>= 65` overflows the shift.
+   In debug both panic; in release — where this workspace deliberately carries no
+   `overflow-checks` — the shift is masked and `scale` comes out silently wrong,
+   quietly rescaling every sample. hound validates the formats it supports, but
+   resting our arithmetic on a dependency's validation is the same mistake as the
+   model-cache assumption in R-001. Now range-checked to `1..=32` with a clean error.
+
+2. **Three `vec![0u8; w * h * 3]` allocations** sized by unchecked multiplication
+   on decoded frame dimensions. On 64-bit that is an absurd allocation request; on
+   **32-bit — and `ffai-wasm` makes wasm32 real — it WRAPS to a small buffer**, and
+   the row/column indexing that follows runs past it. Same defect class as the ONNX
+   dims product (H-17). Now `checked_mul` with an error.
+
+That is seven and eight of this class. The pattern holds: reviewing arithmetic
+finds bugs, reviewing style does not.
 
 ---
 
