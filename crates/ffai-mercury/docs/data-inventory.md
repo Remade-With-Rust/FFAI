@@ -65,10 +65,38 @@ This crate cannot discharge these; they are listed so the integrator does not mi
 | Records of processing (Art 30) | You are the controller/processor |
 | DPIA where diarization identifies people at scale | Art 35 threshold is about your processing, not our code |
 
+## 3a. Retention inside the process (C-06)
+
+Nothing is written to disk, but "not persisted" is not the same as "not retained".
+One structure holds personal data beyond the call that produced it:
+
+| Structure | Holds | Bound | Lifetime | Erasure |
+|---|---|---|---|---|
+| `Diarizer.cache` | **D3 speaker embeddings** (voiceprints), keyed by a hash of the raw audio window | `EMBED_CACHE_CAP` = 512 entries, ~0.4 MB | the `Diarizer` instance | drop the `Diarizer`, or call `Diarizer::clear_embed_cache()` |
+
+Everything else — audio buffers, mel frames, transcripts, synthesized waveforms — is
+owned by the call and dropped when it returns.
+
+**The cache exists for speed**, not for recall: streaming re-embeds a sliding buffer and
+~12 of ~13 windows per tick are byte-identical to the previous tick's. Content keying
+makes a hit numerically identical to a recompute.
+
+**An audit finding, fixed 2026-08-15.** `clear_embed_cache_counters()` was documented as
+"Drop every cached embedding" and only ever reset two atomic counters. Nothing called it
+yet, so it was a trap rather than an active bug — but it had two faces: a harness using it
+to time a cold arm would have silently measured a warm cache, and anyone calling it to
+purge biometric data would have believed an erasure that never happened.
+`Diarizer::clear_embed_cache()` now performs it, `embed_cache_len()` lets an auditor see
+what is held, and both are regression-tested.
+
+**For the integrator (Art 17).** Erasing a recording does not erase a voiceprint derived
+from it. If you hold a `Diarizer` across requests, clear its cache when you honour an
+erasure request — or construct one per request and let the drop do it.
+
 ## 4. Open items in this crate
 
 | Item | Gate |
 |---|---|
 | Log hygiene unreviewed — no evidence that D1/D2/D3 never reach a log sink | C-08, H-20 |
-| Retention within the process unreviewed — whether any buffer or temp path outlives a call | C-06 |
+| ~~Retention within the process unreviewed~~ — **closed 2026-08-15**: audited, documented in §3a, and the one retaining structure now has a working erasure path | C-06 |
 | No API-level signal that D3 is special-category; the type is an ordinary embedding | C-01 (partly closed by this document) |

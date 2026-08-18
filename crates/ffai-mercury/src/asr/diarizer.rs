@@ -51,6 +51,39 @@ pub struct Diarizer {
 const EMBED_CACHE_CAP: usize = 512;
 
 impl Diarizer {
+    /// Drop every cached speaker embedding.
+    ///
+    /// Two callers want this, for unrelated reasons:
+    ///
+    /// * **A measurement harness** timing a cold arm. Without it the first
+    ///   window of the "cold" arm is served from the previous arm's cache and
+    ///   the comparison is void.
+    /// * **Erasure.** These vectors are speaker embeddings — voiceprints — which
+    ///   are GDPR Art 9 special-category biometric data (see
+    ///   `docs/data-inventory.md`). They live in memory for the lifetime of this
+    ///   `Diarizer`, up to [`EMBED_CACHE_CAP`] of them. Dropping the `Diarizer`
+    ///   releases them; this is the way to release them without doing that.
+    ///
+    /// Cannot fail: a poisoned lock still yields the map through
+    /// `into_inner`-style recovery, because clearing is safe from any state.
+    pub fn clear_embed_cache(&self) {
+        match self.cache.lock() {
+            Ok(mut c) => c.clear(),
+            // A panic elsewhere poisoned the lock. Clearing is still the right
+            // thing to do — refusing would strand the data we were asked to erase.
+            Err(poisoned) => poisoned.into_inner().clear(),
+        }
+    }
+
+    /// Number of embeddings currently held. For tests and for anyone auditing
+    /// what is retained.
+    pub fn embed_cache_len(&self) -> usize {
+        match self.cache.lock() {
+            Ok(c) => c.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        }
+    }
+
     pub fn from_manifest_dir(dir: &Path, name: &str, device: Device) -> Result<Self> {
         Self::from_manifest_source(Some(dir), name, device)
     }
@@ -453,8 +486,74 @@ fn cache_enabled() -> bool {
     std::env::var("FFAI_DIARIZE_CACHE").as_deref() != Ok("off")
 }
 
-/// Drop every cached embedding. For a harness measuring a cold arm.
+/// Reset the hit/miss COUNTERS. Does not touch the cache itself.
+///
+/// The name says counters and the body resets counters; the doc comment used to
+/// say "drop every cached embedding", which it has never done. A harness calling
+/// this to measure a cold arm got a WARM cache and a wrong number — the exact
+/// failure mode the counters above exist to prevent. To actually drop the
+/// embeddings, call [`Diarizer::clear_embed_cache`], which is per-instance
+/// because the cache is.
 pub fn clear_embed_cache_counters() {
     CACHE_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
     CACHE_MISSES.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `clear_embed_cache_counters` must reset counters and NOTHING else.
+    ///
+    /// This half needs no model, so it runs everywhere. It is the half that
+    /// pins the name to the behaviour: the function was documented as "drop
+    /// every cached embedding" while only touching these two atomics.
+    #[test]
+    fn clear_embed_cache_counters_resets_only_the_counters() {
+        use std::sync::atomic::Ordering::Relaxed;
+        CACHE_HITS.store(7, Relaxed);
+        CACHE_MISSES.store(9, Relaxed);
+        clear_embed_cache_counters();
+        assert_eq!(cache_stats(), (0, 0), "counters were not reset");
+    }
+
+    /// The retention contract: clearing the cache actually drops the
+    /// embeddings, and resetting the counters does not.
+    ///
+    /// Regression for a doc comment that promised an erasure this crate never
+    /// performed. That is a wrong number for a harness timing a cold arm, and —
+    /// because these vectors are voiceprints, GDPR Art 9 special-category data
+    /// (`docs/data-inventory.md`) — a failed erasure for anyone who called it to
+    /// purge biometric data.
+    ///
+    /// Needs the ECAPA weights, so it SKIPS where they are not cached. It is a
+    /// real guard wherever the model exists; the counter half above is the part
+    /// that always runs.
+    #[test]
+    fn clearing_the_cache_actually_drops_embeddings() {
+        let Ok(d) = Diarizer::from_manifest_source(None, "ecapa-tdnn-voxceleb", Device::Cpu) else {
+            return; // weights absent: the cache contract is untestable here
+        };
+
+        {
+            let mut c = d.cache.lock().expect("fresh mutex is not poisoned");
+            c.insert(0xdead_beef, vec![0.5f32; 192]);
+            c.insert(0xfeed_face, vec![0.25f32; 192]);
+        }
+        assert_eq!(d.embed_cache_len(), 2, "seeded two embeddings");
+
+        clear_embed_cache_counters();
+        assert_eq!(
+            d.embed_cache_len(),
+            2,
+            "clear_embed_cache_counters touched the cache; it is documented not to"
+        );
+
+        d.clear_embed_cache();
+        assert_eq!(
+            d.embed_cache_len(),
+            0,
+            "clear_embed_cache left embeddings behind"
+        );
+    }
 }

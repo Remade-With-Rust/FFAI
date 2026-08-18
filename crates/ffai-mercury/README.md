@@ -269,7 +269,7 @@ crate's [threat model](docs/threat-model.md).
 
 **Tier** critical-path · **Audited** 2026-08-15 (survey) · **v1.0.0 gates** 11/16 · [Full checklist](docs/plans/use-protection-please.md)
 
-`██████████████░░░░░░` **71%** &nbsp;·&nbsp; 30 Completed · 0 Scheduled · 12 Incomplete · 13 N/A
+`██████████████░░░░░░` **74%** &nbsp;·&nbsp; 31 Completed · 0 Scheduled · 11 Incomplete · 13 N/A
 
 | Phase | ✅ Completed | 🗓 Scheduled | ⬜ Incomplete | · N/A |
 |---|--:|--:|--:|--:|
@@ -285,14 +285,14 @@ crate's [threat model](docs/threat-model.md).
 | 9 — Runtime privilege | 0 | 0 | 0 | 1 |
 | 10 — Cryptography | 0 | 0 | 0 | 3 |
 | 11 — CI/CD, release, and operations | 4 | 0 | 1 | 0 |
-| 12 — Compliance controls | 4 | 0 | 3 | 7 |
-| **Total** | **30** | **0** | **12** | **13** |
+| 12 — Compliance controls | 5 | 0 | 2 | 7 |
+| **Total** | **31** | **0** | **11** | **13** |
 
 **Compliance** — *technical controls evidenced by this audit. NOT a certification, an attestation, or an auditor's opinion.*
 
 | Framework | Technical controls met | |
 |---|--:|:--|
-| GDPR / PII | 7 / 8 | ⬜ |
+| GDPR / PII | 8 / 8 | ✅ |
 
 **Architect** — [Nick Overlock](https://www.linkedin.com/in/nick-overlock-593235b9/)
 <!-- HARDENING-TABLE:END -->

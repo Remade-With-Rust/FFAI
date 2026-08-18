@@ -32,6 +32,13 @@ mechanics are in `.github/workflows/release.yml`.
   index in `reflect_pad`. Caller-supplied audio reaches this path, so an empty
   buffer was a denial of service in the embedding process. Found by the new
   property tests; the input is now a permanent fuzz regression seed.
+- **Fixed** — the diarizer's embedding cache had no working erasure path.
+  `clear_embed_cache_counters()` was documented as "Drop every cached embedding"
+  and only reset two atomic counters. The cache holds up to 512 **speaker
+  embeddings** — voiceprints, GDPR Art 9 special-category data. Added
+  `Diarizer::clear_embed_cache()` and `embed_cache_len()`; both regression-tested.
+  Integrators honouring an Art 17 erasure must clear it: deleting a recording does
+  not delete a voiceprint derived from it.
 - **Fixed** — `tts::onnx::parse` accepted tensors whose declared shape did not
   describe their data. `dims.iter().product()` was an unchecked multiply over
   `i64 as usize`: `[1<<32, 1<<32]` wrapped to exactly 0 and matched an empty
