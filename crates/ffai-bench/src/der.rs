@@ -45,6 +45,10 @@ impl Turn {
         Turn { start, end, speaker: speaker.into() }
     }
 
+    // Unused today: DER is computed from overlaps rather than per-turn
+    // durations. Kept because it is the obvious accessor and every future
+    // metric that weights by turn length wants exactly this, clamped at zero.
+    #[allow(dead_code)]
     fn duration(&self) -> f64 {
         (self.end - self.start).max(0.0)
     }
@@ -87,7 +91,7 @@ fn boundaries(reference: &[Turn], hypothesis: &[Turn]) -> Vec<f64> {
     points
 }
 
-fn speaker_at<'a>(turns: &'a [Turn], start: f64, end: f64) -> Option<&'a str> {
+fn speaker_at(turns: &[Turn], start: f64, end: f64) -> Option<&str> {
     let mid = (start + end) / 2.0;
     turns
         .iter()

@@ -313,11 +313,10 @@ fn run_tts_engine(
         let (sampling, out) = (sampling.clone(), our_samples.clone());
         std::thread::spawn(move || {
             while sampling.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(b) = crate::footprint::current_self() {
-                    if let Ok(mut v) = out.lock() {
+                if let Some(b) = crate::footprint::current_self()
+                    && let Ok(mut v) = out.lock() {
                         v.push(b.0);
                     }
-                }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         })

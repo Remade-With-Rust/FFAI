@@ -242,11 +242,10 @@ impl ReferenceSpec {
                 while !done.load(Ordering::Relaxed) {
                     if let Some(ws) = job.as_ref().as_ref().and_then(|j| j.working_set_now()) {
                         peak_seen.fetch_max(ws, Ordering::Relaxed);
-                        if ws > 0 {
-                            if let Ok(mut v) = samples.lock() {
+                        if ws > 0
+                            && let Ok(mut v) = samples.lock() {
                                 v.push(ws);
                             }
-                        }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }

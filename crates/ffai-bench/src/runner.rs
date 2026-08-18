@@ -1146,12 +1146,11 @@ fn run_engine(
             ));
             for (id, text) in &texts {
                 let clip = holdout.iter().find(|c| &c.id == id);
-                if let Some(clip) = clip {
-                    if let Some(truth) = manifest.ground_truth(clip)? {
+                if let Some(clip) = clip
+                    && let Some(truth) = manifest.ground_truth(clip)? {
                         wers.push(wer_with(&truth, text, Mode::English));
                         cers.push(cer_with(&truth, text, Mode::English));
                     }
-                }
             }
             summary.wer = mean(&wers);
             summary.cer = mean(&cers);

@@ -67,6 +67,34 @@ pub fn conv1d_flat(
     (out, l_out)
 }
 
+/// The output region task `task` owns: rows `co0..co1`, columns `t0..t1`.
+///
+/// Extracted so the SAME arithmetic the kernel runs can be PROVED disjoint
+/// (`src/proofs.rs`, gate H-30) instead of argued in a comment. `UNSAFE.md`
+/// class B's soundness — the `unsafe impl Send`/`Sync` on `SendPtr` — is
+/// exactly the claim that this returns non-overlapping regions for distinct
+/// tasks, and in-bounds regions for every task.
+///
+/// Chunks partition `[0, c_out)` and blocks partition `[0, l_out)`, so two
+/// tasks differ in at least one axis and therefore never address the same
+/// element. Change this and the `unsafe impl` becomes unsound.
+#[inline]
+pub(crate) fn task_region(
+    task: usize,
+    n_blocks: usize,
+    co_chunk: usize,
+    block_t: usize,
+    c_out: usize,
+    l_out: usize,
+) -> (usize, usize, usize, usize) {
+    let (chunk, b) = (task / n_blocks, task % n_blocks);
+    let co0 = chunk * co_chunk;
+    let co1 = (co0 + co_chunk).min(c_out);
+    let t0 = b * block_t;
+    let t1 = (t0 + block_t).min(l_out);
+    (co0, co1, t0, t1)
+}
+
 /// As [`conv1d_flat`], but ACCUMULATES into `out` (which already holds the
 /// residual): fuses the resblock's `y += conv(...)` add into the conv's
 /// write pass — one less allocation and one less full-buffer read/write per
@@ -201,11 +229,7 @@ fn conv1d_flat_prepacked_into(
 
     (0..n_chunks * n_blocks).into_par_iter().for_each(|task| {
         let out_ptr = &out_ptr;
-        let (chunk, b) = (task / n_blocks, task % n_blocks);
-        let co0 = chunk * co_chunk;
-        let co1 = (co0 + co_chunk).min(c_out);
-        let t0 = b * block_t;
-        let t1 = (t0 + block_t).min(l_out);
+        let (co0, co1, t0, t1) = task_region(task, n_blocks, co_chunk, block_t, c_out, l_out);
         let bt = t1 - t0;
         // This task's disjoint view: rows co0..co1, columns t0..t1.
         // Reconstructed as raw slices per row.

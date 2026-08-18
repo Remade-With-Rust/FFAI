@@ -63,10 +63,10 @@ jobs:
       # BLOCKING for every crate that is clean. A crate joins this list the moment
       # it reaches zero, rather than waiting for the whole workspace - which is
       # how the debt shrinks without CI ever being red.
-      # Remaining: ffai-bench 8, ffai-diana 30, ffai-carmenta 34, ffai-cli 64.
+      # Remaining: ffai-diana 30, ffai-carmenta 34, ffai-cli 64 (binary-only).
       - name: Clippy (blocking - clean crates)
         run: |
-          cargo clippy -p ffai-core -p ffai-models -p ffai-media -p ffai-argus                        -p ffai-mercury --lib -- -D warnings -A unsafe_code
+          cargo clippy -p ffai-core -p ffai-models -p ffai-media -p ffai-argus                        -p ffai-mercury -p ffai-bench --lib -- -D warnings -A unsafe_code
 
       # ADVISORY for the rest: other crates still carry pre-existing findings.
       # TO FLIP: clear a crate, move it into the blocking step above. 2026-09-30.

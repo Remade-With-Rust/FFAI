@@ -110,7 +110,7 @@ mod imp {
 
     pub fn peak_child(child: &std::process::Child) -> Option<u64> {
         use std::os::windows::io::AsRawHandle;
-        query(child.as_raw_handle() as *mut c_void)
+        query(child.as_raw_handle())
     }
 
     /// DIAGNOSTIC ONLY — ask the OS to trim this process's working set.
@@ -230,7 +230,7 @@ mod imp {
             use std::os::windows::io::AsRawHandle;
             // SAFETY: `self.0` is a live job handle owned by this struct and
             // the child handle is owned by a `Child` that is still alive.
-            unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle() as *mut c_void) != 0 }
+            unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
         }
 
         /// Peak COMMITTED memory across the job.

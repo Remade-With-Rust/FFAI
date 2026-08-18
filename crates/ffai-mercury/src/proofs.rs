@@ -89,3 +89,92 @@ fn proof_dims_product_never_wraps() {
     // being proved is that there is no THIRD outcome - a wrapped value returned
     // as if it were the product.
 }
+
+// ---------------------------------------------------------------------------
+// Class B: the raw-pointer sharing across rayon tasks.
+//
+// This is R-002 — the last claim in the crate that was argued rather than
+// tested. `unsafe impl Send`/`Sync` for `SendPtr(*mut f32)` is sound ONLY IF
+// distinct tasks write disjoint regions. That was a comment; here it is a
+// proof over the same `task_region` the kernel calls.
+//
+// Kani cannot execute the AVX2 kernel, and does not need to: the kernel's
+// soundness does not depend on what the intrinsics compute, only on WHERE each
+// task is allowed to write.
+// ---------------------------------------------------------------------------
+
+/// Distinct tasks never address the same output element.
+///
+/// Bounds are small because this is a bounded model checker; the property is
+/// structural (chunks partition rows, blocks partition columns), so the
+/// boundaries — a ragged final chunk, a ragged final block, single-element
+/// regions — all occur well under these limits.
+#[cfg(kani)]
+#[kani::proof]
+fn proof_task_regions_are_disjoint() {
+    use crate::tts::decoder_kernels::task_region;
+
+    let co_chunk: usize = kani::any();
+    let block_t: usize = kani::any();
+    let c_out: usize = kani::any();
+    let l_out: usize = kani::any();
+    kani::assume(co_chunk >= 1 && co_chunk <= 3);
+    kani::assume(block_t >= 1 && block_t <= 3);
+    kani::assume(c_out >= 1 && c_out <= 6);
+    kani::assume(l_out >= 1 && l_out <= 6);
+
+    // Exactly how the kernel derives them.
+    let n_chunks = c_out.div_ceil(co_chunk);
+    let n_blocks = l_out.div_ceil(block_t);
+    kani::assume(n_blocks >= 1);
+
+    let a: usize = kani::any();
+    let b: usize = kani::any();
+    kani::assume(a < n_chunks * n_blocks);
+    kani::assume(b < n_chunks * n_blocks);
+    kani::assume(a != b);
+
+    let (a_co0, a_co1, a_t0, a_t1) = task_region(a, n_blocks, co_chunk, block_t, c_out, l_out);
+    let (b_co0, b_co1, b_t0, b_t1) = task_region(b, n_blocks, co_chunk, block_t, c_out, l_out);
+
+    // Two rectangles are disjoint if they are separated on either axis. Rows
+    // and columns each partition, so distinct tasks differ on at least one.
+    let rows_disjoint = a_co1 <= b_co0 || b_co1 <= a_co0;
+    let cols_disjoint = a_t1 <= b_t0 || b_t1 <= a_t0;
+    assert!(rows_disjoint || cols_disjoint);
+}
+
+/// Every task's region lies inside the output buffer.
+///
+/// The kernel forms `out_ptr.add(co * l_out + t0)` with length `t1 - t0`, so
+/// the highest element it can touch is `(co1-1) * l_out + t1 - 1`. That must
+/// stay under `c_out * l_out`, or the slice runs past the allocation.
+#[cfg(kani)]
+#[kani::proof]
+fn proof_task_regions_are_in_bounds() {
+    use crate::tts::decoder_kernels::task_region;
+
+    let co_chunk: usize = kani::any();
+    let block_t: usize = kani::any();
+    let c_out: usize = kani::any();
+    let l_out: usize = kani::any();
+    kani::assume(co_chunk >= 1 && co_chunk <= 3);
+    kani::assume(block_t >= 1 && block_t <= 3);
+    kani::assume(c_out >= 1 && c_out <= 6);
+    kani::assume(l_out >= 1 && l_out <= 6);
+
+    let n_chunks = c_out.div_ceil(co_chunk);
+    let n_blocks = l_out.div_ceil(block_t);
+    let task: usize = kani::any();
+    kani::assume(task < n_chunks * n_blocks);
+
+    let (co0, co1, t0, t1) = task_region(task, n_blocks, co_chunk, block_t, c_out, l_out);
+
+    assert!(co1 <= c_out);
+    assert!(t1 <= l_out);
+    assert!(t0 <= t1); // `bt = t1 - t0` must not underflow
+    if co1 > co0 && t1 > t0 {
+        let highest = (co1 - 1) * l_out + (t1 - 1);
+        assert!(highest < c_out * l_out);
+    }
+}
