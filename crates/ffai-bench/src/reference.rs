@@ -100,6 +100,7 @@ pub struct BatchResult {
 impl BatchResult {
     /// Adapter-reported processing time for the batch: the sum of per-clip
     /// timings when available, otherwise the reported aggregate.
+    #[must_use]
     pub fn transcribe_secs(&self) -> Option<f64> {
         let sum: f64 = self.clips.iter().filter_map(|c| c.transcribe_secs).sum();
         if sum > 0.0 {
@@ -110,6 +111,7 @@ impl BatchResult {
     }
 
     /// Look up a clip's text by the path the adapter echoed back.
+    #[must_use]
     pub fn text_for(&self, path: &Path) -> Option<&str> {
         let want = path.to_string_lossy().replace('\\', "/");
         self.clips
@@ -138,6 +140,7 @@ impl ReferenceFile {
 }
 
 impl ReferenceSpec {
+    #[must_use]
     pub fn supports_batch(&self) -> bool {
         self.batch_command.is_some()
     }
@@ -223,7 +226,21 @@ impl ReferenceSpec {
         // us. Both impossible, both plausible-looking in a table.
         let job = std::sync::Arc::new(crate::footprint::Job::create());
         if let Some(j) = job.as_ref() {
-            j.assign(&child);
+            // The return value MATTERS and was being dropped. This job object is
+            // the whole reason the measurement is trustworthy: without it we
+            // measured the Python launcher instead of the process doing the
+            // work, and reported 5 MiB for a reference that loads a 77.7 MB
+            // model. If the assignment fails and nobody says so, the harness
+            // silently reverts to producing exactly that number - impossible,
+            // and plausible-looking in a table.
+            //
+            // `create()` returns None on non-Windows, so reaching here means a
+            // real job object exists and the failure is worth shouting about.
+            if !j.assign(&child) {
+                eprintln!(
+                    "WARNING: could not assign the reference process to its job object;                      footprint numbers from this run measure the direct child only and                      must not be compared against ours"
+                );
+            }
         }
         // Sample the tree's resident memory while it runs and keep the maximum.
         // Sampling is not optional here: a process's counters die with it, and
@@ -310,6 +327,7 @@ impl ReferenceSpec {
 
     /// The argv this reference invokes, with placeholders left intact — the
     /// decode configuration as recorded in the ledger.
+    #[must_use]
     pub fn command_line(&self) -> String {
         self.batch_command
             .as_ref()
@@ -319,6 +337,7 @@ impl ReferenceSpec {
     }
 
     /// Best-effort version string (first line of `version_command` output).
+    #[must_use]
     pub fn version(&self) -> Option<String> {
         let argv = self.version_command.as_ref()?;
         let (prog, args) = argv.split_first()?;
@@ -389,7 +408,7 @@ pub struct TtsClipResult {
     pub wav: PathBuf,
     /// Synthesis-only seconds (model loaded, WAV writing excluded).
     pub synth_secs: Option<f64>,
-    /// Time-to-first-audio: synthesize() call to first chunk. For a
+    /// Time-to-first-audio: `synthesize()` call to first chunk. For a
     /// single-sentence input a non-streaming engine reports ttfa == synth.
     pub ttfa_secs: Option<f64>,
 }
@@ -409,6 +428,7 @@ pub struct TtsBatchResult {
 
 impl TtsBatchResult {
     /// Look up an utterance's result by input text path.
+    #[must_use]
     pub fn clip_for(&self, path: &Path) -> Option<&TtsClipResult> {
         let want = path.to_string_lossy().replace('\\', "/");
         self.clips
@@ -417,6 +437,7 @@ impl TtsBatchResult {
     }
 
     /// Adapter-reported synthesis time for the whole batch.
+    #[must_use]
     pub fn synth_secs(&self) -> Option<f64> {
         let sum: f64 = self.clips.iter().filter_map(|c| c.synth_secs).sum();
         if sum > 0.0 { Some(sum) } else { None }
@@ -429,7 +450,7 @@ impl ReferenceSpec {
     /// must write WAVs into. JSONL contract: a `{"load_secs": ...}` line,
     /// optional metadata lines (any object with a `"voice"` key), and one
     /// `{"path": ..., "wav": ..., "synth_secs": ..., "ttfa_secs": ...}` per
-    /// utterance. See corpora/refs/piper_ref.py for the working example.
+    /// utterance. See `corpora/refs/piper_ref.py` for the working example.
     pub fn run_batch_tts(&self, inputs: &[PathBuf], outdir: &Path) -> Result<TtsBatchResult> {
         let argv = self.batch_command.as_ref().ok_or_else(|| {
             Error::Other(format!("reference `{}` has no batch_command", self.name))

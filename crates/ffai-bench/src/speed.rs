@@ -35,7 +35,8 @@ pub fn best_of_n(n: usize, mut f: impl FnMut() -> Result<()>) -> Result<SpeedSta
 
 impl SpeedStats {
     /// `baseline.best / self.best` — > 1 means `self` is faster.
-    pub fn speedup_over(&self, baseline: &SpeedStats) -> f64 {
+    #[must_use]
+    pub fn speedup_over(&self, baseline: &Self) -> f64 {
         if self.best_secs <= 0.0 {
             f64::INFINITY
         } else {
@@ -47,6 +48,7 @@ impl SpeedStats {
 /// Real-time factor for media processing: media seconds processed per
 /// wall-clock second (e.g. RTF 20 = a minute of audio in 3 s). Higher is
 /// faster; the natural "×-realtime" number for ASR/TTS claims.
+#[must_use]
 pub fn real_time_factor(media_secs: f64, wall_secs: f64) -> f64 {
     if wall_secs <= 0.0 {
         f64::INFINITY

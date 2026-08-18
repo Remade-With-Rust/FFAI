@@ -42,7 +42,7 @@ pub struct Turn {
 
 impl Turn {
     pub fn new(start: f64, end: f64, speaker: impl Into<String>) -> Self {
-        Turn {
+        Self {
             start,
             end,
             speaker: speaker.into(),
@@ -73,6 +73,7 @@ impl DerBreakdown {
     /// The headline number. `None` when the reference contains no speech —
     /// dividing by zero would report 0.0, which reads as a perfect score for
     /// a recording nobody could have got wrong.
+    #[must_use]
     pub fn der(&self) -> Option<f64> {
         if self.reference_secs <= 0.0 {
             return None;
@@ -123,6 +124,7 @@ fn distinct(turns: &[Turn]) -> Vec<&str> {
 /// [`MAX_EXACT_SPEAKERS`] it falls back to greedy assignment and **says so**
 /// in the returned flag rather than quietly reporting an approximation as a
 /// measurement.
+#[must_use]
 pub fn diarization_error_rate(
     reference: &[Turn],
     hypothesis: &[Turn],
@@ -224,10 +226,7 @@ fn best_mapping(overlap: &[f64], n_ref: usize, n_hyp: usize) -> (Vec<Option<usiz
             0.0,
             &mut best,
         );
-        return (
-            best.map(|(_, m)| m).unwrap_or_else(|| vec![None; n_ref]),
-            true,
-        );
+        return (best.map_or_else(|| vec![None; n_ref], |(_, m)| m), true);
     }
     // Greedy: take the largest remaining overlap until none is left.
     let mut mapping = vec![None; n_ref];
@@ -292,6 +291,7 @@ fn permute(
 /// truth. Only `SPEAKER` lines are read; anything else is ignored.
 ///
 /// `SPEAKER <file> <chan> <start> <dur> <ortho> <stype> <name> <conf> <slat>`
+#[must_use]
 pub fn parse_rttm(text: &str) -> Vec<Turn> {
     text.lines()
         .filter_map(|line| {

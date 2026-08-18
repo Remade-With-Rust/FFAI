@@ -3,7 +3,7 @@
 //!
 //! **Proxy, stated plainly.** This scorer implements the standard matching
 //! rule (per-image greedy assignment of confidence-ranked detections to the
-//! highest-IoU unmatched ground-truth box at each IoU threshold 0.50:0.95,
+//! highest-IoU unmatched ground-truth box at each `IoU` threshold 0.50:0.95,
 //! maxDets=100, 101-point interpolated AP averaged over classes with ground
 //! truth) but none of pycocotools' area-range breakdowns or crowd-region
 //! ignore logic — the M-D0 corpus deliberately excludes crowd annotations so
@@ -27,7 +27,7 @@
 use ffai_core::error::{Error, Result};
 use std::collections::BTreeMap;
 
-/// IoU thresholds 0.50:0.05:0.95, the COCO ladder.
+/// `IoU` thresholds 0.50:0.05:0.95, the COCO ladder.
 pub const IOU_THRESHOLDS: [f64; 10] = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95];
 
 /// Detections kept per image, ranked by confidence (COCO maxDets).
@@ -121,7 +121,7 @@ fn iou(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     if union <= 0.0 { 0.0 } else { inter / union }
 }
 
-/// One ranked detection's fate: its confidence and, per IoU threshold, whether
+/// One ranked detection's fate: its confidence and, per `IoU` threshold, whether
 /// it matched a ground-truth box (bit i of `tp_mask` = threshold `IOU_THRESHOLDS[i]`).
 #[derive(Debug, Clone, Copy)]
 struct Ranked {
@@ -137,6 +137,7 @@ pub struct MapAccumulator {
 }
 
 impl MapAccumulator {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -190,7 +191,7 @@ impl MapAccumulator {
         }
     }
 
-    /// AP at one IoU threshold index, averaged over classes with ground truth.
+    /// AP at one `IoU` threshold index, averaged over classes with ground truth.
     fn map_at(&self, ti: usize) -> Option<f64> {
         let mut aps = Vec::new();
         for (class, &n_gt) in &self.gt_count {
@@ -213,7 +214,7 @@ impl MapAccumulator {
             // Precision envelope: max precision at recall >= r.
             let mut ap = 0.0;
             for i in 0..=100 {
-                let r = i as f64 / 100.0;
+                let r = f64::from(i) / 100.0;
                 let p = curve
                     .iter()
                     .filter(|(rec, _)| *rec >= r)
@@ -231,11 +232,13 @@ impl MapAccumulator {
     }
 
     /// mAP@0.5 — the headline the quality gate reads (as `1 - mAP50`).
+    #[must_use]
     pub fn map50(&self) -> Option<f64> {
         self.map_at(0)
     }
 
     /// mAP@0.5:0.95 — the ten-threshold mean, recorded beside `map50`.
+    #[must_use]
     pub fn map5095(&self) -> Option<f64> {
         let aps: Vec<f64> = (0..IOU_THRESHOLDS.len())
             .filter_map(|ti| self.map_at(ti))

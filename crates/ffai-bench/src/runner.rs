@@ -527,8 +527,8 @@ fn run_detect_reference(
 ///
 /// `load_image`, but a panicking decoder costs ONE clip instead of the corpus.
 ///
-/// This is not defensive programming for its own sake. rusty_jpeg 0.1.5
-/// unwraps a `None` on progressive JPEGs, and 49 of OmniDocBench's 316 pages
+/// This is not defensive programming for its own sake. `rusty_jpeg` 0.1.5
+/// unwraps a `None` on progressive JPEGs, and 49 of `OmniDocBench`'s 316 pages
 /// are progressive — so one upstream defect turns a whole benchmark run into
 /// no data at all, and the process dies before the harness can say which clip
 /// did it. Catching it converts "the run produced nothing" into "267 pages
@@ -715,9 +715,14 @@ fn run_detect_engine(
                         out.detections
                             .iter()
                             .map(|d| crate::detect::Detection {
-                                bbox: [d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64],
-                                class: d.class_id as i64,
-                                confidence: d.confidence as f64,
+                                bbox: [
+                                    f64::from(d.x0),
+                                    f64::from(d.y0),
+                                    f64::from(d.x1),
+                                    f64::from(d.y1),
+                                ],
+                                class: i64::from(d.class_id),
+                                confidence: f64::from(d.confidence),
                             })
                             .collect(),
                     ));
@@ -1340,7 +1345,7 @@ pub(crate) fn fill_gates(
                 "{}/{} holdout clips processed; first failure: {}",
                 eng.clips_ok,
                 eng.clips_total,
-                eng.notes.first().map(String::as_str).unwrap_or("-")
+                eng.notes.first().map_or("-", String::as_str)
             ),
         }
     });
@@ -1389,7 +1394,7 @@ pub(crate) fn fill_gates(
                  ({} config, band +{:.0}% relative or +{:.2} pp absolute){open}",
                 ew * 100.0,
                 rw * 100.0,
-                engine_key.map(String::as_str).unwrap_or("?"),
+                engine_key.map_or("?", String::as_str),
                 QUALITY_PARITY_BAND * 100.0 - 100.0,
                 QUALITY_ABS_FLOOR * 100.0
             ),
@@ -1403,7 +1408,7 @@ pub(crate) fn fill_gates(
                 "engine {metric_label} {:.2}% but no reference declares its configuration ({}) — \
                  declare one in corpora/references.toml{open}",
                 ew * 100.0,
-                engine_key.map(String::as_str).unwrap_or("unknown")
+                engine_key.map_or("unknown", String::as_str)
             ),
         ),
         _ => GateResult::skipped(GateKind::Quality, "engine produced no scored output"),
@@ -1519,6 +1524,7 @@ fn mean(xs: &[f64]) -> Option<f64> {
 }
 
 /// Render a bench record as a human table (the CLI's output).
+#[must_use]
 pub fn render(record: &BenchRecord) -> String {
     // The media unit and rate labels are task-scoped: ASR media is seconds of
     // audio and the rate is ×realtime; OCR media is pages and the rate is
@@ -1587,18 +1593,16 @@ pub fn render(record: &BenchRecord) -> String {
         out.push_str(&format!(
             "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
             format!("{marker}{}", s.name),
-            q1.map(|w| format!("{:.2}", w * 100.0))
-                .unwrap_or_else(|| "-".into()),
-            q2.map(|c| format!("{:.2}", c * 100.0))
-                .unwrap_or_else(|| "-".into()),
-            s.rtf_warm.map(&rate).unwrap_or_else(|| "-".into()),
-            s.rtf_e2e.map(&rate).unwrap_or_else(|| "-".into()),
+            q1.map_or_else(|| "-".into(), |w| format!("{:.2}", w * 100.0)),
+            q2.map_or_else(|| "-".into(), |c| format!("{:.2}", c * 100.0)),
+            s.rtf_warm.map_or_else(|| "-".into(), &rate),
+            s.rtf_e2e.map_or_else(|| "-".into(), &rate),
             s.load_secs
-                .map(|l| format!("{l:.2}"))
-                .unwrap_or_else(|| "-".into()),
-            s.peak_bytes
-                .map(|b| format!("{:.0}", b as f64 / (1024.0 * 1024.0)))
-                .unwrap_or_else(|| "-".into()),
+                .map_or_else(|| "-".into(), |l| format!("{l:.2}")),
+            s.peak_bytes.map_or_else(
+                || "-".into(),
+                |b| format!("{:.0}", b as f64 / (1024.0 * 1024.0))
+            ),
             format!("{}/{}", s.clips_ok, s.clips_total),
         ));
     };

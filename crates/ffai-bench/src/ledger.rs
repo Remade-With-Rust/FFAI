@@ -1,7 +1,7 @@
 //! The claims ledger, ported from Prometheus (`prom-ledger`).
 //!
 //! Append-only JSONL: one record per bench run, never edited or deleted.
-//! Every public performance/quality claim FFai makes should be traceable to
+//! Every public performance/quality claim `FFai` makes should be traceable to
 //! a ledger line that pins the corpus (manifest hash), the environment
 //! (os/arch/rustc/cpu), the reference versions, and the full gate report —
 //! reproducible from the line alone. Losses stay in the ledger too; a pruned
@@ -111,8 +111,9 @@ pub struct Environment {
 }
 
 impl Environment {
+    #[must_use]
     pub fn capture() -> Self {
-        Environment {
+        Self {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             rustc: rustc_version(),
@@ -156,11 +157,11 @@ pub struct BenchRecord {
 }
 
 impl BenchRecord {
+    #[must_use]
     pub fn now_id(task: &str) -> (String, u64) {
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
         (format!("bench-{task}-{secs}"), secs)
     }
 }

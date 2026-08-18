@@ -96,7 +96,7 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 
 | ID | Gate | Status | Evidence | Target |
 |---|---|---|---|---|
-| H-15 | ★ Workspace lint policy set and clean | Incomplete | **FIVE crates under pedantic + nursery** — ffai-core, ffai-argus, ffai-models, ffai-media, **ffai-mercury** — plus ffai-bench at clippy::all; all six blocking. ffai-mercury went **757 -> 0**. The casts were split by TRUST BOUNDARY rather than blanket-allowed: `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap` are module-allowed only in the model-internal DSP modules (each carrying a note saying why) and stay **DENIED** in mel, fbank, onnx, normalize, lexicon, chunk, phonemize, phoneme_ids. That gate is not decorative — reviewing exactly those casts is what found the ONNX field-number aliasing bug. `cast_precision_loss` is allowed crate-wide because it rounds and cannot alias one value onto another. Genuine findings triaged individually: a **case-sensitive `.onnx` extension check** (fixed — a voice pack shipping `model.ONNX` was invisible), `cast_ptr_alignment` on `_mm_loadu_si128`/`_mm256_loadu_si256` (false positive — the `u` IS unaligned), an epsilon-guarded float loop (the epsilon is the guard), phoneme match arms that legitimately share a body, and a lock deliberately held across clustering. Remaining: ffai-bench 253 pedantic; diana/carmenta/cli not yet at clippy::all | |
+| H-15 | ★ Workspace lint policy set and clean | Incomplete | **ALL SIX audited crates are now clean under pedantic + nursery** — ffai-core, ffai-argus, ffai-models, ffai-media, ffai-mercury, ffai-bench — each enforced by its own manifest and blocking in CI. Totals cleared: core 94, argus 96, models 108, media 159, bench 253, mercury 757. The casts were split by TRUST BOUNDARY rather than blanket-allowed: truncation/sign-loss/wrap stay **DENIED** on the untrusted surface (mel, fbank, onnx, normalize, lexicon, chunk, phonemize, phoneme_ids) and are module-allowed only in model-internal DSP, each with a written reason. **That policy found four defects** — the ONNX field-number aliasing, the WAV `bits_per_sample` shift, three unchecked frame allocations, and a zero-sample-rate divide that saturated into `Vec::with_capacity(usize::MAX)`. Remaining: ffai-cli (binary-only), ffai-demo, ffai-py, ffai-wasm, and ffai-carmenta/ffai-diana which are deliberately deferred | |
 | H-16 | ★ `unsafe` isolated, SAFETY-commented, inventoried | Completed | `UNSAFE.md` inventories **all 31 sites** in 3 classes; all 31 carry a `// SAFETY:` comment. The count was 28 until `tools/lint_invariants.py` found 3 more: `#[cfg(not(target_arch = "x86_64"))]` fallback stubs, invisible to the compiler on an x86 machine. Combined with the 3 `#[allow(unsafe_code)]` sites the lint also hides, that is **two independent blind spots in a compiler-warning-derived inventory** — both now closed by R1/R2 in CI | |
 | H-17 | Arithmetic safety explicit | Completed | audited every narrowing cast on the untrusted paths (`tts/onnx.rs`, `asr/mel.rs`, `tts/normalize.rs`, `tts/lexicon.rs`) and **fixed three real defects**, all of the same class — unchecked arithmetic on attacker-chosen values. (1) `dims.iter().product()` was an unchecked multiply over `i64 as usize`: a negative dim became colossal and `[1<<32, 1<<32]` wrapped to exactly 0, matching an empty payload — panic in debug, **validation bypass in release** where this workspace carries no `overflow-checks`. Now `usize::try_from` + `checked_mul`. (2) protobuf length `u64 as usize` **truncates on 32-bit**, and `ffai-wasm` makes wasm32 a real target — 2^32+5 would truncate to 5 and pass the bounds check. Now `usize::try_from`. (3) attribute ints (`kernel_shape`, `strides`, `pads`) cast negatives into geometry dimensions; now fall back to the default. Remaining casts in `normalize`/`lexicon` are bounded by their enclosing `match` arms and the symbol table. Regression seeds in `fuzz/corpus/onnx_parse/` | |
 | H-18 | ★ No `unwrap`/`expect`/panic on untrusted paths; typed errors | Completed | audited every panic site reachable from a public entry point — recorded per-site with its invariant in `docs/panic-audit.md`. **Non-test library code has 0 bare `.unwrap()` and 18 `.expect("...")`**, each stating why it cannot fail; all 17 reachable sites are provably unreachable (`bridged` seeded behind an `is_empty` guard, clusters seeded one-member-each, `take(4)`/`chunks_exact(4)` length guarantees, or model-derived architecture constants that R-001 puts out of scope). The earlier "126 unwrap/expect" figure was misleading: it counted test code and trusted-model paths. **Reinforced**: `tools/lint_invariants.py` R5 now fails CI on any bare `.unwrap()` in library code, locking in a discipline the crate already followed. Note the real panics found by this audit were ARITHMETIC, not unwraps (H-17) | |
@@ -323,6 +323,29 @@ instead of allowing them wholesale. Two were not merely noisy:
 
 That is seven and eight of this class. The pattern holds: reviewing arithmetic
 finds bugs, reviewing style does not.
+
+### Pass 5 — pedantic across the workspace, two more defects, 2026-08-15
+
+`ffai-bench` and `ffai-mercury` joined the pedantic tier, completing all six
+audited crates. Two more findings, both from reading rather than allowing:
+
+3. **`resample` divided by an unvalidated sample rate.** `ratio = src_rate /
+   dst_rate`; `src_rate == 0` makes `ratio` 0, `len / 0` infinity, and
+   `floor() as usize` **saturates to `usize::MAX`** — which became
+   `Vec::with_capacity(usize::MAX)` and aborted the process. Rates come from a
+   file header, so zero is reachable input. Guarded, with a regression test.
+
+4. **`j.assign(&child)` dropped its return value.** That job object is the only
+   reason the footprint measurement is trustworthy: without it the harness
+   measured the Python launcher instead of the process doing the work and
+   reported *5 MiB for a reference that loads a 77.7 MB model, a 127x ratio*.
+   A silent assignment failure reverts to exactly that number — impossible, and
+   plausible-looking in a table. The failure is now loud.
+
+Tooling note: `cargo clippy --fix` applied NOTHING to ffai-bench because one of
+its own suggestions produced `error[E0603]: module 'imp' is private`, and a
+single bad suggestion rolls back the whole crate. Applying lint-by-lint cleared
+103 of them.
 
 ---
 

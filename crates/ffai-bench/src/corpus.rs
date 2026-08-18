@@ -6,7 +6,7 @@
 //! so [`Manifest::verify`] proves the bytes on disk are exactly the bytes a
 //! result was measured on, and the manifest's own hash pins "which clips at
 //! which versions" into every ledger record — no result silently drifts onto
-//! different data. Per-clip `license` is mandatory: FFai is public, and only
+//! different data. Per-clip `license` is mandatory: `FFai` is public, and only
 //! redistributable corpora belong in the repo.
 
 use ffai_core::error::{Error, Result};
@@ -24,7 +24,7 @@ pub enum Split {
 }
 
 /// Content class, for stratified reporting ("we win on clean speech, lose on
-/// noisy") — extended from Prometheus's audio/video classes to FFai's tasks.
+/// noisy") — extended from Prometheus's audio/video classes to `FFai`'s tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentClass {
@@ -79,13 +79,14 @@ pub struct Manifest {
 impl Manifest {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)?;
-        let mut m: Manifest =
+        let mut m: Self =
             toml::from_str(&text).map_err(|e| Error::Other(format!("bad corpus manifest: {e}")))?;
         m.base_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         Ok(m)
     }
 
     /// Absolute path of a clip's media file.
+    #[must_use]
     pub fn clip_path(&self, clip: &ClipEntry) -> PathBuf {
         self.base_dir.join(&clip.path)
     }
@@ -104,6 +105,7 @@ impl Manifest {
 
     /// Deterministic hash over (name, version, clip ids + hashes + splits) —
     /// the fingerprint every ledger record pins its data to.
+    #[must_use]
     pub fn manifest_hash(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.name.as_bytes());
@@ -141,6 +143,7 @@ impl Manifest {
 }
 
 /// SHA-256 of a byte slice as lowercase hex (for authoring manifests).
+#[must_use]
 pub fn file_sha256(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }

@@ -9,7 +9,7 @@
 //! the lower Nyquist. Not audiophile-grade, but flat where speech lives and
 //! ~70 dB of alias rejection — far below what a WER judge can hear. The
 //! tests assert CONTENT (a tone survives with its frequency and amplitude),
-//! not shapes, per the audio_encoder.rs lesson.
+//! not shapes, per the `audio_encoder.rs` lesson.
 
 use ffai_core::types::AudioBuffer;
 
@@ -17,6 +17,7 @@ use ffai_core::types::AudioBuffer;
 const HALF_TAPS: usize = 32;
 
 /// Convert to the round-trip judge's input format: mono, `dst_rate` Hz.
+#[must_use]
 pub fn to_judge_format(audio: &AudioBuffer, dst_rate: u32) -> AudioBuffer {
     let mono = audio.to_mono();
     if mono.sample_rate == dst_rate {
@@ -34,10 +35,18 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
     }
-    let ratio = src_rate as f64 / dst_rate as f64;
+    // Sample rates come from a file header, so neither is guaranteed non-zero.
+    // `src_rate == 0` makes `ratio` 0, `len / 0` infinity, and `floor() as usize`
+    // SATURATES to usize::MAX - which then becomes `Vec::with_capacity(usize::MAX)`
+    // and aborts the process. `dst_rate == 0` silently produces an empty signal.
+    // Neither is a meaningful resample, so refuse both up front.
+    if src_rate == 0 || dst_rate == 0 {
+        return Vec::new();
+    }
+    let ratio = f64::from(src_rate) / f64::from(dst_rate);
     // Anti-alias at the LOWER of the two Nyquists (in units of the source
     // rate), with margin for the finite kernel's transition band.
-    let cutoff = 0.45 * (dst_rate.min(src_rate) as f64 / src_rate as f64);
+    let cutoff = 0.45 * (f64::from(dst_rate.min(src_rate)) / f64::from(src_rate));
     let out_len = ((samples.len() as f64) / ratio).floor() as usize;
     let mut out = Vec::with_capacity(out_len);
 
@@ -54,7 +63,7 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
             }
             let t = center - idx as f64; // distance in source samples
             let w = windowed_sinc(t, cutoff);
-            acc += samples[idx as usize] as f64 * w;
+            acc += f64::from(samples[idx as usize]) * w;
             norm += w;
         }
         // Normalizing by the kernel sum keeps unity gain at DC and at the
@@ -68,7 +77,7 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     out
 }
 
-/// `sinc(2·cutoff·t) · 2·cutoff`, Hann-windowed over ±HALF_TAPS.
+/// `sinc(2·cutoff·t) · 2·cutoff`, Hann-windowed over ±`HALF_TAPS`.
 fn windowed_sinc(t: f64, cutoff: f64) -> f64 {
     let x = 2.0 * cutoff * t;
     let sinc = if x.abs() < 1e-9 {
@@ -177,5 +186,21 @@ mod tests {
             max_delta < 1e-6,
             "downmix changed the signal, max delta {max_delta}"
         );
+    }
+
+    /// A zero sample rate must not become `Vec::with_capacity(usize::MAX)`.
+    ///
+    /// `ratio = src_rate / dst_rate`; `src_rate == 0` makes it 0, `len / 0`
+    /// infinity, and `floor() as usize` SATURATES rather than wrapping - so the
+    /// capacity request aborted the process. Rates come from a file header, so
+    /// zero is reachable input, not a hypothetical.
+    #[test]
+    fn zero_sample_rates_do_not_request_an_absurd_allocation() {
+        let samples = vec![0.1f32; 64];
+        assert!(resample(&samples, 0, 16_000).is_empty(), "src_rate 0");
+        assert!(resample(&samples, 16_000, 0).is_empty(), "dst_rate 0");
+        assert!(resample(&samples, 0, 0).is_empty(), "both 0");
+        // A real ratio still resamples.
+        assert!(!resample(&samples, 32_000, 16_000).is_empty());
     }
 }
