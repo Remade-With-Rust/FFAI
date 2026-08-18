@@ -76,7 +76,7 @@ the repository. This section is a sketch produced by the audit, not a reviewed m
 |---|---|---|---|---|
 | H-03 | Toolchain pinned (`rust-toolchain.toml`) | Completed | `rust-toolchain.toml` pins channel 1.95.0 + rustfmt/clippy/rust-src/llvm-tools-preview, profile minimal; matches the workspace `rust-version` | |
 | H-04 | Committed `.cargo/config.toml` hardening defaults | Completed | `.cargo/config.toml` gains a `cfg(all(target_os="linux", target_env="gnu"))` block — full RELRO, `-z now`, noexecstack, frame pointers. Target-scoped deliberately: a blanket `[build]` block would override the existing wasm section and break MSVC | |
-| H-05 | ★ Release profile hardened (overflow-checks, LTO, panic policy) | Completed | `[profile.release]` now `overflow-checks = true`, `codegen-units = 1`, `lto = "thin"`. **Perf impact UNMEASURED** — integer-only and the hot paths are f32/f16 + intrinsics, but the benchmark gates must be re-run before merge (R-005) | |
+| H-05 | ★ Release profile hardened (overflow-checks, LTO, panic policy) | Completed | `[profile.release]` now `overflow-checks = true`, `codegen-units = 1`, `lto = "thin"`. **Cost MEASURED 2026-08-15: 1.060x on the TTS pipeline, 1.094x on the decoder stage** (n=22 paired, z=+4.26, null-arm floor 0.995). ASR unmeasured — no cached whisper weights. Ship/revert decision is R-005 | |
 | H-06 | Security toolchain available to CI and developers | Completed | `.github/workflows/harden.yml` installs the pinned tool set via `dtolnay/rust-toolchain`, `EmbarkStudios/cargo-deny-action@v2`, `rustsec/audit-check@v2` | |
 
 ### Phase 2 — Supply chain
@@ -221,8 +221,59 @@ have been accepted yet** — that is why H-41 is `Incomplete`.
 |---|---|---|---|---|---|---|
 | R-001 | Model cache is parsed as trusted. Anyone who can write to the cache directory controls ONNX/JSON/lexicon bytes and a live mmap; hash verification is upstream in `ffai-models` and unasserted here | Medium (local write access, or a hole upstream) | High (mmap UB is a memory-safety primitive) | Open — no verification, no fuzzing at this boundary | | |
 | R-002 | `SendPtr` disjointness is argued in a comment, not proven. A wrong band calculation is a data race in released code, not a panic | Low | High (UB, silently wrong audio) | Open — no TSan, no Miri, no proof | | |
-| R-003 | `overflow-checks` off in release with 126 unwrap/expect sites and unreviewed `as` casts: arithmetic wraps silently, and a panic on untrusted input is a DoS | Medium | Medium (wrong output or crash, not memory unsafety) | Open — H-05 is a one-line fix; H-18 triage is not | | |
-| R-004 | No CI at all: every gate that could regress silently, does. Nothing re-checks fmt, clippy, tests, or advisories on any commit | High | Medium | Open — H-37 | | |
+| R-003 | 126 `unwrap`/`expect` sites and unreviewed `as` casts on lengths. `overflow-checks` is now ON in release (H-05), so arithmetic no longer wraps silently — but a panic on untrusted input is still a DoS | Medium | Medium | Partly mitigated — checks on; per-callsite triage of the decode path outstanding (H-18) | | 2026-11-15 |
+| R-004 | CI now exists (H-37) but `fmt` and `clippy` are advisory, not blocking, and branch protection is not configured (C-12) — so a regression in either can still land | Medium | Medium | Partly mitigated — test/deny/audit/table-freshness block; fmt+clippy dated to 2026-09-30 | | 2026-09-30 |
+| R-005 | `overflow-checks = true` costs **~6% on the TTS pipeline and ~10% on the decoder stage** (measured 2026-08-15, method below). The **ASR path is unmeasured** — no whisper weights are cached here, and the whisper.cpp comparison is the claim actually at risk | High (measured) | Medium — real throughput loss on a shipped path, no safety impact | **Measured; decision pending** — keep, revert under a time-bounded waiver, or split (explicit `wrapping_*` in the proven-bounded kernels, checks retained on untrusted-input paths) | | 2026-08-22 |
+
+---
+
+## R-005 measurement — what `overflow-checks` actually costs (2026-08-15)
+
+**Method line.** Two release builds of `examples/profile_tts` in separate
+`CARGO_TARGET_DIR`s, differing ONLY in `CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS`. The
+manifest was never edited while measuring — editing `[profile.release]` invalidates
+rust-analyzer's cache and starts a rustc storm that poisons the measurement it was made
+for. Flag effect proven in the binaries: 5 `attempt to ... with overflow` panic strings
+in the ON arm vs 1 in OFF, +73 KB of code. Harness `tools/diana_ab.ps1`: ABBA-interleaved,
+High priority, CPU-time primary, work-count parity enforced, 2 warm-up reps discarded.
+Corpus: 20 Harvard holdout sentences through piper-vits-lessac-medium, seeded RNG.
+**Work parity: 45.0 s of audio from both arms in every rep.**
+
+**The null arm failed first, and that is the point of running one.** Same binary on both
+sides read **5/22, z = -2.56** — a "significant" result from identical code. Two causes:
+the harness forced `FFAI_PROFILE=1`, putting the profiler inside the system under test,
+and it had no warm-up, so the 62 MB model load sat inside the paired samples. Both fixed;
+the null then read **13/22, z = +0.85**, ratio 0.995. Everything below is measured against
+that 0.5% floor.
+
+| metric | checks OFF | checks ON | ratio |
+|---|---:|---:|---:|
+| CPU ms, whole process | 62,656 | 65,203 | 1.041 |
+| paired CPU-time wins | 21 / 22 | | **z = +4.26** |
+| paired in-process wins | 22 / 22 | | **z = +4.69** |
+| pipeline total, min (n=7 ABBA) | 1541.7 ms | 1633.7 ms | **1.060** |
+| **decoder stage, min** | 899.9 ms | 984.4 ms | **1.094** |
+
+The process-level 1.041 is diluted — model load is identical in both arms — so the
+in-process figures are the honest ones. The arithmetic closes: the decoder is 56.5% of the
+pipeline and slows 9.9%, predicting 5.6% at pipeline level against 6.5% observed. That is
+mechanistically right, because the decoder carries the hand-written index arithmetic in
+`tts/decoder_kernels.rs` — exactly what overflow-checks instruments.
+
+**Not measured: the ASR path.** No whisper weights are cached on this machine, so the
+whisper.cpp comparison could not be re-run. That is the claim actually at risk, so R-005
+stays open regardless of what is decided about TTS.
+
+**Decision required** — this is a product trade-off, not an audit finding:
+
+1. **Keep.** Accept ~6% on TTS for overflow safety in a crate that parses untrusted model
+   files. H-05 stays green.
+2. **Revert.** Drop `overflow-checks`, record a time-bounded waiver against H-05 and a
+   residual risk for silent wraparound on untrusted lengths.
+3. **Split** (best outcome, most work). Keep checks on, and make the proven-bounded inner
+   loops in `decoder_kernels.rs` use explicit `wrapping_*`/`get_unchecked`-free index
+   arithmetic. Protection stays where untrusted data is indexed; most of the 10% comes
+   back.
 
 ---
 
