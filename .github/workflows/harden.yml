@@ -93,6 +93,15 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+      # cargo-vet is a RATCHET, not a score. The 474 exemptions record the tree as
+      # it stood when vetting was introduced; what this step enforces is that a
+      # NEW dependency cannot arrive without either an imported audit covering it
+      # or an explicit, reviewed exemption. That is the property worth having on
+      # every PR - the burn-down is a separate, slower programme.
+      - name: cargo-vet
+        run: |
+          cargo install cargo-vet --locked
+          cargo vet check
 
   miri:
     name: Miri (UB interpreter)
