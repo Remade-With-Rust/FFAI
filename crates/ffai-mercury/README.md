@@ -262,4 +262,6 @@ MIT OR Apache-2.0. Model weights carry their own licenses, surfaced at selection
 | 10 — Cryptography | 0 | 0 | 0 | 3 |
 | 11 — CI/CD, release, and operations | 0 | 0 | 5 | 0 |
 | **Total** | **2** | **0** | **33** | **6** |
+
+**Architect** — [Nick Overlock](https://www.linkedin.com/in/nick-overlock-593235b9/)
 <!-- HARDENING-TABLE:END -->

@@ -9,6 +9,7 @@
 `main`, rendered with `--link` to this file). The crates.io page renders this crate's
 README, so it inherits the block — but **only absolute links resolve there**. All mirrors
 **must be re-rendered in the same pass as this file** (SKILL.md §3.1)
+**Architect**: [Nick Overlock](https://www.linkedin.com/in/nick-overlock-593235b9/)
 **Audit depth**: survey (static evidence only — no tool probe was executed)
 **Audited**: 2026-08-15 by Claude (pilot) · **Next review**: 2026-11-15
 
