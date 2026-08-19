@@ -1,3 +1,9 @@
+// Kani 0.67 bundles rustc 1.93-nightly, but `asr::vad` calls `f32::mul_add`
+// inside a `const fn`, which only stabilised in 1.95 - this crate's declared
+// MSRV. Under Kani that needs the feature gate; on any real build the attribute
+// does not exist, so nothing else is affected.
+#![cfg_attr(kani, feature(const_mul_add))]
+
 //! # Mercury — `FFai`'s voice component
 //!
 //! Named for the Roman god of language and messages (Greek: Hermes).
