@@ -141,10 +141,15 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+      # Run cargo-audit DIRECTLY rather than via rustsec/audit-check@v2. That
+      # action executes inside a musl container, where `rust-toolchain.toml`
+      # pins 1.95.0 and rustup then fails with "override toolchain
+      # '1.95.0-x86_64-unknown-linux-musl' is not installed". The advisory scan
+      # is the point; the container is not.
       - name: cargo-audit
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
       # cargo-vet is a RATCHET, not a score. The 474 exemptions record the tree as
       # it stood when vetting was introduced; what this step enforces is that a
       # NEW dependency cannot arrive without either an imported audit covering it

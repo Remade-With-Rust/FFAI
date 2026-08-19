@@ -60,6 +60,14 @@ pub const fn best_device() -> candle::Device {
 /// path — trimming what you are about to touch again just buys page faults.
 ///
 /// No-op where the platform offers no equivalent.
+//
+// NOT const, and clippy::nursery is wrong here in a platform-specific way: on
+// non-Windows every branch below is cfg'd out, the body is empty, and
+// `missing_const_for_fn` fires. On Windows the same function calls a Win32
+// entry point and cannot be const. Making it const would therefore compile on
+// Linux and break on Windows - so the lint is allowed rather than obeyed.
+// Caught only when CI first ran on Linux; it never fired on the author's box.
+#[allow(clippy::missing_const_for_fn)]
 pub fn release_load_arena() {
     #[cfg(windows)]
     {

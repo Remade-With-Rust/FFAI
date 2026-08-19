@@ -35,6 +35,19 @@ ignore = [
     "RUSTSEC-2026-0177",
 ]
 
+# Per-crate licence exceptions. Each needs a REASON, not just a name.
+#
+# intel-mkl-src publishes no SPDX expression, so cargo-deny reports it as
+# `unlicensed` and fails the whole check. It is a build-time downloader for
+# Intel's MKL, which ships under Intel's own Simplified Software License - not
+# an SPDX identifier cargo-deny knows. It reaches the graph ONLY through the
+# optional `mkl` feature (candle-core -> intel-mkl-src) and is absent from every
+# default build, which is why this is an exception rather than a licence change.
+# Anyone enabling `mkl` accepts Intel's terms directly.
+[[licenses.exceptions]]
+crate = "intel-mkl-src"
+allow = ["MIT", "Apache-2.0"]
+
 [licenses]
 # Permissive plus weak-copyleft-for-libraries. Nothing GPL: the crate advertises
 # "nothing GPL" on its front page, and this is what makes that claim enforceable
