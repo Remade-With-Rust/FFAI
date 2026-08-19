@@ -152,7 +152,7 @@ for the workspace members removes 10 at a stroke, and the 16 siblings are certif
 by whoever maintains them, which is this org.
 
 
-## Part 4 — the 2.1M-line boulder is blocked UPSTREAM, not by effort
+## Part 4 — `aws-lc-sys`: WAIVED 2026-08-18, do not audit it
 
 `aws-lc-sys` is 2,108,351 lines: **39% of the entire audit backlog, one crate**. It is C
 and assembly, and it is the single best target for removal rather than review — the same
@@ -187,5 +187,15 @@ With that feature available, this repo switches to it and **39% of the audit bac
 disappears without a single line being read**. `ring` (262k lines) is already present in the
 all-features graph via `ureq → ocipkg → intel-mkl-src`, so it costs no new dependency.
 
-Until then, `aws-lc-sys` stays. Note it is `fetch`-only, so it is absent from a default
-build entirely — it inflates the audit number far more than it inflates the shipped risk.
+**Decision, 2026-08-18: the project lead waived this one crate.** Do not spend audit budget
+on it. It is `fetch`-only and absent from any default build, it is AWS-LC — which carries its
+own external audit and FIPS validation, so a hand read here adds nothing — and removal is
+blocked upstream as shown above. Recorded as **R-007** with a review date of 2026-11-15 in the
+audit plan, and annotated at the exemption itself in `config.toml`.
+
+**Scope of the waiver: this crate only.** The other 312 exemptions are not waived and remain
+on this list. Reopens on any RUSTSEC advisory (`cargo audit` runs in CI), if `fetch` becomes a
+default feature, or when the one-line `hf-hub` PR lands and makes removal free.
+
+Effect on the numbers: the *reading* backlog drops from ~5.6M lines to **~3.5M (a 39% cut)**,
+while the exemption COUNT is unchanged at 313 — the gate counts crates, not lines.
