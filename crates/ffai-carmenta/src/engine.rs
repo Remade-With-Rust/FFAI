@@ -1,4 +1,4 @@
-//! The `craft-crnn` engine: CRAFT detection + english_g2 CRNN recognition,
+//! The `craft-crnn` engine: CRAFT detection + `english_g2` CRNN recognition,
 //! composed exactly as the mission plan's §2 stages — detect → group lines →
 //! crop → recognize — with each stage independently oracle-tested.
 
@@ -13,7 +13,7 @@ use ffai_core::types::{BoundingBox, ImageBuffer, OcrBlock, OcrLine, OcrOutput};
 
 use crate::boxes;
 use crate::craft::Craft;
-use crate::crnn::{ctc_greedy, Crnn};
+use crate::crnn::Crnn;
 use crate::image;
 
 /// Crop padding around a detected line, as fractions of line height. CRAFT
@@ -26,7 +26,7 @@ const PAD_X: f32 = 0.25;
 /// Which recognition stage this engine composes over CRAFT detection.
 #[derive(Clone, Copy, PartialEq)]
 pub enum RecStage {
-    /// english_g2 CRNN: LINE-level crops (arbitrary width, CTC).
+    /// `english_g2` CRNN: LINE-level crops (arbitrary width, CTC).
     Crnn,
     /// PARSeq-tiny: WORD-level 32x128 crops (25-char AR decoder), joined
     /// with spaces within each detected line.
@@ -41,7 +41,7 @@ pub enum DetStage {
     /// PP-OCRv5 mobile-det (DBNet/PP-LCNetV3): emits text-LINE regions
     /// directly, from 4.7 MB against CRAFT's VGG16.
     MobileDet,
-    /// Both, composed: DBNet supplies the LINE GROUPING, CRAFT supplies the
+    /// Both, composed: `DBNet` supplies the LINE GROUPING, CRAFT supplies the
     /// WORD BOXES. Deliberately the expensive option — it runs both detectors —
     /// because it isolates a question neither alone can answer: when CRAFT
     /// loses, is it the box geometry or is it `group_lines`' heuristic
@@ -102,28 +102,32 @@ pub struct CraftCrnn {
 }
 
 impl CraftCrnn {
+    #[must_use] 
     pub fn new() -> Self {
         Self::with_manifest_dir(Path::new("models"))
     }
 
     /// The `craft-parseq` variant: same detection, PARSeq-tiny recognition.
+    #[must_use] 
     pub fn new_parseq() -> Self {
         Self::variant(RecStage::Parseq, DetStage::Craft)
     }
 
-    /// The mobile-det variants: DBNet line regions instead of CRAFT's
+    /// The mobile-det variants: `DBNet` line regions instead of CRAFT's
     /// reassembled character components.
+    #[must_use] 
     pub fn new_mobiledet(rec: RecStage) -> Self {
         Self::variant(rec, DetStage::MobileDet)
     }
 
-    /// The composed variant: both detectors, DBNet grouping CRAFT's words.
+    /// The composed variant: both detectors, `DBNet` grouping CRAFT's words.
+    #[must_use] 
     pub fn new_composed(rec: RecStage) -> Self {
         Self::variant(rec, DetStage::Composed)
     }
 
     fn variant(rec: RecStage, det: DetStage) -> Self {
-        CraftCrnn {
+        Self {
             models: OnceLock::new(),
             manifest_dir: Path::new("models").to_path_buf(),
             rec,
@@ -131,8 +135,9 @@ impl CraftCrnn {
         }
     }
 
+    #[must_use] 
     pub fn with_manifest_dir(dir: &Path) -> Self {
-        CraftCrnn {
+        Self {
             models: OnceLock::new(),
             manifest_dir: dir.to_path_buf(),
             rec: RecStage::Crnn,
@@ -382,7 +387,7 @@ impl OcrEngine for CraftCrnn {
                         // PIXELS. The probability map cannot arbitrate this —
                         // it reads 1.000 at the very gutter that was bridged,
                         // and that hallucination is the defect.
-                        let mut b = boxes::split_at_white_corridor(b, &gray, w, h);
+                        let b = boxes::split_at_white_corridor(b, &gray, w, h);
                         if std::env::var("FFAI_DET_DEBUG").is_ok() {
                             eprintln!(
                                 "mobiledet: {} boxes; image {w}x{h} -> map {pw}x{ph} (sx {sx:.3} sy {sy:.3})",
@@ -611,7 +616,7 @@ impl OcrEngine for CraftCrnn {
                         let ly1 = ((to_img(lb_map.y1) + bh_img * pad_y) as usize).min(h);
                         let _ = (&region, &affinity, mw);
                         let _ = (ly0, ly1);
-                        for &(wx0, wy0, wx1, wy1) in word_ranges.iter() {
+                        for &(wx0, wy0, wx1, wy1) in &word_ranges {
                             let pad = (bh_img * pad_x) as usize;
                             let bx0 = wx0.saturating_sub(pad);
                             let by0 = wy0.saturating_sub((bh_img * pad_y * 0.0) as usize);
@@ -662,11 +667,10 @@ impl OcrEngine for CraftCrnn {
                 // A recognizer asked to read an illegible crop still returns its
                 // best guess, and the confidence it returns alongside is the
                 // signal that the guess is worthless.
-                if let Some(c) = confidence {
-                    if c < reject_threshold() {
+                if let Some(c) = confidence
+                    && c < reject_threshold() {
                         return Ok(None);
                     }
-                }
                 Ok(Some(OcrLine {
                     text,
                     words: Vec::new(), // line-level recognition; word detail is open work

@@ -20,7 +20,9 @@ use std::process::{Command, Stdio};
 use ffai_bench::footprint::Job;
 
 fn measure(label: &str, argv: &[&str]) {
-    let Some((prog, args)) = argv.split_first() else { return };
+    let Some((prog, args)) = argv.split_first() else {
+        return;
+    };
     let job = std::sync::Arc::new(Job::create());
     let child = Command::new(prog)
         .args(args)
@@ -95,13 +97,22 @@ fn main() {
 
     // A process that does essentially nothing. If this reads in the hundreds
     // of MiB the instrument is measuring something other than memory used.
-    measure("trivial process (cmd /c echo)", &["cmd", "/c", "echo", "hi"]);
+    measure(
+        "trivial process (cmd /c echo)",
+        &["cmd", "/c", "echo", "hi"],
+    );
 
     // The launcher alone: a Python interpreter with no model.
-    measure("python -c pass", &[".venv-bench/Scripts/python.exe", "-c", "pass"]);
+    measure(
+        "python -c pass",
+        &[".venv-bench/Scripts/python.exe", "-c", "pass"],
+    );
 
     // whisper-cli printing help: binary + DLLs loaded, no model, no inference.
-    measure("whisper-cli --help", &[".whispercpp/whisper-cli.exe", "--help"]);
+    measure(
+        "whisper-cli --help",
+        &[".whispercpp/whisper-cli.exe", "--help"],
+    );
 
     // whisper-cli doing real work on ONE clip. Its own init log accounts for
     // ~224 MB, so this is the number with a known independent estimate.

@@ -120,7 +120,7 @@ fn bench<F: Fn(f32) -> f32>(name: &str, n: usize, iters: usize, src: &[f32], dst
 #[inline(always)]
 fn silu_v3(x: f32) -> f32 {
     const MAGIC: f32 = 12582912.0;
-    let t = (-x * LOG2_E).max(-125.0).min(125.0);
+    let t = (-x * LOG2_E).clamp(-125.0, 125.0);
     let z = t + MAGIC;
     let n = z - MAGIC;
     let f = t - n;
@@ -155,7 +155,7 @@ fn silu_nodiv(x: f32) -> f32 {
 /// refutation expires when its baseline moves.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn silu_avx2_nodiv(src: &[f32], dst: &mut [f32]) {
+unsafe fn silu_avx2_nodiv(src: &[f32], dst: &mut [f32]) { unsafe {
     use std::arch::x86_64::*;
     const MAGIC: f32 = 12582912.0;
     let (log2e, magic) = (_mm256_set1_ps(LOG2_E), _mm256_set1_ps(MAGIC));
@@ -183,7 +183,7 @@ unsafe fn silu_avx2_nodiv(src: &[f32], dst: &mut [f32]) {
         _mm256_storeu_ps(dst.as_mut_ptr().add(i), y);
         i += 8;
     }
-}
+}}
 
 fn main() {
     let n = 1 << 24; // 16 M elements, 64 MiB in + 64 MiB out — well past L3

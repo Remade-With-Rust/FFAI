@@ -1,10 +1,10 @@
-//! The engine registry — FFai's equivalent of ffmpeg's codec registry.
+//! The engine registry — `FFai`'s equivalent of ffmpeg's codec registry.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::engine::{
-    DepthEngine, AsrEngine, DetectEngine, EngineInfo, OcrEngine, Task, TtsEngine, VlmEngine,
+    AsrEngine, DepthEngine, DetectEngine, EngineInfo, OcrEngine, Task, TtsEngine, VlmEngine,
 };
 use crate::error::{Error, Result};
 
@@ -33,6 +33,7 @@ pub struct EngineRegistry {
 }
 
 impl EngineRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -91,14 +92,25 @@ impl EngineRegistry {
     }
 
     pub fn depth(&self, name: Option<&str>) -> Result<Arc<dyn DepthEngine>> {
-        resolve(&self.depth, name, self.depth_default.as_deref(), Task::Depth)
+        resolve(
+            &self.depth,
+            name,
+            self.depth_default.as_deref(),
+            Task::Depth,
+        )
     }
 
     pub fn detect(&self, name: Option<&str>) -> Result<Arc<dyn DetectEngine>> {
-        resolve(&self.detect, name, self.detect_default.as_deref(), Task::Detect)
+        resolve(
+            &self.detect,
+            name,
+            self.detect_default.as_deref(),
+            Task::Detect,
+        )
     }
 
     /// All engine metadata, ordered by task then name (for `ffai engines`).
+    #[must_use]
     pub fn list(&self) -> Vec<EngineInfo> {
         let mut out: Vec<EngineInfo> = Vec::new();
         out.extend(self.asr.values().map(|e| e.info()));

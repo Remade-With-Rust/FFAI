@@ -33,11 +33,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let texts: Vec<String> = manifest
         .holdout()
         .take(20)
-        .map(|c| std::fs::read_to_string(manifest.clip_path(c)).unwrap().trim().to_string())
+        .map(|c| {
+            std::fs::read_to_string(manifest.clip_path(c))
+                .unwrap()
+                .trim()
+                .to_string()
+        })
         .collect();
     let ids_list: Vec<Vec<i64>> = texts
         .iter()
-        .map(|t| vits.id_map.sentence_to_ids(&phonemizer.phonemize(t).unwrap()).0)
+        .map(|t| {
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t).unwrap())
+                .0
+        })
         .collect();
 
     // Hidden states are the duration predictor's input; compute them once so
@@ -48,7 +57,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hiddens.push(hidden);
     }
     let total_t: usize = hiddens.iter().map(|h| h.dim(2).unwrap()).sum();
-    println!("20 sentences, {total_t} phoneme columns total (mean {:.1})", total_t as f64 / 20.0);
+    println!(
+        "20 sentences, {total_t} phoneme columns total (mean {:.1})",
+        total_t as f64 / 20.0
+    );
 
     // Warm.
     for h in &hiddens {

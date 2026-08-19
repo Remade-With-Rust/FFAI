@@ -42,16 +42,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // DRAM traffic and pricing them at DRAM bandwidth invents a prize.
     println!("  BUT per-conv that is ~{:.0} KiB, which is L2-resident:", ab / 1024.0 / 120.0);
     println!("  the DRAM figure below is an UPPER BOUND that does not apply. See docs/whys/diana-latency.md.");
-    for bw in [24.0f64] {
+    {
+        let bw = 24.0f64;
         println!("  at {bw} GB/s (DRAM, NOT the operative level) that would be {:.1} ms/image", ab * 4.0 / (bw * 1e9) * 1e3);
     }
 
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
+    let cores = std::thread::available_parallelism().map_or(8, |n| n.get());
     // AVX2: 8 lanes x 2 flops/FMA x 2 FMA ports.
     for gh in [2.5f64, 3.5] {
         println!("  peak at {gh} GHz x {cores} cores: {:.0} GFLOP/s", 8.0 * 2.0 * 2.0 * gh * cores as f64);
     }
-    for (who, ms) in [("ultralytics p50", 59.0f64)] {
+    {
+        let (who, ms) = ("ultralytics p50", 59.0f64);
         println!("  {who} {ms} ms => our arithmetic would need {:.0} GFLOP/s", gflop / (ms / 1e3));
     }
     Ok(())

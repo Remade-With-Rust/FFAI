@@ -152,7 +152,7 @@ impl LoadedWhisper {
         )
         .map_err(|e| Error::Model(format!("building mercury encoder: {e}")))?;
 
-        Ok(LoadedWhisper {
+        Ok(Self {
             model,
             decoder,
             encoder,
@@ -167,17 +167,20 @@ impl LoadedWhisper {
     }
 
     /// Mel bands this model expects (80 for tiny→large-v2, 128 for large-v3).
-    pub fn n_mels(&self) -> usize {
+    pub const fn n_mels(&self) -> usize {
         self.config.num_mel_bins
     }
 
     /// True when the model has no language-token slot (the `.en` variants).
-    pub fn is_english_only(&self) -> bool {
+    pub const fn is_english_only(&self) -> bool {
         self.config.vocab_size < 51_865
     }
 
     /// Build the encoder input tensor from a mel chunk.
-    pub fn mel_tensor(&self, mel: &super::mel::MelChunk) -> CandleResult<ffai_core::candle::Tensor> {
+    pub fn mel_tensor(
+        &self,
+        mel: &super::mel::MelChunk,
+    ) -> CandleResult<ffai_core::candle::Tensor> {
         ffai_core::candle::Tensor::from_slice(
             &mel.data,
             (1, mel.n_mels, mel.n_frames),

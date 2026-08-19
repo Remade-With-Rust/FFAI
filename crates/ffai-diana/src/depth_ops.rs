@@ -1,6 +1,6 @@
 //! The two primitives the depth head needs and the detect graph never did.
 //!
-//! Both are gated against fixtures dumped from PyTorch itself
+//! Both are gated against fixtures dumped from `PyTorch` itself
 //! (`corpora/refs/fixtures/diana_depth_ops.json`), not against a reading of
 //! the documentation. That distinction earned its place elsewhere in this
 //! crate: an FMA that passed a 1e-6 unit test still breached a full-graph
@@ -9,11 +9,11 @@
 
 use candle_core::{Result, Tensor};
 
-/// Bilinear upsample by exactly 2, with PyTorch's `align_corners=True`.
+/// Bilinear upsample by exactly 2, with `PyTorch`'s `align_corners=True`.
 ///
 /// # Why this convention and not the other one
 ///
-/// Ultralytics' `Depth.forward` says it plainly: *"align_corners=True is baked
+/// Ultralytics' `Depth.forward` says it plainly: *"`align_corners=True` is baked
 /// into the released depth weights."* It is therefore not a free choice, and
 /// the two conventions differ in a way that will not fail loudly.
 ///
@@ -78,7 +78,7 @@ pub fn bilinear2x_align_corners(x: &Tensor) -> Result<Tensor> {
 /// — which is a plain reduction over input channels, not the general
 /// transposed-convolution accumulation.
 ///
-/// Weight layout is PyTorch's for this op: `[in_channels, out_channels, kh,
+/// Weight layout is `PyTorch`'s for this op: `[in_channels, out_channels, kh,
 /// kw]`, with `in` FIRST. That is transposed relative to `Conv2d`'s
 /// `[out, in, kh, kw]` and is exactly the kind of thing that produces a
 /// plausible-looking wrong answer, so the fixture below pins it.

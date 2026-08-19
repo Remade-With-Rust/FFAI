@@ -38,6 +38,9 @@ static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
 
 use std::time::Instant;
 
+// The uninitialized arm is the measurement, not an oversight - see the
+// SAFETY note at the set_len below.
+#[allow(clippy::uninit_vec)]
 fn main() {
     // 585 calls, 216.9 MiB total => ~380 KiB mean. Sweep around it, because a
     // single size would land on one side of the allocator's large-block

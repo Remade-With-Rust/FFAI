@@ -1,4 +1,4 @@
-//! A fused single-pass SiLU.
+//! A fused single-pass `SiLU`.
 //!
 //! # Why
 //!
@@ -96,7 +96,7 @@ fn old_rounding() -> bool {
     match CACHED.load(Ordering::Relaxed) {
         u8::MAX => {
             let on = std::env::var("FFAI_DIANA_SILU_ROUND").is_ok_and(|v| v == "1");
-            CACHED.store(on as u8, Ordering::Relaxed);
+            CACHED.store(u8::from(on), Ordering::Relaxed);
             on
         }
         v => v == 1,
@@ -117,7 +117,7 @@ pub(crate) fn avx2_enabled() -> bool {
         u8::MAX => {
             let off = std::env::var("FFAI_DIANA_NO_AVX2").is_ok_and(|v| v == "1");
             let on = !off && crate::silu_avx2::available();
-            C.store(on as u8, Ordering::Relaxed);
+            C.store(u8::from(on), Ordering::Relaxed);
             on
         }
         v => v == 1,
@@ -127,6 +127,7 @@ pub(crate) fn avx2_enabled() -> bool {
 /// The scalar twin, exposed so the AVX2 kernel's test can gate against the
 /// exact function the whole graph is oracled on — not a copy of it.
 #[inline(always)]
+#[must_use] 
 pub fn silu_scalar_pub(x: f32) -> f32 {
     silu_scalar(x)
 }
@@ -144,7 +145,7 @@ fn silu_scalar(x: f32) -> f32 {
 /// would cost more than the work.
 const PAR_THRESHOLD: usize = 1 << 16;
 
-/// SiLU over a contiguous f32 tensor, preserving shape.
+/// `SiLU` over a contiguous f32 tensor, preserving shape.
 ///
 /// Runs through [`crate::cpuop::SliceOp`], so the input is read in place and
 /// the output `Vec` becomes the result tensor's storage — no copy on either
@@ -251,12 +252,12 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                         };
                         #[allow(unsafe_code)]
                         unsafe {
-                            crate::silu_avx2::silu_into(xs, out)
+                            crate::silu_avx2::silu_into(xs, out);
                         };
                         // SAFETY: all `n` elements written just above.
                         #[allow(unsafe_code)]
                         unsafe {
-                            v.set_len(n)
+                            v.set_len(n);
                         };
                     }
                 } else {
@@ -291,7 +292,7 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                                 };
                                 #[allow(unsafe_code)]
                                 unsafe {
-                                    crate::silu_avx2::silu_into(i, o)
+                                    crate::silu_avx2::silu_into(i, o);
                                 }
                             });
                     }
@@ -299,7 +300,7 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                     // chunks, and the kernel writes every element of each.
                     #[allow(unsafe_code)]
                     unsafe {
-                        v.set_len(n)
+                        v.set_len(n);
                     };
                 }
             } else if xs.len() >= COLLECT_ABOVE {
@@ -318,6 +319,76 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
         Ok((v, l.shape().clone()))
     })
     .run(x)
+}
+
+
+/// How much of `SiLU`'s work sits in calls too small to fan out?
+///
+/// The chunk width is `max(1 << 14, len / threads)`, so any call with fewer
+/// than 16384 elements is ONE chunk and runs on a single worker. `SiLU` is
+/// 15.2 % of the pipeline across ~1305 calls per image, and 13.4 M activation
+/// elements over those calls is a ~10.3 k mean — BELOW the threshold. If that
+/// holds, most of `SiLU` is serial by construction and no pool width helps it.
+///
+/// A count, not a timing: the box is half-occupied by another project's
+/// benchmark, and this question does not need a clock.
+///
+/// # A counter placed inside the branch it is testing answers nothing
+///
+/// This first reported `SiLU` "**100 % parallel** — 52 calls, zero serial",
+/// and it was measuring its own position. It sat inside
+/// `if xs.len() >= PAR_THRESHOLD`, so the only calls it could ever see were
+/// the ones that had already passed the test. The profiler counted 87 calls
+/// per image against its 52, and that impossible pair is what exposed it:
+/// **the missing 35 are the serial ones, by construction.**
+///
+/// It is now at the top of the closure, above every branch, and reports the
+/// split as an argument rather than inferring it from where it was placed.
+///
+/// The scaling measurement had said so all along — `SiLU` scales 1.24x on four
+/// workers, 74 % serial — and was disbelieved for one round because a count
+/// is supposed to outrank a timing. It does, but only when it counts the
+/// right population.
+static SILU_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SILU_BIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SILU_CALLS_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SILU_CALLS_BIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn count_silu(len: usize, parallel: bool) {
+    use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
+    // Cached, not re-read per call. `std::env::var` allocates and locks the
+    // environment; doing that inside the activation would make the
+    // instrument a cost of the thing it measures — exactly the profiler tax
+    // `codec-measurement` §6 warns about.
+    static ON: AtomicU8 = AtomicU8::new(u8::MAX);
+    let on = match ON.load(Relaxed) {
+        u8::MAX => {
+            let v = std::env::var("FFAI_DIANA_COUNT").is_ok_and(|v| v == "1");
+            ON.store(u8::from(v), Relaxed);
+            v
+        }
+        v => v == 1,
+    };
+    if on {
+        if parallel {
+            SILU_BIG.fetch_add(len as u64, Relaxed);
+            SILU_CALLS_BIG.fetch_add(1, Relaxed);
+        } else {
+            SILU_SMALL.fetch_add(len as u64, Relaxed);
+            SILU_CALLS_SMALL.fetch_add(1, Relaxed);
+        }
+    }
+}
+
+/// `(serial_elems, serial_calls, parallel_elems, parallel_calls)`, and reset.
+pub fn take_silu_split() -> (u64, u64, u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        SILU_SMALL.swap(0, Relaxed),
+        SILU_CALLS_SMALL.swap(0, Relaxed),
+        SILU_BIG.swap(0, Relaxed),
+        SILU_CALLS_BIG.swap(0, Relaxed),
+    )
 }
 
 #[cfg(test)]
@@ -377,76 +448,6 @@ mod tests {
         assert!((y[4] - 60.0).abs() < 1e-3, "large positive -> x, got {}", y[4]);
         assert!(y.iter().all(|v| v.is_finite()), "no NaN/Inf at saturation");
     }
-}
-
-
-/// How much of SiLU's work sits in calls too small to fan out?
-///
-/// The chunk width is `max(1 << 14, len / threads)`, so any call with fewer
-/// than 16384 elements is ONE chunk and runs on a single worker. SiLU is
-/// 15.2 % of the pipeline across ~1305 calls per image, and 13.4 M activation
-/// elements over those calls is a ~10.3 k mean — BELOW the threshold. If that
-/// holds, most of SiLU is serial by construction and no pool width helps it.
-///
-/// A count, not a timing: the box is half-occupied by another project's
-/// benchmark, and this question does not need a clock.
-///
-/// # A counter placed inside the branch it is testing answers nothing
-///
-/// This first reported SiLU "**100 % parallel** — 52 calls, zero serial",
-/// and it was measuring its own position. It sat inside
-/// `if xs.len() >= PAR_THRESHOLD`, so the only calls it could ever see were
-/// the ones that had already passed the test. The profiler counted 87 calls
-/// per image against its 52, and that impossible pair is what exposed it:
-/// **the missing 35 are the serial ones, by construction.**
-///
-/// It is now at the top of the closure, above every branch, and reports the
-/// split as an argument rather than inferring it from where it was placed.
-///
-/// The scaling measurement had said so all along — SiLU scales 1.24x on four
-/// workers, 74 % serial — and was disbelieved for one round because a count
-/// is supposed to outrank a timing. It does, but only when it counts the
-/// right population.
-static SILU_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static SILU_BIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static SILU_CALLS_SMALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static SILU_CALLS_BIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-pub(crate) fn count_silu(len: usize, parallel: bool) {
-    use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
-    // Cached, not re-read per call. `std::env::var` allocates and locks the
-    // environment; doing that inside the activation would make the
-    // instrument a cost of the thing it measures — exactly the profiler tax
-    // `codec-measurement` §6 warns about.
-    static ON: AtomicU8 = AtomicU8::new(u8::MAX);
-    let on = match ON.load(Relaxed) {
-        u8::MAX => {
-            let v = std::env::var("FFAI_DIANA_COUNT").is_ok_and(|v| v == "1");
-            ON.store(v as u8, Relaxed);
-            v
-        }
-        v => v == 1,
-    };
-    if on {
-        if parallel {
-            SILU_BIG.fetch_add(len as u64, Relaxed);
-            SILU_CALLS_BIG.fetch_add(1, Relaxed);
-        } else {
-            SILU_SMALL.fetch_add(len as u64, Relaxed);
-            SILU_CALLS_SMALL.fetch_add(1, Relaxed);
-        }
-    }
-}
-
-/// `(serial_elems, serial_calls, parallel_elems, parallel_calls)`, and reset.
-pub fn take_silu_split() -> (u64, u64, u64, u64) {
-    use std::sync::atomic::Ordering::Relaxed;
-    (
-        SILU_SMALL.swap(0, Relaxed),
-        SILU_CALLS_SMALL.swap(0, Relaxed),
-        SILU_BIG.swap(0, Relaxed),
-        SILU_CALLS_BIG.swap(0, Relaxed),
-    )
 }
 
 

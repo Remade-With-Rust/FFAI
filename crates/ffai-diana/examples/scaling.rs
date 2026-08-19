@@ -33,14 +33,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // static library. `rusty_alloc` exposes the same reclaim as a safe Rust
     // function, so the `unsafe extern` block is gone entirely — which is the
     // small, unglamorous form the pure-Rust argument usually takes.
-    if let Ok(ms) = std::env::var("FFAI_TRIM_MS") {
-        if let Ok(ms) = ms.parse::<u64>() {
+    if let Ok(ms) = std::env::var("FFAI_TRIM_MS")
+        && let Ok(ms) = ms.parse::<u64>() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(ms));
                 rusty_alloc::alloc::collect(false);
             });
         }
-    }
     let tier = std::env::args().nth(1).unwrap_or_else(|| "n".into());
     let reps: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(7);
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()).unwrap();

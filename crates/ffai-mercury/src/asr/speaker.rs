@@ -4,7 +4,7 @@
 //! identifies a voice. [`super::diarize`] does the rest; this module knows
 //! nothing about clustering and clustering knows nothing about this.
 //!
-//! **Architecture** — transcribed from SpeechBrain's `ECAPA_TDNN` with the
+//! **Architecture** — transcribed from `SpeechBrain`'s `ECAPA_TDNN` with the
 //! `spkrec-ecapa-voxceleb` hyperparameters, so a stock checkpoint maps
 //! straight on:
 //!
@@ -21,7 +21,7 @@
 //!
 //! **Why this one.** The obvious choice is pyannote's embedding model, which
 //! is MIT-licensed and **gated** — access walled behind terms acceptance,
-//! which cannot live in a manifest under principle 4. SpeechBrain's is
+//! which cannot live in a manifest under principle 4. `SpeechBrain`'s is
 //! Apache-2.0 and ungated.
 //!
 //! **Verification status.** Shapes and the tensor-name mapping are tested
@@ -29,7 +29,7 @@
 //! numerics — the wav2vec2 port passed every shape test with a
 //! weight-normalisation axis wrong, and only the real checkpoint caught it.
 //! Two things must land before this is `stable`: a real checkpoint, and a
-//! filterbank front end that matches SpeechBrain's `Fbank` rather than
+//! filterbank front end that matches `SpeechBrain`'s `Fbank` rather than
 //! Whisper's log-mel. **They are not the same features**, and feeding
 //! Whisper's mel into this network produces confident nonsense — embeddings
 //! that cluster, but not by speaker.
@@ -56,7 +56,7 @@ pub struct Config {
     pub dilations: Vec<usize>,
     pub attention_channels: usize,
     pub embedding_dim: usize,
-    /// Res2Net cardinality — how many channel groups the block splits into.
+    /// `Res2Net` cardinality — how many channel groups the block splits into.
     pub res2net_scale: usize,
     pub se_channels: usize,
 }
@@ -64,7 +64,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         // speechbrain/spkrec-ecapa-voxceleb, from its hyperparams.yaml.
-        Config {
+        Self {
             n_mels: 80,
             channels: vec![1024, 1024, 1024, 1024, 3072],
             kernel_sizes: vec![5, 3, 3, 3, 1],
@@ -81,17 +81,24 @@ impl Default for Config {
 ///
 /// Off-by-one here does not error — it shifts every frame, so pooling
 /// statistics come from a window misaligned with the audio.
-fn same_padding(kernel: usize, dilation: usize) -> usize {
+const fn same_padding(kernel: usize, dilation: usize) -> usize {
     dilation * (kernel - 1) / 2
 }
 
 fn batch_norm_1d(size: usize, vb: VarBuilder) -> Result<BatchNorm> {
     // SpeechBrain's BatchNorm1d defaults: eps 1e-5, affine, running stats.
-    candle_nn::batch_norm(size, BatchNormConfig { eps: 1e-5, ..Default::default() }, vb)
-        .map_err(|e| model_err("batch_norm", e))
+    candle_nn::batch_norm(
+        size,
+        BatchNormConfig {
+            eps: 1e-5,
+            ..Default::default()
+        },
+        vb,
+    )
+    .map_err(|e| model_err("batch_norm", e))
 }
 
-/// Conv1d → ReLU → BatchNorm. The unit the whole network is built from.
+/// Conv1d → `ReLU` → `BatchNorm`. The unit the whole network is built from.
 struct TdnnBlock {
     conv: Conv1d,
     norm: BatchNorm,
@@ -122,7 +129,10 @@ impl TdnnBlock {
             vb.pp("conv").pp("conv"),
         )
         .map_err(|e| model_err("tdnn conv", e))?;
-        Ok(TdnnBlock { conv, norm: batch_norm_1d(out_ch, vb.pp("norm").pp("norm"))? })
+        Ok(Self {
+            conv,
+            norm: batch_norm_1d(out_ch, vb.pp("norm").pp("norm"))?,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
@@ -130,7 +140,7 @@ impl TdnnBlock {
     }
 }
 
-/// Res2Net: split the channels into `scale` groups and process them in a
+/// `Res2Net`: split the channels into `scale` groups and process them in a
 /// cascade, each group summed with the previous group's output. Gives the
 /// block several effective receptive-field sizes for the cost of one.
 struct Res2NetBlock {
@@ -157,7 +167,7 @@ impl Res2NetBlock {
                 vb.pp("blocks").pp(i.to_string()),
             )?);
         }
-        Ok(Res2NetBlock { blocks, scale })
+        Ok(Self { blocks, scale })
     }
 
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
@@ -193,17 +203,30 @@ struct SeBlock {
 
 impl SeBlock {
     fn load(channels: usize, se_channels: usize, vb: VarBuilder) -> Result<Self> {
-        Ok(SeBlock {
-            conv1: candle_nn::conv1d(channels, se_channels, 1, Default::default(), vb.pp("conv1").pp("conv"))
-                .map_err(|e| model_err("se conv1", e))?,
-            conv2: candle_nn::conv1d(se_channels, channels, 1, Default::default(), vb.pp("conv2").pp("conv"))
-                .map_err(|e| model_err("se conv2", e))?,
+        Ok(Self {
+            conv1: candle_nn::conv1d(
+                channels,
+                se_channels,
+                1,
+                Default::default(),
+                vb.pp("conv1").pp("conv"),
+            )
+            .map_err(|e| model_err("se conv1", e))?,
+            conv2: candle_nn::conv1d(
+                se_channels,
+                channels,
+                1,
+                Default::default(),
+                vb.pp("conv2").pp("conv"),
+            )
+            .map_err(|e| model_err("se conv2", e))?,
         })
     }
 
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
         let pooled = x.mean_keepdim(2)?;
-        let gain = candle_nn::ops::sigmoid(&self.conv2.forward(&self.conv1.forward(&pooled)?.relu()?)?)?;
+        let gain =
+            candle_nn::ops::sigmoid(&self.conv2.forward(&self.conv1.forward(&pooled)?.relu()?)?)?;
         x.broadcast_mul(&gain)
     }
 }
@@ -217,18 +240,24 @@ struct SeRes2NetBlock {
 }
 
 impl SeRes2NetBlock {
-    fn load(cfg: &Config, in_ch: usize, out_ch: usize, index: usize, vb: VarBuilder) -> Result<Self> {
+    fn load(
+        cfg: &Config,
+        in_ch: usize,
+        out_ch: usize,
+        index: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let kernel = cfg.kernel_sizes[index];
         let dilation = cfg.dilations[index];
-        let shortcut = if in_ch != out_ch {
+        let shortcut = if in_ch == out_ch {
+            None
+        } else {
             Some(
                 candle_nn::conv1d(in_ch, out_ch, 1, Default::default(), vb.pp("shortcut"))
                     .map_err(|e| model_err("shortcut", e))?,
             )
-        } else {
-            None
         };
-        Ok(SeRes2NetBlock {
+        Ok(Self {
             // The 1x1 blocks around the Res2Net core are always kernel 1,
             // dilation 1 — the dilation belongs to the core.
             tdnn1: TdnnBlock::load(in_ch, out_ch, 1, 1, vb.pp("tdnn1"))?,
@@ -267,12 +296,18 @@ struct AttentiveStatsPooling {
 
 impl AttentiveStatsPooling {
     fn load(channels: usize, attention_channels: usize, vb: VarBuilder) -> Result<Self> {
-        Ok(AttentiveStatsPooling {
+        Ok(Self {
             // Input is 3x channels: the features plus broadcast global mean
             // and std (SpeechBrain's `global_context=True`, its default).
             tdnn: TdnnBlock::load(channels * 3, attention_channels, 1, 1, vb.pp("tdnn"))?,
-            conv: candle_nn::conv1d(attention_channels, channels, 1, Default::default(), vb.pp("conv").pp("conv"))
-                .map_err(|e| model_err("asp conv", e))?,
+            conv: candle_nn::conv1d(
+                attention_channels,
+                channels,
+                1,
+                Default::default(),
+                vb.pp("conv").pp("conv"),
+            )
+            .map_err(|e| model_err("asp conv", e))?,
         })
     }
 
@@ -334,7 +369,9 @@ impl EcapaTdnn {
             )?);
         }
         // Multi-layer feature aggregation over the three SE-Res2Net outputs.
-        let mfa_in = cfg.channels[1..cfg.channels.len() - 1].iter().sum::<usize>();
+        let mfa_in = cfg.channels[1..cfg.channels.len() - 1]
+            .iter()
+            .sum::<usize>();
         let mfa_out = *cfg.channels.last().expect("channels is non-empty");
         let mfa = TdnnBlock::load(
             mfa_in,
@@ -348,12 +385,28 @@ impl EcapaTdnn {
         // is the attribute itself here rather than a field inside a block.
         // Uniformly applying the double nesting above would miss both.
         let asp_bn = batch_norm_1d(mfa_out * 2, vb.pp("asp_bn").pp("norm"))?;
-        let fc = candle_nn::conv1d(mfa_out * 2, cfg.embedding_dim, 1, Default::default(), vb.pp("fc").pp("conv"))
-            .map_err(|e| model_err("fc", e))?;
-        Ok(EcapaTdnn { cfg, blocks, first, mfa, asp, asp_bn, fc, device })
+        let fc = candle_nn::conv1d(
+            mfa_out * 2,
+            cfg.embedding_dim,
+            1,
+            Default::default(),
+            vb.pp("fc").pp("conv"),
+        )
+        .map_err(|e| model_err("fc", e))?;
+        Ok(Self {
+            cfg,
+            blocks,
+            first,
+            mfa,
+            asp,
+            asp_bn,
+            fc,
+            device,
+        })
     }
 
-    pub fn config(&self) -> &Config {
+    #[must_use]
+    pub const fn config(&self) -> &Config {
         &self.cfg
     }
 
@@ -372,16 +425,24 @@ impl EcapaTdnn {
             .and_then(|t| t.contiguous())
             .map_err(|e| model_err("input tensor", e))?;
 
-        let mut h = self.first.forward(&x).map_err(|e| model_err("block 0", e))?;
+        let mut h = self
+            .first
+            .forward(&x)
+            .map_err(|e| model_err("block 0", e))?;
         let mut outs = Vec::with_capacity(self.blocks.len());
         for (i, block) in self.blocks.iter().enumerate() {
-            h = block.forward(&h).map_err(|e| model_err(&format!("block {}", i + 1), e))?;
+            h = block
+                .forward(&h)
+                .map_err(|e| model_err(&format!("block {}", i + 1), e))?;
             outs.push(h.clone());
         }
         let cat = Tensor::cat(&outs, 1).map_err(|e| model_err("mfa concat", e))?;
         let h = self.mfa.forward(&cat).map_err(|e| model_err("mfa", e))?;
         let h = self.asp.forward(&h).map_err(|e| model_err("asp", e))?;
-        let h = self.asp_bn.forward_t(&h, false).map_err(|e| model_err("asp_bn", e))?;
+        let h = self
+            .asp_bn
+            .forward_t(&h, false)
+            .map_err(|e| model_err("asp_bn", e))?;
         let h = self.fc.forward(&h).map_err(|e| model_err("fc", e))?;
         h.flatten_all()
             .and_then(|t| t.to_dtype(DType::F32))
@@ -413,7 +474,10 @@ mod tests {
     fn build(cfg: &Config) -> (EcapaTdnn, VarMap) {
         let map = VarMap::new();
         let vb = VarBuilder::from_varmap(&map, DType::F32, &Device::Cpu);
-        (EcapaTdnn::load(cfg.clone(), vb, Device::Cpu).expect("loads"), map)
+        (
+            EcapaTdnn::load(cfg.clone(), vb, Device::Cpu).expect("loads"),
+            map,
+        )
     }
 
     #[test]
@@ -433,7 +497,9 @@ mod tests {
         let cfg = tiny();
         let (model, _map) = build(&cfg);
         let frames = 150;
-        let e = model.embed(&vec![0.1f32; frames * cfg.n_mels], frames).expect("embeds");
+        let e = model
+            .embed(&vec![0.1f32; frames * cfg.n_mels], frames)
+            .expect("embeds");
         assert_eq!(e.len(), cfg.embedding_dim);
         assert!(e.iter().all(|v| v.is_finite()), "non-finite embedding");
     }
@@ -444,8 +510,12 @@ mod tests {
         // vector of the same width — this is what lets windows be compared.
         let cfg = tiny();
         let (model, _map) = build(&cfg);
-        let a = model.embed(&vec![0.1f32; 100 * cfg.n_mels], 100).expect("a");
-        let b = model.embed(&vec![0.1f32; 300 * cfg.n_mels], 300).expect("b");
+        let a = model
+            .embed(&vec![0.1f32; 100 * cfg.n_mels], 100)
+            .expect("a");
+        let b = model
+            .embed(&vec![0.1f32; 300 * cfg.n_mels], 300)
+            .expect("b");
         assert_eq!(a.len(), b.len());
     }
 
@@ -462,8 +532,12 @@ mod tests {
         // constant, which would cluster perfectly and mean nothing.
         let cfg = tiny();
         let (model, _map) = build(&cfg);
-        let a = model.embed(&vec![0.1f32; 200 * cfg.n_mels], 200).expect("a");
-        let ramp: Vec<f32> = (0..200 * cfg.n_mels).map(|i| (i % 17) as f32 * 0.01).collect();
+        let a = model
+            .embed(&vec![0.1f32; 200 * cfg.n_mels], 200)
+            .expect("a");
+        let ramp: Vec<f32> = (0..200 * cfg.n_mels)
+            .map(|i| (i % 17) as f32 * 0.01)
+            .collect();
         let b = model.embed(&ramp, 200).expect("b");
         let dist = super::super::diarize::cosine_distance(&a, &b);
         assert!(dist > 1e-6, "embeddings collapsed: distance {dist}");

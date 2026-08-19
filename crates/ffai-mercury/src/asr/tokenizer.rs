@@ -48,7 +48,7 @@ impl WhisperTokenizer {
                 ))
             })
         };
-        Ok(WhisperTokenizer {
+        Ok(Self {
             sot: id("<|startoftranscript|>")?,
             eot: id("<|endoftext|>")?,
             transcribe: id("<|transcribe|>")?,
@@ -57,19 +57,21 @@ impl WhisperTokenizer {
             no_speech: id("<|nospeech|>").or_else(|_| id("<|nocaptions|>"))?,
             prev: id("<|startofprev|>")?,
             timestamp_begin: id("<|0.00|>")?,
-            space: inner.token_to_id("\u{0120}").or_else(|| inner.token_to_id(" ")),
+            space: inner
+                .token_to_id("\u{0120}")
+                .or_else(|| inner.token_to_id(" ")),
             inner,
         })
     }
 
     /// True if `token` encodes a timestamp rather than text.
-    pub fn is_timestamp(&self, token: u32) -> bool {
+    pub const fn is_timestamp(&self, token: u32) -> bool {
         token >= self.timestamp_begin
     }
 
     /// Seconds encoded by a timestamp token.
     pub fn timestamp_secs(&self, token: u32) -> f64 {
-        (token.saturating_sub(self.timestamp_begin)) as f64 * TIMESTAMP_STEP_SECS
+        f64::from(token.saturating_sub(self.timestamp_begin)) * TIMESTAMP_STEP_SECS
     }
 
     /// Whisper's `non_speech_tokens`: punctuation and symbol tokens that
@@ -87,18 +89,36 @@ impl WhisperTokenizer {
     pub fn non_speech_tokens(&self) -> Vec<u32> {
         const SYMBOLS: &str = "\"#()*+/:;<=>@[\\]^_`{|}~「」『』";
         const MULTI: &[&str] = &[
-            "<<", ">>", "<<<", ">>>", "--", "---", "-(", "-[", "('", "(\"", "((", "))",
-            "(((", ")))", "[[", "]]", "{{", "}}", "♪♪", "♪♪♪",
+            "<<",
+            ">>",
+            "<<<",
+            ">>>",
+            "--",
+            "---",
+            "-(",
+            "-[",
+            "('",
+            "(\"",
+            "((",
+            "))",
+            "(((",
+            ")))",
+            "[[",
+            "]]",
+            "{{",
+            "}}",
+            "♪♪",
+            "♪♪♪",
         ];
         const MISC: &str = "♩♪♫♬♭♮♯";
 
         let mut out = std::collections::BTreeSet::new();
         // Whisper seeds the set with " -" and " '" unconditionally.
         for seed in [" -", " '"] {
-            if let Ok(ids) = self.encode(seed) {
-                if let Some(&first) = ids.first() {
-                    out.insert(first);
-                }
+            if let Ok(ids) = self.encode(seed)
+                && let Some(&first) = ids.first()
+            {
+                out.insert(first);
             }
         }
         let singles: Vec<String> = SYMBOLS.chars().map(|c| c.to_string()).collect();
@@ -111,10 +131,11 @@ impl WhisperTokenizer {
         {
             let is_misc = MISC.contains(symbol);
             for form in [symbol.to_string(), format!(" {symbol}")] {
-                if let Ok(ids) = self.encode(&form) {
-                    if (ids.len() == 1 || is_misc) && !ids.is_empty() {
-                        out.insert(ids[0]);
-                    }
+                if let Ok(ids) = self.encode(&form)
+                    && (ids.len() == 1 || is_misc)
+                    && !ids.is_empty()
+                {
+                    out.insert(ids[0]);
                 }
             }
         }
@@ -128,7 +149,11 @@ impl WhisperTokenizer {
 
     /// Decode token ids to text, dropping control tokens.
     pub fn decode(&self, tokens: &[u32]) -> Result<String> {
-        let text: Vec<u32> = tokens.iter().copied().filter(|&t| t < self.eot_floor()).collect();
+        let text: Vec<u32> = tokens
+            .iter()
+            .copied()
+            .filter(|&t| t < self.eot_floor())
+            .collect();
         self.inner
             .decode(&text, true)
             .map_err(|e| Error::Model(format!("decoding tokens: {e}")))
@@ -145,7 +170,7 @@ impl WhisperTokenizer {
     }
 
     /// Everything at or above this id is a control token, not text.
-    fn eot_floor(&self) -> u32 {
+    const fn eot_floor(&self) -> u32 {
         self.eot
     }
 
@@ -170,7 +195,11 @@ impl WhisperTokenizer {
             if let Some(lang) = language {
                 tokens.push(lang);
             }
-            tokens.push(if translate { self.translate } else { self.transcribe });
+            tokens.push(if translate {
+                self.translate
+            } else {
+                self.transcribe
+            });
         }
         if !timestamps {
             tokens.push(self.no_timestamps);

@@ -35,19 +35,26 @@ struct Reader<'a> {
 }
 
 /// One field's payload, already sliced.
+// Narrow allow: `Bytes`'s payload is navigated past rather than read, because
+// length-delimited fields are skipped by this parser. Scoped to this enum so
+// dead code elsewhere still surfaces.
+#[allow(dead_code)]
 enum Wire<'a> {
     Varint(u64),
     Fixed64(u64),
+    // The payload is sliced and skipped rather than read: length-delimited
+    // fields are navigated, not consumed, by this parser. Kept so the enum
+    // documents the whole wire format.
     Bytes(&'a [u8]),
     Fixed32(u32),
 }
 
 impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
+    const fn new(buf: &'a [u8]) -> Self {
         Reader { buf, pos: 0 }
     }
 
-    fn done(&self) -> bool {
+    const fn done(&self) -> bool {
         self.pos >= self.buf.len()
     }
 
@@ -57,7 +64,7 @@ impl<'a> Reader<'a> {
         loop {
             let b = *self.buf.get(self.pos).ok_or_else(|| trunc("varint"))?;
             self.pos += 1;
-            out |= ((b & 0x7f) as u64) << shift;
+            out |= u64::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
                 return Ok(out);
             }
@@ -69,7 +76,10 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self.pos.checked_add(n).ok_or_else(|| trunc("length overflow"))?;
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or_else(|| trunc("length overflow"))?;
         let slice = self.buf.get(self.pos..end).ok_or_else(|| trunc("bytes"))?;
         self.pos = end;
         Ok(slice)
@@ -81,7 +91,19 @@ impl<'a> Reader<'a> {
             return Ok(None);
         }
         let tag = self.varint()?;
-        let field = (tag >> 3) as u32;
+        // Protobuf field numbers are 1..=2^29-1. `as u32` would TRUNCATE a larger
+        // one and alias it onto a small field this parser handles: a tag whose
+        // field number is 2^32 + 1 narrows to 1, which `parse_tensor` reads as
+        // `dims`. Reject the tag instead of narrowing it.
+        let field_num = tag >> 3;
+        const MAX_FIELD: u64 = (1 << 29) - 1;
+        if field_num == 0 || field_num > MAX_FIELD {
+            return Err(Error::Model(format!(
+                "onnx: field number {field_num} outside protobuf's 1..={MAX_FIELD}"
+            )));
+        }
+        #[allow(clippy::cast_possible_truncation)] // bounded to 2^29-1 above
+        let field = field_num as u32;
         let wire = match tag & 7 {
             0 => Wire::Varint(self.varint()?),
             1 => {
@@ -89,7 +111,13 @@ impl<'a> Reader<'a> {
                 Wire::Fixed64(u64::from_le_bytes(b.try_into().expect("8 bytes")))
             }
             2 => {
-                let n = self.varint()? as usize;
+                // `as usize` TRUNCATES on 32-bit. This workspace ships
+                // `ffai-wasm`, so wasm32 is a real target: a declared length of
+                // 2^32 + 5 would truncate to 5, sail past the bounds check in
+                // `take`, and hand back a slice that is not the field. Reject
+                // the length instead of narrowing it.
+                let n = usize::try_from(self.varint()?)
+                    .map_err(|_| trunc("length exceeds this platform's usize"))?;
                 Wire::Bytes(self.take(n)?)
             }
             5 => {
@@ -114,6 +142,12 @@ fn utf8(b: &[u8]) -> String {
 
 /// Repeated int64 that may arrive packed (one length-delimited field) or
 /// unpacked (one varint field per element). Both are legal; exporters differ.
+// `u64 as i64` here is the SPECIFIED protobuf decoding, not an accident:
+// negative int64 values are encoded as ten-byte varints carrying the
+// two's-complement bit pattern, so reinterpreting the u64 is exactly right.
+// (A negative dim that arrives this way is then rejected downstream by
+// `usize::try_from` in parse_tensor - see gate H-17.)
+#[allow(clippy::cast_possible_wrap)]
 fn push_ints(out: &mut Vec<i64>, wire: &Wire<'_>) -> Result<()> {
     match wire {
         Wire::Varint(v) => out.push(*v as i64),
@@ -157,6 +191,9 @@ pub struct Graph {
 /// ONNX `TensorProto.data_type`.
 const DT_FLOAT: i64 = 1;
 
+// Same protobuf rule as `push_ints`: a proto int64 arrives as a u64 varint
+// carrying the two's-complement bits, so `as i64` is the specified decoding.
+#[allow(clippy::cast_possible_wrap)]
 fn parse_tensor(buf: &[u8]) -> Result<Option<Initializer>> {
     let (mut dims, mut name, mut raw, mut floats) =
         (Vec::new(), String::new(), None::<&[u8]>, Vec::<f32>::new());
@@ -201,8 +238,33 @@ fn parse_tensor(buf: &[u8]) -> Result<Option<Initializer>> {
         }
         None => floats,
     };
-    let dims: Vec<usize> = dims.iter().map(|d| *d as usize).collect();
-    let expected: usize = dims.iter().product();
+    // Dims arrive as i64 from the file. Using them as-is went wrong twice:
+    //
+    //   * a NEGATIVE dim - ONNX's -1 "dynamic" marker, or plain corruption -
+    //     cast to a colossal usize under `as`;
+    //   * `dims.iter().product()` is an UNCHECKED multiply. In debug it panics,
+    //     which is a denial of service on model load. In release, where this
+    //     workspace deliberately carries no overflow-checks (H-05, R-005), it
+    //     WRAPS - and a wrapped product can land exactly on `data.len()`, so a
+    //     tensor whose dims do not describe its data passes validation and
+    //     everything downstream indexes `data` through `dims`.
+    //
+    // Found by tests/properties.rs; `[1<<32, 1<<32]` wraps to 0 and matched an
+    // empty payload.
+    let mut expected: usize = 1;
+    let mut shape: Vec<usize> = Vec::with_capacity(dims.len());
+    for &d in &dims {
+        let d = usize::try_from(d).map_err(|_| {
+            Error::Model(format!("onnx: `{name}` declares a negative dimension {d}"))
+        })?;
+        expected = expected.checked_mul(d).ok_or_else(|| {
+            Error::Model(format!(
+                "onnx: `{name}` declares dimensions whose product overflows: {dims:?}"
+            ))
+        })?;
+        shape.push(d);
+    }
+    let dims = shape;
     if data.len() != expected {
         return Err(Error::Model(format!(
             "onnx: `{name}` declares {dims:?} ({expected} values) but carries {}",
@@ -212,6 +274,9 @@ fn parse_tensor(buf: &[u8]) -> Result<Option<Initializer>> {
     Ok(Some(Initializer { name, dims, data }))
 }
 
+// Same protobuf rule as `push_ints`: a proto int64 arrives as a u64 varint
+// carrying the two's-complement bits, so `as i64` is the specified decoding.
+#[allow(clippy::cast_possible_wrap)]
 fn parse_attribute(buf: &[u8]) -> Result<(String, Vec<i64>)> {
     let (mut name, mut ints) = (String::new(), Vec::new());
     let mut r = Reader::new(buf);
@@ -244,7 +309,12 @@ fn parse_node(buf: &[u8]) -> Result<Node> {
             _ => {}
         }
     }
-    Ok(Node { op_type, name, inputs, ints })
+    Ok(Node {
+        op_type,
+        name,
+        inputs,
+        ints,
+    })
 }
 
 fn parse_graph(buf: &[u8]) -> Result<Graph> {
@@ -261,7 +331,10 @@ fn parse_graph(buf: &[u8]) -> Result<Graph> {
             _ => {}
         }
     }
-    Ok(Graph { nodes, initializers })
+    Ok(Graph {
+        nodes,
+        initializers,
+    })
 }
 
 /// Parse an `.onnx` file down to its graph.
@@ -272,7 +345,9 @@ pub fn parse(bytes: &[u8]) -> Result<Graph> {
             return parse_graph(b);
         }
     }
-    Err(Error::Model("onnx: no graph in the file — is it an ONNX model?".into()))
+    Err(Error::Model(
+        "onnx: no graph in the file — is it an ONNX model?".into(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +355,7 @@ pub fn parse(bytes: &[u8]) -> Result<Graph> {
 // ---------------------------------------------------------------------------
 
 /// Convolution geometry, read from the graph rather than assumed.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Geometry {
     pub transpose: bool,
     pub stride: usize,
@@ -312,6 +387,7 @@ fn module_path(node_name: &str, op_type: &str) -> String {
 /// 2. `ElementwiseAffine`'s `logs` is constant-folded into `exp(-logs)`;
 /// 3. weight-norm folding leaves 32 convolution weights named `onnx::Conv_*`,
 ///    recoverable only through the node that consumes them.
+///
 /// Takes the graph **by value** so the weights are moved, not copied. The
 /// first version borrowed and cloned, which meant the file bytes, the parsed
 /// initializers, the recovered copies and the candle tensors were all live at
@@ -327,7 +403,15 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
             "Conv" | "ConvTranspose" => {
                 let base = module_path(&node.name, &node.op_type);
                 let first = |k: &str, d: usize| {
-                    node.ints.get(k).and_then(|v| v.first()).map(|v| *v as usize).unwrap_or(d)
+                    // Attribute ints (kernel_shape, strides, pads, dilations,
+                    // group) are i64 straight from the file. `as usize` turns a
+                    // negative value into a colossal one, which then becomes a
+                    // geometry dimension. Fall back to the default instead.
+                    node.ints
+                        .get(k)
+                        .and_then(|v| v.first())
+                        .and_then(|v| usize::try_from(*v).ok())
+                        .unwrap_or(d)
                 };
                 geometry.insert(
                     base.clone(),
@@ -339,8 +423,11 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
                     },
                 );
                 // Inputs are (x, weight, bias?); only the initializers are ours.
-                let weights: Vec<&String> =
-                    node.inputs.iter().filter(|i| initializer_names.contains(i.as_str())).collect();
+                let weights: Vec<&String> = node
+                    .inputs
+                    .iter()
+                    .filter(|i| initializer_names.contains(i.as_str()))
+                    .collect();
                 for (k, input) in weights.iter().enumerate() {
                     let suffix = if k == 0 { "weight" } else { "bias" };
                     rename.insert((*input).clone(), format!("{base}.{suffix}"));
@@ -355,8 +442,7 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
             }
             "Mul" if node.name == "/dp/flows.0/Mul" => {
                 for input in &node.inputs {
-                    if initializer_names.contains(input.as_str())
-                        && input.ends_with("Exp_output_0")
+                    if initializer_names.contains(input.as_str()) && input.ends_with("Exp_output_0")
                     {
                         rename.insert(input.clone(), "dp.flows.0.exp_neg_logs".to_string());
                     }
@@ -368,17 +454,25 @@ pub fn recover(graph: Graph) -> Result<VoiceWeights> {
 
     let mut tensors = HashMap::new();
     for init in graph.initializers {
-        let canonical = rename.get(&init.name).cloned().unwrap_or_else(|| init.name.clone());
+        let canonical = rename
+            .get(&init.name)
+            .cloned()
+            .unwrap_or_else(|| init.name.clone());
         // Float constants the graph owns rather than the model: keep them
         // under a stable name so nothing is silently dropped, exactly as the
         // Python converter does.
         let canonical = if canonical.starts_with("onnx::") || canonical.starts_with('/') {
-            format!("graph_const.{}", canonical.replace('/', "_").replace("::", "_"))
+            format!(
+                "graph_const.{}",
+                canonical.replace('/', "_").replace("::", "_")
+            )
         } else {
             canonical
         };
         if tensors.contains_key(&canonical) {
-            return Err(Error::Model(format!("onnx: two tensors both named `{canonical}`")));
+            return Err(Error::Model(format!(
+                "onnx: two tensors both named `{canonical}`"
+            )));
         }
         tensors.insert(canonical, init);
     }
@@ -421,8 +515,10 @@ mod tests {
         tensor.extend(varint(2 << 3)); // data_type
         tensor.extend(varint(DT_FLOAT as u64));
         tensor.extend(len_delim(8, b"dp.flows.0.m")); // name
-        let raw: Vec<u8> =
-            [1.5f32, -2.25].iter().flat_map(|f| f.to_le_bytes()).collect();
+        let raw: Vec<u8> = [1.5f32, -2.25]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
         tensor.extend(len_delim(9, &raw)); // raw_data
 
         let graph = len_delim(5, &tensor);
@@ -442,14 +538,20 @@ mod tests {
             module_path("/flow/flows.6/enc/in_layers.0/Conv", "Conv"),
             "flow.flows.6.enc.in_layers.0"
         );
-        assert_eq!(module_path("/dec/ups.0/ConvTranspose", "ConvTranspose"), "dec.ups.0");
+        assert_eq!(
+            module_path("/dec/ups.0/ConvTranspose", "ConvTranspose"),
+            "dec.ups.0"
+        );
         // A numbered repeat of the op is stripped too (`Conv_1` → same base),
         // which is what the Python converter does and therefore what byte
         // equality with it requires. Two convs under one module would then
         // collide — `recover` errors on that rather than silently keeping one.
         assert_eq!(module_path("/dp/flows.0/Mul_1", "Mul"), "dp.flows.0");
         // A last segment that merely contains the op name is NOT stripped.
-        assert_eq!(module_path("/enc_p/proj/PreConv", "Conv"), "enc_p.proj.PreConv");
+        assert_eq!(
+            module_path("/enc_p/proj/PreConv", "Conv"),
+            "enc_p.proj.PreConv"
+        );
     }
 
     #[test]

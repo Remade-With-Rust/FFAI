@@ -54,7 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ids_list = Vec::new();
     for c in &clips {
         let text = std::fs::read_to_string(manifest.clip_path(c))?;
-        let ids = vits.id_map.sentence_to_ids(&phonemizer.phonemize(text.trim())?).0;
+        let ids = vits
+            .id_map
+            .sentence_to_ids(&phonemizer.phonemize(text.trim())?)
+            .0;
         ids_list.push((c.id.clone(), ids));
     }
 
@@ -79,7 +82,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if w_old != w_new {
             let n = w_old.iter().zip(&w_new).filter(|(a, b)| a != b).count();
-            w_diff.push((id.clone(), n, w_old.iter().sum::<u32>(), w_new.iter().sum::<u32>()));
+            w_diff.push((
+                id.clone(),
+                n,
+                w_old.iter().sum::<u32>(),
+                w_new.iter().sum::<u32>(),
+            ));
         }
 
         // Margin: the raw pre-ceil durations under the shipped routing, and how
@@ -101,7 +109,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         set("FFAI_DP_DIRECT_1X1", false);
         let a_new = synth(&vits, &m_p, &logs_p, &w_new)?;
         if a_old.len() != a_new.len()
-            || a_old.iter().zip(&a_new).any(|(x, y)| x.to_bits() != y.to_bits())
+            || a_old
+                .iter()
+                .zip(&a_new)
+                .any(|(x, y)| x.to_bits() != y.to_bits())
         {
             audio_diff.push(id.clone());
         }
@@ -124,7 +135,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if audio_diff.is_empty() {
             "BIT-IDENTICAL".to_string()
         } else {
-            format!("{} sentences differ: {:?}", audio_diff.len(), &audio_diff[..audio_diff.len().min(5)])
+            format!(
+                "{} sentences differ: {:?}",
+                audio_diff.len(),
+                &audio_diff[..audio_diff.len().min(5)]
+            )
         }
     );
     println!(
@@ -210,7 +225,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if w_old != w_new {
             let n = w_old.iter().zip(&w_new).filter(|(a, b)| a != b).count();
-            k_wdiff.push((id.clone(), n, w_old.iter().sum::<u32>(), w_new.iter().sum::<u32>()));
+            k_wdiff.push((
+                id.clone(),
+                n,
+                w_old.iter().sum::<u32>(),
+                w_new.iter().sum::<u32>(),
+            ));
         }
         if a_old.len() != a_new.len() {
             k_len_diff += 1;
@@ -220,8 +240,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    println!("
-[4] GEMM convs + flat LayerNorm + A&S GELU vs candle baseline");
+    println!(
+        "
+[4] GEMM convs + flat LayerNorm + A&S GELU vs candle baseline"
+    );
     println!(
         "    w_ceil   : {}",
         if k_wdiff.is_empty() {
@@ -233,7 +255,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (id, n, so, sn) in k_wdiff.iter().take(5) {
         println!("      {id}: {n} phonemes differ, frames {so} -> {sn}");
     }
-    println!("    audio len: {}", if k_len_diff == 0 { "identical".into() } else { format!("{k_len_diff} differ") });
+    println!(
+        "    audio len: {}",
+        if k_len_diff == 0 {
+            "identical".into()
+        } else {
+            format!("{k_len_diff} differ")
+        }
+    );
     println!("    audio max|delta| vs candle path: {worst_audio:.3e}");
 
     let clean = w_diff.is_empty()

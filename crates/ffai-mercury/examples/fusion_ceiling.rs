@@ -117,9 +117,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  scores q@kT   {:7.2} ms", t_qk * 1e3);
     println!("  softmax       {:7.2} ms", t_sm * 1e3);
     println!("  attn@v        {:7.2} ms", t_wv * 1e3);
-    println!("  TRIO          {:7.2} ms   ({:.1} GFLOP/s on the two matmuls)", trio * 1e3, flops / matmuls / 1e9);
+    println!(
+        "  TRIO          {:7.2} ms   ({:.1} GFLOP/s on the two matmuls)",
+        trio * 1e3,
+        flops / matmuls / 1e9
+    );
     println!("\nTHE PRIZE — perfect fusion removes at most the separate softmax pass:");
-    println!("  ceiling saving {:7.2} ms/layer  = {:.1}% of the trio", t_sm * 1e3, t_sm / trio * 100.0);
+    println!(
+        "  ceiling saving {:7.2} ms/layer  = {:.1}% of the trio",
+        t_sm * 1e3,
+        t_sm / trio * 100.0
+    );
 
     // The tax: what a hand-written fused kernel actually achieves.
     let qv: Vec<f32> = q.flatten_all()?.to_vec1()?;
@@ -143,12 +151,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     println!("\nTHE TAX — hand-written fused kernel, same work:");
-    println!("  fused kernel  {:7.2} ms   ({:.1} GFLOP/s)", t_fused * 1e3, flops / t_fused / 1e9);
+    println!(
+        "  fused kernel  {:7.2} ms   ({:.1} GFLOP/s)",
+        t_fused * 1e3,
+        flops / t_fused / 1e9
+    );
     println!(
         "\nVERDICT: fused {:.2} ms vs trio {:.2} ms  ->  {}",
         t_fused * 1e3,
         trio * 1e3,
-        if t_fused < trio { "WIN, build it" } else { "LOSS, do not build" }
+        if t_fused < trio {
+            "WIN, build it"
+        } else {
+            "LOSS, do not build"
+        }
     );
     Ok(())
 }

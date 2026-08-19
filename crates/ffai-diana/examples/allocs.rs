@@ -68,7 +68,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  mean allocation: {:.1} KiB", bytes as f64 / count.max(1) as f64 / 1024.0);
     // Allocated memory is written at least once, and first touch faults a page
     // per 4 KiB. Both are DRAM traffic that no FLOP count sees.
-    for bw in [24.0f64] {
+    {
+        let bw = 24.0f64;
         println!("  writing {:.1} MiB once at {bw} GB/s = {:.1} ms floor", bytes as f64 / 1048576.0, bytes as f64 / (bw * 1e9) * 1e3);
     }
     println!("  page faults implied (4 KiB first touch): {:.0}k", bytes as f64 / 4096.0 / 1e3);

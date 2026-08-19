@@ -39,6 +39,7 @@ pub mod prelude {
 
 /// Threads available for intra-image work. Always 1 on wasm.
 #[inline]
+#[must_use] 
 pub fn current_num_threads() -> usize {
     #[cfg(not(target_arch = "wasm32"))]
     {

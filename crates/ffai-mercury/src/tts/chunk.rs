@@ -11,11 +11,13 @@
 //! unusual text will over-split, which costs a pause, not words.
 
 /// Split text into synthesizable sentences (with their punctuation).
+#[must_use]
 pub fn sentences(text: &str) -> Vec<String> {
     // Single-token forms only: the lookback collects the alphabetic run
     // before the period, so `e.g.` / `i.e.` surface as their last letter.
-    const ABBREV: &[&str] =
-        &["mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "etc", "g", "e", "no"];
+    const ABBREV: &[&str] = &[
+        "mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "etc", "g", "e", "no",
+    ];
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -73,7 +75,12 @@ mod tests {
         // its sentence (better prosody than a hard gap).
         assert_eq!(
             sentences(text),
-            vec!["The birch canoe slid.", "Dr. Smith spoke!", "Was it loud?", "Yes; quite loud."]
+            vec![
+                "The birch canoe slid.",
+                "Dr. Smith spoke!",
+                "Was it loud?",
+                "Yes; quite loud."
+            ]
         );
     }
 

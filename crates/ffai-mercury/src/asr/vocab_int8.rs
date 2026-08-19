@@ -5,7 +5,7 @@
 //! f16 path moves 39.8 MB/token at ~24 GB/s, already close to what this
 //! machine's memory system gives a read-only stream.
 //!
-//! candle's Q8_0 halves the bytes and measured **no faster** (20/41,
+//! candle's `Q8_0` halves the bytes and measured **no faster** (20/41,
 //! z = -0.2) — it spends on dequantization what it saves on traffic, turning
 //! a memory-bound op into a compute-bound one. That is a verdict on that
 //! kernel, not on int8: AVX2's `_mm256_maddubs_epi16` + `_mm256_madd_epi16`
@@ -31,7 +31,23 @@
 //! first and shipped 4.34x, but corpus WER moved 7.87 -> 7.93 %, leaving only
 //! 0.027 pp of gate margin: one outlier sets the row scale and coarsens every
 //! weight beside it. Block scales cost a per-block horizontal reduction and
-//! ~6 % more bytes, and are why Q8_0 uses them.
+//! ~6 % more bytes, and are why `Q8_0` uses them.
+
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    // `_mm256_loadu_si256` is the UNALIGNED load, so casting a byte pointer to
+    // *const __m256i for it is correct; clippy cannot see the consumer.
+    clippy::cast_ptr_alignment
+)]
 
 use ffai_core::candle::{
     CpuStorage, CustomOp1, Device, Layout, Result as CandleResult, Shape, Tensor,
@@ -39,7 +55,11 @@ use ffai_core::candle::{
 use rayon::prelude::*;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use std::arch::x86_64::{
+    __m256i, _mm_add_epi32, _mm_cvtsi128_si32, _mm_shuffle_epi32, _mm256_add_epi32,
+    _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_madd_epi16,
+    _mm256_maddubs_epi16, _mm256_set1_epi16, _mm256_setzero_si256,
+};
 
 /// Block-symmetric int8 vocabulary weights.
 pub struct Int8Vocab {
@@ -51,7 +71,7 @@ struct Shared {
     /// One scale per 32-weight BLOCK, not per row. A single row scale is set
     /// by that row's largest magnitude, so one outlier coarsens all 384
     /// weights beside it; corpus WER moved 7.87 -> 7.93 % and left only
-    /// 0.027 pp of gate margin. Per-block scales are why Q8_0 uses them.
+    /// 0.027 pp of gate margin. Per-block scales are why `Q8_0` uses them.
     bscale: Vec<f32>,
     /// Per-row activation-offset correction, `64 * sum_b scale_b * blocksum_b`.
     /// Independent of the activation, so it is folded once at load rather than
@@ -62,6 +82,7 @@ struct Shared {
     nblocks: usize,
     /// f32 weights, retained ONLY under `FFAI_VOCAB_AUDIT` so each token can be
     /// scored against an exact oracle. Costs ~80 MB; never allocated otherwise.
+    #[allow(dead_code)] // exact-oracle tensor: ~80 MB, allocated only when scoring against it
     oracle: Option<Tensor>,
 }
 
@@ -88,11 +109,30 @@ impl Int8Vocab {
         };
         // The kernel steps 32 lanes at a time; every Whisper n_state is a
         // multiple of 32, but do not assume it.
+        //
+        // All three conditions are MEMORY-SAFETY invariants for `dot_i8_blocked`,
+        // not tuning preferences, so they are checked HERE - at the point where
+        // the kernel becomes reachable - rather than trusted from the knob's
+        // env-var validator:
+        //
+        //   blk != 0        `d % blk` is a divide-by-zero panic otherwise, and
+        //                   `Num::get_usize` maps any negative override to 0.
+        //   blk % 32 == 0   the inner loop tests `o < blk` but READS 32 BYTES per
+        //                   step, so a blk of 48 reads 16 bytes past the block -
+        //                   and past the whole allocation on the final block.
+        //   d % blk == 0    blocks must tile the row exactly.
+        //
+        // `FFAI_VOCAB_BLK` is validated on the env path, but `Num::set` stores
+        // without validating, so that guarantee does not reach here. Falling back
+        // to `None` picks the safe non-SIMD path instead of trusting the caller.
         let blk = blk();
-        if d % blk != 0 {
+        if blk == 0 || !blk.is_multiple_of(32) || d % blk != 0 {
             return Ok(None);
         }
-        let w: Vec<f32> = embeddings.to_dtype(ffai_core::candle::DType::F32)?.flatten_all()?.to_vec1()?;
+        let w: Vec<f32> = embeddings
+            .to_dtype(ffai_core::candle::DType::F32)?
+            .flatten_all()?
+            .to_vec1()?;
 
         let nblocks = d / blk;
         let mut q = vec![0i8; vocab * d];
@@ -110,7 +150,7 @@ impl Int8Vocab {
                 for k in 0..blk {
                     let qi = (bw[k] / sc).round().clamp(-127.0, 127.0) as i8;
                     q[v * d + b * blk + k] = qi;
-                    bsum += qi as i32;
+                    bsum += i32::from(qi);
                 }
                 c += sc * bsum as f32;
             }
@@ -122,7 +162,7 @@ impl Int8Vocab {
             None
         };
         let _ = &oracle;
-        Ok(Some(Int8Vocab {
+        Ok(Some(Self {
             shared: std::sync::Arc::new(Shared {
                 qw: q,
                 bscale,
@@ -199,6 +239,9 @@ impl CustomOp1 for Int8VocabOp {
             let v0 = ci * 512;
             for (i, slot) in o.iter_mut().enumerate() {
                 let v = v0 + i;
+                // SAFETY: avx2 - the op is only built when `have_avx2()` passes (guard above).
+                // The slices handed to the kernel are derived from `nblocks`/`blk`, which
+                // partition the quantized weight buffer exactly.
                 let acc = unsafe {
                     dot_i8_blocked(
                         &q.qw[v * d..(v + 1) * d],
@@ -234,35 +277,42 @@ fn have_avx2() -> bool {
 /// row-scaled version avoided it by reducing once per row.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+// SAFETY: caller must ensure avx2, and that `w`/`bscale`/`xu` are long enough
+// for `nblocks*blk`. Guarded by `have_avx2()` at the single call site.
 unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, blk: usize) -> f32 {
-    let ones = _mm256_set1_epi16(1);
-    let wp = w.as_ptr();
-    let xp = xu.as_ptr();
-    let mut acc = 0f32;
-    for b in 0..nblocks {
-        // One block may span several 32-lane steps when FFAI_VOCAB_BLK > 32.
-        let mut p = _mm256_setzero_si256();
-        let base = b * blk;
-        let mut o = 0;
-        while o < blk {
-            let x0 = _mm256_loadu_si256(xp.add(base + o) as *const __m256i);
-            let w0 = _mm256_loadu_si256(wp.add(base + o) as *const __m256i);
-            p = _mm256_add_epi32(p, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones));
-            o += 32;
+    unsafe {
+        let ones = _mm256_set1_epi16(1);
+        let wp = w.as_ptr();
+        let xp = xu.as_ptr();
+        let mut acc = 0f32;
+        for b in 0..nblocks {
+            // One block may span several 32-lane steps when FFAI_VOCAB_BLK > 32.
+            let mut p = _mm256_setzero_si256();
+            let base = b * blk;
+            let mut o = 0;
+            while o < blk {
+                let x0 = _mm256_loadu_si256(xp.add(base + o).cast::<__m256i>());
+                let w0 = _mm256_loadu_si256(wp.add(base + o).cast::<__m256i>());
+                p = _mm256_add_epi32(p, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones));
+                o += 32;
+            }
+            let s = _mm_add_epi32(_mm256_castsi256_si128(p), _mm256_extracti128_si256(p, 1));
+            let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b01_00_11_10));
+            let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b00_01_00_01));
+            acc += _mm_cvtsi128_si32(s) as f32 * *bscale.get_unchecked(b);
         }
-        let s = _mm_add_epi32(_mm256_castsi256_si128(p), _mm256_extracti128_si256(p, 1));
-        let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b01_00_11_10));
-        let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b00_01_00_01));
-        acc += _mm_cvtsi128_si32(s) as f32 * *bscale.get_unchecked(b);
+        acc
     }
-    acc
 }
 
 #[cfg(not(target_arch = "x86_64"))]
+// SAFETY: non-x86 stub. It is `unsafe fn` only to match the signature of the
+// x86 kernel it stands in for, and its body is `unreachable!` - the runtime
+// feature check that guards every call site can never pass on this target,
+// so there is no reachable code here to be unsound.
 unsafe fn dot_i8_blocked(_w: &[i8], _b: &[f32], _xu: &[u8], _n: usize, _k: usize) -> f32 {
     unreachable!("guarded by have_avx2()")
 }
-
 
 // ---------------------------------------------------------------------------
 // Argmax-disagreement audit
@@ -298,8 +348,7 @@ pub fn audit_record(ours: &[f32], oracle: &[f32]) {
         v.iter()
             .enumerate()
             .max_by(|a, b| a.1.total_cmp(b.1))
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+            .map_or(0, |(i, _)| i)
     };
     let (a, b) = (top(ours), top(oracle));
     AUDIT_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -328,7 +377,11 @@ pub fn audit_report() -> Option<String> {
   argmax flips vs f32 oracle {flips} ({:.3}%)
            mean oracle top1-top2 margin on flips {:.4}",
         flips as f64 / total as f64 * 100.0,
-        if flips > 0 { margin / flips as f64 } else { 0.0 }
+        if flips > 0 {
+            margin / flips as f64
+        } else {
+            0.0
+        }
     ))
 }
 
@@ -359,7 +412,11 @@ mod tests {
         let want: Vec<f32> = x.matmul(&w.t()?)?.flatten_all()?.to_vec1()?;
 
         let am = |v: &Vec<f32>| {
-            v.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0
+            v.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .unwrap()
+                .0
         };
         let (picked, best) = (am(&ours), am(&want));
         let scale = want.iter().fold(0f32, |m, &v| m.max(v.abs()));

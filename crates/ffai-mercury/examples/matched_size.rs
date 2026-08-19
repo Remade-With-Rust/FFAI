@@ -21,8 +21,8 @@ use std::time::Instant;
 use ffai_bench::corpus::Manifest;
 use ffai_bench::metrics::{cer, wer};
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::text_decoder::Precision;
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::asr::text_decoder::Precision;
 
 /// Length-weighted corpus WER/CER, matching how the bench harness aggregates.
 fn score(pairs: &[(String, String)]) -> (f64, f64) {
@@ -40,11 +40,15 @@ fn score(pairs: &[(String, String)]) -> (f64, f64) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut a = std::env::args().skip(1);
-    let corpus = a.next().unwrap_or("corpora/librispeech-test-clean-v2.toml".into());
+    let corpus = a
+        .next()
+        .unwrap_or("corpora/librispeech-test-clean-v2.toml".into());
     let model = a.next().unwrap_or("whisper-small-en".into());
     let ggml = a.next().unwrap_or(".whispercpp/ggml-small.en.bin".into());
     let limit: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
-    let beam = std::env::var("FFAI_BEAM_SIZE").ok().unwrap_or_else(|| "1".into());
+    let beam = std::env::var("FFAI_BEAM_SIZE")
+        .ok()
+        .unwrap_or_else(|| "1".into());
 
     let manifest = Manifest::load(&PathBuf::from(&corpus))?;
     let clips: Vec<_> = manifest.clips.iter().take(limit).collect();
@@ -54,8 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut audio_secs = 0.0f64;
     for c in &clips {
         let p = manifest.clip_path(c);
-        let (Ok(audio), Ok(Some(truth))) =
-            (ffai_media::load_audio(&p), manifest.ground_truth(c))
+        let (Ok(audio), Ok(Some(truth))) = (ffai_media::load_audio(&p), manifest.ground_truth(c))
         else {
             continue;
         };
@@ -63,7 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         truths.push(truth);
         paths.push(p);
     }
-    println!("corpus {corpus} · {} clips · {audio_secs:.1}s audio · beam {beam}\n", paths.len());
+    println!(
+        "corpus {corpus} · {} clips · {audio_secs:.1}s audio · beam {beam}\n",
+        paths.len()
+    );
 
     // ---- Mercury ----
     let engine = WhisperCandle::with_model("models", model.as_str(), Precision::F32);
@@ -93,7 +99,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .output()?;
     let cpp_secs = t.elapsed().as_secs_f64();
     if !out.status.success() {
-        return Err(format!("whisper.cpp failed: {}", String::from_utf8_lossy(&out.stderr)).into());
+        return Err(format!(
+            "whisper.cpp failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+        .into());
     }
     // Pair BY PATH, never by index. Matching on position assumes the
     // reference emits results in the order the batch file listed them, and
@@ -102,11 +112,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // which is the implausible magnitude that gives a broken probe away.
     // Path-matched, the same transcripts score 3.06 %.
     let stem = |p: &std::path::Path| {
-        p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        p.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
     };
     let mut by_stem: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
         let (Some(path), Some(text)) = (v.get("path").and_then(|p| p.as_str()), v.get("text"))
         else {
             continue;
@@ -127,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "whisper.cpp returned no transcript for {} — arms are not comparable",
                     p.display()
                 )
-                .into())
+                .into());
             }
         }
     }
@@ -137,14 +151,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ow, oc) = score(&ours_pairs);
     let (tw, tc) = score(&theirs_pairs);
 
-    println!("{:<26} {:>8} {:>8} {:>9}", "IMPLEMENTATION", "WER%", "CER%", "xRT");
-    println!("{:<26} {ow:>8.2} {oc:>8.2} {:>9.1}", format!("mercury ({model})"), audio_secs / our_secs);
+    println!(
+        "{:<26} {:>8} {:>8} {:>9}",
+        "IMPLEMENTATION", "WER%", "CER%", "xRT"
+    );
+    println!(
+        "{:<26} {ow:>8.2} {oc:>8.2} {:>9.1}",
+        format!("mercury ({model})"),
+        audio_secs / our_secs
+    );
     println!(
         "{:<26} {tw:>8.2} {tc:>8.2} {:>9.1}",
         "whisper.cpp (same size)",
         audio_secs / cpp_secs
     );
-    println!("\nWER delta {:+.2} pp · CER delta {:+.2} pp (negative = Mercury ahead)", ow - tw, oc - tc);
+    println!(
+        "\nWER delta {:+.2} pp · CER delta {:+.2} pp (negative = Mercury ahead)",
+        ow - tw,
+        oc - tc
+    );
 
     // Per-clip counts: a corpus delta this small is not a result on its own.
     let (mut better, mut worse) = (0, 0);
@@ -165,7 +190,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "per-clip: mercury better {better} · worse {worse} · tied {} · sign z = {z:+.2}{}",
         ours_pairs.len() - moved,
-        if z.abs() > 2.0 { "  SIGNIFICANT" } else { "  (bar |z| > 2)" }
+        if z.abs() > 2.0 {
+            "  SIGNIFICANT"
+        } else {
+            "  (bar |z| > 2)"
+        }
     );
     Ok(())
 }

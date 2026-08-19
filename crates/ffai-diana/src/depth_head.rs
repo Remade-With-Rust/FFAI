@@ -17,9 +17,9 @@
 //!
 //! | block | layers |
 //! |---|---|
-//! | `proj` | 3 x Conv1x1 + BN + SiLU, each level -> 256 |
-//! | `refine[i]` | 2 x Conv3x3 + BN + SiLU, 256 -> 256 |
-//! | `head` | Conv3x3 256->128 · ConvTranspose 128->128 k2 s2 · Conv3x3 128->64 · Conv2d 64->1 k1 |
+//! | `proj` | 3 x Conv1x1 + BN + `SiLU`, each level -> 256 |
+//! | `refine[i]` | 2 x Conv3x3 + BN + `SiLU`, 256 -> 256 |
+//! | `head` | Conv3x3 256->128 · `ConvTranspose` 128->128 k2 s2 · Conv3x3 128->64 · Conv2d 64->1 k1 |
 //!
 //! Output is `(1, 1, H/4, W/4)` in **metres**, unbounded: `exp` of a clamped
 //! logit rather than a scaled sigmoid, which is what lets one model span an
@@ -100,8 +100,8 @@ impl DepthHead {
         let out_w = hb.get((1, c / 4, 1, 1), "3.weight")?;
         let out_b = hb.get(1, "3.bias").ok();
 
-        let cal_a = vb.get(1, "cal_a").and_then(|t| t.flatten_all()?.to_vec1::<f32>()).map(|v| v[0]).unwrap_or(1.0);
-        let cal_b = vb.get(1, "cal_b").and_then(|t| t.flatten_all()?.to_vec1::<f32>()).map(|v| v[0]).unwrap_or(0.0);
+        let cal_a = vb.get(1, "cal_a").and_then(|t| t.flatten_all()?.to_vec1::<f32>()).map_or(1.0, |v| v[0]);
+        let cal_b = vb.get(1, "cal_b").and_then(|t| t.flatten_all()?.to_vec1::<f32>()).map_or(0.0, |v| v[0]);
 
         Ok(Self { proj, refine, tail: HeadTail { c0, up_w, up_b, c2, out_w, out_b }, cal_a, cal_b })
     }
@@ -148,10 +148,10 @@ impl DepthHead {
         // multiply, but because `x^1.0` is not guaranteed bit-identical to `x`
         // and this output is oracle-gated.
         let depth = if (self.cal_a - 1.0).abs() > f32::EPSILON {
-            depth.powf(self.cal_a as f64)?
+            depth.powf(f64::from(self.cal_a))?
         } else {
             depth
         };
-        depth.affine(self.cal_b.exp() as f64, 0.0)
+        depth.affine(f64::from(self.cal_b.exp()), 0.0)
     }
 }

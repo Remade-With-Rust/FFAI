@@ -17,5 +17,34 @@ crate-type = ["cdylib"]
 ffai-core = { workspace = true }
 ffai-diana = { workspace = true }
 ffai-media = { workspace = true }
-pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
-numpy = "0.23"
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
+numpy = "0.29"
+
+[lints.rust]
+unsafe_code = "warn"
+
+# Gate H-15: pedantic + nursery, enforced. This crate is a thin PyO3 binding;
+# it holds no arithmetic of its own, so the cast lints that matter stay in
+# force rather than being allowed.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_long_first_doc_paragraph = "allow"
+cast_precision_loss = "allow"
+needless_pass_by_value = "allow"
+items_after_statements = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+option_if_let_else = "allow"
+single_match_else = "allow"
+unnested_or_patterns = "allow"
+equatable_if_let = "allow"
+manual_let_else = "allow"
+default_trait_access = "allow"
+missing_const_for_fn = "allow"
+unnecessary_wraps = "allow"
+format_push_string = "allow"
+significant_drop_tightening = "allow"
+redundant_closure_for_method_calls = "allow"

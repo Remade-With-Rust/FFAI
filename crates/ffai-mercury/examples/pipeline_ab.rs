@@ -37,8 +37,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::knobs;
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::asr::knobs;
 
 /// What an arm does to the knobs immediately before each timed call.
 /// Load-time knobs are applied once, before the engine is warmed; per-call and
@@ -58,8 +58,14 @@ impl Arm {
     fn new(label: &'static str, apply: Apply, warm: &ffai_core::types::AudioBuffer) -> Self {
         (apply)();
         let engine = WhisperCandle::new();
-        engine.transcribe(warm, &AsrOptions::default()).expect("warm-up transcribe");
-        Arm { label, engine, apply }
+        engine
+            .transcribe(warm, &AsrOptions::default())
+            .expect("warm-up transcribe");
+        Arm {
+            label,
+            engine,
+            apply,
+        }
     }
 
     /// One timed round: the whole clip set through this arm.
@@ -99,10 +105,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     paths.sort();
     paths.truncate(n_clips);
     if paths.is_empty() {
-        return Err("no clips — run `cargo run -p ffai-bench --example prepare_librispeech`".into());
+        return Err(
+            "no clips — run `cargo run -p ffai-bench --example prepare_librispeech`".into(),
+        );
     }
-    let clips: Vec<_> =
-        paths.iter().map(|p| ffai_media::load_audio(p)).collect::<Result<Vec<_>, _>>()?;
+    let clips: Vec<_> = paths
+        .iter()
+        .map(|p| ffai_media::load_audio(p))
+        .collect::<Result<Vec<_>, _>>()?;
     let media: f64 = clips.iter().map(|a| a.duration_secs()).sum();
 
     // Two arms. `null` deliberately configures both identically — the only
@@ -189,8 +199,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let overlap = ta[0] <= *tb.last().unwrap() && tb[0] <= *ta.last().unwrap();
     let z = (a_wins as f64 - 0.5 * rounds as f64) / (0.5 * (rounds as f64).sqrt());
 
-    println!("  {a_label:<26} med {ma:8.1} ms  [{:.1} .. {:.1}]", ta[0], ta.last().unwrap());
-    println!("  {b_label:<26} med {mb:8.1} ms  [{:.1} .. {:.1}]", tb[0], tb.last().unwrap());
+    println!(
+        "  {a_label:<26} med {ma:8.1} ms  [{:.1} .. {:.1}]",
+        ta[0],
+        ta.last().unwrap()
+    );
+    println!(
+        "  {b_label:<26} med {mb:8.1} ms  [{:.1} .. {:.1}]",
+        tb[0],
+        tb.last().unwrap()
+    );
     println!(
         "  paired: A won {a_wins}/{rounds} ({:.0} %) · median ratio {:.3}x · ranges {}",
         a_wins as f64 / rounds as f64 * 100.0,

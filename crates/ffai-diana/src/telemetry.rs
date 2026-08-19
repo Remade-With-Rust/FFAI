@@ -46,6 +46,7 @@ pub fn reset() {}
 /// Dump the harvested distribution. `None` without the feature.
 #[cfg(not(feature = "prometheus-telemetry"))]
 #[inline(always)]
+#[must_use] 
 pub fn dump() -> Option<String> {
     None
 }

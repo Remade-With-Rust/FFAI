@@ -9,8 +9,21 @@
 //! Enable with `FFAI_PROFILE=1`. Overhead when disabled is one relaxed atomic
 //! load per stage, so this can stay compiled into release builds.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 fn enabled() -> bool {
@@ -27,7 +40,10 @@ pub struct Stage {
 
 impl Stage {
     const fn new() -> Self {
-        Stage { nanos: AtomicU64::new(0), calls: AtomicU64::new(0) }
+        Self {
+            nanos: AtomicU64::new(0),
+            calls: AtomicU64::new(0),
+        }
     }
 
     fn add(&self, nanos: u64) {
@@ -101,7 +117,7 @@ pub struct Profile {
 
 impl Profile {
     const fn new() -> Self {
-        Profile {
+        Self {
             mel: Stage::new(),
             encoder: Stage::new(),
             decoder: Stage::new(),
@@ -158,7 +174,11 @@ impl Profile {
             let calls = stage.calls().max(1);
             out.push_str(&format!(
                 "{name:<10} {secs:>10.3} {:>7.1}% {:>9} {:>12.3}\n",
-                if total > 0.0 { secs / total * 100.0 } else { 0.0 },
+                if total > 0.0 {
+                    secs / total * 100.0
+                } else {
+                    0.0
+                },
                 stage.calls(),
                 secs * 1000.0 / calls as f64,
             ));
@@ -180,9 +200,12 @@ impl Profile {
         ];
         let enc_total: f64 = enc.iter().map(|(_, s)| s.secs()).sum();
         if enc_total > 0.0 {
-            out.push_str(&format!("
+            out.push_str(&format!(
+                "
 {:<14} {:>10} {:>8} {:>9}
-", "ENCODER OP", "SECONDS", "SHARE", "CALLS"));
+",
+                "ENCODER OP", "SECONDS", "SHARE", "CALLS"
+            ));
             for (name, stage) in enc {
                 out.push_str(&format!(
                     "{name:<14} {:>10.3} {:>7.1}% {:>9}
@@ -213,24 +236,36 @@ impl Profile {
         ];
         let xa_total: f64 = xa.iter().map(|(_, s)| s.secs()).sum();
         if xa_total > 0.0 {
-            out.push_str(&format!("
+            out.push_str(&format!(
+                "
 {:<14} {:>10} {:>8} {:>9}
-", "CROSS-ATTN OP", "SECONDS", "SHARE", "CALLS"));
+",
+                "CROSS-ATTN OP", "SECONDS", "SHARE", "CALLS"
+            ));
             for (name, stage) in xa {
                 out.push_str(&format!(
                     "{name:<14} {:>10.3} {:>7.1}% {:>9}
 ",
-                    stage.secs(), stage.secs() / xa_total * 100.0, stage.calls(),
+                    stage.secs(),
+                    stage.secs() / xa_total * 100.0,
+                    stage.calls(),
                 ));
             }
-            out.push_str(&format!("{:<14} {:>10.3}   (stage total {:.3})
+            out.push_str(&format!(
+                "{:<14} {:>10.3}   (stage total {:.3})
 ",
-                "  SUM", xa_total, self.dec_cross_attn.secs()));
+                "  SUM",
+                xa_total,
+                self.dec_cross_attn.secs()
+            ));
         }
 
         let inner_total: f64 = inner.iter().map(|(_, s)| s.secs()).sum();
         if inner_total > 0.0 {
-            out.push_str(&format!("\n{:<14} {:>10} {:>8} {:>9}\n", "DECODER OP", "SECONDS", "SHARE", "CALLS"));
+            out.push_str(&format!(
+                "\n{:<14} {:>10} {:>8} {:>9}\n",
+                "DECODER OP", "SECONDS", "SHARE", "CALLS"
+            ));
             for (name, stage) in inner {
                 out.push_str(&format!(
                     "{name:<14} {:>10.3} {:>7.1}% {:>9}\n",
@@ -252,6 +287,7 @@ impl Profile {
 
 /// The process-wide profile. One transcription run is the unit of interest,
 /// so the CLI prints and this is not reset between clips.
+#[must_use]
 pub fn profile() -> &'static Profile {
     static PROFILE: Profile = Profile::new();
     &PROFILE
@@ -259,6 +295,7 @@ pub fn profile() -> &'static Profile {
 
 /// True when `FFAI_PROFILE` is set — the CLI checks this to decide whether to
 /// print a report.
+#[must_use]
 pub fn is_enabled() -> bool {
     enabled()
 }

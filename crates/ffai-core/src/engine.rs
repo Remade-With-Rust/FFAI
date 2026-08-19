@@ -12,7 +12,7 @@ use crate::types::{
     AudioBuffer, DetectOutput, ImageBuffer, OcrOutput, TimedSegment, Transcript, VideoFrame,
 };
 
-/// The tasks FFai knows about (the "stream types" of the toolkit).
+/// The tasks `FFai` knows about (the "stream types" of the toolkit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Task {
     Asr,
@@ -33,12 +33,12 @@ pub enum Task {
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Task::Asr => "asr",
-            Task::Tts => "tts",
-            Task::Ocr => "ocr",
-            Task::Vlm => "vlm",
-            Task::Detect => "detect",
-            Task::Depth => "depth",
+            Self::Asr => "asr",
+            Self::Tts => "tts",
+            Self::Ocr => "ocr",
+            Self::Vlm => "vlm",
+            Self::Detect => "detect",
+            Self::Depth => "depth",
         })
     }
 }
@@ -48,14 +48,14 @@ impl FromStr for Task {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "asr" => Ok(Task::Asr),
-            "tts" => Ok(Task::Tts),
-            "ocr" => Ok(Task::Ocr),
-            "vlm" => Ok(Task::Vlm),
-            "detect" => Ok(Task::Detect),
-            other => {
-                Err(format!("unknown task `{other}` (expected asr, tts, ocr, vlm, or detect)"))
-            }
+            "asr" => Ok(Self::Asr),
+            "tts" => Ok(Self::Tts),
+            "ocr" => Ok(Self::Ocr),
+            "vlm" => Ok(Self::Vlm),
+            "detect" => Ok(Self::Detect),
+            other => Err(format!(
+                "unknown task `{other}` (expected asr, tts, ocr, vlm, or detect)"
+            )),
         }
     }
 }
@@ -74,9 +74,9 @@ pub enum EngineStatus {
 impl fmt::Display for EngineStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            EngineStatus::Stub => "stub",
-            EngineStatus::Experimental => "experimental",
-            EngineStatus::Stable => "stable",
+            Self::Stub => "stub",
+            Self::Experimental => "experimental",
+            Self::Stable => "stable",
         })
     }
 }
@@ -186,7 +186,7 @@ impl Default for AsrOptions {
         // `vad_chunk_secs` have meaningful defaults, and `#[derive(Default)]`
         // would silently make them 0.0 — a threshold that calls everything
         // speech and a window width that holds nothing.
-        AsrOptions {
+        Self {
             language: None,
             word_timestamps: false,
             diarize: false,
@@ -222,7 +222,7 @@ pub struct TtsOptions {
 
 impl Default for TtsOptions {
     fn default() -> Self {
-        TtsOptions {
+        Self {
             voice: None,
             speed: 1.0,
             noise_scale: None,
@@ -257,7 +257,7 @@ pub struct DetectOptions {
     pub confidence: f32,
     /// Maximum detections returned, highest confidence first.
     pub max_detections: usize,
-    /// Class-wise NMS IoU. `None` for the NMS-free one-to-one path, which
+    /// Class-wise NMS `IoU`. `None` for the NMS-free one-to-one path, which
     /// is YOLO26's default and needs no suppression.
     pub iou: Option<f32>,
     /// Restrict to these class ids; empty = every class.
@@ -266,7 +266,7 @@ pub struct DetectOptions {
 
 impl Default for DetectOptions {
     fn default() -> Self {
-        DetectOptions {
+        Self {
             confidence: 0.25,
             max_detections: 300,
             iou: None,
@@ -317,6 +317,7 @@ pub struct DepthOutput {
 
 impl DepthOutput {
     /// Depth at a pixel of the map. `None` when out of range.
+    #[must_use]
     pub fn at(&self, x: usize, y: usize) -> Option<f32> {
         if x >= self.width || y >= self.height {
             return None;
@@ -326,6 +327,7 @@ impl DepthOutput {
 
     /// `(min, max)` over the map, for callers normalising it for display.
     /// Returns `None` for an empty map rather than a nonsense range.
+    #[must_use]
     pub fn range(&self) -> Option<(f32, f32)> {
         if self.depth.is_empty() {
             return None;
@@ -343,7 +345,7 @@ impl DepthOutput {
 }
 
 /// Options for a depth run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DepthOptions {
     /// Resize the map to the SOURCE image's resolution and undo the
     /// letterbox, instead of returning the raw network output at stride 4.
@@ -351,12 +353,6 @@ pub struct DepthOptions {
     /// Off by default: the raw map is what the model computed, and resizing
     /// is a lossy convenience the caller may want to do differently.
     pub full_resolution: bool,
-}
-
-impl Default for DepthOptions {
-    fn default() -> Self {
-        Self { full_resolution: false }
-    }
 }
 
 /// Monocular depth estimation.
@@ -381,7 +377,7 @@ pub trait DetectEngine: Send + Sync {
     ///
     /// The trait is `Send + Sync`, so one loaded model serves every thread.
     /// That is the structural advantage over the Python reference: measured
-    /// on the same machine, PyTorch gets *slower* under threading (0.68-0.72x)
+    /// on the same machine, `PyTorch` gets *slower* under threading (0.68-0.72x)
     /// because of the GIL, and its escape hatch — multiprocessing — pays a
     /// full model copy per worker.
     ///

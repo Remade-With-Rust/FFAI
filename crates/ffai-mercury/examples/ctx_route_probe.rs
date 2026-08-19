@@ -2,14 +2,17 @@
 //! escalation? If low-contrast clips are the escalating ones, a pre-decode
 //! contrast floor removes the doomed-attempt tax without a quality risk.
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::whisper_candle::ADAPTIVE_ESCALATIONS;
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::asr::whisper_candle::ADAPTIVE_ESCALATIONS;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 fn main() {
     let dir = std::env::args().nth(1).expect("dir");
-    let n: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(60);
+    let n: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
     let mut clips: Vec<PathBuf> = std::fs::read_dir(&dir)
         .expect("dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -32,12 +35,20 @@ fn main() {
     }
     let stats = |v: &mut Vec<f32>| {
         v.sort_by(|a, b| a.total_cmp(b));
-        if v.is_empty() { return (0.0, 0.0, 0.0); }
+        if v.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
         let p = |q: f64| v[((v.len() - 1) as f64 * q) as usize];
         (p(0.1), p(0.5), p(0.9))
     };
     let (a, b, c) = stats(&mut esc);
-    println!("escalated n={:>3}  contrast p10/p50/p90 = {a:.1}/{b:.1}/{c:.1}", esc.len());
+    println!(
+        "escalated n={:>3}  contrast p10/p50/p90 = {a:.1}/{b:.1}/{c:.1}",
+        esc.len()
+    );
     let (a, b, c) = stats(&mut kept);
-    println!("kept      n={:>3}  contrast p10/p50/p90 = {a:.1}/{b:.1}/{c:.1}", kept.len());
+    println!(
+        "kept      n={:>3}  contrast p10/p50/p90 = {a:.1}/{b:.1}/{c:.1}",
+        kept.len()
+    );
 }

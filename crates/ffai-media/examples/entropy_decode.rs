@@ -18,10 +18,18 @@
 use std::path::Path;
 
 fn main() -> ffai_core::error::Result<()> {
-    let path = std::env::args().nth(1).expect("usage: entropy_decode <clip.mp4>");
-    let reps: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(5);
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: entropy_decode <clip.mp4>");
+    let reps: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
     // fps <= 0 keeps EVERY frame - decimation would measure the decimator.
-    let fps: f64 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let fps: f64 = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
 
     // Warm: first decode pays lazy init and first-touch faults.
     let _ = ffai_media::sample_frames(Path::new(&path), fps)?;

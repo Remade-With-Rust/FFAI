@@ -4,12 +4,14 @@
 //! network-less checkout still runs the rest of the suite. Warm the cache
 //! with `ffai models --fetch whisper-tiny-en`.
 
-use ffai_mercury::asr::tokenizer::{WhisperTokenizer, TIMESTAMP_STEP_SECS};
+use ffai_mercury::asr::tokenizer::{TIMESTAMP_STEP_SECS, WhisperTokenizer};
 
 fn tokenizer() -> Option<WhisperTokenizer> {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../models");
     let manifests = ffai_models::load_dir(std::path::Path::new(dir)).ok()?;
-    let manifest = manifests.into_iter().find(|m| m.name == "whisper-tiny-en")?;
+    let manifest = manifests
+        .into_iter()
+        .find(|m| m.name == "whisper-tiny-en")?;
     let path = manifest.local_path("tokenizer.json")?;
     WhisperTokenizer::load(&path).ok()
 }
@@ -39,7 +41,10 @@ fn control_tokens_are_ordered_and_timestamps_are_contiguous() {
     };
     // Text ids sit below <|endoftext|>; every control token above it.
     assert!(tk.sot > tk.eot, "sot must live in the control range");
-    assert!(tk.timestamp_begin > tk.no_timestamps, "timestamps follow the control block");
+    assert!(
+        tk.timestamp_begin > tk.no_timestamps,
+        "timestamps follow the control block"
+    );
 
     // The timestamp grammar: contiguous ids, 20 ms apart, starting at zero.
     assert!(tk.is_timestamp(tk.timestamp_begin));
@@ -88,5 +93,8 @@ fn multilingual_prompt_carries_language_and_task() {
         tk.initial_tokens(Some(lang), false, true, false),
         vec![tk.sot, lang, tk.transcribe]
     );
-    assert_eq!(tk.initial_tokens(None, true, true, false), vec![tk.sot, tk.translate]);
+    assert_eq!(
+        tk.initial_tokens(None, true, true, false),
+        vec![tk.sot, tk.translate]
+    );
 }

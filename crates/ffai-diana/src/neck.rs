@@ -5,7 +5,7 @@
 //! and two stride-2 convolutions. The only piece with its own character is
 //! layer 22, which takes the 4-argument `C3k2 [1024, True, 0.5, True]` form
 //! whose final `True` swaps the inner block for a Bottleneck followed by a
-//! PSABlock ([`crate::blocks::InnerKind::Attn`]).
+//! `PSABlock` ([`crate::blocks::InnerKind::Attn`]).
 //!
 //! ```text
 //! 11 Upsample  P5      x2 nearest              256 -> 256  20 -> 40
@@ -61,7 +61,7 @@ impl Neck {
     pub fn new(vb: VarBuilder, d: Dims) -> Result<Self> {
         let m = vb.pp("model");
         let (c256, c512, c1024) = (d.ch(256), d.ch(512), d.ch(1024));
-        Ok(Neck {
+        Ok(Self {
             // 12: cat(upsample(P5 = c1024), backbone P4 = c512)
             l13: C3k2::new(m.pp(13), c1024 + c512, c512, d.hidden(c512, 0.5), d.rep(2), inner(d, true))?,
             // 15: cat(upsample(l13 = c512), backbone P3 = c512)
@@ -146,6 +146,7 @@ pub struct NeckTrace {
 
 impl NeckTrace {
     /// Layers 11..=22 in graph order, for the oracle's per-layer walk.
+    #[must_use] 
     pub fn layers(&self) -> [(&str, &Tensor); 12] {
         [
             ("layer_11", &self.l11),

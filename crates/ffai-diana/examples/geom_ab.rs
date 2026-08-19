@@ -29,6 +29,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut br, mut bs) = (f64::MAX, f64::MAX);
     for i in 0..n {
         // Alternate the order every iteration so "second is warmer" cancels.
+        // The two blocks share a first line but run the arms in opposite
+        // order, which is the entire point of the interleave.
+        #[allow(clippy::branches_sharing_code)]
         if i % 2 == 0 {
             let t = Instant::now();
             std::hint::black_box(rect.detect(&img, &opts)?);

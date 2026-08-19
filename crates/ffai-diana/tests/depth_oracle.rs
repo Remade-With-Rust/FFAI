@@ -41,9 +41,7 @@ fn weights() -> Option<PathBuf> {
 }
 
 fn dirs_cache() -> PathBuf {
-    std::env::var("LOCALAPPDATA")
-        .map(|d| PathBuf::from(d).join("ffai/models"))
-        .unwrap_or_else(|_| PathBuf::from("/tmp/ffai/models"))
+    std::env::var("LOCALAPPDATA").map_or_else(|_| PathBuf::from("/tmp/ffai/models"), |d| PathBuf::from(d).join("ffai/models"))
 }
 
 /// Read the oracle written by the dump script: a raw f32 `.npy`.
@@ -134,10 +132,10 @@ fn depth_matches_ultralytics() {
     eprintln!(
         "depth oracle: worst rel {worst:.3e} at {worst_i}, mean abs {mean:.4} m, \
          range got [{:.2}, {:.2}] oracle [{:.2}, {:.2}]",
-        gv.iter().cloned().fold(f32::MAX, f32::min),
-        gv.iter().cloned().fold(f32::MIN, f32::max),
-        want.iter().cloned().fold(f32::MAX, f32::min),
-        want.iter().cloned().fold(f32::MIN, f32::max),
+        gv.iter().copied().fold(f32::MAX, f32::min),
+        gv.iter().copied().fold(f32::MIN, f32::max),
+        want.iter().copied().fold(f32::MAX, f32::min),
+        want.iter().copied().fold(f32::MIN, f32::max),
     );
     assert!(
         worst < 1e-3,
@@ -255,7 +253,26 @@ fn depth_matches_ultralytics_across_tiers() {
         );
         ran += 1;
     }
-    assert!(ran > 0, "no tier had both weights and an oracle; nothing was verified");
+    // A test that verified nothing must not report success - but "nothing was
+    // available to verify" and "everything available failed to run" are different
+    // facts, and only the second is a defect.
+    //
+    // Asserting on `ran` alone conflated them, so this test failed on any machine
+    // without the tier weights: CI, a fresh clone, this workstation. That is the
+    // reason the workflow ran `cargo test --workspace --lib` and therefore never
+    // ran ANY integration test in the workspace - one red test disabled the whole
+    // tier of them.
+    //
+    // Set FFAI_REQUIRE_ORACLES=1 where the fixtures are expected to exist and the
+    // guard bites again, loudly.
+    if ran == 0 {
+        let required = std::env::var("FFAI_REQUIRE_ORACLES").is_ok_and(|v| v != "0");
+        assert!(
+            !required,
+            "FFAI_REQUIRE_ORACLES is set but no tier had both weights and an oracle"
+        );
+        eprintln!("depth oracle: no tier weights present, skipping");
+    }
 }
 
 /// The from-bytes path must build the SAME engine as the filesystem path.

@@ -1,12 +1,12 @@
 //! CRNN recognition (`english_g2`) on candle: VGG feature extractor →
 //! 2× bidirectional LSTM → linear → CTC greedy decode.
 //!
-//! Ported layer-for-layer from EasyOCR's generation-2 model
+//! Ported layer-for-layer from `EasyOCR`'s generation-2 model
 //! (JaidedAI/EasyOCR, Apache-2.0: `model/vgg_model.py` + `model/modules.py`),
 //! weights `english_g2` converted by `tools/carmenta_crnn_prepare.py` under
 //! `load_state_dict(strict=True)`.
 //!
-//! This seat was TrOCR's until the oracle fixture measured trocr-small-
+//! This seat was `TrOCR`'s until the oracle fixture measured trocr-small-
 //! printed reading mixed-case text as ALL CAPS (SROIE-trained) — a lineage
 //! that can't approach a case-scoring CER gate. The g2 charset below is the
 //! reason this model won: 96 characters covering digits, punctuation, and
@@ -33,7 +33,7 @@ struct BiLstm {
 impl BiLstm {
     fn new(vb: &VarBuilder, name: &str, input: usize, hidden: usize, out: usize) -> Result<Self> {
         let vb = vb.pp(name);
-        Ok(BiLstm {
+        Ok(Self {
             fwd: lstm(input, hidden, LSTMConfig::default(), vb.pp("rnn"))?,
             bwd: lstm(
                 input,
@@ -86,18 +86,20 @@ pub enum RecLang {
 impl RecLang {
     /// `FFAI_REC_LANG=zh` (or `zh_sim`, `chinese`) selects the Chinese model.
     /// Anything else, including unset, is English.
+    #[must_use] 
     pub fn from_env() -> Self {
         match std::env::var("FFAI_REC_LANG").as_deref() {
-            Ok("zh") | Ok("zh_sim") | Ok("chinese") => RecLang::ChineseSimplified,
-            _ => RecLang::English,
+            Ok("zh") | Ok("zh_sim") | Ok("chinese") => Self::ChineseSimplified,
+            _ => Self::English,
         }
     }
 
     /// The model-registry name whose `crnn.safetensors` this variant loads.
+    #[must_use] 
     pub fn model_name(self) -> &'static str {
         match self {
-            RecLang::English => "crnn-english-g2",
-            RecLang::ChineseSimplified => "crnn-zh-sim-g2",
+            Self::English => "crnn-english-g2",
+            Self::ChineseSimplified => "crnn-zh-sim-g2",
         }
     }
 }
@@ -150,7 +152,7 @@ impl Crnn {
         let f = vb.pp("FeatureExtraction").pp("ConvNet");
         let p1 = Conv2dConfig { padding: 1, ..Default::default() };
         let seq = vb.pp("SequenceModeling");
-        Ok(Crnn {
+        Ok(Self {
             convs: [
                 conv2d(1, 32, 3, p1, f.pp("0"))?,
                 conv2d(32, 64, 3, p1, f.pp("3"))?,
@@ -175,11 +177,12 @@ impl Crnn {
 
     /// How many characters this instance can emit — 96 for English, 6 718 for
     /// Chinese. Exposed so a caller can assert which model it actually got.
+    #[must_use] 
     pub fn charset_len(&self) -> usize {
         self.charset.len()
     }
 
-    /// (1, 1, 64, W) normalized crop -> per-timestep logits (T, num_class).
+    /// (1, 1, 64, W) normalized crop -> per-timestep logits (T, `num_class`).
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let t0 = std::time::Instant::now();
         let x = crate::conv3x3::apply(x, &self.convs[0])?.relu()?.max_pool2d_with_stride(2, 2)?;

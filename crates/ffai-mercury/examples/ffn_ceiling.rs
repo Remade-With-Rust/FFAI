@@ -41,7 +41,11 @@ fn bench(label: &str, gflop: f64, mut f: impl FnMut()) -> f64 {
         f();
         best = best.min(t0.elapsed().as_secs_f64());
     }
-    println!("  {label:<40} {:>8.1} ms  {:>7.1} GFLOP/s", best * 1000.0, gflop / best);
+    println!(
+        "  {label:<40} {:>8.1} ms  {:>7.1} GFLOP/s",
+        best * 1000.0,
+        gflop / best
+    );
     best
 }
 
@@ -67,7 +71,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dev = Device::Cpu;
     let lens: Vec<usize> = (0..20).map(|i| 70 + (i * 7) % 40).collect();
     let total_t: usize = lens.iter().sum();
-    println!("{} sentences, {total_t} columns (mean {:.0})", lens.len(), total_t as f64 / 20.0);
+    println!(
+        "{} sentences, {total_t} columns (mean {:.0})",
+        lens.len(),
+        total_t as f64 / 20.0
+    );
 
     // per column per layer: up 192*768*3*2 + down 768*192*3*2
     let per_col_layer = (C_IN * C_HID * K * 2 * 2) as f64;
@@ -82,8 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|&t| Tensor::randn(0f32, 1f32, (1, C_IN, t), &dev).unwrap())
         .collect();
-    let xv: Vec<Vec<f32>> =
-        xs.iter().map(|x| x.flatten_all().unwrap().to_vec1().unwrap()).collect();
+    let xv: Vec<Vec<f32>> = xs
+        .iter()
+        .map(|x| x.flatten_all().unwrap().to_vec1().unwrap())
+        .collect();
 
     // ---- 1. what ships ----
     let t1 = bench("1 candle conv1d (shipped)", gflop, || {
@@ -123,10 +133,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // conv1d(k=3) == sum over taps of a 1x1 GEMM on a shifted view. Avoids
     // materialising a 3x-larger input matrix; costs 3 GEMM calls instead of 1.
     let wu_taps: Vec<Tensor> = (0..K)
-        .map(|j| w_up.narrow(2, j, 1).unwrap().squeeze(2).unwrap().contiguous().unwrap())
+        .map(|j| {
+            w_up.narrow(2, j, 1)
+                .unwrap()
+                .squeeze(2)
+                .unwrap()
+                .contiguous()
+                .unwrap()
+        })
         .collect();
     let wd_taps: Vec<Tensor> = (0..K)
-        .map(|j| w_dn.narrow(2, j, 1).unwrap().squeeze(2).unwrap().contiguous().unwrap())
+        .map(|j| {
+            w_dn.narrow(2, j, 1)
+                .unwrap()
+                .squeeze(2)
+                .unwrap()
+                .contiguous()
+                .unwrap()
+        })
         .collect();
     let t3 = bench("3 three shifted 1x1 GEMMs", gflop, || {
         for (&t, x0) in lens.iter().zip(&xv) {
@@ -146,8 +170,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .copy_from_slice(&hv[c * t + src_lo..c * t + src_lo + n]);
                     }
                     let m = Tensor::from_vec(sh, (C_IN, n), &dev).unwrap();
-                    let y: Vec<f32> =
-                        w.matmul(&m).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+                    let y: Vec<f32> = w
+                        .matmul(&m)
+                        .unwrap()
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1()
+                        .unwrap();
                     for c in 0..C_HID {
                         for i in 0..n {
                             acc[c * t + dst_lo + i] += y[c * n + i];
@@ -168,8 +197,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .copy_from_slice(&acc[c * t + src_lo..c * t + src_lo + n]);
                     }
                     let m = Tensor::from_vec(sh, (C_HID, n), &dev).unwrap();
-                    let y: Vec<f32> =
-                        w.matmul(&m).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+                    let y: Vec<f32> = w
+                        .matmul(&m)
+                        .unwrap()
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1()
+                        .unwrap();
                     for c in 0..C_IN {
                         for i in 0..n {
                             acc2[c * t + dst_lo + i] += y[c * n + i];
@@ -186,8 +220,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ops: Vec<(Tensor, Tensor)> = Vec::new();
     for &t in &lens {
         for _ in 0..LAYERS {
-            ops.push((w_up2.clone(), Tensor::randn(0f32, 1f32, (C_IN * K, t), &dev).unwrap()));
-            ops.push((w_dn2.clone(), Tensor::randn(0f32, 1f32, (C_HID * K, t), &dev).unwrap()));
+            ops.push((
+                w_up2.clone(),
+                Tensor::randn(0f32, 1f32, (C_IN * K, t), &dev).unwrap(),
+            ));
+            ops.push((
+                w_dn2.clone(),
+                Tensor::randn(0f32, 1f32, (C_HID * K, t), &dev).unwrap(),
+            ));
         }
     }
     let tc = bench("C pure-GEMM ceiling (no movement)", gflop, || {
@@ -211,7 +251,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         t1 / t2,
         t1 / t3
     );
-    println!("  best expressible   : {:.1} ms vs shipped {:.1} ms", t2.min(t3), t1 * 1000.0 / 1000.0 * 1000.0 / 1000.0 * 1000.0);
-    println!("  headroom to ceiling: im2col+matmul is {:.2}x the pure GEMM", t2 / tc);
+    println!(
+        "  best expressible   : {:.1} ms vs shipped {:.1} ms",
+        t2.min(t3),
+        t1 * 1000.0 / 1000.0 * 1000.0 / 1000.0 * 1000.0
+    );
+    println!(
+        "  headroom to ceiling: im2col+matmul is {:.2}x the pure GEMM",
+        t2 / tc
+    );
     Ok(())
 }

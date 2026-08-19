@@ -45,6 +45,7 @@ pub struct Choice {
 
 impl Choice {
     /// How much the winner beat the loser by.
+    #[must_use]
     pub fn speedup(&self) -> f64 {
         let (win, lose) = if self.dtype == DType::F16 {
             (self.f16_secs, self.f32_secs)
@@ -70,8 +71,14 @@ fn forced() -> Option<DType> {
 }
 
 fn time_matmul(m: usize, k: usize, n: usize, dtype: DType, device: &Device) -> Option<f64> {
-    let a = Tensor::zeros((m, k), DType::F32, device).ok()?.to_dtype(dtype).ok()?;
-    let b = Tensor::zeros((k, n), DType::F32, device).ok()?.to_dtype(dtype).ok()?;
+    let a = Tensor::zeros((m, k), DType::F32, device)
+        .ok()?
+        .to_dtype(dtype)
+        .ok()?;
+    let b = Tensor::zeros((k, n), DType::F32, device)
+        .ok()?
+        .to_dtype(dtype)
+        .ok()?;
     // One untimed pass so allocation and first-touch don't land in the result.
     std::hint::black_box(a.matmul(&b).ok()?);
     let mut best = f64::MAX;
@@ -88,6 +95,7 @@ fn time_matmul(m: usize, k: usize, n: usize, dtype: DType, device: &Device) -> O
 ///
 /// Falls back to f32 when either candidate cannot be built or timed — a
 /// device without f16 support gets the safe answer rather than an error.
+#[must_use]
 pub fn matmul_dtype(m: usize, k: usize, n: usize, device: &Device) -> DType {
     if let Some(forced) = forced() {
         return forced;
@@ -111,8 +119,16 @@ pub fn matmul_dtype(m: usize, k: usize, n: usize, device: &Device) -> DType {
     // Require a real margin before leaving f32: f16 costs a little accuracy,
     // so it has to earn its place rather than win on noise.
     const MARGIN: f64 = 1.10;
-    let dtype = if f32_secs > f16_secs * MARGIN { DType::F16 } else { DType::F32 };
-    let choice = Choice { dtype, f32_secs, f16_secs };
+    let dtype = if f32_secs > f16_secs * MARGIN {
+        DType::F16
+    } else {
+        DType::F32
+    };
+    let choice = Choice {
+        dtype,
+        f32_secs,
+        f16_secs,
+    };
 
     if super::profile::is_enabled() {
         eprintln!(
@@ -141,12 +157,7 @@ pub fn matmul_dtype(m: usize, k: usize, n: usize, device: &Device) -> DType {
 ///
 /// Measured on the chain, f16 wins 1.18x (31/41 paired rounds, z = +3.3)
 /// once `fast_softmax` removes the f16 softmax penalty.
-pub fn attention_kv_dtype(
-    heads: usize,
-    kv_len: usize,
-    head_dim: usize,
-    device: &Device,
-) -> DType {
+pub fn attention_kv_dtype(heads: usize, kv_len: usize, head_dim: usize, device: &Device) -> DType {
     if let Some(forced) = forced() {
         return forced;
     }
@@ -159,12 +170,18 @@ pub fn attention_kv_dtype(
     }
 
     let chain = |dtype: DType| -> Option<f64> {
-        let q = Tensor::zeros((1, heads, 1, head_dim), DType::F32, device).ok()?
-            .to_dtype(dtype).ok()?;
-        let k = Tensor::zeros((1, heads, head_dim, kv_len), DType::F32, device).ok()?
-            .to_dtype(dtype).ok()?;
-        let v = Tensor::zeros((1, heads, kv_len, head_dim), DType::F32, device).ok()?
-            .to_dtype(dtype).ok()?;
+        let q = Tensor::zeros((1, heads, 1, head_dim), DType::F32, device)
+            .ok()?
+            .to_dtype(dtype)
+            .ok()?;
+        let k = Tensor::zeros((1, heads, head_dim, kv_len), DType::F32, device)
+            .ok()?
+            .to_dtype(dtype)
+            .ok()?;
+        let v = Tensor::zeros((1, heads, kv_len, head_dim), DType::F32, device)
+            .ok()?
+            .to_dtype(dtype)
+            .ok()?;
         let once = || -> Option<()> {
             let qk = q.matmul(&k).ok()?;
             let w = super::text_decoder::fast_softmax(&qk).ok()?;
@@ -187,7 +204,11 @@ pub fn attention_kv_dtype(
         return DType::F32;
     };
     // 10 % margin, as elsewhere: half precision must earn its accuracy cost.
-    let dtype = if f32_secs > f16_secs * 1.10 { DType::F16 } else { DType::F32 };
+    let dtype = if f32_secs > f16_secs * 1.10 {
+        DType::F16
+    } else {
+        DType::F32
+    };
     if super::profile::is_enabled() {
         eprintln!(
             "[xattn-kv] {heads}h x {kv_len} x {head_dim}: f32 {:.3} ms vs f16 {:.3} ms -> {dtype:?}",
@@ -238,8 +259,14 @@ pub fn matmul_pad_rows(k: usize, n: usize, dtype: DType, device: &Device) -> usi
     // ~50 ms once per process; correctness of the decision outranks it.
     let probe_n = n;
     let time = |m: usize| -> Option<f64> {
-        let x = Tensor::zeros((m, k), DType::F32, device).ok()?.to_dtype(dtype).ok()?;
-        let w = Tensor::zeros((k, probe_n), DType::F32, device).ok()?.to_dtype(dtype).ok()?;
+        let x = Tensor::zeros((m, k), DType::F32, device)
+            .ok()?
+            .to_dtype(dtype)
+            .ok()?;
+        let w = Tensor::zeros((k, probe_n), DType::F32, device)
+            .ok()?
+            .to_dtype(dtype)
+            .ok()?;
         std::hint::black_box(x.matmul(&w).ok()?);
         let mut best = f64::MAX;
         for _ in 0..3 {
@@ -257,11 +284,11 @@ pub fn matmul_pad_rows(k: usize, n: usize, dtype: DType, device: &Device) -> usi
     for m in [2usize, 4, 8] {
         // Require a 15 % margin: padding costs an allocation and a copy of
         // the (tiny) activation, and should not be adopted on noise.
-        if let Some(secs) = time(m) {
-            if secs * 1.15 < best_secs {
-                best_secs = secs;
-                best_rows = m;
-            }
+        if let Some(secs) = time(m)
+            && secs * 1.15 < best_secs
+        {
+            best_secs = secs;
+            best_rows = m;
         }
     }
     if best_rows > 1 && super::profile::is_enabled() {

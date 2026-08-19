@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::profile;
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::asr::profile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -35,7 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     clips.sort();
     clips.truncate(count);
 
-    let opts = AsrOptions { vad, ..AsrOptions::default() };
+    let opts = AsrOptions {
+        vad,
+        ..AsrOptions::default()
+    };
     let engine = WhisperCandle::new();
 
     // Warm-up outside the measured region: model load + precision calibration.

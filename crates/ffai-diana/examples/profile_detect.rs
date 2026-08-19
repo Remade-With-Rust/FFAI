@@ -62,9 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         image.height,
         std::env::var("RAYON_NUM_THREADS")
             .ok()
-            .unwrap_or_else(|| std::thread::available_parallelism()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|_| "?".into()))
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or_else(|_| "?".into(), |n| n.to_string()))
     );
     println!(
         "min {min:.1} ms · median {med:.1} ms · max {max:.1} ms · spread {:.2}x  \

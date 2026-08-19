@@ -39,6 +39,7 @@ mod imp {
     ///
     /// Returns `None` if the call fails, rather than a zero that would enter
     /// a median looking like data.
+    #[must_use] 
     pub fn cycles() -> Option<u64> {
         let mut c = 0u64;
         // SAFETY: `GetCurrentProcess` yields a pseudo-handle that needs no
@@ -64,6 +65,7 @@ pub use imp::cycles;
 /// Calibrated rather than taken from the CPU's nominal frequency: the label
 /// on a mobile part describes neither its base nor its boost behaviour under
 /// load, and this box is under load whenever anything is measured.
+#[must_use] 
 pub fn calibrate() -> Option<f64> {
     // MAX over several short windows, not one long one.
     //
@@ -97,6 +99,11 @@ pub fn calibrate() -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    // Every test in this module is `#[cfg(windows)]` - the counter it exercises
+    // is a Win32 facility - so on any other platform this import serves nothing
+    // and `-D warnings` fails the build on `unused_imports`. Gate it with the
+    // tests rather than deleting it.
+    #[cfg(windows)]
     use super::*;
 
     /// The counter must advance on work, and advance FINELY — the whole

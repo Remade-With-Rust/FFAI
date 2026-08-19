@@ -58,11 +58,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let texts: Vec<String> = manifest
         .holdout()
         .take(20)
-        .map(|c| std::fs::read_to_string(manifest.clip_path(c)).unwrap().trim().to_string())
+        .map(|c| {
+            std::fs::read_to_string(manifest.clip_path(c))
+                .unwrap()
+                .trim()
+                .to_string()
+        })
         .collect();
     let ids_list: Vec<Vec<i64>> = texts
         .iter()
-        .map(|t| vits.id_map.sentence_to_ids(&phonemizer.phonemize(t).unwrap()).0)
+        .map(|t| {
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t).unwrap())
+                .0
+        })
         .collect();
     let mut hiddens = Vec::new();
     for ids in &ids_list {
@@ -115,13 +124,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{} rounds{}",
         rounds,
-        if null { "  [NULL ARM — both arms identical]" } else { "" }
+        if null {
+            "  [NULL ARM — both arms identical]"
+        } else {
+            ""
+        }
     );
-    println!("  new median {mn:8.2} ms   old median {mo:8.2} ms   ratio {:.3}x", mo / mn);
+    println!(
+        "  new median {mn:8.2} ms   old median {mo:8.2} ms   ratio {:.3}x",
+        mo / mn
+    );
     println!(
         "  new wins {new_wins}/{rounds}  z = {z:+.2}  -> {}",
         if z.abs() > 2.0 {
-            if z > 0.0 { "NEW faster (real)" } else { "OLD faster (real)" }
+            if z > 0.0 {
+                "NEW faster (real)"
+            } else {
+                "OLD faster (real)"
+            }
         } else {
             "INSIDE NOISE — no verdict"
         }

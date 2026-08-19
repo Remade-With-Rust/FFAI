@@ -12,7 +12,7 @@
 //! alignment of the *known* transcript against those probabilities. Because
 //! the text is already known, this is not recognition: it is a shortest-path
 //! problem over a trellis, solved exactly by dynamic programming. Same
-//! approach as WhisperX (Bain et al., Interspeech 2023) and torchaudio's
+//! approach as `WhisperX` (Bain et al., Interspeech 2023) and torchaudio's
 //! forced-alignment pipeline.
 //!
 //! **This module is deliberately model-free.** It takes emissions as data and
@@ -21,6 +21,19 @@
 //! against synthetic emissions in the tests below, with no weights, no fetch,
 //! and no candle. The wav2vec2 port that produces real emissions is a separate
 //! piece of work (Mercury-X §C2) and cannot break this one.
+
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 
 use std::collections::HashMap;
 
@@ -42,7 +55,12 @@ pub struct Emissions {
 }
 
 impl Emissions {
-    pub fn new(frames: usize, vocab: usize, data: Vec<f32>, frame_secs: f64) -> Result<Self, String> {
+    pub fn new(
+        frames: usize,
+        vocab: usize,
+        data: Vec<f32>,
+        frame_secs: f64,
+    ) -> Result<Self, String> {
         if data.len() != frames * vocab {
             return Err(format!(
                 "emissions are {}×{} = {} values but {} were given",
@@ -52,7 +70,12 @@ impl Emissions {
                 data.len()
             ));
         }
-        Ok(Emissions { frames, vocab, data, frame_secs })
+        Ok(Self {
+            frames,
+            vocab,
+            data,
+            frame_secs,
+        })
     }
 
     #[inline]
@@ -88,14 +111,23 @@ pub struct CtcAlphabet {
 
 impl CtcAlphabet {
     /// Build from an ordered character list; index in the list is the token id.
+    #[must_use]
     pub fn new(chars: &[char], blank: u32, word_sep: Option<char>) -> Self {
-        let lookup: HashMap<char, u32> =
-            chars.iter().enumerate().map(|(i, &c)| (c, i as u32)).collect();
+        let lookup: HashMap<char, u32> = chars
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| (c, i as u32))
+            .collect();
         let word_sep = word_sep.and_then(|c| lookup.get(&c).copied());
-        CtcAlphabet { blank, word_sep, lookup }
+        Self {
+            blank,
+            word_sep,
+            lookup,
+        }
     }
 
     /// The standard wav2vec2 English CTC alphabet, in its canonical order.
+    #[must_use]
     pub fn wav2vec2_english() -> Self {
         let chars: Vec<char> = "<pad><s></s><unk>|ETAONIHSRDLUMWCFGYPBVK'XJQZ"
             .chars()
@@ -115,7 +147,7 @@ impl CtcAlphabet {
             '|', 'E', 'T', 'A', 'O', 'N', 'I', 'H', 'S', 'R', 'D', 'L', 'U', 'M', 'W', 'C', 'F',
             'G', 'Y', 'P', 'B', 'V', 'K', '\'', 'X', 'J', 'Q', 'Z',
         ];
-        CtcAlphabet::new(&table, 0, Some('|'))
+        Self::new(&table, 0, Some('|'))
     }
 
     /// Map text onto token ids, folding case and dropping anything the model
@@ -125,6 +157,7 @@ impl CtcAlphabet {
     /// needs to know which characters survived in order to reassemble words
     /// from the aligned tokens. Silently dropping a character and then
     /// indexing the original string is how word boundaries end up off by one.
+    #[must_use]
     pub fn tokenize(&self, text: &str) -> (Vec<u32>, Vec<char>) {
         let mut ids = Vec::new();
         let mut kept = Vec::new();
@@ -132,12 +165,12 @@ impl CtcAlphabet {
         for ch in text.chars() {
             let upper = ch.to_ascii_uppercase();
             if upper.is_whitespace() {
-                if let Some(sep) = self.word_sep {
-                    if !last_was_sep {
-                        ids.push(sep);
-                        kept.push(' ');
-                        last_was_sep = true;
-                    }
+                if let Some(sep) = self.word_sep
+                    && !last_was_sep
+                {
+                    ids.push(sep);
+                    kept.push(' ');
+                    last_was_sep = true;
                 }
                 continue;
             }
@@ -186,7 +219,10 @@ pub fn forced_align(
         ));
     }
     if let Some(&bad) = tokens.iter().find(|&&t| t as usize >= emissions.vocab) {
-        return Err(format!("token id {bad} is outside the {}-symbol vocabulary", emissions.vocab));
+        return Err(format!(
+            "token id {bad} is outside the {}-symbol vocabulary",
+            emissions.vocab
+        ));
     }
 
     const NEG: f32 = f32::NEG_INFINITY;
@@ -284,12 +320,24 @@ pub fn forced_align(
             return Err(format!("token {j} received no frames during backtrace"));
         }
         let emitting: Vec<usize> = assigned.iter().copied().filter(|&t| was_emit[t]).collect();
-        let frames = if emitting.is_empty() { &assigned } else { &emitting };
+        let frames = if emitting.is_empty() {
+            &assigned
+        } else {
+            &emitting
+        };
         let start = frames[0];
         let end = frames[frames.len() - 1] + 1;
-        let score = frames.iter().map(|&t| emissions.at(t, token).exp()).sum::<f32>()
+        let score = frames
+            .iter()
+            .map(|&t| emissions.at(t, token).exp())
+            .sum::<f32>()
             / frames.len() as f32;
-        spans.push(TokenSpan { token, start, end, score });
+        spans.push(TokenSpan {
+            token,
+            start,
+            end,
+            score,
+        });
     }
     Ok(spans)
 }
@@ -300,6 +348,7 @@ pub fn forced_align(
 /// [`CtcAlphabet::tokenize`] — the two are index-parallel by construction, and
 /// pairing them any other way is how a word ends up carrying its neighbour's
 /// timing.
+#[must_use]
 pub fn words_from_spans(
     spans: &[TokenSpan],
     kept: &[char],
@@ -313,17 +362,17 @@ pub fn words_from_spans(
     let mut score_sum = 0.0f32;
     let mut score_n = 0usize;
 
-    let mut flush = |text: &mut String,
-                     first: &mut Option<usize>,
-                     last: usize,
-                     score_sum: &mut f32,
-                     score_n: &mut usize,
-                     out: &mut Vec<TimedSegment<String>>| {
+    let flush = |text: &mut String,
+                 first: &mut Option<usize>,
+                 last: usize,
+                 score_sum: &mut f32,
+                 score_n: &mut usize,
+                 out: &mut Vec<TimedSegment<String>>| {
         if let Some(f) = first.take() {
             if !text.is_empty() {
                 out.push(TimedSegment {
-                    start: time_offset + f as f64 * frame_secs,
-                    end: time_offset + last as f64 * frame_secs,
+                    start: (f as f64).mul_add(frame_secs, time_offset),
+                    end: (last as f64).mul_add(frame_secs, time_offset),
                     value: std::mem::take(text),
                     confidence: (*score_n > 0).then(|| *score_sum / *score_n as f32),
                 });
@@ -336,7 +385,14 @@ pub fn words_from_spans(
 
     for (span, &ch) in spans.iter().zip(kept.iter()) {
         if ch == ' ' {
-            flush(&mut text, &mut first, last, &mut score_sum, &mut score_n, &mut words);
+            flush(
+                &mut text,
+                &mut first,
+                last,
+                &mut score_sum,
+                &mut score_n,
+                &mut words,
+            );
             continue;
         }
         if first.is_none() {
@@ -347,7 +403,14 @@ pub fn words_from_spans(
         score_sum += span.score;
         score_n += 1;
     }
-    flush(&mut text, &mut first, last, &mut score_sum, &mut score_n, &mut words);
+    flush(
+        &mut text,
+        &mut first,
+        last,
+        &mut score_sum,
+        &mut score_n,
+        &mut words,
+    );
     words
 }
 
@@ -363,7 +426,12 @@ pub fn align_words(
         return Ok(Vec::new());
     }
     let spans = forced_align(emissions, &tokens, alphabet.blank)?;
-    Ok(words_from_spans(&spans, &kept, emissions.frame_secs, time_offset))
+    Ok(words_from_spans(
+        &spans,
+        &kept,
+        emissions.frame_secs,
+        time_offset,
+    ))
 }
 
 #[cfg(test)]
@@ -376,8 +444,11 @@ mod tests {
         let mut data = vec![0.0f32; plan.len() * vocab];
         for (t, &want) in plan.iter().enumerate() {
             for v in 0..vocab {
-                data[t * vocab + v] =
-                    if v as u32 == want { (0.9f32).ln() } else { (0.1f32 / vocab as f32).ln() };
+                data[t * vocab + v] = if v as u32 == want {
+                    (0.9f32).ln()
+                } else {
+                    (0.1f32 / vocab as f32).ln()
+                };
             }
         }
         Emissions::new(plan.len(), vocab, data, frame_secs).expect("shape checked")
@@ -423,7 +494,10 @@ mod tests {
         let e = emissions_for(&plan, 4, 0.02);
         let spans = forced_align(&e, &[1, 2], 0).expect("alignable");
         assert_eq!(spans[0].end, 1, "leading token absorbed blanks: {spans:?}");
-        assert_eq!(spans[1].start, 4, "trailing token absorbed blanks: {spans:?}");
+        assert_eq!(
+            spans[1].start, 4,
+            "trailing token absorbed blanks: {spans:?}"
+        );
     }
 
     #[test]
@@ -461,7 +535,11 @@ mod tests {
         let (ids, kept) = a.tokenize("Hi, there!");
         let text: String = kept.iter().collect();
         assert_eq!(text, "HI THERE", "punctuation should be dropped: {text:?}");
-        assert_eq!(ids.len(), kept.len(), "ids and chars must stay index-parallel");
+        assert_eq!(
+            ids.len(),
+            kept.len(),
+            "ids and chars must stay index-parallel"
+        );
         assert_eq!(ids[2], a.word_sep.expect("separator exists"));
     }
 
@@ -507,7 +585,10 @@ mod tests {
         let (tokens, _) = a.tokenize("HELLO WORLD");
         let e = emissions_for(&tokens, 40, 0.02);
         let words = align_words(&e, "Hello, world!", &a, 0.0).expect("aligns");
-        assert_eq!(words.iter().map(|w| w.value.as_str()).collect::<Vec<_>>(), ["HELLO", "WORLD"]);
+        assert_eq!(
+            words.iter().map(|w| w.value.as_str()).collect::<Vec<_>>(),
+            ["HELLO", "WORLD"]
+        );
         assert!(words[0].confidence.is_some());
     }
 }

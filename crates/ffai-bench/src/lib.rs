@@ -1,4 +1,4 @@
-//! # ffai-bench — FFai's analyzer
+//! # ffai-bench — `FFai`'s analyzer
 //!
 //! One call to answer: **how does our engine compare to the world standard,
 //! on pinned data, reproducibly?** `ffai bench asr --corpus corpora/x.toml`
@@ -16,7 +16,7 @@
 //! (symreg → E-graph simplify → SMT prove → codegen) stays private and
 //! codec-focused; it does not apply to learned-model engines.
 //!
-//! This crate is public on purpose: performance/quality claims FFai makes are
+//! This crate is public on purpose: performance/quality claims `FFai` makes are
 //! only worth making if anyone can re-run them from a ledger line alone.
 //!
 //! ## The four gates (adapted from Prometheus for model engines)

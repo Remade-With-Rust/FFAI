@@ -1,7 +1,7 @@
 //! The claims ledger, ported from Prometheus (`prom-ledger`).
 //!
 //! Append-only JSONL: one record per bench run, never edited or deleted.
-//! Every public performance/quality claim FFai makes should be traceable to
+//! Every public performance/quality claim `FFai` makes should be traceable to
 //! a ledger line that pins the corpus (manifest hash), the environment
 //! (os/arch/rustc/cpu), the reference versions, and the full gate report —
 //! reproducible from the line alone. Losses stay in the ledger too; a pruned
@@ -111,8 +111,9 @@ pub struct Environment {
 }
 
 impl Environment {
+    #[must_use]
     pub fn capture() -> Self {
-        Environment {
+        Self {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             rustc: rustc_version(),
@@ -122,8 +123,14 @@ impl Environment {
 }
 
 fn rustc_version() -> Option<String> {
-    let out = std::process::Command::new("rustc").arg("--version").output().ok()?;
-    String::from_utf8_lossy(&out.stdout).lines().next().map(|s| s.trim().to_string())
+    let out = std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
 }
 
 /// One bench run: our engine vs the world standards on a pinned corpus.
@@ -150,11 +157,11 @@ pub struct BenchRecord {
 }
 
 impl BenchRecord {
+    #[must_use]
     pub fn now_id(task: &str) -> (String, u64) {
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
         (format!("bench-{task}-{secs}"), secs)
     }
 }
@@ -167,7 +174,10 @@ pub fn append(path: &Path, record: &BenchRecord) -> Result<()> {
     let mut line =
         serde_json::to_string(record).map_err(|e| Error::Other(format!("ledger encode: {e}")))?;
     line.push('\n');
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     file.write_all(line.as_bytes())?;
     Ok(())
 }

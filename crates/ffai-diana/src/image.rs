@@ -43,11 +43,12 @@ pub const STRIDE: usize = 32;
 
 /// Letterbox `image` into a CHW f32 tensor in `[0, 1]`.
 ///
-//// The letterbox output shape `(height, width)` for a source, WITHOUT resizing.
+/// The letterbox output shape `(height, width)` for a source, WITHOUT resizing.
 ///
 /// Shares its arithmetic with [`letterbox_with`] line for line, so the number a
 /// progress line prints cannot drift from the tensor the model actually sees.
 /// Ultralytics prints this shape height-first, and so does the CLI.
+#[must_use] 
 pub fn letterbox_shape(w0: usize, h0: usize, size: usize, geometry: Geometry) -> (usize, usize) {
     let scale = (size as f32 / w0 as f32).min(size as f32 / h0 as f32);
     let nw = ((w0 as f32 * scale).round() as usize).max(1).min(size);
@@ -138,7 +139,7 @@ pub fn letterbox_with(
         // Gray8 broadcasts its single channel; Rgba8 drops alpha.
         let src_c = if channels == 1 { 0 } else { c };
         let at = |yy: usize, xx: usize| -> f32 {
-            image.data[(yy * w0 + xx) * channels + src_c] as f32 / 255.0
+            f32::from(image.data[(yy * w0 + xx) * channels + src_c]) / 255.0
         };
         for (x, &(x0, x1, fx)) in xs.iter().enumerate() {
             let top = at(y0, x0) * (1.0 - fx) + at(y0, x1) * fx;

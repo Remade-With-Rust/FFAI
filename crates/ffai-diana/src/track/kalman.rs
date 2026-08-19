@@ -44,12 +44,14 @@ pub struct Xyah {
 
 impl Xyah {
     /// From `[x0, y0, x1, y1]`.
+    #[must_use] 
     pub fn from_xyxy(b: [f32; 4]) -> Self {
         let (w, h) = ((b[2] - b[0]).max(1e-6), (b[3] - b[1]).max(1e-6));
-        Xyah { cx: b[0] + w * 0.5, cy: b[1] + h * 0.5, a: w / h, h }
+        Self { cx: b[0] + w * 0.5, cy: b[1] + h * 0.5, a: w / h, h }
     }
 
     /// Back to `[x0, y0, x1, y1]`.
+    #[must_use] 
     pub fn to_xyxy(self) -> [f32; 4] {
         let w = self.a * self.h;
         [self.cx - w * 0.5, self.cy - self.h * 0.5, self.cx + w * 0.5, self.cy + self.h * 0.5]
@@ -57,6 +59,7 @@ impl Xyah {
 }
 
 /// Initial state and covariance for a newly observed box.
+#[must_use] 
 pub fn initiate(m: Xyah) -> (State, Cov) {
     let s: State = [m.cx, m.cy, m.a, m.h, 0.0, 0.0, 0.0, 0.0];
     // Velocity starts UNKNOWN, so its variance starts large — 10x the position

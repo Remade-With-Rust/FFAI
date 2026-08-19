@@ -86,7 +86,9 @@ fn main() {
         whisper_cli,
         model,
     }));
-    let speaker = Arc::new(Mutex::new(Speaker { piper: PiperCandle::new() }));
+    let speaker = Arc::new(Mutex::new(Speaker {
+        piper: PiperCandle::new(),
+    }));
     // Both OCR lineages, constructed lazily — weights load on first read, so
     // starting the demo does not pay for a tab nobody opens.
     let reader = Arc::new(Mutex::new(Reader {
@@ -110,13 +112,13 @@ fn main() {
     // rather than inside the first click, since an unconverted voice is a
     // setup problem with a one-command fix.
     eprintln!("loading the voice (piper-vits-lessac-medium) ...");
-    if let Ok(g) = speaker.lock() {
-        if let Err(e) = g.piper.synthesize("Warm up.", &TtsOptions::default()) {
-            eprintln!(
-                "note: TTS unavailable — {e}\n      The Speak tab will show this message; \
+    if let Ok(g) = speaker.lock()
+        && let Err(e) = g.piper.synthesize("Warm up.", &TtsOptions::default())
+    {
+        eprintln!(
+            "note: TTS unavailable — {e}\n      The Speak tab will show this message; \
                  the Listen tab is unaffected."
-            );
-        }
+        );
     }
 
     let listener = match TcpListener::bind(ADDR) {
@@ -250,8 +252,7 @@ fn transcribe_both(
         "ffai-demo-{}.wav",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_nanos())
     )));
     if let Err(e) = std::fs::write(&tmp.0, wav) {
         return json_error(&format!("could not stage audio: {e}"));
@@ -356,7 +357,12 @@ fn synthesize(body: &[u8], speaker: &Arc<Mutex<Speaker>>) -> String {
         Ok(v) => v,
         Err(e) => return json!({ "error": format!("bad request: {e}") }).to_string(),
     };
-    let text = req.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+    let text = req
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if text.is_empty() {
         return json!({ "error": "nothing to say — type some text" }).to_string();
     }
@@ -367,7 +373,15 @@ fn synthesize(body: &[u8], speaker: &Arc<Mutex<Speaker>>) -> String {
         return json!({ "error": format!("text longer than {MAX_CHARS} characters") }).to_string();
     }
 
-    let f32_opt = |k: &str| req.get(k).and_then(|v| v.as_f64()).map(|v| v as f32);
+    // JSON numbers are f64; TtsOptions takes f32. Narrowing a speed or pitch
+    // knob costs precision no listener can hear, and the value is clamped by the
+    // synthesiser anyway.
+    #[allow(clippy::cast_possible_truncation)]
+    let f32_opt = |k: &str| {
+        req.get(k)
+            .and_then(serde_json::Value::as_f64)
+            .map(|v| v as f32)
+    };
     let opts = TtsOptions {
         voice: None,
         speed: f32_opt("speed").unwrap_or(1.0).clamp(0.25, 4.0),
@@ -375,10 +389,16 @@ fn synthesize(body: &[u8], speaker: &Arc<Mutex<Speaker>>) -> String {
         // engine, so the demo's knobs and the library's defaults cannot drift.
         noise_scale: f32_opt("noise_scale").map(|v| v.clamp(0.0, 2.0)),
         noise_w: f32_opt("noise_w").map(|v| v.clamp(0.0, 2.0)),
-        seed: req.get("seed").and_then(|v| v.as_u64()).unwrap_or(0),
+        seed: req
+            .get("seed")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
         sentence_silence_s: f32_opt("sentence_silence").unwrap_or(0.2).clamp(0.0, 2.0),
     };
-    let verify = req.get("verify").and_then(|v| v.as_bool()).unwrap_or(false);
+    let verify = req
+        .get("verify")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     let guard = match speaker.lock() {
         Ok(g) => g,
@@ -397,7 +417,11 @@ fn synthesize(body: &[u8], speaker: &Arc<Mutex<Speaker>>) -> String {
     // The determinism check runs the SAME call again and hashes both. Only on
     // request: it doubles the work, and a demo should not spend that silently.
     let repeat_hash = if verify {
-        guard.piper.synthesize(&text, &opts).ok().map(|a| sha256_hex(samples_bytes(&a.samples)))
+        guard
+            .piper
+            .synthesize(&text, &opts)
+            .ok()
+            .map(|a| sha256_hex(samples_bytes(&a.samples)))
     } else {
         None
     };
@@ -428,6 +452,10 @@ fn wav_bytes(audio: &ffai_core::types::AudioBuffer) -> Vec<u8> {
     let n = audio.samples.len();
     let rate = audio.sample_rate;
     let mut out = Vec::with_capacity(44 + n * 2);
+    // WAV headers carry a u32 byte count, so this narrowing is the format's,
+    // not ours. The `as i16` below is preceded by `.clamp(-1.0, 1.0)`, which is
+    // what makes it exact.
+    #[allow(clippy::cast_possible_truncation)]
     let data_len = (n * 2) as u32;
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&(36 + data_len).to_le_bytes());
@@ -469,14 +497,26 @@ fn sha256_hex(bytes: Vec<u8>) -> String {
 /// lines and the alternative is a crate in the tree for one data URL.
 fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -487,7 +527,17 @@ fn base64(bytes: &[u8]) -> String {
 /// defect the mission plan spent a milestone finding (§6.17).
 fn run_whisper_cpp(bin: &Path, model: &Path, wav: &Path) -> (String, Option<String>) {
     let out = Command::new(bin)
-        .args(["-m", &model.to_string_lossy(), "-t", "24", "-bs", "1", "-bo", "1", "-np"])
+        .args([
+            "-m",
+            &model.to_string_lossy(),
+            "-t",
+            "24",
+            "-bs",
+            "1",
+            "-bo",
+            "1",
+            "-np",
+        ])
         .arg(wav)
         .output();
     match out {
@@ -498,7 +548,7 @@ fn run_whisper_cpp(bin: &Path, model: &Path, wav: &Path) -> (String, Option<Stri
             // survives so the two panes hold comparable text.
             let cleaned: String = text
                 .lines()
-                .map(|l| l.split_once(']').map(|(_, t)| t).unwrap_or(l).trim())
+                .map(|l| l.split_once(']').map_or(l, |(_, t)| t).trim())
                 .filter(|l| !l.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -509,10 +559,16 @@ fn run_whisper_cpp(bin: &Path, model: &Path, wav: &Path) -> (String, Option<Stri
             Some(format!(
                 "whisper-cli exited {}: {}",
                 o.status,
-                String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")
+                String::from_utf8_lossy(&o.stderr)
+                    .lines()
+                    .last()
+                    .unwrap_or("")
             )),
         ),
-        Err(e) => (String::new(), Some(format!("could not run whisper-cli: {e}"))),
+        Err(e) => (
+            String::new(),
+            Some(format!("could not run whisper-cli: {e}")),
+        ),
     }
 }
 
@@ -535,13 +591,18 @@ fn label_speakers(t: &ffai_core::types::Transcript) -> String {
         if text.is_empty() {
             continue;
         }
-        match turns.iter().find(|w| seg.start >= w.start - 0.25 && seg.start < w.end + 0.25) {
+        match turns
+            .iter()
+            .find(|w| seg.start >= w.start - 0.25 && seg.start < w.end + 0.25)
+        {
             Some(w) => out.push(format!("{}: {text}", w.value)),
             None => out.push(text.to_string()),
         }
     }
-    out.join("
-")
+    out.join(
+        "
+",
+    )
 }
 
 /// Read one image with BOTH OCR lineages and report each one's text, wall
@@ -554,7 +615,9 @@ fn label_speakers(t: &ffai_core::types::Transcript) -> String {
 fn read_image(body: &[u8], reader: &Arc<Mutex<Reader>>) -> String {
     const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
     if body.len() < 8 || body[..8] != PNG_MAGIC {
-        return json_error("posted body is not a PNG (the demo decodes PNG only until the rff image decoders land)");
+        return json_error(
+            "posted body is not a PNG (the demo decodes PNG only until the rff image decoders land)",
+        );
     }
     // ffai-media reads from a path, so the bytes land in a temp file that is
     // deleted on EVERY path below — the demo promises no storage.
@@ -617,7 +680,11 @@ fn json_error(msg: &str) -> String {
 /// Serve the built Dioxus app. `dx build` writes into a nested target dir; the
 /// candidates below cover a release build and a plain `public/` copy.
 fn serve_static(stream: &mut TcpStream, path: &str) -> std::io::Result<()> {
-    let rel = if path == "/" { "index.html" } else { path.trim_start_matches('/') };
+    let rel = if path == "/" {
+        "index.html"
+    } else {
+        path.trim_start_matches('/')
+    };
     // Refuse traversal before touching the filesystem.
     if rel.contains("..") {
         return respond(stream, 400, "text/plain", b"bad path");

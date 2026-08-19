@@ -88,8 +88,12 @@ fn unwired_container_names_the_gap() {
 #[test]
 fn every_wired_container_decodes() {
     let root = std::path::Path::new("../../corpora/clips/entropy-ladder");
-    for (file, expect) in [("cavlc_akiyo.mp4", 164), ("akiyo.avi", 164),
-                           ("akiyo.ts", 164), ("akiyo.mkv", 164)] {
+    for (file, expect) in [
+        ("cavlc_akiyo.mp4", 164),
+        ("akiyo.avi", 164),
+        ("akiyo.ts", 164),
+        ("akiyo.mkv", 164),
+    ] {
         let p = root.join(file);
         if !p.exists() {
             continue; // generated corpus; skip when absent

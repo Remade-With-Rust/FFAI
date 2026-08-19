@@ -69,7 +69,10 @@ mod win {
     /// be A/B'd against a knob in seconds instead of two 20-minute bench runs.
     pub fn mem_bytes() -> (usize, usize) {
         unsafe {
-            let mut c = MemCounters { cb: std::mem::size_of::<MemCounters>() as u32, ..Default::default() };
+            let mut c = MemCounters {
+                cb: std::mem::size_of::<MemCounters>() as u32,
+                ..Default::default()
+            };
             if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) == 0 {
                 return (0, 0);
             }
@@ -130,11 +133,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // For P-core sets take one logical per physical core (even bits) so we
     // measure cores, not hyperthread siblings contending for one core.
     let mask: usize = match which.as_str() {
-        "p1" => 0x1,          // a single P-core
-        "e1" => 0x1_0000,     // a single E-core
-        "p" => 0x5555,        // 8 P-cores, one thread each
-        "all" => 0xFF_5555,   // 8 P-cores + 8 E-cores
-        _ => 0,               // scheduler's choice
+        "p1" => 0x1,        // a single P-core
+        "e1" => 0x1_0000,   // a single E-core
+        "p" => 0x5555,      // 8 P-cores, one thread each
+        "all" => 0xFF_5555, // 8 P-cores + 8 E-cores
+        _ => 0,             // scheduler's choice
     };
     if mask != 0 {
         if !win::pin(mask) {
@@ -143,7 +146,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         win::raise_priority();
     }
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(0);
     println!("pin={which} mask={mask:#x} available_parallelism={threads}");
 
     let cache = std::env::var("FFAI_CACHE")
@@ -157,11 +162,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let texts: Vec<String> = manifest
         .holdout()
         .take(20)
-        .map(|c| std::fs::read_to_string(manifest.clip_path(c)).unwrap().trim().to_string())
+        .map(|c| {
+            std::fs::read_to_string(manifest.clip_path(c))
+                .unwrap()
+                .trim()
+                .to_string()
+        })
         .collect();
     let ids_list: Vec<Vec<i64>> = texts
         .iter()
-        .map(|t| vits.id_map.sentence_to_ids(&phonemizer.phonemize(t).unwrap()).0)
+        .map(|t| {
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t).unwrap())
+                .0
+        })
         .collect();
 
     // Hand the reference the EXACT id sequences we run, so the two arms drive
@@ -240,13 +254,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("  {audio_secs:.1}s audio, best-of-5:");
-    println!("    {:<14} {:>9} {:>9} {:>7}", "stage", "wall ms", "cpu ms", "cores");
+    println!(
+        "    {:<14} {:>9} {:>9} {:>7}",
+        "stage", "wall ms", "cpu ms", "cores"
+    );
     for ((name, t), c) in ["text_encoder", "duration_pred", "flow", "decoder"]
         .iter()
         .zip(best)
         .zip(best_cpu)
     {
-        println!("    {name:<14} {:>9.1} {:>9.1} {:>7.2}", t * 1000.0, c * 1000.0, c / t);
+        println!(
+            "    {name:<14} {:>9.1} {:>9.1} {:>7.2}",
+            t * 1000.0,
+            c * 1000.0,
+            c / t
+        );
     }
     let (ws, peak) = win::mem_bytes();
     println!(

@@ -30,7 +30,7 @@
 
 use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder};
 use ffai_core::candle::quantized::{GgmlDType, QMatMul, QTensor};
-use ffai_core::candle::{DType, IndexOp, Result as CandleResult, Tensor, D};
+use ffai_core::candle::{D, DType, IndexOp, Result as CandleResult, Tensor};
 
 /// Whisper uses eps 1e-5 throughout.
 const LAYER_NORM_EPS: f64 = 1e-5;
@@ -52,19 +52,20 @@ pub enum Precision {
 }
 
 impl Precision {
-    fn ggml(self) -> Option<GgmlDType> {
+    const fn ggml(self) -> Option<GgmlDType> {
         match self {
-            Precision::F32 => None,
-            Precision::Q8_0 => Some(GgmlDType::Q8_0),
-            Precision::Q4K => Some(GgmlDType::Q4K),
+            Self::F32 => None,
+            Self::Q8_0 => Some(GgmlDType::Q8_0),
+            Self::Q4K => Some(GgmlDType::Q4K),
         }
     }
 
-    pub fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            Precision::F32 => "f32",
-            Precision::Q8_0 => "q8_0",
-            Precision::Q4K => "q4k",
+            Self::F32 => "f32",
+            Self::Q8_0 => "q8_0",
+            Self::Q4K => "q4k",
         }
     }
 }
@@ -86,7 +87,10 @@ pub enum QLinear {
     // projection (VocabProj), +5.7 % at 15/15 rounds. A cliff that exists in a
     // microbenchmark is not a cliff that exists in the pipeline.
     Full(Linear),
-    Quant { matmul: QMatMul, bias: Option<Tensor> },
+    Quant {
+        matmul: QMatMul,
+        bias: Option<Tensor>,
+    },
     /// int8 GEMV for layers that only ever see ONE input row.
     ///
     /// The decoder MLP is 18.9 MB of weights per token across the stack and
@@ -167,7 +171,7 @@ fn gemv_rows(
 }
 
 impl QLinear {
-    /// Load a linear layer from a VarBuilder at the given precision.
+    /// Load a linear layer from a `VarBuilder` at the given precision.
     pub fn from_vb(
         in_dim: usize,
         out_dim: usize,
@@ -176,7 +180,11 @@ impl QLinear {
         precision: Precision,
     ) -> CandleResult<Self> {
         let weight = vb.get((out_dim, in_dim), "weight")?;
-        let bias = if bias { Some(vb.get(out_dim, "bias")?) } else { None };
+        let bias = if bias {
+            Some(vb.get(out_dim, "bias")?)
+        } else {
+            None
+        };
         Self::new(weight, bias, precision)
     }
 
@@ -200,7 +208,11 @@ impl QLinear {
         precision: Precision,
     ) -> CandleResult<Self> {
         let weight = vb.get((out_dim, in_dim), "weight")?;
-        let bias = if bias { Some(vb.get(out_dim, "bias")?) } else { None };
+        let bias = if bias {
+            Some(vb.get(out_dim, "bias")?)
+        } else {
+            None
+        };
         // A/B escape hatch. Resolved ONCE here at load, never per call — an
         // earlier optimization in this crate regressed itself 3x by reading an
         // env var inside the per-token path.
@@ -209,7 +221,7 @@ impl QLinear {
         }
         // Weight is already (out, in) row-major — the layout the kernel reads.
         match super::vocab_int8::Int8Vocab::new(&weight)? {
-            Some(q) => Ok(QLinear::Int8 { q, bias }),
+            Some(q) => Ok(Self::Int8 { q, bias }),
             None => Self::new(weight, bias, precision),
         }
     }
@@ -224,13 +236,17 @@ impl QLinear {
         precision: Precision,
     ) -> CandleResult<Self> {
         let weight = vb.get((out_dim, in_dim), "weight")?;
-        let bias = if bias { Some(vb.get(out_dim, "bias")?) } else { None };
+        let bias = if bias {
+            Some(vb.get(out_dim, "bias")?)
+        } else {
+            None
+        };
         // A/B escape hatch, resolved once at load.
         if dec_f16_disabled() {
             return Self::new(weight, bias, precision);
         }
         match super::f16_gemv::F16Gemv::new(&weight)? {
-            Some(k) => Ok(QLinear::Half { k, bias }),
+            Some(k) => Ok(Self::Half { k, bias }),
             None => Self::new(weight, bias, precision),
         }
     }
@@ -243,23 +259,26 @@ impl QLinear {
             // rather than failing to load.
             Some(dtype) if weight.dim(D::Minus1)? % dtype.block_size() == 0 => {
                 let q = QTensor::quantize(&weight, dtype)?;
-                Ok(QLinear::Quant { matmul: QMatMul::from_qtensor(q)?, bias })
+                Ok(Self::Quant {
+                    matmul: QMatMul::from_qtensor(q)?,
+                    bias,
+                })
             }
-            _ => Ok(QLinear::Full(Linear::new(weight, bias))),
+            _ => Ok(Self::Full(Linear::new(weight, bias))),
         }
     }
 
     pub fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
         match self {
-            QLinear::Full(linear) => linear.forward(x),
-            QLinear::Quant { matmul, bias } => {
+            Self::Full(linear) => linear.forward(x),
+            Self::Quant { matmul, bias } => {
                 let y = matmul.forward(x)?;
                 match bias {
                     Some(b) => y.broadcast_add(b),
                     None => Ok(y),
                 }
             }
-            QLinear::Half { k, bias } => {
+            Self::Half { k, bias } => {
                 let dims = x.dims();
                 let rows: usize = dims[..dims.len() - 1].iter().product();
                 let flat = x.reshape((rows, dims[dims.len() - 1]))?;
@@ -273,7 +292,7 @@ impl QLinear {
                 out[n - 1] = y.dim(1)?;
                 y.reshape(out)
             }
-            QLinear::Int8 { q, bias } => {
+            Self::Int8 { q, bias } => {
                 let dims = x.dims();
                 let rows: usize = dims[..dims.len() - 1].iter().product();
                 let flat = x.reshape((rows, dims[dims.len() - 1]))?;
@@ -321,7 +340,7 @@ impl QLinear {
 #[inline(always)]
 fn gelu_scalar(t: f32) -> f32 {
     // Whisper's GELU: 0.5x(1 + tanh(sqrt(2/pi)(x + 0.044715x^3)))
-    let u = 0.797_884_56_f32 * (t + 0.044715 * t * t * t);
+    let u = 0.797_884_6_f32 * (0.044715 * t * t).mul_add(t, t);
     // Clamp before squaring: the rational diverges outside its range, and
     // tanh has saturated to +/-1 long before |u| = 8 anyway.
     let u2 = (u * u).min(64.0);
@@ -391,7 +410,7 @@ impl ffai_core::candle::CustomOp1 for FastGelu {
             _ => {
                 return Err(ffai_core::candle::Error::Msg(
                     "fast_gelu supports f32 and f16 storage only".to_string(),
-                ))
+                ));
             }
         };
         Ok((out, layout.shape().clone()))
@@ -472,7 +491,7 @@ impl ffai_core::candle::CustomOp1 for FastSoftmax {
             _ => {
                 return Err(ffai_core::candle::Error::Msg(
                     "fast_softmax supports f32 and f16 storage only".into(),
-                ))
+                ));
             }
         };
         Ok((out, layout.shape().clone()))
@@ -505,7 +524,12 @@ fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder, p: Precision) -> Candle
     )
 }
 
-fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder, p: Precision) -> CandleResult<QLinear> {
+fn linear_no_bias(
+    in_dim: usize,
+    out_dim: usize,
+    vb: VarBuilder,
+    p: Precision,
+) -> CandleResult<QLinear> {
     QLinear::new(vb.get((out_dim, in_dim), "weight")?, None, p)
 }
 
@@ -578,10 +602,9 @@ impl Attention {
         p: Precision,
         kv_single_row: bool,
     ) -> CandleResult<Self> {
-        let half = |name: &str, b: bool| {
-            QLinear::from_vb_gemv_f16(n_state, n_state, vb.pp(name), b, p)
-        };
-        Ok(Attention {
+        let half =
+            |name: &str, b: bool| QLinear::from_vb_gemv_f16(n_state, n_state, vb.pp(name), b, p);
+        Ok(Self {
             query: half("q_proj", true)?,
             key: if kv_single_row {
                 half("k_proj", false)?
@@ -600,7 +623,7 @@ impl Attention {
     }
 
     fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
-        Ok(Attention {
+        Ok(Self {
             query: linear(n_state, n_state, vb.pp("q_proj"), p)?,
             // Whisper's key projection has no bias — it would be redundant
             // under the softmax.
@@ -612,7 +635,7 @@ impl Attention {
         })
     }
 
-    /// (batch, seq, n_state) -> (batch, n_head, seq, head_dim)
+    /// (batch, seq, `n_state`) -> (batch, `n_head`, seq, `head_dim`)
     fn split_heads(&self, x: &Tensor) -> CandleResult<Tensor> {
         let (b, seq, n_state) = x.dims3()?;
         x.reshape((b, seq, self.n_head, n_state / self.n_head))?
@@ -642,7 +665,13 @@ impl Attention {
 
         let q_len = x.dim(1)?;
         let mask = if q_len > 1 {
-            Some(causal_mask(q_len, k.dim(1)?, offset, x.dtype(), x.device())?)
+            Some(causal_mask(
+                q_len,
+                k.dim(1)?,
+                offset,
+                x.dtype(),
+                x.device(),
+            )?)
         } else {
             None
         };
@@ -661,85 +690,83 @@ impl Attention {
         let p = super::profile::profile();
         let q = super::profile::timed(&p.xa_qproj, || self.query.forward(x))?;
         let scale = self.scale(&q)?;
-        let (k, v) = match &self.cache {
-            Some((k, v)) => (k.clone(), v.clone()),
-            None => {
-                let k = self.key.forward(audio)?;
-                let v = self.value.forward(audio)?;
-                // Prepared once per window, reused for every token.
-                // Whisper folds 1/sqrt(d) as ^-0.25 into BOTH q and k. That is
-                // symmetric but not required: (q*s)·(k*s) = q·k·s^2, so the
-                // whole factor can ride on q alone. Here q is ONE row per
-                // token and k is 1500x384 per layer, so scaling k meant a
-                // 2.3 MB multiply-and-allocate per layer at cache build —
-                // paid once per clip, and these corpus clips average ~6 s, so
-                // a fixed cost lands heavily on the throughput figure.
-                let k = self.split_heads(&k)?.transpose(2, 3)?.contiguous()?;
-                let v = self.split_heads(&v)?.contiguous()?;
-                // The cross-attention cache is read IN FULL on every generated
-                // token — 4.6 MB per layer, 18.4 MB per token across the stack
-                // — which the three-pass breakdown showed is what
-                // cross-attention actually costs.
+        let (k, v) = if let Some((k, v)) = &self.cache {
+            (k.clone(), v.clone())
+        } else {
+            let k = self.key.forward(audio)?;
+            let v = self.value.forward(audio)?;
+            // Prepared once per window, reused for every token.
+            // Whisper folds 1/sqrt(d) as ^-0.25 into BOTH q and k. That is
+            // symmetric but not required: (q*s)·(k*s) = q·k·s^2, so the
+            // whole factor can ride on q alone. Here q is ONE row per
+            // token and k is 1500x384 per layer, so scaling k meant a
+            // 2.3 MB multiply-and-allocate per layer at cache build —
+            // paid once per clip, and these corpus clips average ~6 s, so
+            // a fixed cost lands heavily on the throughput figure.
+            let k = self.split_heads(&k)?.transpose(2, 3)?.contiguous()?;
+            let v = self.split_heads(&v)?.contiguous()?;
+            // The cross-attention cache is read IN FULL on every generated
+            // token — 4.6 MB per layer, 18.4 MB per token across the stack
+            // — which the three-pass breakdown showed is what
+            // cross-attention actually costs.
+            //
+            // Storing it at f16 halves that. This was tried once and
+            // REVERTED (§6.16): the matmuls got faster and candle's f16
+            // softmax, 82 % slower, gave it all back. With `fast_softmax`
+            // that blocker is gone and the FULL CHAIN now wins 1.18x
+            // (31/41 paired rounds, z = +3.3). The link was never the
+            // problem; the chain was.
+            // ...and with the fused f32 kernel that argument changes
+            // again. f16 bought its 1.18x by halving traffic through a
+            // three-op path; the fused kernel reads K and V exactly once
+            // in f32 and beats the f16 three-op path outright:
+            //
+            //   default (adaptive)      cross-attn 0.107 s   total 0.440
+            //   forced f16 (no kernel)  cross-attn 0.083 s   total 0.368
+            //   forced f32 (kernel)     cross-attn 0.075 s   total 0.360
+            //
+            // The adaptive path was ALSO losing to both of its own
+            // options — the known run-to-run flip (margin ~1.0-1.17x
+            // against a 1.10 threshold) meant it kept re-deciding. When
+            // the fused kernel can serve this shape the choice is no
+            // longer a balance to calibrate, so stop calibrating it.
+            let kv_dtype = if super::flash_attn::serves(&k, &v) {
+                // f16 cache: the fused kernel widens it with F16C as it
+                // streams and still accumulates in f32, so this halves the
+                // 18.4 MB/token read without halving the arithmetic. That
+                // is the distinction §6.16's failed f16 K/V chain missed —
+                // it did f16 MATH, and the softmax between the matmuls ran
+                // 82 % slower for it.
+                // f16 cache, widened by F16C as it streams so the
+                // accumulation still happens in f32. Halves the largest
+                // remaining per-token read in decode, 18.4 -> 9.2 MB.
                 //
-                // Storing it at f16 halves that. This was tried once and
-                // REVERTED (§6.16): the matmuls got faster and candle's f16
-                // softmax, 82 % slower, gave it all back. With `fast_softmax`
-                // that blocker is gone and the FULL CHAIN now wins 1.18x
-                // (31/41 paired rounds, z = +3.3). The link was never the
-                // problem; the chain was.
-                // ...and with the fused f32 kernel that argument changes
-                // again. f16 bought its 1.18x by halving traffic through a
-                // three-op path; the fused kernel reads K and V exactly once
-                // in f32 and beats the f16 three-op path outright:
+                // NOT the f16 K/V chain that failed in 6.16 — that did f16
+                // MATH, and the softmax between the matmuls ran 82 %
+                // slower for it. Here only the bytes are half.
                 //
-                //   default (adaptive)      cross-attn 0.107 s   total 0.440
-                //   forced f16 (no kernel)  cross-attn 0.083 s   total 0.368
-                //   forced f32 (kernel)     cross-attn 0.075 s   total 0.360
-                //
-                // The adaptive path was ALSO losing to both of its own
-                // options — the known run-to-run flip (margin ~1.0-1.17x
-                // against a 1.10 threshold) meant it kept re-deciding. When
-                // the fused kernel can serve this shape the choice is no
-                // longer a balance to calibrate, so stop calibrating it.
-                let kv_dtype = if super::flash_attn::serves(&k, &v) {
-                    // f16 cache: the fused kernel widens it with F16C as it
-                    // streams and still accumulates in f32, so this halves the
-                    // 18.4 MB/token read without halving the arithmetic. That
-                    // is the distinction §6.16's failed f16 K/V chain missed —
-                    // it did f16 MATH, and the softmax between the matmuls ran
-                    // 82 % slower for it.
-                    // f16 cache, widened by F16C as it streams so the
-                    // accumulation still happens in f32. Halves the largest
-                    // remaining per-token read in decode, 18.4 -> 9.2 MB.
-                    //
-                    // NOT the f16 K/V chain that failed in 6.16 — that did f16
-                    // MATH, and the softmax between the matmuls ran 82 %
-                    // slower for it. Here only the bytes are half.
-                    //
-                    // Measured: cross-attn 0.064 -> 0.055 s (1.16x on the
-                    // stage); pipeline 13/21, z = +1.1, ratio 1.003x —
-                    // INCONCLUSIVE at the total level, because cross-attention
-                    // is ~18 % of the pipeline so 1.16x there is ~2.5 %, under
-                    // this harness's noise floor. Kept on the strength of the
-                    // stage measurement and the halved cache memory; the
-                    // pipeline claim is NOT made.
-                    if kv_f16_disabled() { DType::F32 } else { DType::F16 }
+                // Measured: cross-attn 0.064 -> 0.055 s (1.16x on the
+                // stage); pipeline 13/21, z = +1.1, ratio 1.003x —
+                // INCONCLUSIVE at the total level, because cross-attention
+                // is ~18 % of the pipeline so 1.16x there is ~2.5 %, under
+                // this harness's noise floor. Kept on the strength of the
+                // stage measurement and the halved cache memory; the
+                // pipeline claim is NOT made.
+                if kv_f16_disabled() {
+                    DType::F32
                 } else {
-                    super::adaptive::attention_kv_dtype(
-                        k.dim(1)?,
-                        k.dim(3)?,
-                        k.dim(2)?,
-                        k.device(),
-                    )
-                };
-                let (k, v) = if kv_dtype == DType::F16 {
-                    (k.to_dtype(DType::F16)?, v.to_dtype(DType::F16)?)
-                } else {
-                    (k, v)
-                };
-                self.cache = Some((k.clone(), v.clone()));
+                    DType::F16
+                }
+            } else {
+                super::adaptive::attention_kv_dtype(k.dim(1)?, k.dim(3)?, k.dim(2)?, k.device())
+            };
+            let (k, v) = if kv_dtype == DType::F16 {
+                (k.to_dtype(DType::F16)?, v.to_dtype(DType::F16)?)
+            } else {
                 (k, v)
-            }
+            };
+            self.cache = Some((k.clone(), v.clone()));
+            (k, v)
         };
         let q = super::profile::timed(&p.xa_prep, || {
             // scale^2 because k no longer carries its half — see the cache
@@ -748,7 +775,11 @@ impl Attention {
             // NOT k.dtype(): with an f16 cache the kernel wants q in f32 so
             // the accumulation stays full precision.
             let q = (self.split_heads(&q)? * (scale * scale))?.contiguous()?;
-            if super::flash_attn::serves(&k, &v) { Ok(q) } else { q.to_dtype(k.dtype()) }
+            if super::flash_attn::serves(&k, &v) {
+                Ok(q)
+            } else {
+                q.to_dtype(k.dtype())
+            }
         })?;
 
         // Inlined from attend_prepared so each step is separately timed in
@@ -757,9 +788,9 @@ impl Attention {
         // Fused streaming kernel for the decode shape (one query row, many
         // keys) — 2.37x the three ops below, 41/41, z=+6.4. Declines when the
         // KV cache is f16, so the fallback stays live.
-        if let Some(ctx) = super::profile::timed(&p.xa_qk, || {
-            super::flash_attn::attend(&q, &k, &v, false)
-        })? {
+        if let Some(ctx) =
+            super::profile::timed(&p.xa_qk, || super::flash_attn::attend(&q, &k, &v, false))?
+        {
             let merged = super::profile::timed(&p.xa_merge, || {
                 ctx.transpose(1, 2)?.flatten_from(2)?.to_dtype(x.dtype())
             })?;
@@ -771,10 +802,10 @@ impl Attention {
         // matmul would face mixed dtypes. Widen K/V for this one call: it
         // runs once per window, and every per-token step after it still
         // reads the f16 cache through the kernel.
-        let (k, v) = if q.dtype() != k.dtype() {
-            (k.to_dtype(q.dtype())?, v.to_dtype(q.dtype())?)
-        } else {
+        let (k, v) = if q.dtype() == k.dtype() {
             (k, v)
+        } else {
+            (k.to_dtype(q.dtype())?, v.to_dtype(q.dtype())?)
         };
         let qk = super::profile::timed(&p.xa_qk, || q.matmul(&k))?;
         let w = super::profile::timed(&p.xa_softmax, || fast_softmax(&qk))?;
@@ -785,7 +816,7 @@ impl Attention {
         super::profile::timed(&p.xa_out, || self.out.forward(&merged))
     }
 
-    /// Whisper folds 1/sqrt(head_dim) into q and k as `^-0.25` each, rather
+    /// Whisper folds `1/sqrt(head_dim)` into q and k as `^-0.25` each, rather
     /// than scaling once after the product.
     fn scale(&self, q: &Tensor) -> CandleResult<f64> {
         Ok(((q.dim(D::Minus1)? / self.n_head) as f64).powf(-0.25))
@@ -834,7 +865,9 @@ impl Attention {
             qk = qk.broadcast_add(mask)?;
         }
         let wv = candle_nn::ops::softmax_last_dim(&qk)?.matmul(v)?;
-        wv.transpose(1, 2)?.flatten_from(2).and_then(|wv| self.out.forward(&wv))
+        wv.transpose(1, 2)?
+            .flatten_from(2)
+            .and_then(|wv| self.out.forward(&wv))
     }
 
     fn reset(&mut self) {
@@ -878,7 +911,11 @@ fn causal_mask(
     let mask: Vec<f32> = (0..q_len)
         .flat_map(|i| {
             (0..k_len).map(move |j| {
-                if j > offset + i { f32::NEG_INFINITY } else { 0.0 }
+                if j > offset + i {
+                    f32::NEG_INFINITY
+                } else {
+                    0.0
+                }
             })
         })
         .collect();
@@ -889,7 +926,7 @@ fn causal_mask(
 ///
 /// Deliberately NOT a `candle_nn::Linear` in the f32 case: `Linear::forward`
 /// calls `weight.t()` internally, and matmul against that non-contiguous view
-/// materializes the whole 51864 × d_model matrix *per token* — measured at
+/// materializes the whole 51864 × `d_model` matrix *per token* — measured at
 /// 91.5 % of decoder time before it was fixed (mission plan §6.3). The f32
 /// arm therefore holds a pre-transposed contiguous copy; the quantized arm
 /// needs no transpose at all, since `QMatMul` contracts the last dimension.
@@ -904,8 +941,14 @@ enum VocabProj {
     /// decoder instead made cross-attention 1.13x *slower*. Precision is a
     /// per-op property, and which way it falls depends on the machine — hence
     /// the calibration rather than a constant.
-    Half { w: Tensor, pad: usize },
-    Full { w: Tensor, pad: usize },
+    Half {
+        w: Tensor,
+        pad: usize,
+    },
+    Full {
+        w: Tensor,
+        pad: usize,
+    },
     Quant(QMatMul),
     /// Hand-written AVX2 int8 GEMV — 4.34x the f16+pad arm (41/41, z=+6.4).
     /// See [`super::vocab_int8`].
@@ -917,16 +960,15 @@ impl VocabProj {
         match self {
             // The activation is a single row; converting it costs nothing
             // against the 40 MB weight read it enables.
-            VocabProj::Half { w, pad } => matmul_padded(&x.to_dtype(DType::F16)?, w, *pad)?
-                .to_dtype(DType::F32),
-            VocabProj::Full { w, pad } => matmul_padded(x, w, *pad),
-            VocabProj::Quant(q) => q.forward(x),
-            VocabProj::Int8(q) => q.forward(x),
+            Self::Half { w, pad } => {
+                matmul_padded(&x.to_dtype(DType::F16)?, w, *pad)?.to_dtype(DType::F32)
+            }
+            Self::Full { w, pad } => matmul_padded(x, w, *pad),
+            Self::Quant(q) => q.forward(x),
+            Self::Int8(q) => q.forward(x),
         }
     }
-
 }
-
 
 /// Matmul, padding a single output row up to whatever [`super::adaptive`]
 /// measured as fastest for this shape.
@@ -952,7 +994,7 @@ impl VocabProj {
 ///
 /// An earlier version called the calibration helper here, which meant a
 /// `std::env::var` (allocating, and locking the process environment) plus a
-/// mutex-guarded HashMap lookup **on every generated token**. That cost more
+/// mutex-guarded `HashMap` lookup **on every generated token**. That cost more
 /// than the optimization saved and showed up as the vocabulary projection
 /// regressing from 0.088 s to 0.263 s. A per-call lookup in a per-token path
 /// is a bug even when the lookup is "cheap".
@@ -994,12 +1036,7 @@ pub struct EncoderAttention {
 }
 
 impl EncoderAttention {
-    pub fn load(
-        n_state: usize,
-        n_head: usize,
-        vb: VarBuilder,
-        p: Precision,
-    ) -> CandleResult<Self> {
+    pub fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
         let inner = Attention::load(n_state, n_head, vb.clone(), p)?;
         // Whisper's k projection carries no bias (see `load_decode`), so the
         // fold is a plain scalar multiply with nothing else to carry.
@@ -1007,7 +1044,10 @@ impl EncoderAttention {
         let scale = (head_dim as f64).powf(-0.25);
         let key_w = vb.pp("k_proj").get((n_state, n_state), "weight")?;
         let key_wt_scaled = (key_w * (scale * scale))?.contiguous()?;
-        Ok(EncoderAttention { inner, key_wt_scaled })
+        Ok(Self {
+            inner,
+            key_wt_scaled,
+        })
     }
 
     /// Inlined from `Attention::attend` so each step is timed IN CONTEXT.
@@ -1078,9 +1118,9 @@ impl EncoderAttention {
 
         // Merged path: the kernel writes (1, seq, heads*HD) directly, so the
         // strided transpose in `ea_merge` never happens.
-        if let Some(merged) =
-            super::profile::timed(&p.ea_kernel, || super::flash_attn::attend_merged(&q, &k, &v))?
-        {
+        if let Some(merged) = super::profile::timed(&p.ea_kernel, || {
+            super::flash_attn::attend_merged(&q, &k, &v)
+        })? {
             return super::profile::timed(&p.ea_merge, || self.inner.out.forward(&merged));
         }
         let wv = super::profile::timed(&p.ea_kernel, || -> CandleResult<Tensor> {
@@ -1111,7 +1151,7 @@ struct Block {
 
 impl Block {
     fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
-        Ok(Block {
+        Ok(Self {
             attn: Attention::load_decode(n_state, n_head, vb.pp("self_attn"), p, true)?,
             attn_ln: layer_norm(n_state, vb.pp("self_attn_layer_norm"))?,
             cross_attn: Attention::load_decode(n_state, n_head, vb.pp("encoder_attn"), p, false)?,
@@ -1193,8 +1233,12 @@ impl DecoderState {
     /// [`TextDecoder::reset`] decoder. Restoring it into a decoder with more
     /// blocks than this holds leaves the extra blocks untouched, so it is
     /// only meaningful as a placeholder (tests, an unused beam slot).
-    pub fn empty() -> Self {
-        DecoderState { blocks: Vec::new(), offset: 0 }
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            blocks: Vec::new(),
+            offset: 0,
+        }
     }
 }
 
@@ -1212,8 +1256,6 @@ pub struct TextDecoder {
 }
 
 impl TextDecoder {
-    /// Load from the HF safetensors layout (`model.decoder.*`) at `precision`.
-
     /// The projection used when the int8 GEMV declines this shape or machine.
     fn fallback_proj(
         embeddings: &Tensor,
@@ -1222,27 +1264,34 @@ impl TextDecoder {
         precision: Precision,
     ) -> CandleResult<VocabProj> {
         Ok(match precision.ggml() {
-            Some(dtype) if n_state % dtype.block_size() == 0 => {
+            Some(dtype) if n_state.is_multiple_of(dtype.block_size()) => {
                 // ~4x smaller than the f32 transposed copy it replaces, and no
                 // transpose is needed at all.
-                VocabProj::Quant(QMatMul::from_qtensor(QTensor::quantize(embeddings, dtype)?)?)
+                VocabProj::Quant(QMatMul::from_qtensor(QTensor::quantize(
+                    embeddings, dtype,
+                )?)?)
             }
             // Pay the transpose once, here, instead of once per generated token.
             _ => {
                 let w = embeddings.t()?.contiguous()?;
                 // Both decisions measured once, here, and then stored.
                 let chosen = super::adaptive::matmul_dtype(1, n_state, cfg.vocab_size, w.device());
-                match (chosen, w.to_dtype(DType::F16)) {
-                    (DType::F16, Ok(half)) => {
-                        let pad = super::adaptive::matmul_pad_rows(
-                            n_state, cfg.vocab_size, DType::F16, half.device());
-                        VocabProj::Half { w: half, pad }
-                    }
-                    _ => {
-                        let pad = super::adaptive::matmul_pad_rows(
-                            n_state, cfg.vocab_size, DType::F32, w.device());
-                        VocabProj::Full { w, pad }
-                    }
+                if let (DType::F16, Ok(half)) = (chosen, w.to_dtype(DType::F16)) {
+                    let pad = super::adaptive::matmul_pad_rows(
+                        n_state,
+                        cfg.vocab_size,
+                        DType::F16,
+                        half.device(),
+                    );
+                    VocabProj::Half { w: half, pad }
+                } else {
+                    let pad = super::adaptive::matmul_pad_rows(
+                        n_state,
+                        cfg.vocab_size,
+                        DType::F32,
+                        w.device(),
+                    );
+                    VocabProj::Full { w, pad }
                 }
             }
         })
@@ -1256,11 +1305,14 @@ impl TextDecoder {
         let n_state = cfg.d_model;
         let n_head = cfg.decoder_attention_heads;
         let token_embedding = Embedding::new(
-            vb.pp("embed_tokens").get((cfg.vocab_size, n_state), "weight")?,
+            vb.pp("embed_tokens")
+                .get((cfg.vocab_size, n_state), "weight")?,
             n_state,
         );
-        let positional_embedding =
-            vb.get((cfg.max_target_positions, n_state), "embed_positions.weight")?;
+        let positional_embedding = vb.get(
+            (cfg.max_target_positions, n_state),
+            "embed_positions.weight",
+        )?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| Block::load(n_state, n_head, vb.pp(format!("layers.{i}")), precision))
             .collect::<CandleResult<Vec<_>>>()?;
@@ -1272,7 +1324,7 @@ impl TextDecoder {
             Some(q) => VocabProj::Int8(q),
             None => Self::fallback_proj(embeddings, cfg, n_state, precision)?,
         };
-        Ok(TextDecoder {
+        Ok(Self {
             token_embedding,
             positional_embedding,
             blocks,
@@ -1307,9 +1359,14 @@ impl TextDecoder {
     /// never written in place, so snapshots share storage with the live
     /// cache and stay valid after it advances. The cross-attention cache is
     /// identical across beams — same audio — so sharing it costs nothing.
+    #[must_use]
     pub fn save(&self) -> DecoderState {
         DecoderState {
-            blocks: self.blocks.iter().map(|b| (b.attn.cache.clone(), b.cross_attn.cache.clone())).collect(),
+            blocks: self
+                .blocks
+                .iter()
+                .map(|b| (b.attn.cache.clone(), b.cross_attn.cache.clone()))
+                .collect(),
             offset: self.offset,
         }
     }

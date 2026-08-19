@@ -1,0 +1,6 @@
+# cargo-fuzz build output. Deep paths under .fingerprint/ exceed Windows' path
+# limit, so `git add -A` fails outright rather than merely adding noise.
+target/
+# libFuzzer's crash reproducers land here. A crasher belongs in corpus/ as a
+# named regression seed, not as an unnamed artifact.
+artifacts/

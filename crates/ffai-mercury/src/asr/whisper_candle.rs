@@ -5,6 +5,19 @@
 //! it wires stages and manages the loaded model, which is exactly the
 //! division that makes each stage separately testable.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -12,17 +25,17 @@ use ffai_core::engine::{AsrEngine, AsrOptions, EngineInfo, EngineStatus, Task};
 use ffai_core::error::{Error, Result};
 use ffai_core::types::{AudioBuffer, Transcript};
 
+use super::aligner::{Aligner, DEFAULT_MODEL as ALIGN_MODEL};
 use super::decoder::{self, DecodeConfig};
+use super::diarize;
+use super::diarizer::{DEFAULT_MODEL as DIARIZE_MODEL, Diarizer};
 use super::mel::{self, MelSpectrogram};
 use super::model::LoadedWhisper;
-use super::aligner::{Aligner, DEFAULT_MODEL as ALIGN_MODEL};
-use super::diarize;
-use super::diarizer::{Diarizer, DEFAULT_MODEL as DIARIZE_MODEL};
 use super::registry::SpeakerRegistry;
 use super::text_decoder::Precision;
 use super::vad;
 
-/// OpenAI Whisper running on candle.
+/// `OpenAI` Whisper running on candle.
 ///
 /// The model is loaded lazily on first use and reused across calls, so
 /// per-clip timing measures inference rather than weight loading (see
@@ -128,13 +141,14 @@ impl WhisperCandle {
     /// ([`crate::manifests`]), so this works from any working directory; a
     /// library that resolved them from a relative `models/` path would work
     /// only inside this repo.
+    #[must_use]
     pub fn new() -> Self {
         Self::model("whisper-tiny-en", Precision::F32)
     }
 
     /// A named size/precision, using the compiled-in manifests.
     pub fn model(model_name: impl Into<String>, precision: Precision) -> Self {
-        WhisperCandle {
+        Self {
             manifest_dir: None,
             model_name: model_name.into(),
             precision,
@@ -154,7 +168,7 @@ impl WhisperCandle {
         model_name: impl Into<String>,
         precision: Precision,
     ) -> Self {
-        WhisperCandle {
+        Self {
             manifest_dir: Some(manifest_dir.into()),
             model_name: model_name.into(),
             precision,
@@ -200,6 +214,10 @@ impl AsrEngine for WhisperCandle {
         }
     }
 
+    // The speaker-table guard is deliberately held across clustering: the table
+    // must not change under it, which is the entire point of persisting speakers
+    // between calls. Tightening the scope would reintroduce the race.
+    #[allow(clippy::significant_drop_tightening)]
     fn transcribe(&self, audio: &AudioBuffer, opts: &AsrOptions) -> Result<Transcript> {
         let mut guard = self.state.lock().map_err(|_| {
             Error::Other("whisper-candle state lock poisoned by an earlier panic".into())
@@ -212,7 +230,11 @@ impl AsrEngine for WhisperCandle {
                 self.precision,
             )?;
             let front_end = MelSpectrogram::new(whisper.n_mels());
-            *guard = Some(State { whisper, front_end, warmed: false });
+            *guard = Some(State {
+                whisper,
+                front_end,
+                warmed: false,
+            });
         }
         let state = guard.as_mut().expect("state initialized above");
 
@@ -228,20 +250,26 @@ impl AsrEngine for WhisperCandle {
         let mono = audio.to_mono();
 
         let language = match (&opts.language, state.whisper.is_english_only()) {
-            (Some(code), false) => Some(state.whisper.tokenizer.language(code).ok_or_else(|| {
-                Error::Other(format!("model has no language token for `{code}`"))
-            })?),
+            (Some(code), false) => {
+                Some(state.whisper.tokenizer.language(code).ok_or_else(|| {
+                    Error::Other(format!("model has no language token for `{code}`"))
+                })?)
+            }
             // An .en model has no language slot; forcing English is a no-op
             // rather than an error.
             (Some(code), true) if !code.eq_ignore_ascii_case("en") => {
                 return Err(Error::Other(format!(
                     "model `{}` is English-only but language `{code}` was requested",
                     state.whisper.name
-                )))
+                )));
             }
             _ => None,
         };
-        let cfg = DecodeConfig { language, translate: opts.translate, ..Default::default() };
+        let cfg = DecodeConfig {
+            language,
+            translate: opts.translate,
+            ..Default::default()
+        };
 
         // Window selection is the whole of the VAD feature. With it off this
         // is the fixed 30 s grid, byte for byte what it has always been; with
@@ -271,14 +299,23 @@ impl AsrEngine for WhisperCandle {
             Vec::new()
         };
         if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() && vad_on {
-            for w in vad::pack(&regions, opts.vad_chunk_secs as f64) {
-                eprintln!("[vad window] {:.2}-{:.2}s ({:.1}s)", w.start, w.end, w.end - w.start);
+            for w in vad::pack(&regions, f64::from(opts.vad_chunk_secs)) {
+                eprintln!(
+                    "[vad window] {:.2}-{:.2}s ({:.1}s)",
+                    w.start,
+                    w.end,
+                    w.end - w.start
+                );
             }
         }
         // No speech found is a valid answer, and the common one on a silent
         // chunk. It returns an empty transcript without loading the encoder.
         let sr = mel::SAMPLE_RATE as f64;
-        let did_work = if vad_on { !regions.is_empty() } else { !mono.samples.is_empty() };
+        let did_work = if vad_on {
+            !regions.is_empty()
+        } else {
+            !mono.samples.is_empty()
+        };
 
         // THE SEEK LOOP. A window's decode can end before the window does —
         // the model emits <|endoftext|> early, most often at a discontinuity.
@@ -327,8 +364,12 @@ impl AsrEngine for WhisperCandle {
         let adaptive_ctx_on = std::env::var("FFAI_ADAPTIVE_CTX").as_deref() != Ok("off");
         let mut prev_text: Vec<u32> = Vec::new();
         let total_secs = mono.samples.len() as f64 / sr;
-        let window_secs_max = (opts.vad_chunk_secs as f64).clamp(1.0, mel::CHUNK_SECONDS as f64);
+        let window_secs_max = f64::from(opts.vad_chunk_secs).clamp(1.0, mel::CHUNK_SECONDS as f64);
         let mut point = 0.0f64;
+        // The 1e-6 epsilon is precisely the guard against float accumulation
+        // that makes this loop terminate cleanly at the end of the audio; a
+        // bare `<` is what would be wrong here.
+        #[allow(clippy::while_float)]
         while point < total_secs - 1e-6 {
             let window_start = if vad_on {
                 // First speech at or after `point`; silence between is never
@@ -366,113 +407,102 @@ impl AsrEngine for WhisperCandle {
             // with no margin, no timestamp mask, and no guards to escalate
             // through; this path has all three.
             let mut outcome = None;
-            if adaptive_ctx_on {
-                if let Some(ctx_secs) = adaptive_ctx_secs(window_secs) {
-                    let mut scfg = wcfg.clone();
-                    scfg.max_timestamp_secs = Some(ctx_secs);
-                    // The short-context arm must be HARDER to satisfy than
-                    // the temperature ladder: -1.0 asks "is this transcript
-                    // salvageable", the right bar for retrying at a higher
-                    // temperature, not for trusting a reduced context. On
-                    // test-other (noisy) the model at 10 s context degrades
-                    // exactly on the windows it scores worst — measured
-                    // per-clip: CER 38 worsened / 23 improved at the -1.0
-                    // bar. Requiring the model's own confidence to clear a
-                    // stricter bar routes hard audio back to the trained
-                    // 30 s regime; clean speech scores -0.24..-0.48 and
-                    // keeps the speed.
-                    scfg.logprob_threshold = scfg.logprob_threshold.max(
-                        std::env::var("FFAI_CTX_LOGPROB")
-                            .ok()
-                            .and_then(|v| v.parse::<f32>().ok())
-                            .unwrap_or(-0.5),
-                    );
-                    // A hair under the bar, not comfortably under it: with a
-                    // 0.15 margin the windows the -0.5 bar rejects mostly sat
-                    // in [-0.65, -0.5] and decoded to completion before being
-                    // rejected — the doomed decode the abort exists to kill.
-                    // 0.05 keeps a token's worth of wobble room; a decode
-                    // that dips below THAT and recovers merely escalates to
-                    // the full-context path, which is a speed cost on that
-                    // window, never a quality one.
-                    scfg.early_abort_logprob = Some(scfg.logprob_threshold - 0.05);
-                    let chunk = super::profile::timed(&super::profile::profile().mel, || {
-                        state
-                            .front_end
-                            .compute(&mel::pad_or_trim_to(window, (ctx_secs * sr) as usize))
+            if adaptive_ctx_on && let Some(ctx_secs) = adaptive_ctx_secs(window_secs) {
+                let mut scfg = wcfg.clone();
+                scfg.max_timestamp_secs = Some(ctx_secs);
+                // The short-context arm must be HARDER to satisfy than
+                // the temperature ladder: -1.0 asks "is this transcript
+                // salvageable", the right bar for retrying at a higher
+                // temperature, not for trusting a reduced context. On
+                // test-other (noisy) the model at 10 s context degrades
+                // exactly on the windows it scores worst — measured
+                // per-clip: CER 38 worsened / 23 improved at the -1.0
+                // bar. Requiring the model's own confidence to clear a
+                // stricter bar routes hard audio back to the trained
+                // 30 s regime; clean speech scores -0.24..-0.48 and
+                // keeps the speed.
+                scfg.logprob_threshold = scfg.logprob_threshold.max(
+                    std::env::var("FFAI_CTX_LOGPROB")
+                        .ok()
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .unwrap_or(-0.5),
+                );
+                // A hair under the bar, not comfortably under it: with a
+                // 0.15 margin the windows the -0.5 bar rejects mostly sat
+                // in [-0.65, -0.5] and decoded to completion before being
+                // rejected — the doomed decode the abort exists to kill.
+                // 0.05 keeps a token's worth of wobble room; a decode
+                // that dips below THAT and recovers merely escalates to
+                // the full-context path, which is a speed cost on that
+                // window, never a quality one.
+                scfg.early_abort_logprob = Some(scfg.logprob_threshold - 0.05);
+                let chunk = super::profile::timed(&super::profile::profile().mel, || {
+                    state
+                        .front_end
+                        .compute(&mel::pad_or_trim_to(window, (ctx_secs * sr) as usize))
+                });
+                outcome = decoder::decode_window_strict(
+                    &mut state.whisper,
+                    &chunk,
+                    offset_secs,
+                    &scfg,
+                    window_secs,
+                )?;
+                // GEOMETRY GUARDS. The confidence/repetition guards catch
+                // bad TEXT; a reduced context also produces bad
+                // TIMESTAMPS on audio the model finds hard, and those
+                // poison the pipeline around the decode rather than the
+                // transcript itself. Reproduced on test-other
+                // 7975-280063-0002: the short-context decode transcribed
+                // the whole window correctly but closed its segment at
+                // 1.2 s of 7.0 s of speech — the seek loop trusted that,
+                // resumed at 1.2 s, and re-decoded the same speech into a
+                // duplicate (WER > 1). Escalate to the full context when
+                // the decode's geometry is untrustworthy: it stops short
+                // of the VAD speech extent, or a segment claims a span
+                // its own word count cannot cover.
+                if let Some(o) = &outcome
+                    && !o.segments.is_empty()
+                {
+                    let window_end = offset_secs + window_secs;
+                    let speech_end = if vad_on {
+                        regions
+                            .iter()
+                            .filter(|r| r.start < window_end)
+                            .map(|r| r.end.min(window_end))
+                            .fold(offset_secs, f64::max)
+                    } else {
+                        window_end
+                    };
+                    let decoded_to = o.segments.iter().map(|s| s.end).fold(offset_secs, f64::max);
+                    let unfinished = speech_end - decoded_to > SEEK_TAIL_SECS;
+                    let stretched = o.segments.iter().any(|s| {
+                        let words = s.value.split_whitespace().count() as f64;
+                        s.end - s.start > words + 2.0 // 1 word/s floor + slack
                     });
-                    outcome = decoder::decode_window_strict(
-                        &mut state.whisper,
-                        &chunk,
-                        offset_secs,
-                        &scfg,
-                        window_secs,
-                    )?;
-                    // GEOMETRY GUARDS. The confidence/repetition guards catch
-                    // bad TEXT; a reduced context also produces bad
-                    // TIMESTAMPS on audio the model finds hard, and those
-                    // poison the pipeline around the decode rather than the
-                    // transcript itself. Reproduced on test-other
-                    // 7975-280063-0002: the short-context decode transcribed
-                    // the whole window correctly but closed its segment at
-                    // 1.2 s of 7.0 s of speech — the seek loop trusted that,
-                    // resumed at 1.2 s, and re-decoded the same speech into a
-                    // duplicate (WER > 1). Escalate to the full context when
-                    // the decode's geometry is untrustworthy: it stops short
-                    // of the VAD speech extent, or a segment claims a span
-                    // its own word count cannot cover.
-                    if let Some(o) = &outcome {
-                        if !o.segments.is_empty() {
-                            let window_end = offset_secs + window_secs;
-                            let speech_end = if vad_on {
-                                regions
-                                    .iter()
-                                    .filter(|r| r.start < window_end)
-                                    .map(|r| r.end.min(window_end))
-                                    .fold(offset_secs, f64::max)
-                            } else {
-                                window_end
-                            };
-                            let decoded_to =
-                                o.segments.iter().map(|s| s.end).fold(offset_secs, f64::max);
-                            let unfinished = speech_end - decoded_to > SEEK_TAIL_SECS;
-                            let stretched = o.segments.iter().any(|s| {
-                                let words = s.value.split_whitespace().count() as f64;
-                                s.end - s.start > words + 2.0 // 1 word/s floor + slack
-                            });
-                            if unfinished || stretched {
-                                outcome = None;
-                            }
-                        }
+                    if unfinished || stretched {
+                        outcome = None;
                     }
-                    if outcome.is_none() {
-                        ADAPTIVE_ESCALATIONS
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() {
-                            eprintln!(
-                                "[ctx] window at {offset_secs:.2}s rejected at {ctx_secs:.0}s \
+                }
+                if outcome.is_none() {
+                    ADAPTIVE_ESCALATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() {
+                        eprintln!(
+                            "[ctx] window at {offset_secs:.2}s rejected at {ctx_secs:.0}s \
                                  context — escalating to 30s"
-                            );
-                        }
+                        );
                     }
                 }
             }
-            let outcome = match outcome {
-                Some(o) => o,
-                None => {
-                    // Pad in the sample domain, before the spectrogram — see
-                    // mel::pad_or_trim for why the distinction matters.
-                    let chunk = super::profile::timed(&super::profile::profile().mel, || {
-                        state.front_end.compute(&mel::pad_or_trim(window))
-                    });
-                    decoder::decode_window(
-                        &mut state.whisper,
-                        &chunk,
-                        offset_secs,
-                        &wcfg,
-                        window_secs,
-                    )?
-                }
+            let outcome = if let Some(o) = outcome {
+                o
+            } else {
+                // Pad in the sample domain, before the spectrogram — see
+                // mel::pad_or_trim for why the distinction matters.
+                let chunk = super::profile::timed(&super::profile::profile().mel, || {
+                    state.front_end.compute(&mel::pad_or_trim(window))
+                });
+                decoder::decode_window(&mut state.whisper, &chunk, offset_secs, &wcfg, window_secs)?
             };
             if prev_context_on {
                 if outcome.temperature > 0.5 {
@@ -491,7 +521,10 @@ impl AsrEngine for WhisperCandle {
             let mut new_segments = outcome.segments;
 
             // Where did the decode actually get to, in absolute seconds?
-            let decoded_to = new_segments.iter().map(|s| s.end).fold(offset_secs, f64::max);
+            let decoded_to = new_segments
+                .iter()
+                .map(|s| s.end)
+                .fold(offset_secs, f64::max);
             let window_end_secs = end_sample as f64 / sr;
             point = if window_end_secs - decoded_to > SEEK_TAIL_SECS && decoded_to > offset_secs {
                 if std::env::var_os("FFAI_DEBUG_TOKENS").is_some() {
@@ -569,9 +602,11 @@ impl AsrEngine for WhisperCandle {
                     .filter(|s| s.start < region.end && s.end > region.start)
                     .map(|s| {
                         let words = s.value.split_whitespace().count() as f64;
-                        let plausible_end =
-                            s.start + words / MIN_WORDS_PER_SEC + CLAIM_SLACK_SECS;
-                        (s.start.max(region.start), s.end.min(plausible_end).min(region.end))
+                        let plausible_end = s.start + words / MIN_WORDS_PER_SEC + CLAIM_SLACK_SECS;
+                        (
+                            s.start.max(region.start),
+                            s.end.min(plausible_end).min(region.end),
+                        )
                     })
                     .filter(|(a, b)| b > a)
                     .collect();
@@ -736,7 +771,12 @@ impl AsrEngine for WhisperCandle {
             None
         };
 
-        Ok(Transcript { language, segments, words, speakers })
+        Ok(Transcript {
+            language,
+            segments,
+            words,
+            speakers,
+        })
     }
 }
 
@@ -824,6 +864,9 @@ mod reset_tests {
             "window history must not survive a reset — a new recording would \
              cluster against the old one's audio"
         );
-        assert!(engine.speakers.lock().expect("lock").is_none(), "registry cleared");
+        assert!(
+            engine.speakers.lock().expect("lock").is_none(),
+            "registry cleared"
+        );
     }
 }

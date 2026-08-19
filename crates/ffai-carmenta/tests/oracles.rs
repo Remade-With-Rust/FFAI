@@ -59,7 +59,7 @@ fn craft_maps_match_pytorch_reference() {
     for (a, b) in ours.iter().zip(&reference) {
         let d = (a - b).abs();
         max_d = max_d.max(d);
-        sum_d += d as f64;
+        sum_d += f64::from(d);
     }
     let mean_d = sum_d / ours.len() as f64;
     eprintln!("craft oracle: max |d| = {max_d:.2e}, mean |d| = {mean_d:.2e}");
@@ -292,7 +292,7 @@ fn mobiledet_boxes_match_paddle_postprocess() {
         // row. Cause isolated and bounded in `box_score_fast`'s docs — the
         // tolerance is the MEASURED residual, not a number picked to pass.
         assert!(
-            (o.score as f64 - w[4]) > -0.005 && (o.score as f64 - w[4]) < 0.05,
+            (f64::from(o.score) - w[4]) > -0.005 && (f64::from(o.score) - w[4]) < 0.05,
             "score {:.4} vs paddle {:.4}", o.score, w[4]
         );
     }

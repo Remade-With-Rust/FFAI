@@ -34,9 +34,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `--fixtures` selects an alternate fixture file (e.g. the TUNE set from
     // Harvard lists 21-40, disjoint from the corpus); pair it with
     // `--split all`, since tune sentences are not in the manifest.
-    let fixtures_path = get("--fixtures", "corpora/fixtures/harvard-espeak-phonemes-v1.jsonl");
+    let fixtures_path = get(
+        "--fixtures",
+        "corpora/fixtures/harvard-espeak-phonemes-v1.jsonl",
+    );
 
-    let manifest = ffai_bench::corpus::Manifest::load(Path::new("corpora/harvard-sentences-v1.toml"))?;
+    let manifest =
+        ffai_bench::corpus::Manifest::load(Path::new("corpora/harvard-sentences-v1.toml"))?;
     let want_split = |id: &str| -> bool {
         let clip = manifest.clips.iter().find(|c| c.id == id);
         match (split.as_str(), clip) {
@@ -84,8 +88,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mean_per = pers.iter().sum::<f64>() / pers.len().max(1) as f64;
 
     println!("split: {split}  ({total} sentences)");
-    println!("sentence exact-match: {exact}/{total} ({:.1} %)", 100.0 * exact as f64 / total.max(1) as f64);
-    println!("mean phoneme error rate (char-level): {:.2} %", 100.0 * mean_per);
+    println!(
+        "sentence exact-match: {exact}/{total} ({:.1} %)",
+        100.0 * exact as f64 / total.max(1) as f64
+    );
+    println!(
+        "mean phoneme error rate (char-level): {:.2} %",
+        100.0 * mean_per
+    );
 
     // Divergence census: which character substitutions dominate. This names
     // the next rule to fix, instead of eyeballing diffs.
@@ -108,7 +118,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\nworst {} mismatches:", show.min(mismatches.len()));
     for (id, per, text, espeak, ours) in mismatches.iter().take(show) {
-        println!("  {id}  PER {:.1} %\n    txt: {text}\n    esp: {espeak}\n    our: {ours}", per * 100.0);
+        println!(
+            "  {id}  PER {:.1} %\n    txt: {text}\n    esp: {espeak}\n    our: {ours}",
+            per * 100.0
+        );
     }
     Ok(())
 }

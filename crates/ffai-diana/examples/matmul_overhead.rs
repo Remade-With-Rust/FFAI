@@ -21,7 +21,7 @@ fn main() -> candle_core::Result<()> {
             std::hint::black_box(&y);
             best = best.min(t.elapsed().as_secs_f64());
         }
-        let tiles = (102400 + n - 1) / n;
+        let tiles = 102400_usize.div_ceil(n);
         println!("N={n:>7}  {:>8.3} ms/call   {tiles:>3} tiles to cover 102400 -> {:>8.3} ms total",
                  best * 1e3, best * 1e3 * tiles as f64);
     }

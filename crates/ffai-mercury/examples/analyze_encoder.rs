@@ -92,7 +92,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (i, &frames) in [188usize, 375, 750, 1500, 2250, 3000].iter().enumerate() {
             let chunk = full.resized(frames);
             let tensor = whisper.mel_tensor(&chunk)?;
-            let secs = best_of(3, || whisper.encoder.forward(&tensor).expect("encoder forward"));
+            let secs = best_of(3, || {
+                whisper.encoder.forward(&tensor).expect("encoder forward")
+            });
             let positions = frames / 2;
             let us_per_pos = secs * 1e6 / positions as f64;
             if i == 0 {
@@ -110,9 +112,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // ---- 2: the padding ceiling on the real corpus ----
-        if let Ok(manifest) =
-            ffai_bench::corpus::Manifest::load(std::path::Path::new("corpora/librispeech-test-clean-v1.toml"))
-        {
+        if let Ok(manifest) = ffai_bench::corpus::Manifest::load(std::path::Path::new(
+            "corpora/librispeech-test-clean-v1.toml",
+        )) {
             let mut speech = 0.0f64;
             let mut windows = 0usize;
             for clip in &manifest.clips {
@@ -135,7 +137,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ---- 3: fixed vs per-layer cost, deployment config ----
         let tensor = whisper.mel_tensor(&full)?;
-        let deploy = best_of(5, || whisper.encoder.forward(&tensor).expect("encoder forward"));
+        let deploy = best_of(5, || {
+            whisper.encoder.forward(&tensor).expect("encoder forward")
+        });
         println!(
             "\nDEPLOYMENT CONFIG (3000 mel frames, best of 5): {:.2} ms  ({:.3} ms/layer)",
             deploy * 1000.0,

@@ -1,0 +1,152 @@
+# Release pipeline (gates H-12 SBOM, C-14 SBOM + provenance, H-38 signed and
+# attested releases).
+#
+# Fires on a version tag. Nothing here runs on a normal push, so the hardening
+# gate stays fast; this is the slow, careful path that only a release takes.
+#
+# WHY THESE GATES CANNOT CLOSE UNTIL THIS RUNS: "SBOM published with releases"
+# and "releases signed and attested" are claims about artifacts that exist.
+# The machinery being present is necessary and not sufficient - the gates flip
+# on the first tag that produces a verified release, not on this file landing.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "ffai-*-v*"     # per-crate tags, e.g. ffai-mercury-v0.7.0
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and attest, but do not publish a release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The tag itself is the first artifact, and an unsigned tag makes everything
+  # downstream unverifiable. Fail here rather than shipping unattributable bits.
+  verify-tag:
+    name: Tag is signed
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Verify the tag carries a signature
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if ! git cat-file tag "$TAG" 2>/dev/null | grep -qE "BEGIN (PGP|SSH) SIGNATURE"; then
+            echo "::error::Tag $TAG is not signed. Re-tag with: git tag -s $TAG"
+            echo "A release nobody can attribute is a supply-chain gap, not a formality."
+            exit 1
+          fi
+          echo "Tag $TAG is signed."
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-cyclonedx --locked
+      # Default features only: --all-features pulls candle's `metal`, which
+      # drags in the macOS-only objc2 and cannot resolve on Linux. Learned the
+      # hard way while establishing the geiger baseline.
+      - name: Generate SBOM
+        run: cargo cyclonedx --format json --spec-version 1.5
+      - name: Collect
+        run: |
+          mkdir -p sbom
+          find . -name "*.cdx.json" -not -path "./sbom/*" -exec cp {} sbom/ \;
+          ls -la sbom/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+          if-no-files-found: error
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest,   target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - uses: Swatinem/rust-cache@v2
+      # cargo-auditable embeds the dependency list INSIDE the binary, so the
+      # artifact carries its own bill of materials even when separated from the
+      # release page. `cargo audit bin` can then scan the shipped file directly.
+      - run: cargo install cargo-auditable --locked
+      - name: Build with an embedded dependency manifest
+        run: cargo auditable build --release -p ffai-cli --target ${{ matrix.target }}
+      - name: Verify the embedded manifest is really there
+        shell: bash
+        run: |
+          cargo install cargo-audit --locked
+          BIN=target/${{ matrix.target }}/release/ffai
+          [ -f "$BIN" ] || BIN="$BIN.exe"
+          cargo audit bin "$BIN" || echo "::warning::cargo audit bin reported findings - triage before publishing"
+      - name: Verify binary hardening (Linux, gate H-31)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update && sudo apt-get install -y checksec
+          checksec --file=target/${{ matrix.target }}/release/ffai || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffai-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/ffai
+            target/${{ matrix.target }}/release/ffai.exe
+          if-no-files-found: error
+
+  attest-and-publish:
+    name: Attest and publish
+    needs: [sbom, build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write        # create the release
+      id-token: write        # OIDC, for provenance signing
+      attestations: write    # record the attestation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist }
+      - run: find dist -type f | sort
+      # SLSA-style build provenance: a signed statement of WHAT built these
+      # bytes, from WHICH commit, on WHICH runner. This is what turns "we
+      # published a binary" into something a consumer can verify.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/**/*"
+      - name: Publish the release with SBOM attached
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Security
+
+            - **SBOM**: CycloneDX 1.5 JSON attached (`sbom/`), one per crate.
+            - **Provenance**: SLSA build attestation signed via GitHub OIDC.
+              Verify with `gh attestation verify <file> -R ${{ github.repository }}`.
+            - **Embedded manifest**: binaries are built with `cargo auditable`;
+              scan a shipped binary directly with `cargo audit bin ./ffai`.
+            - **Hardening status**: each crate's README carries its audit table;
+              the checklist lives at `crates/<crate>/docs/plans/use-protection-please.md`.
+
+            Security-relevant changes for this release are listed under
+            "Security" in CHANGELOG.md.

@@ -74,6 +74,7 @@ pub struct MelFilters {
 impl MelFilters {
     /// Build the librosa-default filterbank (`htk=False`, `norm="slaney"`),
     /// which is what Whisper ships in `mel_filters.npz`.
+    #[must_use]
     pub fn new(n_mels: usize) -> Self {
         let n_bins = N_FFT / 2 + 1;
         let nyquist = SAMPLE_RATE as f32 / 2.0;
@@ -98,7 +99,11 @@ impl MelFilters {
                 weights[m * n_bins + k] = enorm * rising.min(falling).max(0.0);
             }
         }
-        MelFilters { n_mels, n_bins, weights }
+        Self {
+            n_mels,
+            n_bins,
+            weights,
+        }
     }
 
     fn row(&self, m: usize) -> &[f32] {
@@ -115,21 +120,21 @@ pub struct MelSpectrogram {
 }
 
 impl MelSpectrogram {
+    #[must_use]
     pub fn new(n_mels: usize) -> Self {
         // torch.hann_window defaults to periodic=True: denominator N, not N-1.
         let window: Vec<f32> = (0..N_FFT)
-            .map(|n| {
-                0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / N_FFT as f32).cos())
-            })
+            .map(|n| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / N_FFT as f32).cos()))
             .collect();
-        MelSpectrogram {
+        Self {
             filters: MelFilters::new(n_mels),
             window,
             fft: FftPlanner::new().plan_fft_forward(N_FFT),
         }
     }
 
-    pub fn n_mels(&self) -> usize {
+    #[must_use]
+    pub const fn n_mels(&self) -> usize {
         self.filters.n_mels
     }
 
@@ -152,11 +157,13 @@ impl MelSpectrogram {
     }
 
     /// Frames produced for `n_samples` of audio: `n_samples / HOP_LENGTH`.
-    pub fn n_frames(n_samples: usize) -> usize {
+    #[must_use]
+    pub const fn n_frames(n_samples: usize) -> usize {
         n_samples / HOP_LENGTH
     }
 
     /// Compute the log-mel spectrogram: `(n_mels, n_frames)` row-major.
+    #[must_use]
     pub fn compute(&self, samples: &[f32]) -> MelChunk {
         let n_frames = Self::n_frames(samples.len());
         let n_bins = self.filters.n_bins;
@@ -215,7 +222,11 @@ impl MelSpectrogram {
             *v = (v.max(floor) + 4.0) / 4.0;
         }
 
-        MelChunk { n_mels, n_frames, data: mel }
+        MelChunk {
+            n_mels,
+            n_frames,
+            data: mel,
+        }
     }
 }
 
@@ -229,14 +240,19 @@ pub struct MelChunk {
 
 impl MelChunk {
     /// Pad or truncate to `frames`.
-    pub fn resized(&self, frames: usize) -> MelChunk {
+    #[must_use]
+    pub fn resized(&self, frames: usize) -> Self {
         let mut data = vec![0.0f32; self.n_mels * frames];
         for m in 0..self.n_mels {
             let take = self.n_frames.min(frames);
             data[m * frames..m * frames + take]
                 .copy_from_slice(&self.data[m * self.n_frames..m * self.n_frames + take]);
         }
-        MelChunk { n_mels: self.n_mels, n_frames: frames, data }
+        Self {
+            n_mels: self.n_mels,
+            n_frames: frames,
+            data,
+        }
     }
 }
 
@@ -248,11 +264,13 @@ impl MelChunk {
 /// is the floor, not 0.0, and the dynamic-range clamp in [`MelSpectrogram::compute`]
 /// takes a *global* max — computing it over only the speech frames and then
 /// appending padding normalizes the window differently than Whisper does.
+#[must_use]
 pub fn pad_or_trim(samples: &[f32]) -> Vec<f32> {
     pad_or_trim_to(samples, N_SAMPLES)
 }
 
 /// Zero-pad or truncate to `target` samples.
+#[must_use]
 pub fn pad_or_trim_to(samples: &[f32], target: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; target];
     let take = samples.len().min(target);
@@ -272,6 +290,18 @@ pub fn pad_or_trim_to(samples: &[f32], target: usize) -> Vec<f32> {
 /// the edge sample itself is not repeated).
 fn reflect_pad(samples: &[f32], pad: usize) -> Vec<f32> {
     let n = samples.len();
+    // An empty signal has nothing to reflect, and BOTH loops below are unsound
+    // for n == 0: `reflect_index` returns 0, which is not a valid index into an
+    // empty slice, and `n - 1 - i.min(n - 1)` underflows. `compute` produces
+    // zero frames for an empty buffer and never reads this padding, but
+    // `AudioBuffer::samples` is caller-supplied and an empty one must not panic
+    // the library. Silence of the padded length keeps the function TOTAL.
+    //
+    // Found by tests/properties.rs (gate H-28) on its first run; minimal
+    // failing input was `samples = []`.
+    if n == 0 {
+        return vec![0.0; 2 * pad];
+    }
     let mut out = Vec::with_capacity(n + 2 * pad);
     for i in 0..pad {
         out.push(samples[reflect_index(pad - i, n)]);
@@ -284,11 +314,7 @@ fn reflect_pad(samples: &[f32], pad: usize) -> Vec<f32> {
 }
 
 fn reflect_index(i: usize, n: usize) -> usize {
-    if n == 0 {
-        0
-    } else {
-        i.min(n - 1)
-    }
+    if n == 0 { 0 } else { i.min(n - 1) }
 }
 
 #[cfg(test)]
@@ -313,7 +339,10 @@ mod tests {
         // Every filter must have some energy, and none may be negative.
         for m in 0..80 {
             let row = f.row(m);
-            assert!(row.iter().all(|&w| w >= 0.0), "filter {m} has negative weight");
+            assert!(
+                row.iter().all(|&w| w >= 0.0),
+                "filter {m} has negative weight"
+            );
             assert!(row.iter().any(|&w| w > 0.0), "filter {m} is empty");
         }
     }
@@ -346,15 +375,15 @@ mod tests {
     fn a_tone_concentrates_energy_in_a_few_mel_bands() {
         let mel = MelSpectrogram::new(80);
         let samples: Vec<f32> = (0..SAMPLE_RATE)
-            .map(|i| {
-                (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin()
-            })
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin())
             .collect();
         let out = mel.compute(&samples);
         // Energy per mel band, averaged over frames.
         let band_energy: Vec<f32> = (0..out.n_mels)
             .map(|m| {
-                out.data[m * out.n_frames..(m + 1) * out.n_frames].iter().sum::<f32>()
+                out.data[m * out.n_frames..(m + 1) * out.n_frames]
+                    .iter()
+                    .sum::<f32>()
                     / out.n_frames as f32
             })
             .collect();
@@ -366,7 +395,10 @@ mod tests {
             .0;
         // 440 Hz sits in the linear part of the mel scale: 440/(200/3) = 6.6
         // mel, and the band spacing puts it in the low bands.
-        assert!(loudest < 20, "440 Hz landed in mel band {loudest}, expected a low band");
+        assert!(
+            loudest < 20,
+            "440 Hz landed in mel band {loudest}, expected a low band"
+        );
     }
 
     #[test]
@@ -398,7 +430,11 @@ mod tests {
 
     #[test]
     fn resized_truncates_each_mel_row_independently() {
-        let long = MelChunk { n_mels: 2, n_frames: 5, data: (0..10).map(|i| i as f32).collect() };
+        let long = MelChunk {
+            n_mels: 2,
+            n_frames: 5,
+            data: (0..10).map(|i| i as f32).collect(),
+        };
         let cut = long.resized(3);
         assert_eq!(cut.data, vec![0.0, 1.0, 2.0, 5.0, 6.0, 7.0]);
     }

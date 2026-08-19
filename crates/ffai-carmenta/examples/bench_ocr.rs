@@ -35,7 +35,7 @@ fn main() {
         match ReferenceFile::load(refs_path) {
             Ok(f) => f
                 .for_task("ocr")
-                .filter(|r| only.is_empty() || only.iter().any(|n| *n == r.name))
+                .filter(|r| only.is_empty() || only.contains(&r.name))
                 .cloned()
                 .collect(),
             Err(e) => {
@@ -48,6 +48,9 @@ fn main() {
     let cfg = BenchConfig {
         engine: Some(engine),
         skip_engine: false,
+        // Keep the references: this example baselines our engine AGAINST them,
+        // so skipping them would leave nothing to compare to.
+        skip_references: false,
         corpus,
         references,
         // Best-of-1: CER is deterministic, and the timings this suite produces

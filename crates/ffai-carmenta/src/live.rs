@@ -62,7 +62,7 @@ pub struct LiveConfig {
 
 impl Default for LiveConfig {
     fn default() -> Self {
-        LiveConfig {
+        Self {
             change_fraction: 0.0005,
             pixel_delta: 8.0,
             sample_every: 1,
@@ -86,13 +86,13 @@ pub struct LiveStats {
     pub sampled_out: usize,
     /// OCR calls served by band (auto-ROI) recognition.
     pub roi_calls: usize,
-    /// Bands actually re-recognized across all roi_calls (dirty bands).
+    /// Bands actually re-recognized across all `roi_calls` (dirty bands).
     pub dirty_bands: usize,
     /// Wall seconds of each STEADY-STATE call (band recognition), for
     /// p50/p95 — the number the latency gate reads.
     pub call_secs: Vec<f64>,
     /// Wall seconds of calibration + synchronous full-frame calls — the
-    /// LOAD_S of this loop: one-time/async-maintenance cost, reported
+    /// `LOAD_S` of this loop: one-time/async-maintenance cost, reported
     /// beside steady p95, never inside it.
     pub full_secs: Vec<f64>,
     /// Background sweeps completed (band geometry refreshes).
@@ -103,12 +103,13 @@ pub struct LiveStats {
 }
 
 impl LiveStats {
+    #[must_use] 
     pub fn percentile(&self, p: f64) -> Option<f64> {
         if self.call_secs.is_empty() {
             return None;
         }
         let mut v = self.call_secs.clone();
-        v.sort_by(|a, b| a.total_cmp(b));
+        v.sort_by(f64::total_cmp);
         Some(v[((v.len() - 1) as f64 * p).round() as usize])
     }
 }
@@ -230,7 +231,7 @@ fn calibrate_bands(full: &OcrOutput, frame_h: usize) -> Vec<Band> {
         .collect()
 }
 
-/// 2x2-decimated grayscale plane for the change gate (see push_frame).
+/// 2x2-decimated grayscale plane for the change gate (see `push_frame`).
 fn decimated_gray(img: &ImageBuffer) -> Result<Vec<f32>> {
     let (w, h) = (img.width as usize, img.height as usize);
     let bpp = img.format.bytes_per_pixel();
@@ -240,11 +241,11 @@ fn decimated_gray(img: &ImageBuffer) -> Result<Vec<f32>> {
         for x in (0..w).step_by(2) {
             let i = (y * w + x) * bpp;
             let v = match img.format {
-                ffai_core::types::PixelFormat::Gray8 => img.data[i] as f32,
+                ffai_core::types::PixelFormat::Gray8 => f32::from(img.data[i]),
                 _ => {
-                    0.299 * img.data[i] as f32
-                        + 0.587 * img.data[i + 1] as f32
-                        + 0.114 * img.data[i + 2] as f32
+                    0.299 * f32::from(img.data[i])
+                        + 0.587 * f32::from(img.data[i + 1])
+                        + 0.114 * f32::from(img.data[i + 2])
                 }
             };
             out.push(v);
@@ -273,7 +274,7 @@ impl LiveSession {
         opts: OcrOptions,
         cfg: LiveConfig,
     ) -> Self {
-        LiveSession {
+        Self {
             engine,
             opts,
             cfg,
@@ -326,16 +327,16 @@ impl LiveSession {
         } else {
             global_changed = usize::MAX; // first frame: always process
         }
-        let frac = self.cfg.change_fraction as f64;
+        let frac = f64::from(self.cfg.change_fraction);
         if (global_changed as f64) < gray.len() as f64 * frac {
             self.stats.gated += 1;
             return Ok(&self.prev_out);
         }
 
         // Harvest a finished background sweep: refresh band geometry.
-        if self.pending_sweep.as_ref().is_some_and(|h| h.is_finished()) {
-            if let Some(handle) = self.pending_sweep.take() {
-                if let Ok(Ok(full)) = handle.join() {
+        if self.pending_sweep.as_ref().is_some_and(std::thread::JoinHandle::is_finished)
+            && let Some(handle) = self.pending_sweep.take()
+                && let Ok(Ok(full)) = handle.join() {
                     // GEOMETRY ONLY. The sweep ran on an older frame, so its
                     // TEXT is stale by construction — caching it clobbered
                     // fresh dirty-band re-reads and resurrected old text
@@ -358,8 +359,6 @@ impl LiveSession {
                     self.bands = new_bands;
                     self.stats.sweeps_landed += 1;
                 }
-            }
-        }
 
         let bands_ready = self.cfg.auto_roi
             && !self.bands.is_empty()
@@ -453,11 +452,10 @@ impl LiveSession {
             self.stats.first_text_secs = Some(self.started.elapsed().as_secs_f64());
         }
         if text != self.prev_text {
-            if let Some((start, prev)) = self.open.take() {
-                if !prev.is_empty() {
+            if let Some((start, prev)) = self.open.take()
+                && !prev.is_empty() {
                     self.segments.push(TimedSegment { start, end: t_secs, value: prev, confidence: None });
                 }
-            }
             if !text.is_empty() {
                 self.open = Some((t_secs, text.clone()));
             }
@@ -469,17 +467,18 @@ impl LiveSession {
     }
 
     /// Close the session at `end_secs` and take the timed track.
+    #[must_use] 
     pub fn finish(mut self, end_secs: f64) -> (Vec<TimedSegment<String>>, LiveStats) {
-        if let Some((start, text)) = self.open.take() {
-            if !text.is_empty() {
+        if let Some((start, text)) = self.open.take()
+            && !text.is_empty() {
                 self.segments.push(TimedSegment { start, end: end_secs, value: text, confidence: None });
             }
-        }
         (self.segments, self.stats)
     }
 }
 
 /// Render timed OCR spans as SRT.
+#[must_use] 
 pub fn to_srt(segments: &[TimedSegment<String>]) -> String {
     let mut out = String::new();
     for (i, s) in segments.iter().enumerate() {
@@ -494,7 +493,8 @@ pub fn to_srt(segments: &[TimedSegment<String>]) -> String {
     out
 }
 
-/// Render timed OCR spans as WebVTT.
+/// Render timed OCR spans as `WebVTT`.
+#[must_use] 
 pub fn to_vtt(segments: &[TimedSegment<String>]) -> String {
     let mut out = String::from("WEBVTT\n\n");
     for s in segments {
@@ -558,7 +558,7 @@ mod tests {
         let eng = std::sync::Arc::new(CountingEngine(AtomicUsize::new(0)));
         let mut s = LiveSession::new(eng.clone(), OcrOptions::default(), LiveConfig::default());
         for i in 0..5 {
-            s.push_frame(&frame(100), i as f64).unwrap();
+            s.push_frame(&frame(100), f64::from(i)).unwrap();
         }
         // frame changes at t=5
         s.push_frame(&frame(200), 5.0).unwrap();

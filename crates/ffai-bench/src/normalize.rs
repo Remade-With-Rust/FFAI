@@ -1,9 +1,9 @@
-//! Text normalization for error-rate scoring — a port of OpenAI Whisper's
+//! Text normalization for error-rate scoring — a port of `OpenAI` Whisper's
 //! `whisper/normalizers/{basic,english}.py`.
 //!
 //! # Why this exists
 //!
-//! Raw WER between an ASR hypothesis and a LibriSpeech reference is mostly
+//! Raw WER between an ASR hypothesis and a `LibriSpeech` reference is mostly
 //! noise about formatting. The reference says `MISTER QUILTER`, Whisper
 //! writes `Mr. Quilter`; the reference says `TWENTY THREE`, Whisper writes
 //! `23`. Scoring those as errors would make every implementation — ours and
@@ -60,6 +60,7 @@ pub enum Mode {
 }
 
 /// Normalize `text` under `mode`.
+#[must_use]
 pub fn normalize(text: &str, mode: Mode) -> String {
     match mode {
         Mode::None => text.to_string(),
@@ -84,7 +85,9 @@ fn english(text: &str) -> String {
     let s = re(r"[<\[][^>\]]*[>\]]").replace_all(&s, "").into_owned();
     let s = re(r"\(([^)]+?)\)").replace_all(&s, "").into_owned();
     // Fillers Whisper drops outright.
-    let s = re(r"\b(hmm|mm|mhm|mmm|uh|um)\b").replace_all(&s, "").into_owned();
+    let s = re(r"\b(hmm|mm|mhm|mmm|uh|um)\b")
+        .replace_all(&s, "")
+        .into_owned();
     // Standardize a space before an apostrophe ("it 's" -> "it's").
     let s = re(r"\s+'").replace_all(&s, "'").into_owned();
 
@@ -320,7 +323,7 @@ fn words_to_digits(text: &str) -> String {
         fn flush(&mut self, out: &mut Vec<String>) {
             if self.active {
                 out.push(self.value().to_string());
-                *self = Acc::default();
+                *self = Self::default();
             }
         }
     }
@@ -407,7 +410,10 @@ mod tests {
 
     #[test]
     fn titles_expand() {
-        assert_eq!(en("Dr. Smith and Mrs. Jones"), "doctor smith and missus jones");
+        assert_eq!(
+            en("Dr. Smith and Mrs. Jones"),
+            "doctor smith and missus jones"
+        );
     }
 
     #[test]
@@ -449,7 +455,10 @@ mod tests {
 
     #[test]
     fn numbers_survive_surrounding_words() {
-        assert_eq!(en("he had twenty three apples and left"), "he had 23 apples and left");
+        assert_eq!(
+            en("he had twenty three apples and left"),
+            "he had 23 apples and left"
+        );
     }
 
     #[test]

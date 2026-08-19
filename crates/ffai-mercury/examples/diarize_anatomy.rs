@@ -31,8 +31,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
         .nth(1)
         .unwrap_or("corpora/clips/librispeech-test-clean/audio/1089-134686-0000.wav".into());
-    let secs: f64 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(3.0);
-    let rounds: usize = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(9);
+    let secs: f64 = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3.0);
+    let rounds: usize = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(9);
 
     let audio = ffai_media::load_audio(std::path::Path::new(&path))?;
     let mono = audio.to_mono();
@@ -109,7 +115,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sublinear => fixed overhead dominates, so the lever is batching the
     // windows into one call. This decides which optimization to build, and
     // it is two minutes of measurement against a day of the wrong one.
-    println!("\n{:<12} {:>8} {:>10} {:>12} {:>11}", "WINDOW s", "frames", "ms", "ms/frame", "GFLOP/s*");
+    println!(
+        "\n{:<12} {:>8} {:>10} {:>12} {:>11}",
+        "WINDOW s", "frames", "ms", "ms/frame", "GFLOP/s*"
+    );
     for w in [0.5f64, 1.0, 1.5, 3.0, 6.0] {
         let k = ((w * sr) as usize).min(samples.len());
         if k == 0 {
@@ -129,7 +138,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ~34.6 MFLOP/frame for this topology (see the module header): the
         // 1024-channel stack plus the 3072-wide MFA dominate.
         let gflops = (frames as f64 * 34.6e6) / (ms / 1e3) / 1e9;
-        println!("{w:<12.1} {frames:>8} {ms:>10.1} {:>12.3} {gflops:>11.1}", ms / frames as f64);
+        println!(
+            "{w:<12.1} {frames:>8} {ms:>10.1} {:>12.3} {gflops:>11.1}",
+            ms / frames as f64
+        );
     }
     println!("* rough: 34.6 MFLOP/frame from the channel/kernel config, for scale only");
     Ok(())

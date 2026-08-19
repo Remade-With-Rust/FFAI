@@ -1,7 +1,7 @@
 //! PARSeq-tiny recognition (Bautista & Atienza 2022) on candle — the
 //! audit-cleared successor to the g2 CRNN, brought in to close the M-C1
 //! quality gate (the CRNN's measured ceiling is the sentence-period class;
-//! PARSeq reads a 94-char mixed-case charset with punctuation).
+//! `PARSeq` reads a 94-char mixed-case charset with punctuation).
 //!
 //! Ported against the CHECKPOINT's shape map
 //! (`corpora/refs/fixtures/parseq_tiny_shapes.json`) and strhub's decoder
@@ -11,9 +11,9 @@
 //! `tests/oracles.rs::parseq_ids_match_pytorch_reference`.
 //!
 //! Architecture (from shapes): ViT-tiny encoder — 4×8 patch conv on a
-//! 32×128 RGB crop → 128 tokens, dim 192, no cls token, learned pos_embed,
+//! 32×128 RGB crop → 128 tokens, dim 192, no cls token, learned `pos_embed`,
 //! 12 pre-norm blocks (3 heads), final norm — and ONE decoder layer with
-//! separate query/content LayerNorms, packed-projection self+cross
+//! separate query/content `LayerNorms`, packed-projection self+cross
 //! attention, GELU MLP 192→768, then a final norm and a 95-way head
 //! (charset 94 + EOS; BOS/PAD are input-only).
 
@@ -32,7 +32,7 @@ fn softmax_last(x: &Tensor) -> Result<Tensor> {
     candle_nn::ops::softmax(x, D::Minus1)
 }
 
-/// Multi-head attention with a torch-packed in_proj (3E×E weight, 3E bias).
+/// Multi-head attention with a torch-packed `in_proj` (3E×E weight, 3E bias).
 struct Mha {
     in_w: Tensor, // (3E, E)
     in_b: Tensor, // (3E,)
@@ -42,7 +42,7 @@ struct Mha {
 
 impl Mha {
     fn new(vb: &VarBuilder, heads: usize) -> Result<Self> {
-        Ok(Mha {
+        Ok(Self {
             in_w: vb.get((3 * DIM, DIM), "in_proj_weight")?,
             in_b: vb.get(3 * DIM, "in_proj_bias")?,
             out: linear(DIM, DIM, vb.pp("out_proj"))?,
@@ -92,7 +92,7 @@ impl VitBlock {
             out: linear(DIM, DIM, vb.pp("attn.proj"))?,
             heads: ENC_HEADS,
         };
-        Ok(VitBlock {
+        Ok(Self {
             norm1: layer_norm(DIM, 1e-6, vb.pp("norm1"))?,
             attn,
             norm2: layer_norm(DIM, 1e-6, vb.pp("norm2"))?,
@@ -122,7 +122,7 @@ struct DecoderLayer {
 
 impl DecoderLayer {
     fn new(vb: &VarBuilder) -> Result<Self> {
-        Ok(DecoderLayer {
+        Ok(Self {
             self_attn: Mha::new(&vb.pp("self_attn"), DEC_HEADS)?,
             cross_attn: Mha::new(&vb.pp("cross_attn"), DEC_HEADS)?,
             norm_q: layer_norm(DIM, 1e-5, vb.pp("norm_q"))?,
@@ -175,7 +175,7 @@ impl Parseq {
         // columns manually? No — candle supports only square stride here, so
         // the patchify is done by hand in `encode` with a matmul.
         let _ = cfg;
-        Ok(Parseq {
+        Ok(Self {
             patch: candle_nn::conv2d(
                 3,
                 DIM,
@@ -237,7 +237,7 @@ impl Parseq {
         self.enc_norm.forward(&h)
     }
 
-    /// AR-greedy decode (refine_iters = 0). Returns (text, mean confidence).
+    /// AR-greedy decode (`refine_iters` = 0). Returns (text, mean confidence).
     pub fn recognize(&self, x: &Tensor) -> Result<(String, Option<f32>)> {
         let memory = self.encode(x)?;
         let dev = x.device();
@@ -273,8 +273,7 @@ impl Parseq {
                 .iter()
                 .enumerate()
                 .max_by(|a, b| a.1.total_cmp(b.1))
-                .map(|(i, p)| (i as u32, *p))
-                .unwrap_or((EOS_ID, 0.0));
+                .map_or((EOS_ID, 0.0), |(i, p)| (i as u32, *p));
             if std::env::var("FFAI_PARSEQ_DEBUG").is_ok() {
                 let mut top: Vec<(usize, f32)> = probs.iter().copied().enumerate().collect();
                 top.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -330,8 +329,7 @@ impl Parseq {
                     .iter()
                     .enumerate()
                     .max_by(|a, b| a.1.total_cmp(b.1))
-                    .map(|(i, p)| (i as u32, *p))
-                    .unwrap_or((EOS_ID, 0.0));
+                    .map_or((EOS_ID, 0.0), |(i, p)| (i as u32, *p));
                 if id == EOS_ID {
                     break;
                 }
@@ -354,7 +352,7 @@ impl Parseq {
     }
 }
 
-/// Preprocess a grayscale crop for PARSeq: replicate to RGB, bicubic resize
+/// Preprocess a grayscale crop for `PARSeq`: replicate to RGB, bicubic resize
 /// to 32x128, normalize (x/255 - 0.5)/0.5, CHW.
 pub fn parseq_input(
     gray: &[f32],

@@ -47,7 +47,10 @@ fn main() {
         .expect("long-form corpus loads");
     let clip_truth = PathBuf::from("corpora/clips/librispeech-test-clean/truth");
     let engine = WhisperCandle::new();
-    let opts = AsrOptions { word_timestamps: true, ..Default::default() };
+    let opts = AsrOptions {
+        word_timestamps: true,
+        ..Default::default()
+    };
 
     struct Utt {
         id: String,
@@ -62,7 +65,9 @@ fn main() {
 
     for clip in &manifest.clips {
         let path = manifest.clip_path(clip);
-        let Ok(audio) = ffai_media::load_audio(&path) else { continue };
+        let Ok(audio) = ffai_media::load_audio(&path) else {
+            continue;
+        };
         let spans_path = path
             .parent()
             .and_then(|p| p.parent())
@@ -76,13 +81,16 @@ fn main() {
 
         // One pass over the whole file, with word timings so each utterance's
         // share of the output can be recovered.
-        let Ok(whole) = engine.transcribe(&audio, &opts) else { continue };
+        let Ok(whole) = engine.transcribe(&audio, &opts) else {
+            continue;
+        };
         let words = whole.words.clone().unwrap_or_default();
         let mono = audio.to_mono();
 
         for span in &spans {
             // `span.speaker` carries the source clip's stem.
-            let Ok(truth) = std::fs::read_to_string(clip_truth.join(format!("{}.txt", span.speaker)))
+            let Ok(truth) =
+                std::fs::read_to_string(clip_truth.join(format!("{}.txt", span.speaker)))
             else {
                 continue;
             };
@@ -99,7 +107,9 @@ fn main() {
                 sample_rate: SR as u32,
                 channels: 1,
             };
-            let Ok(alone) = engine.transcribe(&slice, &AsrOptions::default()) else { continue };
+            let Ok(alone) = engine.transcribe(&slice, &AsrOptions::default()) else {
+                continue;
+            };
 
             // In context: the words the whole-file pass placed inside this span.
             let in_ctx: String = words
@@ -134,19 +144,36 @@ fn main() {
     let alone = mean(&|u: &Utt| u.wer_alone);
     let ctx = mean(&|u: &Utt| u.wer_in_context);
 
-    println!("\n=== same audio, same truth, {} utterances ===", utts.len());
+    println!(
+        "\n=== same audio, same truth, {} utterances ===",
+        utts.len()
+    );
     println!("  transcribed ALONE       mean WER {:.4}", alone);
     println!("  transcribed IN CONTEXT  mean WER {:.4}", ctx);
     println!("  difference              {:+.4}", ctx - alone);
 
-    let worse = utts.iter().filter(|u| u.wer_in_context > u.wer_alone + 1e-9).count();
-    let better = utts.iter().filter(|u| u.wer_in_context < u.wer_alone - 1e-9).count();
+    let worse = utts
+        .iter()
+        .filter(|u| u.wer_in_context > u.wer_alone + 1e-9)
+        .count();
+    let better = utts
+        .iter()
+        .filter(|u| u.wer_in_context < u.wer_alone - 1e-9)
+        .count();
     let n = (worse + better) as f64;
-    let z = if n > 0.0 { (worse as f64 - n / 2.0) / (n * 0.25).sqrt() } else { 0.0 };
+    let z = if n > 0.0 {
+        (worse as f64 - n / 2.0) / (n * 0.25).sqrt()
+    } else {
+        0.0
+    };
     println!(
         "  worse in context {worse}   better {better}   tied {}   sign z = {z:+.2} {}",
         utts.len() - worse - better,
-        if z.abs() > 2.0 { "SIGNIFICANT" } else { "(bar |z| > 2)" }
+        if z.abs() > 2.0 {
+            "SIGNIFICANT"
+        } else {
+            "(bar |z| > 2)"
+        }
     );
 
     println!("\n=== hypothesis 2: is it the 30 s window boundary? ===");

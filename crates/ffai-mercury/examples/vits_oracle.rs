@@ -33,8 +33,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("loading via ONNX (pure Rust)");
         Vits::load_onnx(&onnx, &onnx.with_extension("onnx.json"))?
     };
-    println!("voice loaded: {} Hz, defaults noise {:.3} / len {:.1} / w {:.1}",
-        vits.sample_rate, vits.defaults.noise_scale, vits.defaults.length_scale, vits.defaults.noise_w);
+    println!(
+        "voice loaded: {} Hz, defaults noise {:.3} / len {:.1} / w {:.1}",
+        vits.sample_rate,
+        vits.defaults.noise_scale,
+        vits.defaults.length_scale,
+        vits.defaults.noise_w
+    );
 
     let fixture_dir = Path::new("crates/ffai-mercury/tests/fixtures/vits");
     let mut all_ok = true;
@@ -45,7 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let fx = ffai_core::candle::safetensors::load(&path, &ffai_core::candle::Device::Cpu)?;
-        let ids: Vec<i64> = fx["ids"].i(0)?.to_dtype(ffai_core::candle::DType::I64)?.to_vec1()?;
+        let ids: Vec<i64> = fx["ids"]
+            .i(0)?
+            .to_dtype(ffai_core::candle::DType::I64)?
+            .to_vec1()?;
 
         println!("\n=== {name} ({} ids) ===", ids.len());
 
@@ -80,12 +88,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ok4 = report_vec("audio ", &audio, &ref_audio, 2e-2)?;
 
         // End to end at zero noise: our whole chain vs the reference's.
-        let opts = SynthesisOptions { noise_scale: 0.0, length_scale: 1.0, noise_w: 0.0, seed: 0 };
+        let opts = SynthesisOptions {
+            noise_scale: 0.0,
+            length_scale: 1.0,
+            noise_w: 0.0,
+            seed: 0,
+        };
         let ours = vits.synthesize_ids(&ids, &opts)?;
         let e2e = if ours.len() == ref_audio.len() {
             report_vec("e2e   ", &ours, &ref_audio, 2e-2)?
         } else {
-            println!("e2e    LENGTH MISMATCH: {} vs {}", ours.len(), ref_audio.len());
+            println!(
+                "e2e    LENGTH MISMATCH: {} vs {}",
+                ours.len(),
+                ref_audio.len()
+            );
             false
         };
         all_ok &= ok1a && ok1b && ok2 && ok3 && ok4 && e2e;
@@ -109,21 +126,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "\nbyte-stability: same seed {} ({} samples), different seed {}",
         if stable { "IDENTICAL" } else { "DIVERGED" },
         a.len(),
-        if varies { "differs (as it must)" } else { "IDENTICAL (rng broken)" }
+        if varies {
+            "differs (as it must)"
+        } else {
+            "IDENTICAL (rng broken)"
+        }
     );
     all_ok &= stable && varies;
 
-    println!("\nverdict: {}", if all_ok { "ALL STAGES PASS" } else { "STAGE FAILURES ABOVE" });
+    println!(
+        "\nverdict: {}",
+        if all_ok {
+            "ALL STAGES PASS"
+        } else {
+            "STAGE FAILURES ABOVE"
+        }
+    );
     std::process::exit(if all_ok { 0 } else { 1 });
 }
 
-fn report(label: &str, ours: &Tensor, reference: &Tensor, tol: f32) -> Result<bool, Box<dyn std::error::Error>> {
+fn report(
+    label: &str,
+    ours: &Tensor,
+    reference: &Tensor,
+    tol: f32,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let a: Vec<f32> = ours.flatten_all()?.to_vec1()?;
     let b: Vec<f32> = reference.flatten_all()?.to_vec1()?;
     report_vec(label, &a, &b, tol)
 }
 
-fn report_vec(label: &str, a: &[f32], b: &[f32], tol: f32) -> Result<bool, Box<dyn std::error::Error>> {
+fn report_vec(
+    label: &str,
+    a: &[f32],
+    b: &[f32],
+    tol: f32,
+) -> Result<bool, Box<dyn std::error::Error>> {
     if a.len() != b.len() {
         println!("{label} SHAPE MISMATCH: {} vs {}", a.len(), b.len());
         return Ok(false);
@@ -154,6 +192,8 @@ fn dirs_cache() -> PathBuf {
     {
         std::env::var("XDG_CACHE_HOME")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache"))
+            .unwrap_or_else(|_| {
+                PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache")
+            })
     }
 }

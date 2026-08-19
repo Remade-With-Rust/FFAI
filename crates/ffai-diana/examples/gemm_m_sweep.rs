@@ -35,7 +35,7 @@ fn main() -> candle_core::Result<()> {
     println!(
         "candle matmul, K={K}, N chosen to hold M*K*N constant, f32, \
          {} threads",
-        std::thread::available_parallelism().map(|v| v.get()).unwrap_or(0)
+        std::thread::available_parallelism().map_or(0, |v| v.get())
     );
     println!("(N shrinks as M grows, so every row does the same arithmetic)\n");
     println!("{:>6} {:>9} {:>12} {:>11} {:>9}", "M", "N", "GFLOP", "ms", "GFLOP/s");

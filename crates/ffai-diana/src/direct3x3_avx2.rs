@@ -28,7 +28,7 @@
 //!
 //! # The inversion that looked obvious and measured worse
 //!
-//! Consecutive output channels are `c_in * 9` floats apart, so at c_in = 256
+//! Consecutive output channels are `c_in * 9` floats apart, so at `c_in` = 256
 //! this tile's eight weight broadcasts sit **9 KB apart — every one a
 //! different cache line**. "One load feeding eight FMAs is worthless if the
 //! eight scalars feeding them each cost a miss" is a good argument, and the
@@ -58,6 +58,7 @@ pub const OXB: usize = 8;
 
 /// True when this CPU has what the kernel needs.
 #[inline]
+#[must_use] 
 pub fn available() -> bool {
     #[cfg(target_arch = "x86_64")]
     {
@@ -90,7 +91,7 @@ pub unsafe fn tile(
     (c_in, h, w): (usize, usize, usize),
     (nr, ow): (usize, usize),
     (oc0, ox0, oy, r): (usize, usize, usize, usize),
-) {
+) { unsafe {
     debug_assert!(ox0 >= 1 && ox0 + OXB <= w, "tile must be interior");
     let hw = h * w;
 
@@ -124,7 +125,7 @@ pub unsafe fn tile(
     for (o, av) in a.iter().enumerate() {
         _mm256_storeu_ps(acc.as_mut_ptr().add(((oc0 + o) * nr + r) * ow + ox0), *av);
     }
-}
+}}
 
 #[cfg(test)]
 mod tests {

@@ -7,11 +7,13 @@
 //!
 //! **Weights are pre-fused.** `tools/diana_convert.py` folds each
 //! `conv → bn` pair into one convolution with bias, so a [`ConvAct`] here is
-//! a single `Conv2d` plus an optional SiLU — there is no BatchNorm at
+//! a single `Conv2d` plus an optional `SiLU` — there is no `BatchNorm` at
 //! runtime. The manifest records `fused: true` and [`crate::config`]
 //! refuses a file that says otherwise, because unfused weights would be a
 //! different forward pass rather than a slower one.
 
+// Feature-dependent: empty under some `par` configurations, hence the allow.
+#[allow(unused_imports)]
 use crate::par::prelude::*;
 use candle_core::{Result, Tensor, D};
 use candle_nn::{conv2d, Conv2d, Conv2dConfig, Module, VarBuilder};
@@ -23,7 +25,7 @@ fn dwconv_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var_os("FFAI_DIANA_NO_DWCONV").is_some())
 }
 
-/// Escape hatch back to candle's own SiLU.
+/// Escape hatch back to candle's own `SiLU`.
 /// `FFAI_DIANA_NO_FUSE=1` restores the unfused epilogue — bias as a
 /// `broadcast_add`, activation as a separate downstream op — so the fusion
 /// can be A/B'd in one process and the oracle run against both arms.
@@ -33,7 +35,7 @@ pub(crate) fn fuse_disabled() -> bool {
     match C.load(Ordering::Relaxed) {
         u8::MAX => {
             let off = std::env::var("FFAI_DIANA_NO_FUSE").is_ok_and(|v| v == "1");
-            C.store(off as u8, Ordering::Relaxed);
+            C.store(u8::from(off), Ordering::Relaxed);
             off
         }
         v => v == 1,
@@ -120,14 +122,14 @@ fn pointwise_matmul(x: &Tensor, w: &Tensor, b: Option<&Tensor>, act: bool) -> Re
     out.reshape((n, c_out, h, wd))
 }
 
-/// A fused convolution with an optional SiLU.
+/// A fused convolution with an optional `SiLU`.
 ///
 /// The activation is a **per-Conv fact, not a rule**: Ultralytics shares one
 /// `nn.SiLU()` instance across every `Conv` that takes the default, so
-/// PyTorch's module walk lists it once and omits it everywhere else, making
+/// `PyTorch`'s module walk lists it once and omits it everywhere else, making
 /// most Convs *look* activation-free. The nine genuinely activation-free
 /// Convs in this graph (SPPF's `cv1`, and the attention `qkv`/`proj`/`pe`
-/// plus the second FFN Conv inside each PSABlock) are passed `act = false`
+/// plus the second FFN Conv inside each `PSABlock`) are passed `act = false`
 /// at their construction sites below, matching the probed truth in
 /// `corpora/refs/fixtures/yolo26n_arch.json`.
 pub struct ConvAct {
@@ -177,10 +179,10 @@ impl ConvAct {
         } else {
             ConvKind::Other
         };
-        Ok(ConvAct { conv: conv2d(c_in, c_out, k, cfg, vb)?, act, depthwise, kind })
+        Ok(Self { conv: conv2d(c_in, c_out, k, cfg, vb)?, act, depthwise, kind })
     }
 
-    /// The common case: 1-stride, undivided groups, SiLU.
+    /// The common case: 1-stride, undivided groups, `SiLU`.
     pub fn plain(vb: VarBuilder, c_in: usize, c_out: usize, k: usize) -> Result<Self> {
         Self::new(vb, c_in, c_out, k, 1, 1, true)
     }
@@ -281,11 +283,10 @@ impl Module for ConvAct {
             } else {
                 self.conv.forward(x)?
             };
-            if crate::profile::roofline_enabled() {
-                if let Ok(v) = y.flatten_all().and_then(|f| f.to_vec1::<f32>()) {
+            if crate::profile::roofline_enabled()
+                && let Ok(v) = y.flatten_all().and_then(|f| f.to_vec1::<f32>()) {
                     crate::profile::census(&v);
                 }
-            }
             if let Some(t0) = t_kernel {
                 let (xd, yd) = (x.dims(), y.dims());
                 if xd.len() == 4 && yd.len() == 4 {
@@ -377,7 +378,7 @@ impl Bottleneck {
         shortcut: bool,
         k: usize,
     ) -> Result<Self> {
-        Ok(Bottleneck {
+        Ok(Self {
             cv1: ConvAct::plain(vb.pp("cv1"), c_in, hidden, k)?,
             cv2: ConvAct::plain(vb.pp("cv2"), hidden, c_out, k)?,
             add: shortcut && c_in == c_out,
@@ -450,7 +451,7 @@ impl C3k {
             // e = 1.0 inside C3/C3k — see Bottleneck's docs.
             m.push(Bottleneck::full(vb.pp("m").pp(i), hidden, hidden, true, 3)?);
         }
-        Ok(C3k {
+        Ok(Self {
             cv1: ConvAct::plain(vb.pp("cv1"), c_in, hidden, 1)?,
             cv2: ConvAct::plain(vb.pp("cv2"), c_in, hidden, 1)?,
             cv3: ConvAct::plain(vb.pp("cv3"), 2 * hidden, c_out, 1)?,
@@ -490,7 +491,7 @@ impl Attention {
         let head_dim = dim / num_heads;
         let key_dim = head_dim / 2; // attn_ratio 0.5
         let h = dim + key_dim * num_heads * 2;
-        Ok(Attention {
+        Ok(Self {
             qkv: ConvAct::new(vb.pp("qkv"), dim, h, 1, 1, 1, false)?,
             proj: ConvAct::new(vb.pp("proj"), dim, dim, 1, 1, 1, false)?,
             pe: ConvAct::new(vb.pp("pe"), dim, dim, 3, 1, dim, false)?,
@@ -557,7 +558,7 @@ pub struct PsaBlock {
 
 impl PsaBlock {
     pub fn new(vb: VarBuilder, c: usize, num_heads: usize, add: bool) -> Result<Self> {
-        Ok(PsaBlock {
+        Ok(Self {
             attn: Attention::new(vb.pp("attn"), c, num_heads)?,
             ffn0: ConvAct::plain(vb.pp("ffn").pp(0), c, c * 2, 1)?,
             ffn1: ConvAct::new(vb.pp("ffn").pp(1), c * 2, c, 1, 1, 1, false)?,
@@ -583,21 +584,21 @@ impl Module for PsaBlock {
 ///
 /// Boxed because the variants differ several-fold in size — a `C3k` carries
 /// three convolutions and two bottlenecks, the attention form carries an
-/// entire PSABlock — and an unboxed enum would size every element of the
+/// entire `PSABlock` — and an unboxed enum would size every element of the
 /// `Vec` to the largest.
 pub enum Inner {
     Bottleneck(Box<Bottleneck>),
     C3k(Box<C3k>),
-    /// The 4-arg `attn` form: a Bottleneck followed by a PSABlock.
+    /// The 4-arg `attn` form: a Bottleneck followed by a `PSABlock`.
     Attn(Box<(Bottleneck, PsaBlock)>),
 }
 
 impl Module for Inner {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         match self {
-            Inner::Bottleneck(b) => b.forward(x),
-            Inner::C3k(c) => c.forward(x),
-            Inner::Attn(bp) => bp.1.forward(&bp.0.forward(x)?),
+            Self::Bottleneck(b) => b.forward(x),
+            Self::C3k(c) => c.forward(x),
+            Self::Attn(bp) => bp.1.forward(&bp.0.forward(x)?),
         }
     }
 }
@@ -648,7 +649,7 @@ impl C3k2 {
                 ))),
             });
         }
-        Ok(C3k2 {
+        Ok(Self {
             cv1: ConvAct::plain(vb.pp("cv1"), c_in, 2 * c, 1)?,
             cv2: ConvAct::plain(vb.pp("cv2"), (2 + n) * c, c_out, 1)?,
             m,
@@ -684,7 +685,7 @@ pub struct Sppf {
 impl Sppf {
     pub fn new(vb: VarBuilder, c_in: usize, c_out: usize, k: usize, n: usize) -> Result<Self> {
         let hidden = c_in / 2;
-        Ok(Sppf {
+        Ok(Self {
             cv1: ConvAct::new(vb.pp("cv1"), c_in, hidden, 1, 1, 1, false)?,
             cv2: ConvAct::plain(vb.pp("cv2"), hidden * (n + 1), c_out, 1)?,
             k,
@@ -737,7 +738,7 @@ impl C2psa {
         for i in 0..n {
             m.push(PsaBlock::new(vb.pp("m").pp(i), c, (c / 64).max(1), true)?);
         }
-        Ok(C2psa {
+        Ok(Self {
             cv1: ConvAct::plain(vb.pp("cv1"), c_in, 2 * c, 1)?,
             cv2: ConvAct::plain(vb.pp("cv2"), 2 * c, c_out, 1)?,
             m,

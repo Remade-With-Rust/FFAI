@@ -54,7 +54,12 @@ fn interleave(rounds: usize, mut a: impl FnMut() -> f64, mut b: impl FnMut() -> 
         va.push(ta);
         vb.push(tb);
     }
-    Verdict { a_wins: wins, rounds, a: va, b: vb }
+    Verdict {
+        a_wins: wins,
+        rounds,
+        a: va,
+        b: vb,
+    }
 }
 
 fn report(name: &str, la: &str, lb: &str, mut v: Verdict) {
@@ -103,7 +108,10 @@ fn probe(
         .max_all()?
         .to_scalar::<f32>()?;
     let scale = yf.abs()?.max_all()?.to_scalar::<f32>()?;
-    println!("\n=== ({out_dim} x {in_dim}), m=1 · max|f16-int8| {d:.4} ({:.2} % of peak)", d / scale * 100.0);
+    println!(
+        "\n=== ({out_dim} x {in_dim}), m=1 · max|f16-int8| {d:.4} ({:.2} % of peak)",
+        d / scale * 100.0
+    );
 
     let wt = w.t()?.contiguous()?;
     report(

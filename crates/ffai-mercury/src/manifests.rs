@@ -26,15 +26,39 @@ use ffai_models::ModelManifest;
 /// `(name, toml)` for every manifest Mercury can load on its own.
 pub const EMBEDDED: &[(&str, &str)] = &[
     // ---- ASR: the Whisper sizes ----
-    ("whisper-tiny-en", include_str!("../manifests/whisper-tiny-en.toml")),
-    ("whisper-base-en", include_str!("../manifests/whisper-base-en.toml")),
-    ("whisper-small-en", include_str!("../manifests/whisper-small-en.toml")),
-    ("whisper-medium-en", include_str!("../manifests/whisper-medium-en.toml")),
-    ("whisper-tiny", include_str!("../manifests/whisper-tiny.toml")),
-    ("whisper-large-v3", include_str!("../manifests/whisper-large-v3.toml")),
+    (
+        "whisper-tiny-en",
+        include_str!("../manifests/whisper-tiny-en.toml"),
+    ),
+    (
+        "whisper-base-en",
+        include_str!("../manifests/whisper-base-en.toml"),
+    ),
+    (
+        "whisper-small-en",
+        include_str!("../manifests/whisper-small-en.toml"),
+    ),
+    (
+        "whisper-medium-en",
+        include_str!("../manifests/whisper-medium-en.toml"),
+    ),
+    (
+        "whisper-tiny",
+        include_str!("../manifests/whisper-tiny.toml"),
+    ),
+    (
+        "whisper-large-v3",
+        include_str!("../manifests/whisper-large-v3.toml"),
+    ),
     // ---- ASR: the WhisperX layer, fetched only when its flag is set ----
-    ("wav2vec2-base-960h", include_str!("../manifests/wav2vec2-base-960h.toml")),
-    ("ecapa-tdnn-voxceleb", include_str!("../manifests/ecapa-tdnn-voxceleb.toml")),
+    (
+        "wav2vec2-base-960h",
+        include_str!("../manifests/wav2vec2-base-960h.toml"),
+    ),
+    (
+        "ecapa-tdnn-voxceleb",
+        include_str!("../manifests/ecapa-tdnn-voxceleb.toml"),
+    ),
     // ---- TTS ----
     ("cmudict", include_str!("../manifests/cmudict.toml")),
     (
@@ -44,8 +68,12 @@ pub const EMBEDDED: &[(&str, &str)] = &[
 ];
 
 /// The embedded TOML for `name`, if Mercury ships one.
+#[must_use]
 pub fn embedded(name: &str) -> Option<&'static str> {
-    EMBEDDED.iter().find(|(n, _)| *n == name).map(|(_, toml)| *toml)
+    EMBEDDED
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, toml)| *toml)
 }
 
 /// Resolve a manifest by name.
@@ -65,14 +93,21 @@ pub fn resolve(dir: Option<&Path>, name: &str) -> Result<ModelManifest> {
             .into_iter()
             .find(|m| m.name == name)
             .ok_or_else(|| {
-                Error::Model(format!("no model manifest named `{name}` in {}", dir.display()))
+                Error::Model(format!(
+                    "no model manifest named `{name}` in {}",
+                    dir.display()
+                ))
             });
     }
     let toml = embedded(name).ok_or_else(|| {
         Error::Model(format!(
             "no manifest named `{name}` is compiled into ffai-mercury (have: {}) — \
              pass a manifest directory to use your own",
-            EMBEDDED.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+            EMBEDDED
+                .iter()
+                .map(|(n, _)| *n)
+                .collect::<Vec<_>>()
+                .join(", ")
         ))
     })?;
     ModelManifest::from_toml(toml)
@@ -128,7 +163,10 @@ mod tests {
         // A directory override still works, and a missing one still errors.
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models");
         if repo.exists() {
-            assert_eq!(resolve(Some(&repo), "whisper-base-en").unwrap().name, "whisper-base-en");
+            assert_eq!(
+                resolve(Some(&repo), "whisper-base-en").unwrap().name,
+                "whisper-base-en"
+            );
         }
         assert!(resolve(Some(Path::new("no/such/dir")), "whisper-tiny-en").is_err());
     }
