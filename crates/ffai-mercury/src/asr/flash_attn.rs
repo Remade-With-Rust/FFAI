@@ -507,6 +507,37 @@ fn flash_head(_q: &[f32], _kt: &[f32], _v: &[f32], _out: &mut [f32], _seq: usize
     unreachable!("guarded by have_avx2()")
 }
 
+// The two stubs below were MISSING, and mercury therefore did not compile at
+// all on any non-x86_64 target. Nothing caught it: every developer box and every
+// CI job was x86_64 until the release matrix built for aarch64-apple-darwin.
+//
+// Same contract as the stubs above - the runtime feature check that guards each
+// call site can never pass here, so no reachable code exists to be unsound.
+#[cfg(not(target_arch = "x86_64"))]
+fn flash_head_strided(
+    _q: &[f32],
+    _kt: &[f32],
+    _v: &[f32],
+    _out: &mut [f32],
+    _seq: usize,
+    _out_stride: usize,
+) {
+    unreachable!("guarded by have_avx2()")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+// SAFETY: non-x86 stub, `unsafe fn` only to match the kernel it stands in for.
+unsafe fn xattn_head_f16(
+    _q: &[f32],
+    _kt: &[u16],
+    _v: &[u16],
+    _out: &mut [f32],
+    _keys: usize,
+    _s: &mut [f32],
+) {
+    unreachable!("guarded by have_f16c()")
+}
+
 // ---------------------------------------------------------------------------
 // AVX2 kernels
 // ---------------------------------------------------------------------------
