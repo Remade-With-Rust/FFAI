@@ -170,7 +170,7 @@ jobs:
       # SLSA-style build provenance: a signed statement of WHAT built these
       # bytes, from WHICH commit, on WHICH runner. This is what turns "we
       # published a binary" into something a consumer can verify.
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/**/*"
       - name: Publish the release with SBOM attached
