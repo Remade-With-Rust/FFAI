@@ -334,7 +334,7 @@ version = "2.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-argus]]
-version = "0.6.1"
+version = "0.6.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-bench]]
@@ -350,7 +350,7 @@ version = "0.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-core]]
-version = "0.6.4"
+version = "0.6.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-diana]]
@@ -366,7 +366,7 @@ version = "1.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-models]]
-version = "0.6.1"
+version = "0.6.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-wasm]]
