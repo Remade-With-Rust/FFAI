@@ -122,10 +122,22 @@ jobs:
           BIN=target/${{ matrix.target }}/release/ffai
           [ -f "$BIN" ] || BIN="$BIN.exe"
           cargo audit bin "$BIN" || echo "::warning::cargo audit bin reported findings - triage before publishing"
+      # H-31 is a DIAGNOSTIC: it prints the binary's hardening flags. It must
+      # never be able to block a release, and on the v1.0.0 run it did exactly
+      # that - `apt-get install checksec` hung for 35 minutes with no
+      # DEBIAN_FRONTEND, no timeout, and no `|| true` on the apt line (only the
+      # checksec call had one). Windows and macOS had long finished.
+      #
+      # Now: non-interactive, time-boxed, and incapable of failing the job.
       - name: Verify binary hardening (Linux, gate H-31)
         if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 5
+        continue-on-error: true
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update && sudo apt-get install -y checksec
+          sudo apt-get update -qq -o Acquire::Retries=3 || true
+          sudo apt-get install -y -qq --no-install-recommends checksec || true
           checksec --file=target/${{ matrix.target }}/release/ffai || true
       - uses: actions/upload-artifact@v4
         with:
