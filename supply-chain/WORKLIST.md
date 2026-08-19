@@ -202,7 +202,7 @@ while the exemption COUNT is unchanged at 313 — the gate counts crates, not li
 
 ## Part 5 — what an agent already certified, and what is left for a human
 
-**Done 2026-08-18 — 7 crates. Exemptions 313 → 306, fully audited 260 → 267.**
+**Done 2026-08-18 — 8 crates. Exemptions 313 → 305, fully audited 260 → 268.**
 
 `cargo vet certify` accepts `--who`, so these are recorded as reviewed by an AI agent and
 explicitly **not independently human-verified**. That is an accurate audit record rather than
@@ -210,7 +210,16 @@ one signed in someone else's name, and anyone importing it can weigh it accordin
 
 Every one had its **complete** diff read, and every one touches **no source file at all**:
 `futures-core`, `futures-macro`, `futures-sink`, `futures-io`, `quinn-udp`, `zerofrom`,
-`crypto-common`.
+`crypto-common`. Plus `rand_core 0.10.0 → 0.10.1`, whose only source change is **two rustdoc
+links** retargeted from `rand::Rng` to `rand::RngExt` — read in full, no executable code touched.
+
+**Two examples of where an agent should stop, both read and deliberately NOT certified:**
+`find-msvc-tools 0.1.8 → 0.1.9` adds a `find_windows_sdk` API that enumerates SDK directories —
+ambient filesystem capability, which the criteria single out as needing careful reasoning.
+`stable_deref_trait 1.2.0 → 1.2.1` adds `unsafe impl StableDeref for Cow<'a, T>`; the argument is
+straightforward (Cow derefs to heap or borrowed data whose address survives moving the enum, as
+the existing `String`/`Vec` impls do) but an `unsafe impl` on a pointer-stability trait is a
+person's signature.
 
 **That is the ceiling without human judgement.** All 75 diff candidates were swept against the
 same rule; **73 touch source** and are listed below, smallest first.

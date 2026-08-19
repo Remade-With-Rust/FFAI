@@ -797,10 +797,6 @@ criteria = "safe-to-deploy"
 version = "0.10.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.rand_core]]
-version = "0.10.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.rand_pcg]]
 version = "0.10.2"
 criteria = "safe-to-deploy"
