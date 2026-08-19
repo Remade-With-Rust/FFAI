@@ -25,8 +25,13 @@
 //! oracle). Synthesis knobs live on [`ffai_core::engine::TtsOptions`], and
 //! `seed` makes output byte-identical run over run.
 
-// Bounded proofs (gate H-30). `cfg(kani)` only, so a normal build never sees it.
-#[cfg(kani)]
+// Bounded proofs (gate H-30). A normal build never sees this.
+//
+// `test` is included as well as `kani` on purpose: the harness BODIES stay
+// `cfg(kani)`, but the pure index helpers they reason about then type-check
+// under `cargo test` too. Without that, the whole file is dead code on every
+// machine without Kani and rots silently between Linux runs.
+#[cfg(any(kani, test))]
 mod proofs;
 
 pub mod asr;

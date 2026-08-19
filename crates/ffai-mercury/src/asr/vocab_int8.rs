@@ -109,8 +109,24 @@ impl Int8Vocab {
         };
         // The kernel steps 32 lanes at a time; every Whisper n_state is a
         // multiple of 32, but do not assume it.
+        //
+        // All three conditions are MEMORY-SAFETY invariants for `dot_i8_blocked`,
+        // not tuning preferences, so they are checked HERE - at the point where
+        // the kernel becomes reachable - rather than trusted from the knob's
+        // env-var validator:
+        //
+        //   blk != 0        `d % blk` is a divide-by-zero panic otherwise, and
+        //                   `Num::get_usize` maps any negative override to 0.
+        //   blk % 32 == 0   the inner loop tests `o < blk` but READS 32 BYTES per
+        //                   step, so a blk of 48 reads 16 bytes past the block -
+        //                   and past the whole allocation on the final block.
+        //   d % blk == 0    blocks must tile the row exactly.
+        //
+        // `FFAI_VOCAB_BLK` is validated on the env path, but `Num::set` stores
+        // without validating, so that guarantee does not reach here. Falling back
+        // to `None` picks the safe non-SIMD path instead of trusting the caller.
         let blk = blk();
-        if d % blk != 0 {
+        if blk == 0 || !blk.is_multiple_of(32) || d % blk != 0 {
             return Ok(None);
         }
         let w: Vec<f32> = embeddings
