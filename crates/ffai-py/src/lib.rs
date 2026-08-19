@@ -173,8 +173,11 @@ impl Detector {
         };
         // Release the GIL: detection is pure Rust and takes tens of ms, so
         // holding it would serialise any caller threading over frames.
+        //
+        // `detach` is `allow_threads` under its pyo3 0.28+ name; the semantics
+        // are unchanged.
         let out = py
-            .allow_threads(|| self.engine.detect(&buf, &opts))
+            .detach(|| self.engine.detect(&buf, &opts))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let mut xyxy = Vec::with_capacity(out.detections.len() * 4);
