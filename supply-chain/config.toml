@@ -362,7 +362,7 @@ version = "0.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-mercury]]
-version = "0.7.0"
+version = "1.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-models]]

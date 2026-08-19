@@ -25,14 +25,14 @@ ignore = [
     # Not present in any shipped crate's normal dependency graph.
     # Review 2026-11-15. Replacement candidate: skrifa.
     "RUSTSEC-2026-0192",
-    # pyo3 0.23.5 - two real vulnerabilities (PyString::from_object buffer overflow;
-    # missing Sync bound on PyCFunction::new_closure). Scope: ffai-py ONLY - not
-    # reachable from any other crate. The fix requires a semver-MAJOR bump to pyo3
-    # 0.25+, which is a breaking change to the Python extension and needs its own
-    # work item. Tracked as a finding on the ffai-py unit's audit.
-    # SHORTER review deadline because these are live vulnerabilities: 2026-09-30.
-    "RUSTSEC-2025-0020",
-    "RUSTSEC-2026-0177",
+    # RESOLVED 2026-08-19, ignores REMOVED rather than left to rot. pyo3 went
+    # 0.23.5 -> 0.29.2, so RUSTSEC-2025-0020 (PyString::from_object buffer
+    # overflow) and RUSTSEC-2026-0177 (missing Sync bound on
+    # PyCFunction::new_closure) no longer match anything - cargo-deny reported
+    # them as `advisory-not-detected`. A stale ignore is worse than no ignore:
+    # it silently suppresses the SAME advisory if a downgrade ever reintroduces
+    # it. Delete ignores when the advisory is fixed, do not keep them "just in
+    # case".
 ]
 
 [licenses]
