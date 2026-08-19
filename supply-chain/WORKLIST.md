@@ -199,3 +199,105 @@ default feature, or when the one-line `hf-hub` PR lands and makes removal free.
 
 Effect on the numbers: the *reading* backlog drops from ~5.6M lines to **~3.5M (a 39% cut)**,
 while the exemption COUNT is unchanged at 313 — the gate counts crates, not lines.
+
+## Part 5 — what an agent already certified, and what is left for a human
+
+**Done 2026-08-18 — 7 crates. Exemptions 313 → 306, fully audited 260 → 267.**
+
+`cargo vet certify` accepts `--who`, so these are recorded as reviewed by an AI agent and
+explicitly **not independently human-verified**. That is an accurate audit record rather than
+one signed in someone else's name, and anyone importing it can weigh it accordingly.
+
+Every one had its **complete** diff read, and every one touches **no source file at all**:
+`futures-core`, `futures-macro`, `futures-sink`, `futures-io`, `quinn-udp`, `zerofrom`,
+`crypto-common`.
+
+**That is the ceiling without human judgement.** All 75 diff candidates were swept against the
+same rule; **73 touch source** and are listed below, smallest first.
+
+**Where the line is, and why.** `stable_deref_trait 1.2.0 → 1.2.1` adds
+`unsafe impl StableDeref for Cow<'a, T>`. The reasoning is not hard — Cow's deref targets are
+heap or borrowed data whose addresses survive moving the enum, exactly as the existing
+`String`/`Vec` impls do — but an `unsafe impl` on a POINTER-STABILITY trait is something a
+person should sign, not an agent. Everything touching code is routed here for that reason.
+
+| # | crate | delta | .rs files | first few |
+|--:|---|---|--:|---|
+| 1 | `find-msvc-tools` | 0.1.8 → 0.1.9 | 1 | `find_tools.rs` |
+| 2 | `idna_adapter` | 1.2.1 → 1.2.2 | 1 | `lib.rs` |
+| 3 | `openssl-probe` | 0.1.6 → 0.2.1 | 1 | `lib.rs` |
+| 4 | `pkg-config` | 0.3.32 → 0.3.33 | 1 | `lib.rs` |
+| 5 | `rand_core` | 0.10.0 → 0.10.1 | 1 | `lib.rs` |
+| 6 | `rusty-fork` | 0.3.0 → 0.3.1 | 1 | `cmdline.rs` |
+| 7 | `stable_deref_trait` | 1.2.0 → 1.2.1 | 1 | `lib.rs` |
+| 8 | `wasm-bindgen-macro` | 0.2.105 → 0.2.121 | 1 | `lib.rs` |
+| 9 | `mimalloc` | 0.1.37 → 0.1.52 | 2 | `extended.rs`, `lib.rs` |
+| 10 | `pin-project-lite` | 0.2.16 → 0.2.17 | 2 | `lib.rs`, `test.rs` |
+| 11 | `rustc-hash` | 2.1.1 → 2.1.3 | 2 | `lib.rs`, `random_state.rs` |
+| 12 | `shlex` | 1.3.0 → 2.0.1 | 2 | `bytes.rs`, `lib.rs` |
+| 13 | `version_check` | 0.9.4 → 0.9.5 | 2 | `channel.rs`, `lib.rs` |
+| 14 | `webpki-root-certs` | 1.0.4 → 1.0.9 | 2 | `codegen.rs`, `lib.rs` |
+| 15 | `crypto-common` | 0.1.6 → 0.2.2 | 3 | `generate.rs`, `hazmat.rs`, `lib.rs` |
+| 16 | `futures-executor` | 0.3.31 → 0.3.33 | 3 | `enter.rs`, `local_pool.rs`, `thread_pool.rs` |
+| 17 | `hermit-abi` | 0.2.6 → 0.3.3 | 3 | `lib.rs`, `tcplistener.rs`, `tcpstream.rs` |
+| 18 | `oneshot` | 0.1.11 → 0.1.13 | 3 | `errors.rs`, `lib.rs`, `miri.rs` |
+| 19 | `rand` | 0.9.4 → 0.9.5 | 3 | `slice.rs`, `uniform_int.rs`, `uniform_other.rs` |
+| 20 | `safetensors` | 0.3.3 → 0.4.5 | 3 | `lib.rs`, `slice.rs`, `tensor.rs` |
+| 21 | `webpki-roots` | 0.26.8 → 0.26.11 | 3 | `codegen.rs`, `lib.rs`, `verify.rs` |
+| 22 | `webpki-roots` | 0.26.8 → 1.0.9 | 3 | `codegen.rs`, `lib.rs`, `verify.rs` |
+| 23 | `arrayvec` | 0.7.6 → 0.7.8 | 4 | `array_string.rs`, `arrayvec.rs`, `lib.rs` … +1 |
+| 24 | `block-buffer` | 0.10.4 → 0.12.1 | 4 | `lib.rs`, `mod.rs`, `read.rs` … +1 |
+| 25 | `bytemuck_derive` | 1.9.3 → 1.11.0 | 4 | `basic.rs`, `lib.rs`, `traits.rs` … +1 |
+| 26 | `castaway` | 0.2.2 → 0.2.4 | 4 | `internal.rs`, `lib.rs`, `lifetime_free.rs` … +1 |
+| 27 | `fastrand` | 2.3.0 → 2.5.0 | 4 | `bench.rs`, `global_rng.rs`, `lib.rs` … +1 |
+| 28 | `iana-time-zone` | 0.1.64 → 0.1.65 | 4 | `lib.rs`, `platform.rs`, `tz_wasm32_emscripten.rs` … +1 |
+| 29 | `raw-cpuid` | 11.5.0 → 11.6.0 | 4 | `display.rs`, `extended.rs`, `lib.rs` … +1 |
+| 30 | `safetensors` | 0.3.3 → 0.8.0 | 4 | `benchmark.rs`, `lib.rs`, `slice.rs` … +1 |
+| 31 | `tracing-attributes` | 0.1.30 → 0.1.31 | 4 | `attr.rs`, `expand.rs`, `fields.rs` … +1 |
+| 32 | `futures-channel` | 0.3.31 → 0.3.33 | 5 | `lib.rs`, `mod.rs`, `mpsc.rs` … +2 |
+| 33 | `log` | 0.4.29 → 0.4.33 | 5 | `__private_api.rs`, `key.rs`, `lib.rs` … +2 |
+| 34 | `objc2` | 0.6.3 → 0.6.4 | 5 | `common_selectors.rs`, `define_class.rs`, `defined_ivars.rs` … +2 |
+| 35 | `tower-layer` | 0.1.0 → 0.3.2 | 5 | `identity.rs`, `layer_fn.rs`, `lib.rs` … +2 |
+| 36 | `wasm-bindgen-shared` | 0.2.100 → 0.2.121 | 5 | `build.rs`, `identifier.rs`, `lib.rs` … +2 |
+| 37 | `untrusted` | 0.7.1 → 0.9.0 | 6 | `input.rs`, `lib.rs`, `no_panic.rs` … +3 |
+| 38 | `wasm-bindgen-futures` | 0.4.49 → 0.4.71 | 6 | `lib.rs`, `multithread.rs`, `queue.rs` … +3 |
+| 39 | `chacha20` | 0.10.0 → 0.10.1 | 7 | `chacha.rs`, `legacy.rs`, `lib.rs` … +4 |
+| 40 | `bitflags` | 2.11.1 → 2.13.1 | 8 | `all_named.rs`, `flag_name.rs`, `iter.rs` … +5 |
+| 41 | `cc` | 1.2.53 → 1.4.0 | 8 | `command_helpers.rs`, `generated.rs`, `job_token.rs` … +5 |
+| 42 | `crc32fast` | 1.4.2 → 1.5.0 | 8 | `aarch64.rs`, `baseline.rs`, `bench.rs` … +5 |
+| 43 | `js-sys` | 0.3.77 → 0.3.98 | 8 | `lib.rs`, `mod.rs`, `multithread.rs` … +5 |
+| 44 | `tinyvec` | 1.9.0 → 1.12.0 | 8 | `array.rs`, `arrayvec.rs`, `const_generic_impl.rs` … +5 |
+| 45 | `wasm-bindgen-macro-support` | 0.2.100 → 0.2.121 | 8 | `ast.rs`, `codegen.rs`, `encode.rs` … +5 |
+| 46 | `zeroize` | 1.8.2 → 1.9.0 | 8 | `aarch64.rs`, `alloc.rs`, `barrier.rs` … +5 |
+| 47 | `getset` | 0.1.3 → 0.1.7 | 9 | `clone_getters.rs`, `generate.rs`, `lib.rs` … +6 |
+| 48 | `rand` | 0.10.1 → 0.10.2 | 9 | `lib.rs`, `mod.rs`, `rng.rs` … +6 |
+| 49 | `simd-adler32` | 0.3.7 → 0.3.10 | 9 | `avx2.rs`, `avx512.rs`, `lib.rs` … +6 |
+| 50 | `tracing-core` | 0.1.34 → 0.1.36 | 9 | `callsite.rs`, `dispatcher.rs`, `field.rs` … +6 |
+| 51 | `half` | 2.5.0 → 2.7.1 | 11 | `aarch64.rs`, `arch.rs`, `bfloat.rs` … +8 |
+| 52 | `tokio-rustls` | 0.24.0 → 0.26.4 | 11 | `badssl.rs`, `client.rs`, `early-data.rs` … +8 |
+| 53 | `bytemuck` | 1.22.0 → 1.25.2 | 12 | `anybitpattern.rs`, `array_tests.rs`, `cast_slice_tests.rs` … +9 |
+| 54 | `libloading` | 0.9.0 → 0.8.9 | 12 | `as_filename.rs`, `as_symbol_name.rs`, `changelog.rs` … +9 |
+| 55 | `constant_time_eq` | 0.3.1 → 0.4.2 | 13 | `bench.rs`, `bench_classic.rs`, `bench_generic.rs` … +10 |
+| 56 | `futures` | 0.3.31 → 0.3.33 | 13 | `async_await_macros.rs`, `auto_traits.rs`, `compat.rs` … +10 |
+| 57 | `core-foundation` | 0.10.0 → 0.10.1 | 15 | `array.rs`, `base.rs`, `bundle.rs` … +12 |
+| 58 | `wasm-bindgen` | 0.2.100 → 0.2.121 | 16 | `build.rs`, `cast.rs`, `closure.rs` … +13 |
+| 59 | `sha2` | 0.10.9 → 0.11.0 | 17 | `aarch64_sha2.rs`, `aarch64_sha3.rs`, `block_api.rs` … +14 |
+| 60 | `time-macros` | 0.2.27 → 0.2.32 | 18 | `ast.rs`, `component.rs`, `date.rs` … +15 |
+| 61 | `ureq` | 2.9.1 → 2.12.1 | 21 | `agent.rs`, `agent_test.rs`, `decoder.rs` … +18 |
+| 62 | `tracing-subscriber` | 0.3.20 → 0.3.23 | 23 | `ansi_escaping.rs`, `builder.rs`, `chrono_crate.rs` … +20 |
+| 63 | `compact_str` | 0.7.1 → 0.9.1 | 24 | `arbitrary.rs`, `borsh.rs`, `bytes.rs` … +21 |
+| 64 | `zlib-rs` | 0.6.3 → 0.6.6 | 26 | `acle.rs`, `adler32.rs`, `allocate.rs` … +23 |
+| 65 | `rustls-webpki` | 0.101.4 → 0.103.10 | 34 | `alg_tests.rs`, `aws_lc_rs_algs.rs`, `better_tls.rs` … +31 |
+| 66 | `ttf-parser` | 0.19.0 → 0.25.1 | 35 | `aat.rs`, `avar.rs`, `cff1.rs` … +32 |
+| 67 | `zip` | 2.4.2 → 8.6.0 | 35 | `aes.rs`, `aes_ctr.rs`, `aex_encryption.rs` … +32 |
+| 68 | `tracing` | 0.1.41 → 0.1.44 | 57 | `debug.rs`, `debug_n.rs`, `debug_np.rs` … +54 |
+| 69 | `jni` | 0.21.1 → 0.22.4 | 78 | `api_calls.rs`, `auto.rs`, `auto_elements.rs` … +75 |
+| 70 | `rustls` | 0.21.6 → 0.23.42 | 88 | `alert.rs`, `anchors.rs`, `api.rs` … +85 |
+| 71 | `zerocopy-derive` | 0.8.27 → 0.8.55 | 93 | `absence_of_deprecated_warning.rs`, `crate_path.rs`, `deprecated.rs` … +90 |
+| 72 | `zerocopy` | 0.8.27 → 0.8.55 | 160 | `as_bytes_dynamic_size.rs`, `as_bytes_static_size.rs`, `build.rs` … +157 |
+| 73 | `web-sys` | 0.3.76 → 0.3.98 | 1554 | `gen_AbortController.rs`, `gen_AbortSignal.rs`, `gen_AbstractRange.rs` … +1551 |
+
+Work them with `cargo vet diff <crate> <from> <to> --mode=local`, then
+`cargo vet certify <crate> <from> <to>` once satisfied. The first dozen touch a single
+source file each.
+

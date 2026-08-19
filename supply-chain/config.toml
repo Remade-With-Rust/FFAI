@@ -218,10 +218,6 @@ version = "0.8.22"
 criteria = "safe-to-deploy"
 
 [[exemptions.crypto-common]]
-version = "0.1.7"
-criteria = "safe-to-deploy"
-
-[[exemptions.crypto-common]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
 
@@ -405,23 +401,7 @@ criteria = "safe-to-deploy"
 version = "0.3.33"
 criteria = "safe-to-deploy"
 
-[[exemptions.futures-core]]
-version = "0.3.33"
-criteria = "safe-to-deploy"
-
 [[exemptions.futures-executor]]
-version = "0.3.33"
-criteria = "safe-to-deploy"
-
-[[exemptions.futures-io]]
-version = "0.3.33"
-criteria = "safe-to-deploy"
-
-[[exemptions.futures-macro]]
-version = "0.3.33"
-criteria = "safe-to-deploy"
-
-[[exemptions.futures-sink]]
 version = "0.3.33"
 criteria = "safe-to-deploy"
 
@@ -799,10 +779,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.quinn-proto]]
 version = "0.11.16"
-criteria = "safe-to-deploy"
-
-[[exemptions.quinn-udp]]
-version = "0.5.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
@@ -1295,10 +1271,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy-derive]]
 version = "0.8.55"
-criteria = "safe-to-deploy"
-
-[[exemptions.zerofrom]]
-version = "0.1.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.zeroize]]

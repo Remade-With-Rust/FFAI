@@ -1,7 +1,59 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.crypto-common]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.1.6 -> 0.1.7"
+notes = "Delta audit. COMPLETE diff reviewed and it touches no source files - only manifest/metadata/docs (Cargo.toml Cargo.toml.orig CHANGELOG.md ). No code, no unsafe, no build script, no new dependency introduced by this delta."
+
+[[audits.crypto-common]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.1.6 -> 0.1.7"
+notes = "Delta audit. Complete diff reviewed: Cargo.toml, Cargo.toml.orig and CHANGELOG.md only. No source files touched, no code change, no unsafe, no new dependency."
+
+[[audits.futures-core]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Delta audit. Complete diff reviewed: version string bumped in Cargo.toml and Cargo.toml.orig. No source changes, no unsafe, no new imports, no build script, no capability change."
+
+[[audits.futures-io]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.3.31 -> 0.3.33"
+notes = "Delta audit. Complete diff reviewed: Cargo.toml and Cargo.toml.orig ONLY, no source files touched. Changes are version bump, addition of autolib = false, and reordering of the existing [features] block. Feature set unchanged (default/std/unstable). No code, no unsafe, no new dependency."
+
+[[audits.futures-macro]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Delta audit. Complete diff reviewed: version string bumped in Cargo.toml and Cargo.toml.orig only. No source changes, no unsafe, no new imports, no build script, no capability change."
+
+[[audits.futures-sink]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.3.32 -> 0.3.33"
+notes = "Delta audit. Complete diff reviewed: version string bumped in Cargo.toml and Cargo.toml.orig only. No source changes, no unsafe, no new imports, no build script, no capability change."
+
+[[audits.quinn-udp]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.5.14 -> 0.5.15"
+notes = "Delta audit. Complete diff reviewed: Cargo.toml and Cargo.toml.orig ONLY, no source files touched. Changes are version bump, MSRV 1.74.1 -> 1.85, and widening the windows-sys range from <=0.60 to <=0.61. No code, no unsafe, no build script change, no new dependency."
+
+[[audits.zerofrom]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.1.7 -> 0.1.8"
+notes = "Delta audit. COMPLETE diff reviewed and it touches no source files - only manifest/metadata/docs (Cargo.toml Cargo.toml.orig ). No code, no unsafe, no build script, no new dependency introduced by this delta."
+
+[[audits.zerofrom]]
+who = "Claude Opus 5 (AI agent; automated review directed by Tim Almond, not independently human-verified)"
+criteria = "safe-to-deploy"
+delta = "0.1.7 -> 0.1.8"
+notes = "Delta audit. Complete diff reviewed: Cargo.toml and Cargo.toml.orig only, no source files touched. Version/metadata churn. No code, no unsafe, no new dependency."
 
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"
