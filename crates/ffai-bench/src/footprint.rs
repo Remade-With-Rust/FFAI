@@ -382,6 +382,13 @@ mod imp {
     /// not available and the gate skips rather than reporting a partial one.
     pub struct Job;
 
+    // The non-Windows stub. Every method is a constant-valued placeholder, so
+    // clippy::pedantic wants `#[must_use]` on all of them - but ONLY here: the
+    // Windows impl returns real handles and does not trip the lint. Annotating
+    // the stub to match a lint the real implementation never fires would be
+    // noise, so it is allowed at the impl with the reason recorded.
+    // Surfaced by the first Linux CI run, never by a local Windows build.
+    #[allow(clippy::must_use_candidate)]
     impl Job {
         pub fn create() -> Option<Self> {
             None

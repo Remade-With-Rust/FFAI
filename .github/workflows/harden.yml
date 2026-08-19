@@ -105,6 +105,13 @@ jobs:
       # a `BenchConfig` field added to ffai-bench - `cargo test --lib` never
       # compiles an example, so nothing noticed until cargo-mutants tried to
       # build the tree. An example that does not compile is dead documentation.
+      # nasm assembles OpenH264's SIMD kernels, reached through rusty_h264 in
+      # ffai-media. Without it the link fails with a wall of "undefined symbol:
+      # DeblockChromaEq4H_ssse3" and similar - a missing BUILD TOOL, not broken
+      # code. Windows developers never see it because the toolchain there ships
+      # an assembler.
+      - name: Install nasm (OpenH264 SIMD)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nasm
       - run: cargo check --workspace --all-targets
       # Lib AND integration tests.
       #
@@ -137,10 +144,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Run cargo-deny DIRECTLY, not via cargo-deny-action@v2. The action executes
+      # in a musl container that cannot resolve the toolchain this repo pins
+      # ("override toolchain '1.95.0-x86_64-unknown-linux-musl' is not
+      # installed"), and it then failed licences on `intel-mkl-src` - a crate
+      # `deny.toml` already excludes by setting `[graph] all-features = false`,
+      # because it is an optional `mkl`-feature backend with no SPDX expression.
+      # Running it here honours this repo's deny.toml and its own toolchain.
       - name: cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
       # Run cargo-audit DIRECTLY rather than via rustsec/audit-check@v2. That
       # action executes inside a musl container, where `rust-toolchain.toml`
       # pins 1.95.0 and rustup then fails with "override toolchain
