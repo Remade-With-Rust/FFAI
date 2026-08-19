@@ -75,3 +75,36 @@ jobs:
           path: |
             crates/ffai-mercury/fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
+
+  # Sanitizers (gate H-24). Nightly, not per-PR: `-Zbuild-std` rebuilds the whole
+  # standard library under instrumentation, which is minutes of work that would
+  # dominate a PR gate for a check that has never yet found a regression.
+  #
+  # TSan is the one that earns its keep here. It exercises both Class B unsafe
+  # sites - the rayon `SendPtr` sharing in tts::decoder_kernels and the strided
+  # heads in asr::flash_attn - which is exactly the claim R-002 says is argued in
+  # a comment rather than proven. Kani proves the addressing arithmetic; TSan
+  # watches the real threads. Neither alone is enough.
+  #
+  # MSan is deliberately absent: it needs every dependency instrumented including
+  # C/C++, and this graph carries onig_sys, aws-lc-sys and BLAS-family code that
+  # is not. An uninstrumented MSan run yields false positives, not findings.
+  sanitizers:
+    name: Sanitizers (TSan + ASan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with: { components: rust-src }
+      - uses: Swatinem/rust-cache@v2
+      - name: ThreadSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=thread
+          TSAN_OPTIONS: halt_on_error=1
+        run: cargo +nightly test -p ffai-mercury --lib -Zbuild-std --target x86_64-unknown-linux-gnu
+      - name: AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          # Leak detection is a different gate; this job is about memory errors.
+          ASAN_OPTIONS: detect_leaks=0
+        run: cargo +nightly test -p ffai-mercury --lib -Zbuild-std --target x86_64-unknown-linux-gnu
