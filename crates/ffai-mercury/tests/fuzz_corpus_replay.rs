@@ -112,3 +112,46 @@ fn lexicon_parse_corpus_is_total() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The named regression seeds must SURVIVE corpus minimisation.
+///
+/// `cargo fuzz cmin` minimises for COVERAGE: it keeps a smallest set of inputs
+/// reaching the same edges and deletes the rest. That is the right objective for
+/// fuzzing throughput and the wrong one for regressions, because a seed's value
+/// is not the coverage it adds — it is that this exact input once crashed us.
+///
+/// Running cmin on 2026-08-18 silently deleted all twelve named seeds, including
+/// `mel_compute/empty_REGRESSION_oob_panic`, and afterwards the corpus contained
+/// no empty input at all — so the very defect that motivated the mel fuzz target
+/// had stopped being tested. Restored, and pinned here.
+///
+/// If you minimise the corpus, re-add these afterwards. The union is the corpus,
+/// not the minimised set.
+#[test]
+fn named_regression_seeds_survive_minimisation() {
+    const REQUIRED: &[(&str, &str)] = &[
+        ("mel_compute", "empty_REGRESSION_oob_panic"),
+        ("normalize_text", "REGRESSION_20_digit_overflow"),
+        ("normalize_text", "REGRESSION_leading_zeros"),
+        ("onnx_parse", "REGRESSION_dims_overflow"),
+        ("onnx_parse", "REGRESSION_dims_product_wraps"),
+        ("onnx_parse", "REGRESSION_field_number_aliasing"),
+    ];
+    let mut missing = Vec::new();
+    for (target, name) in REQUIRED {
+        if !corpus_dir(target).join(name).is_file() {
+            missing.push(format!("{target}/{name}"));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "named regression seeds are gone - did something run `cargo fuzz cmin`? \
+         Restore them; coverage-minimisation is not allowed to delete a crasher: {missing:?}"
+    );
+
+    // The mel target's defect was specifically an EMPTY input, so assert the
+    // property rather than just the filename.
+    let empty = std::fs::read(corpus_dir("mel_compute").join("empty_REGRESSION_oob_panic"))
+        .expect("empty regression seed readable");
+    assert!(empty.is_empty(), "the empty-input regression seed is no longer empty");
+}
