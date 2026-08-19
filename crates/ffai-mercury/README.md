@@ -287,7 +287,7 @@ crate's [threat model](docs/threat-model.md).
 
 **Tier** critical-path · **Audited** 2026-08-15 (survey) · **v1.0.0 gates** 12/16 · [Full checklist](docs/plans/use-protection-please.md)
 
-`███████████████░░░░░` **76%** &nbsp;·&nbsp; 32 Completed · 0 Scheduled · 10 Incomplete · 13 N/A
+`███████████████░░░░░` **79%** &nbsp;·&nbsp; 33 Completed · 0 Scheduled · 9 Incomplete · 13 N/A
 
 | Phase | ✅ Completed | 🗓 Scheduled | ⬜ Incomplete | · N/A |
 |---|--:|--:|--:|--:|
@@ -298,13 +298,13 @@ crate's [threat model](docs/threat-model.md).
 | 4 — Static analysis | 1 | 0 | 0 | 0 |
 | 5 — Dynamic analysis | 2 | 0 | 1 | 0 |
 | 6 — Fuzzing and properties | 2 | 0 | 2 | 0 |
-| 7 — Formal verification | 0 | 0 | 1 | 0 |
+| 7 — Formal verification | 1 | 0 | 0 | 0 |
 | 8 — Build and binary | 0 | 0 | 0 | 2 |
 | 9 — Runtime privilege | 0 | 0 | 0 | 1 |
 | 10 — Cryptography | 0 | 0 | 0 | 3 |
 | 11 — CI/CD, release, and operations | 4 | 0 | 1 | 0 |
 | 12 — Compliance controls | 5 | 0 | 2 | 7 |
-| **Total** | **32** | **0** | **10** | **13** |
+| **Total** | **33** | **0** | **9** | **13** |
 
 **Compliance** — *technical controls evidenced by this audit. NOT a certification, an attestation, or an auditor's opinion.*
 

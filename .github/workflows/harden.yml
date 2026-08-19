@@ -182,14 +182,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install --locked kani-verifier && cargo kani setup
-      # ADVISORY on arrival: the harnesses in crates/ffai-mercury/src/proofs.rs are
-      # written and compile, but Kani does not run on Windows so they have never
-      # been executed. The first green run on this runner is what flips this to
-      # blocking - claiming a proof nobody has run is worse than no proof.
-      # TO FLIP: delete continue-on-error once this passes. Target 2026-09-30.
+      # BLOCKING since 2026-08-18. All 13 harnesses were executed under Kani
+      # 0.67.0 (on WSL2 Ubuntu, since Kani does not run on Windows) and every one
+      # verified, so this no longer claims a proof nobody has run.
+      #
+      # Two flags/facts this run cost, so nobody has to rediscover them:
+      #
+      # --ignore-global-asm: the `pulp` crate (SIMD, via gemm) contains global
+      #   asm, which Kani cannot translate and refuses outright. It is a
+      #   DEPENDENCY, not code under proof - every harness here reasons about
+      #   pure integer index arithmetic - but Kani's warning that "verification
+      #   results may be impacted" is retained honestly rather than hidden.
+      #
+      # MSRV: Kani 0.67 bundles rustc 1.93-nightly while this workspace declares
+      #   1.95, and that is not merely a manifest number - `asr::vad` calls
+      #   `f32::mul_add` inside a `const fn`, stabilised in 1.95. lib.rs carries
+      #   `#![cfg_attr(kani, feature(const_mul_add))]` for exactly this; the
+      #   attribute does not exist on a normal build. If Kani ships a newer rustc
+      #   the gate becomes a no-op and can go.
       - name: Verify
-        continue-on-error: true
-        run: cargo kani -p ffai-mercury
+        run: cargo kani -p ffai-mercury -Z unstable-options --ignore-global-asm
 
   invariants:
     name: Project invariants
