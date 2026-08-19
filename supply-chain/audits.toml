@@ -69,11 +69,39 @@ user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-11-27"
 end = "2027-08-18"
 
+[[trusted.bytes]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-01-11"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.cc]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-01"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.cc]]
 criteria = "safe-to-deploy"
 user-id = 2915 # Amanieu d'Antras (Amanieu)
 start = "2024-02-20"
 end = "2027-08-18"
+
+[[trusted.cc]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2022-10-29"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.cfg-if]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.clap]]
 criteria = "safe-to-deploy"
@@ -99,6 +127,20 @@ user-id = 6743 # Ed Page (epage)
 start = "2022-04-15"
 end = "2027-08-18"
 
+[[trusted.cmake]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-26"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.cmake]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2022-10-29"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.colorchoice]]
 criteria = "safe-to-deploy"
 user-id = 6743 # Ed Page (epage)
@@ -123,17 +165,59 @@ user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2024-06-20"
 end = "2027-08-18"
 
+[[trusted.either]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-04-02"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.filetime]]
 criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-04-23"
 end = "2027-08-18"
 
+[[trusted.find-msvc-tools]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2025-08-29"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.flate2]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-14"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.flate2]]
+criteria = "safe-to-deploy"
+user-id = 980 # Sebastian Thiel (Byron)
+start = "2023-08-15"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.flate2]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2022-11-24"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.foreign-types-macros]]
 criteria = "safe-to-deploy"
 user-id = 5 # Steven Fackler (sfackler)
 start = "2019-03-04"
 end = "2027-08-18"
+
+[[trusted.glob]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2023-01-06"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.globset]]
 criteria = "safe-to-deploy"
@@ -249,17 +333,58 @@ user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-05-02"
 end = "2027-08-18"
 
+[[trusted.jobserver]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-15"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.jobserver]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-07-23"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.js-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.libc]]
 criteria = "safe-to-deploy"
 user-id = 2915 # Amanieu d'Antras (Amanieu)
 start = "2021-01-27"
 end = "2027-08-18"
 
+[[trusted.libc]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-08-15"
+end = "2027-08-19"
+
+[[trusted.libm]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-05-14"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.libm]]
 criteria = "safe-to-deploy"
 user-id = 2915 # Amanieu d'Antras (Amanieu)
 start = "2022-02-06"
 end = "2027-08-18"
+
+[[trusted.libm]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-10-26"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.linux-raw-sys]]
 criteria = "safe-to-deploy"
@@ -284,6 +409,20 @@ criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-09-09"
 end = "2027-08-18"
+
+[[trusted.mio]]
+criteria = "safe-to-deploy"
+user-id = 10
+start = "2019-05-15"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.mio]]
+criteria = "safe-to-deploy"
+user-id = 6025 # Thomas de Zeeuw (Thomasdezeeuw)
+start = "2019-12-17"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.monostate]]
 criteria = "safe-to-deploy"
@@ -332,6 +471,13 @@ criteria = "safe-to-deploy"
 user-id = 6743 # Ed Page (epage)
 start = "2025-05-22"
 end = "2027-08-18"
+
+[[trusted.openssl-probe]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2020-08-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.paste]]
 criteria = "safe-to-deploy"
@@ -471,11 +617,46 @@ user-id = 6743 # Ed Page (epage)
 start = "2023-01-20"
 end = "2027-08-18"
 
+[[trusted.slab]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-10-13"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.socket2]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-05-06"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.socket2]]
+criteria = "safe-to-deploy"
+user-id = 6025 # Thomas de Zeeuw (Thomasdezeeuw)
+start = "2020-09-09"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.syn]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-03-01"
 end = "2027-08-18"
+
+[[trusted.tar]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.target-lexicon]]
+criteria = "safe-to-deploy"
+user-id = 696 # Nick Fitzgerald (fitzgen)
+start = "2024-07-30"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.target-lexicon]]
 criteria = "safe-to-deploy"
@@ -506,6 +687,27 @@ criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2021-01-14"
 end = "2027-08-18"
+
+[[trusted.tokio]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-12-25"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.tokio-macros]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-10-26"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.tokio-util]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-01-12"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.toml]]
 criteria = "safe-to-deploy"
@@ -543,6 +745,20 @@ user-id = 359 # Sean McArthur (seanmonstar)
 start = "2024-09-23"
 end = "2027-08-18"
 
+[[trusted.tower-layer]]
+criteria = "safe-to-deploy"
+user-id = 10
+start = "2019-04-27"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.tracing-subscriber]]
+criteria = "safe-to-deploy"
+user-id = 10
+start = "2025-08-29"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
 [[trusted.unicase]]
 criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
@@ -575,9 +791,58 @@ end = "2027-08-18"
 
 [[trusted.wasi]]
 criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2020-06-03"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.wasi]]
+criteria = "safe-to-deploy"
 user-id = 6825 # Dan Gohman (sunfishcode)
 start = "2019-07-22"
 end = "2027-08-18"
+
+[[trusted.wasm-bindgen]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.wasm-bindgen-futures]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.wasm-bindgen-macro]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.wasm-bindgen-macro-support]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.wasm-bindgen-shared]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
+
+[[trusted.web-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.winapi-util]]
 criteria = "safe-to-deploy"
@@ -764,6 +1029,13 @@ criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2021-12-11"
 end = "2027-08-18"
+
+[[trusted.zlib-rs]]
+criteria = "safe-to-deploy"
+user-id = 1303
+start = "2024-02-23"
+end = "2027-08-19"
+notes = "Trusted publisher, surfaced by 'cargo vet suggest' 2026-08-18: this project and/or mozilla, bytecode-alliance, isrg, ariel-os already trust this publisher. Entry is publisher-scoped, so it certifies only versions this user actually published."
 
 [[trusted.zmij]]
 criteria = "safe-to-deploy"
