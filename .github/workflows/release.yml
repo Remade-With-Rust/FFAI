@@ -39,7 +39,20 @@ jobs:
       - name: Verify the tag carries a signature
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          if ! git cat-file tag "$TAG" 2>/dev/null | grep -qE "BEGIN (PGP|SSH) SIGNATURE"; then
+          # Fetch the tag OBJECT explicitly. actions/checkout leaves a detached
+          # HEAD at the commit, and `git cat-file tag <name>` then finds nothing -
+          # which this check previously read as "unsigned" and failed a correctly
+          # signed tag. Verified against GitHub's own API, which reported the tag
+          # as an annotated object with a signature present.
+          git fetch --force --no-recurse-submodules origin             "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null || true
+
+          OBJ="$(git rev-parse "refs/tags/${TAG}" 2>/dev/null || true)"
+          if [ -z "$OBJ" ] || [ "$(git cat-file -t "$OBJ" 2>/dev/null)" != "tag" ]; then
+            echo "::error::Tag $TAG is not an ANNOTATED tag, so it cannot carry a signature."
+            echo "Re-tag with: git tag -s $TAG"
+            exit 1
+          fi
+          if ! git cat-file tag "$OBJ" | grep -qE "BEGIN (PGP|SSH) SIGNATURE"; then
             echo "::error::Tag $TAG is not signed. Re-tag with: git tag -s $TAG"
             echo "A release nobody can attribute is a supply-chain gap, not a formality."
             exit 1
@@ -88,6 +101,17 @@ jobs:
       # cargo-auditable embeds the dependency list INSIDE the binary, so the
       # artifact carries its own bill of materials even when separated from the
       # release page. `cargo audit bin` can then scan the shipped file directly.
+      # nasm assembles OpenH264's SIMD kernels, pulled in through rusty_h264 in
+      # ffai-media. Without it the ffai-cli link dies with "undefined symbol:
+      # McChromaWidthEq4_mmx" and a wall of siblings. Linux and macOS runners
+      # ship no assembler; the Windows toolchain does, which is why this only
+      # ever breaks on the other two.
+      - name: Install nasm (OpenH264 SIMD)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nasm
+      - name: Install nasm (macOS)
+        if: runner.os == 'macOS'
+        run: brew install nasm
       - run: cargo install cargo-auditable --locked
       - name: Build with an embedded dependency manifest
         run: cargo auditable build --release -p ffai-cli --target ${{ matrix.target }}
