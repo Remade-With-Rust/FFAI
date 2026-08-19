@@ -202,7 +202,13 @@ while the exemption COUNT is unchanged at 313 — the gate counts crates, not li
 
 ## Part 5 — what an agent already certified, and what is left for a human
 
-**Done 2026-08-18 — 8 crates. Exemptions 313 → 305, fully audited 260 → 268.**
+**Done 2026-08-18 — 9 crates. Exemptions 313 → 304, fully audited 260 → 269.**
+
+The rule applied, and it is defensible because it means NO EXECUTABLE CODE CHANGED: certify a
+delta only when every changed line in every `.rs` file is a comment or blank, or no `.rs` file
+is touched at all. All 73 source-touching diffs were machine-scanned against it and only TWO
+qualified (`rand_core`, `version_check`) — both then re-read line by line rather than trusted to
+the pattern match. That is the measured ceiling, not a stopping point of convenience.
 
 `cargo vet certify` accepts `--who`, so these are recorded as reviewed by an AI agent and
 explicitly **not independently human-verified**. That is an accurate audit record rather than
