@@ -18,14 +18,19 @@
 use std::path::{Path, PathBuf};
 
 fn corpus_dir(target: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz").join("corpus").join(target)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fuzz")
+        .join("corpus")
+        .join(target)
 }
 
 /// Read every input for a target. Returns an empty vec if the directory is
 /// absent, so a shallow checkout does not fail the suite.
 fn inputs(target: &str) -> Vec<(String, Vec<u8>)> {
     let dir = corpus_dir(target);
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
     let mut out: Vec<(String, Vec<u8>)> = entries
         .filter_map(Result::ok)
         .filter(|e| e.path().is_file())
@@ -44,7 +49,10 @@ fn inputs(target: &str) -> Vec<(String, Vec<u8>)> {
 #[test]
 fn onnx_parse_corpus_is_total() {
     let cases = inputs("onnx_parse");
-    assert!(!cases.is_empty(), "onnx_parse corpus is empty - regression seeds lost?");
+    assert!(
+        !cases.is_empty(),
+        "onnx_parse corpus is empty - regression seeds lost?"
+    );
     for (name, bytes) in cases {
         let _ = ffai_mercury::tts::onnx::parse(&bytes);
         // Reaching here without unwinding IS the assertion.
@@ -59,7 +67,10 @@ fn onnx_parse_corpus_is_total() {
 fn mel_compute_corpus_holds_shape_contract() {
     use ffai_mercury::asr::mel::MelSpectrogram;
     let cases = inputs("mel_compute");
-    assert!(!cases.is_empty(), "mel_compute corpus is empty - regression seeds lost?");
+    assert!(
+        !cases.is_empty(),
+        "mel_compute corpus is empty - regression seeds lost?"
+    );
     let m = MelSpectrogram::new(80);
     for (name, bytes) in cases {
         let samples: Vec<f32> = bytes
@@ -86,9 +97,14 @@ fn mel_compute_corpus_holds_shape_contract() {
 fn normalize_text_corpus_is_total_and_deterministic() {
     use ffai_mercury::tts::normalize::normalize;
     let cases = inputs("normalize_text");
-    assert!(!cases.is_empty(), "normalize_text corpus is empty - regression seeds lost?");
+    assert!(
+        !cases.is_empty(),
+        "normalize_text corpus is empty - regression seeds lost?"
+    );
     for (name, bytes) in cases {
-        let Ok(text) = std::str::from_utf8(&bytes) else { continue };
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
         let a = normalize(text);
         let b = normalize(text);
         assert_eq!(a, b, "{name}: normalize is not deterministic");
@@ -101,7 +117,10 @@ fn normalize_text_corpus_is_total_and_deterministic() {
 #[test]
 fn lexicon_parse_corpus_is_total() {
     let cases = inputs("lexicon_parse");
-    assert!(!cases.is_empty(), "lexicon_parse corpus is empty - regression seeds lost?");
+    assert!(
+        !cases.is_empty(),
+        "lexicon_parse corpus is empty - regression seeds lost?"
+    );
     let dir = std::env::temp_dir().join(format!("ffai-lexicon-replay-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     for (name, bytes) in cases {
@@ -153,5 +172,8 @@ fn named_regression_seeds_survive_minimisation() {
     // property rather than just the filename.
     let empty = std::fs::read(corpus_dir("mel_compute").join("empty_REGRESSION_oob_panic"))
         .expect("empty regression seed readable");
-    assert!(empty.is_empty(), "the empty-input regression seed is no longer empty");
+    assert!(
+        empty.is_empty(),
+        "the empty-input regression seed is no longer empty"
+    );
 }

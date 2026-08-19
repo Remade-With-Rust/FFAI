@@ -170,7 +170,14 @@ jobs:
       # fails for those reasons and not because the code is wrong, which is
       # exactly the sort of red CI that teaches people to ignore CI.
       # TO WIDEN: move a test into miri_safe.rs once it avoids SIMD and FFI.
-      - run: cargo miri test -p ffai-mercury --test miri_safe
+      #
+      # `cargo +nightly` is REQUIRED, not decorative. `rust-toolchain.toml` pins
+      # 1.95.0 and rustup honours that file over whatever the job installed, so a
+      # bare `cargo miri` resolves to 1.95.0 and dies with "the 'miri' component
+      # ... is not available for the '1.95.0' toolchain". Miri ships on nightly
+      # only. This was invisible until the first PR, because the workflow triggers
+      # on push to master/main and pull_request - never on a topic-branch push.
+      - run: cargo +nightly miri test -p ffai-mercury --test miri_safe
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
@@ -201,7 +208,22 @@ jobs:
       #   attribute does not exist on a normal build. If Kani ships a newer rustc
       #   the gate becomes a no-op and can go.
       - name: Verify
-        run: cargo kani -p ffai-mercury -Z unstable-options --ignore-global-asm
+        run: |
+          # Kani 0.67 bundles rustc 1.93-nightly; this workspace declares MSRV
+          # 1.95. Cargo refuses on the DECLARED VERSION ALONE, before compiling
+          # anything, so the run dies with "rustc 1.93.0-nightly is not supported
+          # by the following packages". Relax the declaration for this step only
+          # and restore it immediately - the code itself still builds, because
+          # lib.rs gates the one 1.95 feature it needs behind
+          # `#![cfg_attr(kani, feature(const_mul_add))]`.
+          #
+          # Delete this dance the moment Kani ships a rustc >= the workspace MSRV.
+          cp Cargo.toml /tmp/Cargo.toml.bak
+          sed -i 's/^rust-version = .*/rust-version = "1.85"/' Cargo.toml
+          cargo kani -p ffai-mercury -Z unstable-options --ignore-global-asm
+          status=$?
+          cp /tmp/Cargo.toml.bak Cargo.toml
+          exit $status
 
   invariants:
     name: Project invariants
