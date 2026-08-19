@@ -151,3 +151,41 @@ that is a real supply-chain risk for a multi-repo org. Otherwise setting it `fal
 for the workspace members removes 10 at a stroke, and the 16 siblings are certifiable
 by whoever maintains them, which is this org.
 
+
+## Part 4 — the 2.1M-line boulder is blocked UPSTREAM, not by effort
+
+`aws-lc-sys` is 2,108,351 lines: **39% of the entire audit backlog, one crate**. It is C
+and assembly, and it is the single best target for removal rather than review — the same
+move that took the graph 320 → 154 when `fetch` was gated.
+
+It arrives by exactly one path:
+
+```
+ffai-models --(fetch)--> hf-hub --> reqwest --> hyper-rustls --> rustls --> aws-lc-rs --> aws-lc-sys
+```
+
+**It cannot be removed from this repository.** The evidence, so nobody re-runs the search:
+
+| crate | what it offers | verdict |
+|---|---|---|
+| `rustls` 0.23 | pluggable provider: `aws-lc-rs` **or** `ring` | fine in principle |
+| `reqwest` 0.13.4 | has **`rustls-no-provider`** — rustls with no provider forced | the hook exists |
+| `hf-hub` 1.0.0 | only `rustls-tls = ["reqwest/rustls"]`, and `reqwest/rustls` = `__rustls-aws-lc-rs` | **the blocker** |
+
+Cargo features are **additive**: once `hf-hub` enables `reqwest/rustls`, nothing downstream
+can un-enable the provider it drags in. Adding `rustls = { features = ["ring"] }` here does
+not help — it adds `ring` alongside `aws-lc-rs`, it does not replace it.
+
+**The fix is a one-line upstream contribution**, and it is worth making:
+
+```toml
+# huggingface/hf-hub Cargo.toml
+rustls-tls-no-provider = ["reqwest/rustls-no-provider"]
+```
+
+With that feature available, this repo switches to it and **39% of the audit backlog
+disappears without a single line being read**. `ring` (262k lines) is already present in the
+all-features graph via `ureq → ocipkg → intel-mkl-src`, so it costs no new dependency.
+
+Until then, `aws-lc-sys` stays. Note it is `fetch`-only, so it is absent from a default
+build entirely — it inflates the audit number far more than it inflates the shipped risk.
