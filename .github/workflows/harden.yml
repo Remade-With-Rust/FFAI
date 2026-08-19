@@ -106,8 +106,30 @@ jobs:
       # compiles an example, so nothing noticed until cargo-mutants tried to
       # build the tree. An example that does not compile is dead documentation.
       - run: cargo check --workspace --all-targets
-      # Lib + integration tests. Model-dependent tests skip when fixtures are absent.
-      - run: cargo test --workspace --lib
+      # Lib AND integration tests.
+      #
+      # This said "Lib + integration tests" while running `--lib`, which runs
+      # NEITHER integration tests NOR doc tests. Everything under `tests/` -
+      # properties.rs, miri_safe.rs, the oracle suites, the fuzz corpus replay -
+      # had never run in CI at all.
+      #
+      # The cause was two oracle tests that asserted `ran > 0` and so went red on
+      # any machine without model fixtures. Pinning to `--lib` silenced them and
+      # took every other integration test with it. Those two now skip cleanly
+      # when fixtures are absent and fail loudly under FFAI_REQUIRE_ORACLES=1,
+      # which is set below so a runner that DOES have fixtures cannot pass
+      # vacuously.
+      #
+      # 368 tests across 22 binaries, versus the lib-only subset before.
+      - run: cargo test --workspace --lib --tests
+      # Belt and braces: on a runner with fixtures present, a silent skip is a
+      # regression. Harmless where they are absent - the guard only fires if the
+      # variable is set AND nothing ran.
+      - name: Oracle suites must not skip vacuously when fixtures exist
+        if: hashFiles('corpora/cache/*.safetensors') != ''
+        env:
+          FFAI_REQUIRE_ORACLES: '1'
+        run: cargo test -p ffai-diana --tests
 
   supply-chain:
     name: Supply chain (deny + audit)

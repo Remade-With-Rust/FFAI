@@ -255,11 +255,18 @@ fn full_graph_matches_the_reference_on_every_converted_tier() {
             ran.push(tier);
         }
     }
-    assert!(
-        !ran.is_empty(),
-        "no tier could be oracled — convert at least one checkpoint with \
-         tools/diana_convert.py before trusting this suite"
-    );
+    // Same split as depth_oracle.rs: "nothing to verify" is not "verification
+    // failed". Unconditionally asserting here made this test red on every machine
+    // without converted checkpoints, which is what pinned CI to `--lib` and so
+    // stopped ALL integration tests in the workspace from running.
+    //
+    // FFAI_REQUIRE_ORACLES=1 restores the hard failure where fixtures are expected.
+    if ran.is_empty() {
+        let required = std::env::var("FFAI_REQUIRE_ORACLES").is_ok_and(|v| v != "0");
+        assert!(!required, "FFAI_REQUIRE_ORACLES is set but no tier could be oracled");
+        eprintln!("oracles: no converted checkpoints present, skipping");
+        return;
+    }
     eprintln!("oracled tiers: {ran:?}");
 }
 

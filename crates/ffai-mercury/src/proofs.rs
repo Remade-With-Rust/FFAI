@@ -17,6 +17,7 @@
 //!
 //!     cargo kani --harness <name>
 
+#[cfg(kani)]
 use crate::asr::mel;
 
 /// `pad_or_trim_to` returns EXACTLY `target`, for every input length and target.
@@ -262,7 +263,7 @@ fn proof_flash_head_writes_are_in_bounds() {
 /// `blk` bytes each. Mirrors the loop: `base = b * blk`, steps of 32, each step
 /// reading 32 bytes from `base + o`.
 #[cfg(any(kani, test))]
-pub(crate) const fn int8_last_byte_read(nblocks: usize, blk: usize) -> usize {
+const fn int8_last_byte_read(nblocks: usize, blk: usize) -> usize {
     // Final block, final 32-lane step, final byte of that step.
     let base = (nblocks - 1) * blk;
     let steps = blk.div_ceil(32);
