@@ -1,4 +1,4 @@
-//! Explicit AVX2 SiLU — the last unpruned lever on the latency gate.
+//! Explicit AVX2 `SiLU` — the last unpruned lever on the latency gate.
 //!
 //! # Why this one and not the others
 //!
@@ -34,6 +34,7 @@ use std::arch::x86_64::*;
 /// baseline so that a published binary runs everywhere, which is exactly why
 /// `-C target-cpu=native` was measured and pruned as a global answer.
 #[inline]
+#[must_use] 
 pub fn available() -> bool {
     #[cfg(target_arch = "x86_64")]
     {
@@ -45,7 +46,7 @@ pub fn available() -> bool {
     }
 }
 
-/// SiLU over `src` into `dst`, eight lanes at a time.
+/// `SiLU` over `src` into `dst`, eight lanes at a time.
 ///
 /// # Safety
 ///
@@ -60,7 +61,7 @@ pub unsafe fn silu_into(src: &[f32], dst: &mut [f32]) {
     unsafe { silu_ptr(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
 }
 
-/// SiLU over a buffer IN PLACE — what a fused epilogue needs.
+/// `SiLU` over a buffer IN PLACE — what a fused epilogue needs.
 ///
 /// The kernel loads lane `i` before storing lane `i`, so `src == dst` is
 /// correct. It cannot be written as `silu_into(x, x)` because that would hold
@@ -84,7 +85,7 @@ pub unsafe fn silu_in_place(x: &mut [f32]) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[allow(unsafe_code)]
-unsafe fn silu_ptr(src: *const f32, dst: *mut f32, n: usize) {
+unsafe fn silu_ptr(src: *const f32, dst: *mut f32, n: usize) { unsafe {
     // The same constants the scalar kernel derives, for the same reason:
     // hand-typed decimals here once silently selected a different f32 and
     // broke the oracle, so the compiler computes them.
@@ -144,7 +145,7 @@ unsafe fn silu_ptr(src: *const f32, dst: *mut f32, n: usize) {
     for j in i..n {
         *dst.add(j) = crate::silu::silu_scalar_pub(*src.add(j));
     }
-}
+}}
 
 #[cfg(not(target_arch = "x86_64"))]
 #[allow(unsafe_code)]

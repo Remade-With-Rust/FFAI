@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
 
 use ffai_core::engine::{DepthEngine, DepthOptions, DepthOutput, EngineInfo, EngineStatus, Task};
@@ -41,7 +41,7 @@ pub struct Yolo26Depth {
 
 impl Yolo26Depth {
     pub fn build(tier: &str, geometry: Geometry, manifest_dir: impl Into<PathBuf>) -> Self {
-        Yolo26Depth {
+        Self {
             manifest_dir: manifest_dir.into(),
             geometry,
             tier: tier.to_string(),
@@ -86,7 +86,7 @@ impl Yolo26Depth {
         let model = build(vb, cfg, device)?;
         let cell = OnceLock::new();
         let _ = cell.set(Ok(model));
-        Ok(Yolo26Depth {
+        Ok(Self {
             manifest_dir: PathBuf::new(),
             geometry,
             tier: tier.to_string(),

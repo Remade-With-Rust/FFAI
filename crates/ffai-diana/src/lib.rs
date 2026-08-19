@@ -1,4 +1,4 @@
-//! # Diana — FFai's detection component
+//! # Diana — `FFai`'s detection component
 //!
 //! Named for the Roman goddess of the hunt — fast, precise detection —
 //! keeping the pantheon Roman alongside Mercury (voice), Carmenta (the
@@ -36,7 +36,7 @@
 //!   **inference uses one2one only**. The conversion drops the other.
 //! - Ultralytics shares one `nn.SiLU()` across every default-activation
 //!   `Conv`, so a module walk under-reports activations. 93 Convs have
-//!   SiLU, 9 have none — recorded per-Conv in the arch fixture.
+//!   `SiLU`, 9 have none — recorded per-Conv in the arch fixture.
 
 pub mod backbone;
 pub mod blocks;

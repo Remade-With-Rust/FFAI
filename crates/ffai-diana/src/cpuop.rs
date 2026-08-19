@@ -50,7 +50,7 @@ where
     F: Fn(&[f32], &Layout) -> Result<(Vec<f32>, Shape)>,
 {
     pub fn new(name: &'static str, f: F) -> Self {
-        SliceOp { name, f }
+        Self { name, f }
     }
 
     /// Apply to `x` without building a backward graph — inference only.

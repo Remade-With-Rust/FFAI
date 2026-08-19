@@ -203,13 +203,11 @@ fn main() {
     let mut prev_tess: Option<String> = None;
     for (i, path) in paths.iter().enumerate() {
         let text = batch.text_for(path).unwrap_or_default().to_string();
-        if truths[i] == truths.get(i.wrapping_sub(1)).map(String::as_str).unwrap_or("") {
-            if let Some(prev) = &prev_tess {
-                if *prev != text {
+        if truths[i] == truths.get(i.wrapping_sub(1)).map_or("", String::as_str)
+            && let Some(prev) = &prev_tess
+                && *prev != text {
                     tess_churn += 1;
                 }
-            }
-        }
         prev_tess = Some(text);
     }
     for c in &batch.clips {
@@ -240,13 +238,13 @@ fn main() {
     println!("  churn (engine):         {churn} of {unchanged_pairs} unchanged pairs");
     println!("  churn (tesseract):      {tess_churn} of {unchanged_pairs} (no change gate)");
     println!("  CER on change frames:   {:.2}%", mean_cer * 100.0);
-    println!("  batch parity:           {} breaks / {parity_checked} checked", parity_break);
+    println!("  batch parity:           {parity_break} breaks / {parity_checked} checked");
     println!(
         "  auto-ROI harvest:       bands cover {:.1}% of post-calibration boxes at {:.1}% of frame area \
          => detection-pixel ceiling {:.1}%",
         coverage * 100.0,
         band_area * 100.0,
-        (1.0 - band_area as f64) * 100.0
+        (1.0 - f64::from(band_area)) * 100.0
     );
 
     // ---- gates (M-C2 wording) + ledger ----

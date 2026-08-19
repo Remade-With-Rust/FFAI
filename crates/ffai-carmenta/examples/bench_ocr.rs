@@ -35,7 +35,7 @@ fn main() {
         match ReferenceFile::load(refs_path) {
             Ok(f) => f
                 .for_task("ocr")
-                .filter(|r| only.is_empty() || only.iter().any(|n| *n == r.name))
+                .filter(|r| only.is_empty() || only.contains(&r.name))
                 .cloned()
                 .collect(),
             Err(e) => {

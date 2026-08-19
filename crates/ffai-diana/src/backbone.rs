@@ -85,7 +85,7 @@ impl Backbone {
         // the layer table it mirrors.
         let (c64, c128, c256, c512, c1024) =
             (d.ch(64), d.ch(128), d.ch(256), d.ch(512), d.ch(1024));
-        Ok(Backbone {
+        Ok(Self {
             l0: ConvAct::new(m.pp(0), 3, c64, 3, 2, 1, true)?,
             l1: ConvAct::new(m.pp(1), c64, c128, 3, 2, 1, true)?,
             // `C3k2 [256, False, 0.25]` — e = 0.25 on the two shallow

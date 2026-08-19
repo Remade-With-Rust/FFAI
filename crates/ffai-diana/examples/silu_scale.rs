@@ -76,7 +76,7 @@ fn main() {
         if threads == 1 {
             BASE.with(|b| b.set(best));
         }
-        let sp = BASE.with(|b| b.get()) / best;
+        let _sp = BASE.with(|b| b.get()) / best;
 
         // Cold arm, same thread count, same kernel, same wrapper.
         let mut cbest = f64::MAX;

@@ -1,16 +1,16 @@
-//! PP-OCRv5 mobile text detection on candle — DBNet head over a PP-LCNetV3
+//! PP-OCRv5 mobile text detection on candle — `DBNet` head over a PP-LCNetV3
 //! backbone and an RSEFPN neck (Apache-2.0, plan §7.1 audit).
 //!
 //! Why this exists alongside CRAFT: CRAFT is a VGG16 that emits character
 //! heatmaps we then have to reconstruct into word boxes, and §8.13 measured
-//! that reconstruction as a 16-point CER cause with median IoU 0.537 against
-//! ground truth. DBNet emits the regions directly, from 4.7 MB of weights.
+//! that reconstruction as a 16-point CER cause with median `IoU` 0.537 against
+//! ground truth. `DBNet` emits the regions directly, from 4.7 MB of weights.
 //! One brick, both open fronts.
 //!
 //! ## The weights are pre-fused, and that is load-bearing
 //!
 //! PP-LCNetV3 trains every convolution as a sum of parallel branches (an
-//! identity BatchNorm, an optional 1x1, and four kxk convs, each with its own
+//! identity `BatchNorm`, an optional 1x1, and four kxk convs, each with its own
 //! BN) scaled by a learnable affine. All of it is linear, so
 //! `tools/carmenta_mobiledet_fuse.py` collapses it offline — 905 tensors to
 //! 168 — and this module only ever sees plain convolutions. Nothing here knows
@@ -24,8 +24,8 @@
 //! against paddle's own exported program:
 //!
 //! - the backbone's squeeze-excitation uses paddle's **1/6** hardsigmoid slope;
-//! - the neck's squeeze-excitation uses PaddleOCR's **0.2**;
-//! - RSELayer applies its residual shortcut.
+//! - the neck's squeeze-excitation uses `PaddleOCR`'s **0.2**;
+//! - `RSELayer` applies its residual shortcut.
 //!
 //! They genuinely differ between backbone and neck. The uniform reading that
 //! the source text suggests ("0.2 everywhere") costs 0.55 of logit error —
@@ -99,13 +99,13 @@ impl RepConv {
         let vb = vb.pp(name);
         let cfg = Conv2dConfig { padding: k / 2, stride, groups, ..Default::default() };
         let act = if vb.contains_tensor("act.lab.scale") {
-            let s = vb.get(1, "act.lab.scale")?.to_vec1::<f32>()?[0] as f64;
-            let b = vb.get(1, "act.lab.bias")?.to_vec1::<f32>()?[0] as f64;
+            let s = f64::from(vb.get(1, "act.lab.scale")?.to_vec1::<f32>()?[0]);
+            let b = f64::from(vb.get(1, "act.lab.bias")?.to_vec1::<f32>()?[0]);
             Some((s, b))
         } else {
             None
         };
-        Ok(RepConv { conv: conv2d(cin, cout, k, cfg, vb)?, act })
+        Ok(Self { conv: conv2d(cin, cout, k, cfg, vb)?, act })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -117,7 +117,7 @@ impl RepConv {
     }
 }
 
-/// Squeeze-excitation: global average, two 1x1s with ReLU between, hardsigmoid,
+/// Squeeze-excitation: global average, two 1x1s with `ReLU` between, hardsigmoid,
 /// then a channel-wise rescale of the input.
 struct Se {
     conv1: Conv2d,
@@ -129,7 +129,7 @@ impl Se {
     fn new(vb: &VarBuilder, name: &str, ch: usize, reduced: usize, slope: f64) -> Result<Self> {
         let vb = vb.pp(name);
         let cfg = Conv2dConfig::default();
-        Ok(Se {
+        Ok(Self {
             conv1: conv2d(ch, reduced, 1, cfg, vb.pp("conv1"))?,
             conv2: conv2d(reduced, ch, 1, cfg, vb.pp("conv2"))?,
             slope,
@@ -150,7 +150,7 @@ struct Block {
     pw: RepConv,
 }
 
-/// RSELayer — a bias-free convolution followed by `x + se(x)`.
+/// `RSELayer` — a bias-free convolution followed by `x + se(x)`.
 struct RseLayer {
     conv: Conv2d,
     se: Se,
@@ -160,7 +160,7 @@ impl RseLayer {
     fn new(vb: &VarBuilder, name: &str, cin: usize, cout: usize, k: usize) -> Result<Self> {
         let vb = vb.pp(name);
         let cfg = Conv2dConfig { padding: k / 2, ..Default::default() };
-        Ok(RseLayer {
+        Ok(Self {
             conv: conv2d_no_bias(cin, cout, k, cfg, vb.pp("in_conv"))?,
             se: Se::new(&vb, "se_block", cout, cout / 4, NECK_SE_SLOPE)?,
         })
@@ -189,7 +189,7 @@ impl MobileDet {
         let stem = conv2d(3, 16, 3, Conv2dConfig { padding: 1, stride: 2, ..Default::default() }, bb.pp("conv1"))?;
 
         let mut blocks = Vec::with_capacity(BLOCKS.len());
-        for &(name, k, stride, cin, cout) in BLOCKS.iter() {
+        for &(name, k, stride, cin, cout) in &BLOCKS {
             let vbb = bb.pp(name);
             // The depthwise conv keeps the block's input width; only the
             // pointwise conv changes it.
@@ -218,7 +218,7 @@ impl MobileDet {
         // resolution without overlap.
         let hb = vb.pp("head").pp("binarize");
         let tcfg = ConvTranspose2dConfig { stride: 2, ..Default::default() };
-        Ok(MobileDet {
+        Ok(Self {
             stem,
             blocks,
             taps,
@@ -300,16 +300,16 @@ pub const BOX_THRESHOLD: f32 = 0.6;
 /// CRNN runs 70.3 / 47.4 / 41.6 / 37.0 / **32.0** / 31.8 / 32.6 / 35.2 % across
 /// 0.0 -> 2.8, so its optimum sits at the reference value (1.9 is 0.26 pp
 /// better, inside the noise of 15 clips, and not worth moving a default for).
-/// PARSeq runs 45.6 / 32.8 / **32.3** / 36.5 / 41.3 / 45.4 % — optimum at
+/// `PARSeq` runs 45.6 / 32.8 / **32.3** / 36.5 / 41.3 / 45.4 % — optimum at
 /// **0.8**, and 9 points better than the reference default.
 ///
 /// The mechanism is the crop each recognizer consumes. CRNN reads a whole line
-/// and wants generous context around it; PARSeq reads WORDS recovered from an
+/// and wants generous context around it; `PARSeq` reads WORDS recovered from an
 /// ink-gap projection inside that box, and a loose box fills the gaps with
 /// background until the projection can no longer find them.
 ///
 /// Confirmed on a second corpus class rather than assumed to generalise: on
-/// frames, PARSeq reads 1.83 % at 0.8 against 5.42 % at 1.5.
+/// frames, `PARSeq` reads 1.83 % at 0.8 against 5.42 % at 1.5.
 pub const UNCLIP_LINE: f32 = 1.5;
 pub const UNCLIP_WORD: f32 = 0.8;
 const MIN_SIDE: f32 = 3.0;
@@ -332,7 +332,7 @@ fn convex_hull(mut p: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
         return p;
     }
     let mut hull: Vec<(f32, f32)> = Vec::with_capacity(p.len() * 2);
-    for &pt in p.iter() {
+    for &pt in &p {
         while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], pt) <= 0.0 {
             hull.pop();
         }
@@ -504,7 +504,7 @@ fn box_score_fast(prob: &[f32], w: usize, h: usize, quad: &[(f32, f32); 4]) -> f
         let c0 = lo.round().max(0.0) as usize;
         let c1 = (hi.round().max(0.0) as usize).min(xmax - xmin);
         for col in c0..=c1 {
-            sum += prob[(ymin + row) * w + xmin + col] as f64;
+            sum += f64::from(prob[(ymin + row) * w + xmin + col]);
             n += 1;
         }
     }
@@ -517,7 +517,7 @@ fn box_score_fast(prob: &[f32], w: usize, h: usize, quad: &[(f32, f32); 4]) -> f
 
 /// Probability map -> word boxes in SOURCE image coordinates.
 ///
-/// This is PaddleOCR's `DBPostProcess`, with one deliberate deviation recorded
+/// This is `PaddleOCR`'s `DBPostProcess`, with one deliberate deviation recorded
 /// rather than hidden: the reference emits rotated quadrilaterals and we emit
 /// their axis-aligned bounds, because everything downstream — line grouping and
 /// crop extraction — is axis-aligned. §8.8 measured deskew at 0.1 pp on these
@@ -528,6 +528,7 @@ fn box_score_fast(prob: &[f32], w: usize, h: usize, quad: &[(f32, f32); 4]) -> f
 /// raw thresholded region is systematically tighter than the text it covers —
 /// the same tightness §8.13 measured as a 16-point CER cause with CRAFT. The
 /// expansion is what makes these boxes crop-ready.
+#[must_use] 
 pub fn boxes_from_probability(
     prob: &[f32],
     w: usize,
@@ -637,7 +638,7 @@ pub fn boxes_from_probability(
 ///   does not separate them either.
 ///
 /// And the probability map cannot arbitrate: at the true gutter the merged boxes
-/// read max probability **1.000**. DBNet hallucinates ink across the columns,
+/// read max probability **1.000**. `DBNet` hallucinates ink across the columns,
 /// which is why the component bridged in the first place. A map-based split
 /// looks principled and is searching evidence that is not there.
 ///

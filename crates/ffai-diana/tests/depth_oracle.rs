@@ -41,9 +41,7 @@ fn weights() -> Option<PathBuf> {
 }
 
 fn dirs_cache() -> PathBuf {
-    std::env::var("LOCALAPPDATA")
-        .map(|d| PathBuf::from(d).join("ffai/models"))
-        .unwrap_or_else(|_| PathBuf::from("/tmp/ffai/models"))
+    std::env::var("LOCALAPPDATA").map_or_else(|_| PathBuf::from("/tmp/ffai/models"), |d| PathBuf::from(d).join("ffai/models"))
 }
 
 /// Read the oracle written by the dump script: a raw f32 `.npy`.
@@ -134,10 +132,10 @@ fn depth_matches_ultralytics() {
     eprintln!(
         "depth oracle: worst rel {worst:.3e} at {worst_i}, mean abs {mean:.4} m, \
          range got [{:.2}, {:.2}] oracle [{:.2}, {:.2}]",
-        gv.iter().cloned().fold(f32::MAX, f32::min),
-        gv.iter().cloned().fold(f32::MIN, f32::max),
-        want.iter().cloned().fold(f32::MAX, f32::min),
-        want.iter().cloned().fold(f32::MIN, f32::max),
+        gv.iter().copied().fold(f32::MAX, f32::min),
+        gv.iter().copied().fold(f32::MIN, f32::max),
+        want.iter().copied().fold(f32::MAX, f32::min),
+        want.iter().copied().fold(f32::MIN, f32::max),
     );
     assert!(
         worst < 1e-3,

@@ -206,7 +206,7 @@ fn conv3x3_tiled(
                 // SAFETY: `avx2_enabled()` verified avx2+fma at runtime.
                 #[allow(unsafe_code)]
                 unsafe {
-                    crate::silu_avx2::silu_in_place(chunk)
+                    crate::silu_avx2::silu_in_place(chunk);
                 }
             } else {
                 for e in chunk.iter_mut() {
@@ -272,7 +272,7 @@ fn tiling_disabled() -> bool {
     match C.load(Ordering::Relaxed) {
         u8::MAX => {
             let on = std::env::var("FFAI_DIANA_TILE").is_ok_and(|v| v == "1");
-            C.store(!on as u8, Ordering::Relaxed);
+            C.store(u8::from(!on), Ordering::Relaxed);
             !on
         }
         v => v == 1,
@@ -294,6 +294,7 @@ fn tiling_disabled() -> bool {
 /// OUTPUT that the real design would not. It is therefore a LOWER BOUND: if
 /// this is close to parity while paying a transpose per layer, the transpose-
 /// free version wins by that transpose.
+#[must_use] 
 pub fn nhwc_enabled() -> bool {
     mode() == 1
 }
@@ -310,6 +311,7 @@ pub fn nhwc_enabled() -> bool {
 ///
 /// `FFAI_DIANA_NHWC=pair` selects it; `=1` also turns on the isolated path, for
 /// A/B only.
+#[must_use] 
 pub fn nhwc_pair_enabled() -> bool {
     matches!(mode(), 1 | 2)
 }
@@ -625,11 +627,10 @@ pub fn conv3x3_strided(
     // activation, a wrong graph rather than a slow one. Both are env-gated
     // experiments; declining is cheaper than keeping a second fused path in
     // step with this one.
-    if stride == 1 && !act && crate::direct3x3::enabled() {
-        if let Some(y) = crate::direct3x3::conv3x3_direct(x, weight, bias)? {
+    if stride == 1 && !act && crate::direct3x3::enabled()
+        && let Some(y) = crate::direct3x3::conv3x3_direct(x, weight, bias)? {
             return Ok(y);
         }
-    }
     if nhwc_enabled() {
         return conv3x3_nhwc(x, weight, bias, stride, act);
     }
@@ -745,13 +746,13 @@ pub fn conv3x3_strided(
                             if w >= kx { ((w - kx) / 2 + 1).min(ow) } else { 0 };
                         // Everything outside [lo, hi) is padding and is now
                         // written rather than inherited.
-                        for d in dst[..lo.min(ow)].iter_mut() {
+                        for d in &mut dst[..lo.min(ow)] {
                             d.write(0.0);
                         }
                         for ox in lo..hi {
                             dst[ox].write(src[ox * 2 + kx - 1]);
                         }
-                        for d in dst[hi.min(ow)..].iter_mut() {
+                        for d in &mut dst[hi.min(ow)..] {
                             d.write(0.0);
                         }
                     }
@@ -770,7 +771,7 @@ pub fn conv3x3_strided(
     // branch above writes its whole `ow`-wide destination, padding included.
     #[allow(unsafe_code)]
     unsafe {
-        col.set_len(need)
+        col.set_len(need);
     };
             Ok((col, (c_in * 9, ohw).into()))
         })
@@ -809,78 +810,6 @@ pub fn conv3x3_strided(
         let out = crate::epilogue::apply(y, bias_v, ohw, act)?;
         out.reshape((n, c_out, oh, ow))
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use candle_core::Device;
-    use candle_nn::{Conv2d, Conv2dConfig, Module};
-
-    fn oracle(x: &Tensor, w: &Tensor, b: &Tensor, stride: usize) -> Tensor {
-        let cfg = Conv2dConfig { padding: 1, stride, ..Default::default() };
-        Conv2d::new(w.clone(), Some(b.clone()), cfg).forward(x).unwrap()
-    }
-
-    fn max_rel(a: &Tensor, b: &Tensor) -> f32 {
-        let a = a.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        let b = b.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        let scale = b.iter().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-6);
-        a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs() / scale).fold(0.0f32, f32::max)
-    }
-
-    #[test]
-    fn matches_candles_conv2d() {
-        let dev = Device::Cpu;
-        // Real shapes plus degenerate ones where the padding is most of it.
-        for &(ci, co, h, w) in &[
-            (32, 16, 80, 80),
-            (64, 16, 80, 80),
-            (16, 8, 160, 160),
-            (64, 64, 20, 20),
-            (3, 4, 5, 7),
-            (1, 1, 1, 1),
-            (2, 3, 1, 6),
-            (2, 3, 6, 1),
-        ] {
-            let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
-            let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
-            let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
-            let got = conv3x3(&x, &wt, Some(&b), false).unwrap();
-            let want = oracle(&x, &wt, &b, 1);
-            assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w}");
-            let d = max_rel(&got, &want);
-            assert!(d < 1e-5, "{ci}->{co} {h}x{w}: max rel {d:.3e}");
-        }
-    }
-
-    #[test]
-    fn matches_candles_conv2d_at_stride_2() {
-        let dev = Device::Cpu;
-        // The model's seven downsampling shapes, plus ODD spatial sizes —
-        // the in-bounds range arithmetic differs there and an off-by-one in
-        // it would be invisible on the even shapes the model actually runs.
-        for &(ci, co, h, w) in &[
-            (3, 16, 640, 640),
-            (16, 32, 320, 320),
-            (64, 64, 160, 160),
-            (128, 256, 40, 40),
-            (2, 3, 7, 9),
-            (2, 3, 5, 5),
-            (1, 1, 1, 1),
-            (2, 2, 1, 8),
-            (2, 2, 8, 1),
-        ] {
-            let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
-            let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
-            let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
-            let got = conv3x3_strided(&x, &wt, Some(&b), 2, false).unwrap();
-            let want = oracle(&x, &wt, &b, 2);
-            assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w} s2");
-            let d = max_rel(&got, &want);
-            assert!(d < 1e-5, "{ci}->{co} {h}x{w} s2: max rel {d:.3e}");
-        }
-    }
 }
 
 /// Total im2col output elements produced since process start.
@@ -968,7 +897,7 @@ fn zerofill_enabled() -> bool {
     match C.load(Ordering::Relaxed) {
         u8::MAX => {
             let on = std::env::var("FFAI_DIANA_ZEROFILL").is_ok_and(|v| v == "1");
-            C.store(on as u8, Ordering::Relaxed);
+            C.store(u8::from(on), Ordering::Relaxed);
             on
         }
         v => v == 1,
@@ -981,7 +910,7 @@ fn counting() -> bool {
     match C.load(Ordering::Relaxed) {
         u8::MAX => {
             let on = std::env::var("FFAI_DIANA_COUNT").is_ok_and(|v| v == "1");
-            C.store(on as u8, Ordering::Relaxed);
+            C.store(u8::from(on), Ordering::Relaxed);
             on
         }
         v => v == 1,
@@ -991,4 +920,76 @@ fn counting() -> bool {
 /// Elements written by im2col so far, and reset.
 pub fn take_im2col_elems() -> u64 {
     IM2COL_ELEMS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+    use candle_nn::{Conv2d, Conv2dConfig, Module};
+
+    fn oracle(x: &Tensor, w: &Tensor, b: &Tensor, stride: usize) -> Tensor {
+        let cfg = Conv2dConfig { padding: 1, stride, ..Default::default() };
+        Conv2d::new(w.clone(), Some(b.clone()), cfg).forward(x).unwrap()
+    }
+
+    fn max_rel(a: &Tensor, b: &Tensor) -> f32 {
+        let a = a.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let b = b.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let scale = b.iter().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-6);
+        a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs() / scale).fold(0.0f32, f32::max)
+    }
+
+    #[test]
+    fn matches_candles_conv2d() {
+        let dev = Device::Cpu;
+        // Real shapes plus degenerate ones where the padding is most of it.
+        for &(ci, co, h, w) in &[
+            (32, 16, 80, 80),
+            (64, 16, 80, 80),
+            (16, 8, 160, 160),
+            (64, 64, 20, 20),
+            (3, 4, 5, 7),
+            (1, 1, 1, 1),
+            (2, 3, 1, 6),
+            (2, 3, 6, 1),
+        ] {
+            let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
+            let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
+            let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
+            let got = conv3x3(&x, &wt, Some(&b), false).unwrap();
+            let want = oracle(&x, &wt, &b, 1);
+            assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w}");
+            let d = max_rel(&got, &want);
+            assert!(d < 1e-5, "{ci}->{co} {h}x{w}: max rel {d:.3e}");
+        }
+    }
+
+    #[test]
+    fn matches_candles_conv2d_at_stride_2() {
+        let dev = Device::Cpu;
+        // The model's seven downsampling shapes, plus ODD spatial sizes —
+        // the in-bounds range arithmetic differs there and an off-by-one in
+        // it would be invisible on the even shapes the model actually runs.
+        for &(ci, co, h, w) in &[
+            (3, 16, 640, 640),
+            (16, 32, 320, 320),
+            (64, 64, 160, 160),
+            (128, 256, 40, 40),
+            (2, 3, 7, 9),
+            (2, 3, 5, 5),
+            (1, 1, 1, 1),
+            (2, 2, 1, 8),
+            (2, 2, 8, 1),
+        ] {
+            let x = Tensor::randn(0f32, 1.0, (1, ci, h, w), &dev).unwrap();
+            let wt = Tensor::randn(0f32, 1.0, (co, ci, 3, 3), &dev).unwrap();
+            let b = Tensor::randn(0f32, 1.0, co, &dev).unwrap();
+            let got = conv3x3_strided(&x, &wt, Some(&b), 2, false).unwrap();
+            let want = oracle(&x, &wt, &b, 2);
+            assert_eq!(got.dims(), want.dims(), "shape {ci}->{co} {h}x{w} s2");
+            let d = max_rel(&got, &want);
+            assert!(d < 1e-5, "{ci}->{co} {h}x{w} s2: max rel {d:.3e}");
+        }
+    }
 }

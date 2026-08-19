@@ -120,7 +120,7 @@ pub(crate) unsafe fn conv3x3_avx2(
     h: usize,
     wd: usize,
     out: &mut [f32],
-) {
+) { unsafe {
     use std::arch::x86_64::*;
     const CO: usize = 4;
     let sw = wd + 2;
@@ -189,7 +189,7 @@ pub(crate) unsafe fn conv3x3_avx2(
             }
         }
     }
-}
+}}
 
 struct Conv3x3Op;
 
@@ -251,7 +251,7 @@ pub fn apply(x: &Tensor, conv: &Conv2d) -> Result<Tensor> {
         && cfg.groups == 1
         && dims.2 == 3
         && dims.3 == 3
-        && x.dims4().map(|d| d.0 == 1).unwrap_or(false)
+        && x.dims4().is_ok_and(|d| d.0 == 1)
         && x.dtype() == candle_core::DType::F32
         && x.device().is_cpu()
         && std::env::var("FFAI_CONV3X3").as_deref() != Ok("0");

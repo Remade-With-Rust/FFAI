@@ -23,6 +23,6 @@ fn main() {
         }
         let gbs = (n as f64 * 8.0) / best / 1e9;
         let note = if mb <= 24 { "L2/L3 resident" } else { "DRAM" };
-        println!("{:>8} MB {:>12.1} {:>12}", mb, gbs, note);
+        println!("{mb:>8} MB {gbs:>12.1} {note:>12}");
     }
 }

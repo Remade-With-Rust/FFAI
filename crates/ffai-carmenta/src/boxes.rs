@@ -36,6 +36,7 @@ pub fn low_text() -> f32 {
 const MIN_AREA: usize = 10;
 
 /// Extract word-level boxes from the two maps (row-major, `w` × `h`).
+#[must_use] 
 pub fn extract_boxes(region: &[f32], affinity: &[f32], w: usize, h: usize) -> Vec<DetBox> {
     let mut mask: Vec<bool> =
         (0..w * h).map(|i| region[i] >= low_text() || affinity[i] >= LINK_THRESHOLD).collect();
@@ -86,6 +87,7 @@ pub fn extract_boxes(region: &[f32], affinity: &[f32], w: usize, h: usize) -> Ve
 /// Group word boxes into lines by vertical overlap, then order both levels
 /// for reading: lines top-to-bottom, boxes left-to-right within a line.
 /// Returns each line's member boxes; the caller unions them per line.
+#[must_use] 
 pub fn group_lines(mut boxes: Vec<DetBox>) -> Vec<Vec<DetBox>> {
     boxes.sort_by_key(|b| b.y0 + b.y1); // by vertical center ×2
     let mut lines: Vec<Vec<DetBox>> = Vec::new();
@@ -188,6 +190,7 @@ mod tests {
 /// (PARSeq): CRAFT's affinity links characters ACROSS word gaps at tight
 /// rendering spacing, so connected components are line-level here — measured
 /// as one box per line on the render corpus.
+#[must_use] 
 pub fn split_words(region: &[f32], affinity: &[f32], w: usize, line: &DetBox) -> Vec<DetBox> {
     let height = line.y1.saturating_sub(line.y0).max(1);
     let min_gap = ((height as f32) * 0.35).max(1.0) as usize;
@@ -377,6 +380,7 @@ pub(crate) fn find_gutters(lines: &[Vec<DetBox>], page_w: usize) -> Vec<(usize, 
 ///
 /// With no gutter this is exactly the previous behaviour — top-to-bottom — so
 /// single-column pages cannot regress.
+#[must_use] 
 pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
     // FFAI_ORDER selects the strategy so all three can be A/B'd on ONE binary.
     // They could not be before: the recursive cut replaced the one-level cut in
@@ -492,7 +496,7 @@ fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
     let lh = hs[hs.len() / 2].max(1) as f32;
     let h = best_gap(lines, lh, page_w, Axis::Horizontal);
     let v = best_gap(lines, lh, page_w, Axis::Vertical);
-    let spans = lines.iter().any(|l| is_spanning(&line_bbox(l), page_w)) as u8;
+    let spans = u8::from(lines.iter().any(|l| is_spanning(&line_bbox(l), page_w)));
     let (x0, y0, x1, y1) = lines.iter().fold((usize::MAX, usize::MAX, 0, 0), |a, l| {
         let b = line_bbox(l);
         (a.0.min(b.x0), a.1.min(b.y0), a.2.max(b.x1), a.3.max(b.y1))
@@ -513,10 +517,10 @@ fn trace_node(lines: &[Vec<DetBox>], page_w: usize, depth: usize) {
         f,
         "{tag}	{depth}	{}	{lh}	{}	{}	{}	{}	{spans}	{page_w}	{x0},{y0},{x1},{y1}	{}",
         lines.len(),
-        h.map(|g| g.1).unwrap_or(-1.0),
-        v.map(|g| g.1).unwrap_or(-1.0),
-        h.map(|g| g.0 as i64).unwrap_or(-1),
-        v.map(|g| g.0 as i64).unwrap_or(-1),
+        h.map_or(-1.0, |g| g.1),
+        v.map_or(-1.0, |g| g.1),
+        h.map_or(-1, |g| g.0 as i64),
+        v.map_or(-1, |g| g.0 as i64),
         boxes.join(";")
     );
 }
@@ -664,7 +668,7 @@ fn xy_cut_cost(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<Vec<
 /// once per column change, so leftward resets ≈ columns − 1. A page read ACROSS
 /// its columns oscillates on nearly every line. Fewest resets wins.
 ///
-/// Measured on the 236-page OmniDocBench holdout, against `pernode` alone:
+/// Measured on the 236-page `OmniDocBench` holdout, against `pernode` alone:
 ///
 /// | ordering | CER |
 /// |---|---|
@@ -732,9 +736,7 @@ fn order_by_selection(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>
     candidates
         .into_iter()
         .map(|c| { let s = score(&c); (s, c) })
-        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(_, c)| c)
-        .unwrap_or_else(Vec::new)
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)).map_or_else(Vec::new, |(_, c)| c)
 }
 
 /// Route between grid and recursion at every NODE, not once per page.
@@ -812,7 +814,7 @@ fn xy_cut_pernode(lines: Vec<Vec<DetBox>>, page_w: usize, depth: usize) -> Vec<V
 ///
 /// | cell | recursive cut | one-level grid |
 /// |---|---|---|
-/// | academic_literature | 12.01 % | **4.51 %** |
+/// | `academic_literature` | 12.01 % | **4.51 %** |
 /// | magazine | 6.07 % | **4.06 %** |
 /// | newspaper | **5.25 %** | 9.13 % |
 /// | book | **3.24 %** | 6.51 % |
@@ -999,7 +1001,7 @@ fn order_one_level(mut lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox
     let mut out: Vec<Vec<DetBox>> = Vec::with_capacity(lines.len());
     let mut stripe: Vec<Vec<DetBox>> = Vec::new();
     // A stripe is flushed column-major whenever a spanning element closes it.
-    let mut flush = |stripe: &mut Vec<Vec<DetBox>>, out: &mut Vec<Vec<DetBox>>| {
+    let flush = |stripe: &mut Vec<Vec<DetBox>>, out: &mut Vec<Vec<DetBox>>| {
         stripe.sort_by_key(|l| {
             let b = line_bbox(l);
             (column_of(&b), b.y0)
@@ -1023,7 +1025,7 @@ fn order_one_level(mut lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox
 ///
 /// §8.28's one-level cut computed ONE set of gutters for the whole page and let
 /// spanning elements separate stripes. That is right for a report and wrong for
-/// a newspaper: measured on OmniDocBench, newspapers score 34.51 % as-is and
+/// a newspaper: measured on `OmniDocBench`, newspapers score 34.51 % as-is and
 /// **13.11 % order-free — 21.40 pp of pure ordering**, and they are the only
 /// source where order dominates. A newspaper is not one column grid; it is a
 /// headline over a 3-column block beside a boxed sidebar over a 2-column block,
@@ -1137,7 +1139,7 @@ enum Axis {
 /// Widest empty band on `axis`, as `(cut position, width in line-heights)`.
 ///
 /// Vertical scans use ERODED boxes and skip page-spanning ones, for the reasons
-/// §8.28 measured: DBNet's 1.5x unclip closes a real gutter outright, and one
+/// §8.28 measured: `DBNet`'s 1.5x unclip closes a real gutter outright, and one
 /// centred page number must not veto a column break. Horizontal scans use the
 /// boxes as they are — a line's vertical extent is not inflated the same way,
 /// and a heading that spans the page is exactly what a horizontal cut wants to
@@ -1258,7 +1260,7 @@ fn element_tops(lines: &[Vec<DetBox>], page_w: usize, lh: f32) -> Vec<usize> {
 
 /// Split a detected box at a white corridor visible in the SOURCE PIXELS.
 ///
-/// §8.85-§8.87: DBNet occasionally emits one component spanning two columns, so
+/// §8.85-§8.87: `DBNet` occasionally emits one component spanning two columns, so
 /// its text comes out interleaved — `"...Knowledge   except that the range..."`
 /// — which no reordering can repair, and the wide box then suppresses the column
 /// grid for the whole page. `omni-0069` loses 68 pp to three such lines.
@@ -1445,6 +1447,10 @@ const V_GAP_MIN: f32 = 0.55;
 /// already lost, and unbounded recursion on adversarial input is a hazard.
 const MAX_CUT_DEPTH: usize = 12;
 /// How much wider than the median line a box must be to count as spanning.
+// Nothing reads this today - the span branch it was fitted for is not wired in.
+// Kept because the value is a measured result, not a guess; delete it only
+// together with the paragraph above.
+#[allow(dead_code)]
 const SPAN_RATIO: f32 = 1.8;
 
 

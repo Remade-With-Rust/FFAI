@@ -105,7 +105,7 @@ pub fn disabled() -> bool {
     match CACHED.load(Ordering::Relaxed) {
         u8::MAX => {
             let off = std::env::var("FFAI_DIANA_NO_SMALLGAINS").is_ok_and(|v| v == "1");
-            CACHED.store(off as u8, Ordering::Relaxed);
+            CACHED.store(u8::from(off), Ordering::Relaxed);
             off
         }
         v => v == 1,

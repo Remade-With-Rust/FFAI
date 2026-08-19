@@ -80,7 +80,7 @@ pub struct ModelConfig {
 impl ModelConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)?;
-        let cfg: ModelConfig = serde_json::from_str(&text)
+        let cfg: Self = serde_json::from_str(&text)
             .map_err(|e| Error::Other(format!("manifest {}: {e}", path.display())))?;
         cfg.validate()?;
         Ok(cfg)
@@ -209,7 +209,7 @@ impl Dims {
                 )))
             }
         };
-        Ok(Dims {
+        Ok(Self {
             depth,
             width,
             max_channels,
@@ -222,6 +222,7 @@ impl Dims {
     /// `make_divisible(min(c, max_channels) * width, 8)` — Ultralytics'
     /// `parse_model` rule, including the cap applied BEFORE the scaling
     /// (which is what makes m/l/x differ from a pure width multiple).
+    #[must_use] 
     pub fn ch(&self, yaml_c: usize) -> usize {
         let scaled = (yaml_c.min(self.max_channels) as f64) * self.width;
         // make_divisible(x, 8) = ceil(x / 8) * 8
@@ -232,6 +233,7 @@ impl Dims {
     ///
     /// Only counts above 1 scale; a single block stays single. This is why
     /// `l` and `x` carry TWO inner blocks per C3k2 where n/s/m carry one.
+    #[must_use] 
     pub fn rep(&self, yaml_n: usize) -> usize {
         if yaml_n > 1 {
             ((yaml_n as f64 * self.depth).round() as usize).max(1)
@@ -241,6 +243,7 @@ impl Dims {
     }
 
     /// A C3k2's hidden width: `int(c_out * e)` for the layer's expansion.
+    #[must_use] 
     pub fn hidden(&self, c_out: usize, e: f64) -> usize {
         (c_out as f64 * e) as usize
     }
@@ -263,6 +266,7 @@ impl Dims {
     /// one no amount of testing n and s harder could have surfaced. The m
     /// checkpoint reports 224 tensors against n's 204; that difference is
     /// entirely these two layers.
+    #[must_use] 
     pub fn c3k(&self, yaml_c3k: bool) -> bool {
         yaml_c3k || self.c3k_all
     }

@@ -47,6 +47,8 @@ use crate::par::prelude::*;
 
 /// Output columns accumulated at once. 32 f32 = 4 AVX2 registers, which
 /// leaves room for the broadcast weight and the loaded row.
+// Read only by the OFF-by-default variant documented below.
+#[allow(dead_code)]
 const OX: usize = 32;
 
 /// **OFF by default: 1.22x slower serial, ~1.10x slower at 24 threads.**
@@ -87,7 +89,7 @@ pub fn enabled() -> bool {
     match C.load(Ordering::Relaxed) {
         u8::MAX => {
             let on = std::env::var("FFAI_DIANA_DIRECT").is_ok_and(|v| v == "1");
-            C.store(on as u8, Ordering::Relaxed);
+            C.store(u8::from(on), Ordering::Relaxed);
             on
         }
         v => v == 1,

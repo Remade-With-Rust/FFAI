@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_det = warm.detections.len();
     let mut sum = 0f64;
     for d in &warm.detections {
-        sum += d.x0 as f64 + d.y0 as f64 + d.x1 as f64 + d.y1 as f64 + d.confidence as f64;
+        sum += f64::from(d.x0) + f64::from(d.y0) + f64::from(d.x1) + f64::from(d.y1) + f64::from(d.confidence);
     }
 
     let mut times = Vec::with_capacity(reps);

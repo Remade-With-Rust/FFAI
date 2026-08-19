@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{n} images · RAYON_NUM_THREADS={} · cores={}",
         std::env::var("RAYON_NUM_THREADS").unwrap_or_else(|_| "default".into()),
-        std::thread::available_parallelism().map(|c| c.get()).unwrap_or(0)
+        std::thread::available_parallelism().map_or(0, |c| c.get())
     );
 
     // --- SEQUENTIAL: one image at a time, intra-op parallelism only. ---

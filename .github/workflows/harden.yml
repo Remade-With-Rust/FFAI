@@ -63,10 +63,14 @@ jobs:
       # BLOCKING for every crate that is clean. A crate joins this list the moment
       # it reaches zero, rather than waiting for the whole workspace - which is
       # how the debt shrinks without CI ever being red.
-      # TEN of twelve crates are under PEDANTIC + NURSERY, enforced by their own
-      # manifests (so `-D warnings` promotes those lints): core, models, media,
-      # argus, mercury, bench, cli, demo, py, wasm.
-      # Remaining: ffai-carmenta and ffai-diana, deliberately deferred.
+      # ALL TWELVE crates are under PEDANTIC + NURSERY, enforced by their own
+      # manifests (so `-D warnings` promotes those lints).
+      #
+      # carmenta and diana joined last and are NOT equivalent to the other ten:
+      # both allow cast_possible_truncation / cast_sign_loss / cast_possible_wrap
+      # wholesale, where the other ten cleared those casts one at a time against
+      # the trust boundary. Read the comment in either Cargo.toml before treating
+      # a green tick here as a clean parse surface.
       #
       # NOTE for anyone measuring this: do NOT pass `-W clippy::pedantic` on the
       # command line to check a single crate. It re-lints DEPENDENCIES and
@@ -75,12 +79,14 @@ jobs:
       # with the manifest policies as this job does.
       - name: Clippy (blocking - clean crates)
         run: |
-          # --no-deps is REQUIRED: without it `-D warnings` promotes warnings in
-          # ffai-carmenta and ffai-diana, which have no policy yet, and the gate
-          # goes red on crates it is not checking.
+          # --no-deps is REQUIRED: without it `-D warnings` promotes warnings from
+          # DEPENDENCIES into this gate, and it goes red on code it is not checking.
           cargo clippy --no-deps -p ffai-core -p ffai-models -p ffai-media                        -p ffai-argus -p ffai-mercury -p ffai-bench                        --lib -- -D warnings -A unsafe_code
           # Binary and binding crates: --all-targets, since several have no lib.
           cargo clippy --no-deps -p ffai-cli -p ffai-demo -p ffai-py -p ffai-wasm                        --all-targets -- -D warnings -A unsafe_code
+          # carmenta and diana: --all-targets, which also covers their examples -
+          # that is where the never-loop and uninit-vec findings actually were.
+          cargo clippy --no-deps -p ffai-carmenta -p ffai-diana                        --all-targets -- -D warnings -A unsafe_code
 
       # ADVISORY for the rest: other crates still carry pre-existing findings.
       # TO FLIP: clear a crate, move it into the blocking step above. 2026-09-30.

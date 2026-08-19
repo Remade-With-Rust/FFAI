@@ -1,9 +1,9 @@
-//! IoU cost and rectangular Hungarian assignment.
+//! `IoU` cost and rectangular Hungarian assignment.
 //!
 //! # Why Hungarian and not greedy
 //!
 //! Greedy descending-IoU matching is what a first draft reaches for and it is
-//! not what ByteTrack does. The difference does not show up as missed boxes —
+//! not what `ByteTrack` does. The difference does not show up as missed boxes —
 //! it shows up as **identity switches**, because greedy will hand a detection
 //! to the track that wants it most rather than to the assignment that is best
 //! overall. AP50 cannot see that; IDF1 can, and IDF1 is exactly the metric this
@@ -14,6 +14,7 @@
 //! test rather than quietly costing IDF1.
 
 /// Intersection over union of two `[x0, y0, x1, y1]` boxes.
+#[must_use] 
 pub fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
     let x0 = a[0].max(b[0]);
     let y0 = a[1].max(b[1]);
@@ -34,6 +35,7 @@ pub fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
 }
 
 /// `1 - IoU`, the cost the assignment minimises.
+#[must_use] 
 pub fn cost_matrix(tracks: &[[f32; 4]], dets: &[[f32; 4]]) -> Vec<Vec<f32>> {
     tracks
         .iter()
@@ -45,14 +47,15 @@ pub fn cost_matrix(tracks: &[[f32; 4]], dets: &[[f32; 4]]) -> Vec<Vec<f32>> {
 /// in, which is what the reference tracker's `fuse_score` computes.
 ///
 /// The argument for it: when two detections overlap one track similarly, pure
-/// IoU picks by geometry alone and is indifferent to the detector saying one of
+/// `IoU` picks by geometry alone and is indifferent to the detector saying one of
 /// them is far more likely to be a real object. Folding the score in breaks
 /// that tie toward the confident box.
 ///
 /// It is NOT free — it makes the `match_thresh` gate stricter, because the
-/// product is always ≤ the IoU. A fair test therefore has to re-sweep the
-/// threshold rather than compare at the value tuned for pure IoU, or it prices
+/// product is always ≤ the `IoU`. A fair test therefore has to re-sweep the
+/// threshold rather than compare at the value tuned for pure `IoU`, or it prices
 /// a gate change as an algorithm change.
+#[must_use] 
 pub fn cost_matrix_fused(
     tracks: &[[f32; 4]],
     dets: &[[f32; 4]],
@@ -110,6 +113,7 @@ fn transpose(m: &[Vec<f32>]) -> Vec<Vec<f32>> {
 /// expensive edges up front changes which assignment is optimal, and a pair the
 /// solver only chose because a cheaper one was taken elsewhere still tells you
 /// the cheaper one was taken.
+#[must_use] 
 pub fn assign(cost: &[Vec<f32>], max_cost: f32) -> Vec<(usize, usize)> {
     assign_gated(cost, cost, max_cost)
 }
@@ -120,12 +124,13 @@ pub fn assign(cost: &[Vec<f32>], max_cost: f32) -> Vec<(usize, usize)> {
 /// things at once, and they want separating. `1 - IoU * score` is a better
 /// RANKING — when two detections overlap a track equally, the one the detector
 /// believes in should win — but it is a worse GATE, because the product is
-/// always ≤ the IoU, so a fixed `max_cost` silently tightens by a factor of the
+/// always ≤ the `IoU`, so a fixed `max_cost` silently tightens by a factor of the
 /// score. Sweeping the threshold to compensate then prices a gate change as an
 /// algorithm change, and the measured response is correspondingly jumpy.
 ///
 /// So: rank by `rank_cost`, admit by `gate_cost`. "Whose box is it" and "is it
 /// close enough to be anyone's" are different questions.
+#[must_use] 
 pub fn assign_gated(
     rank_cost: &[Vec<f32>],
     gate_cost: &[Vec<f32>],

@@ -83,7 +83,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let null_rounds = rounds.max(9);
     let mut null_ratios = Vec::new();
     for r in 0..null_rounds {
-        let (x, y) = if r % 2 == 0 { (run(false), run(false)) } else { (run(false), run(false)) };
+        // Both arms are deliberately `false`: the null arm measures the
+        // configuration against itself, so there is no order to alternate.
+        let _ = r;
+        let (x, y) = (run(false), run(false));
         if x.is_finite() && y.is_finite() && y > 0.0 {
             null_ratios.push(x / y);
         }

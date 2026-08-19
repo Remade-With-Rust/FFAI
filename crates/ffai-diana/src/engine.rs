@@ -47,7 +47,7 @@ impl Yolo26 {
     /// A specific tier and geometry — the general constructor the others
     /// delegate to.
     pub fn build(tier: &str, geometry: Geometry, manifest_dir: impl Into<PathBuf>) -> Self {
-        Yolo26 {
+        Self {
             manifest_dir: manifest_dir.into(),
             geometry,
             tier: tier.to_string(),
@@ -85,7 +85,7 @@ impl Yolo26 {
         let model = load_from_bytes(tier, safetensors, manifest_json)?;
         let cell = OnceLock::new();
         let _ = cell.set(Ok(model));
-        Ok(Yolo26 {
+        Ok(Self {
             manifest_dir: PathBuf::new(),
             geometry,
             tier: tier.to_string(),
@@ -102,15 +102,18 @@ impl Yolo26 {
     /// 1.35-1.48x faster on the corpus's aspect ratios. Square remains
     /// available as [`Self::square`] because the M-D0 parity gate is pinned
     /// to it; pinning the GATE and choosing the DEFAULT are two decisions.
+    #[must_use] 
     pub fn new() -> Self {
         Self::with_geometry(Geometry::Rect)
     }
 
     /// The square-padded engine — the configuration the parity gate pins.
+    #[must_use] 
     pub fn square() -> Self {
         Self::with_geometry(Geometry::Square)
     }
 
+    #[must_use] 
     pub fn with_geometry(geometry: Geometry) -> Self {
         Self::build("n", geometry, "models")
     }

@@ -100,7 +100,7 @@ fn photo_tensor(path: &std::path::Path, device: &Device) -> Tensor {
     let mut data = vec![0f32; 3 * w * h];
     for (px, chunk) in img.data.chunks_exact(3).enumerate() {
         for c in 0..3 {
-            data[c * w * h + px] = chunk[c] as f32 / 255.0;
+            data[c * w * h + px] = f32::from(chunk[c]) / 255.0;
         }
     }
     Tensor::from_vec(data, (1, 3, h, w), device).expect("photo tensor")

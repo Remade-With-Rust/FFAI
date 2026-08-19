@@ -142,6 +142,7 @@ pub struct LiveStats {
 
 impl LiveStats {
     /// Fraction of frames that never touched the model. This is the prize.
+    #[must_use] 
     pub fn skip_rate(&self) -> f32 {
         if self.frames == 0 {
             return 0.0;
@@ -162,6 +163,7 @@ impl LiveStats {
 /// reading a 4.7x spread across eight ABBA runs, so at that resolution the
 /// cost is currently UNKNOWN rather than small. Returns 1.0 for a size or format change, which is not a "difference"
 /// so much as a different picture, and must never be gated.
+#[must_use] 
 pub fn changed_fraction(prev: &ImageBuffer, cur: &ImageBuffer, delta: u8) -> f32 {
     if prev.width != cur.width || prev.height != cur.height || prev.format != cur.format {
         return 1.0;
@@ -175,15 +177,15 @@ pub fn changed_fraction(prev: &ImageBuffer, cur: &ImageBuffer, delta: u8) -> f32
     if n == 0 {
         return 0.0;
     }
-    let d = delta as i16;
+    let d = i16::from(delta);
     let mut changed = 0usize;
     // Compare the first channel only. A green-only change with red and blue
     // held is not a thing a camera produces, and one channel is a third of
     // the memory traffic — which matters because this runs on every frame,
     // including the ones it saves.
     for i in 0..n {
-        let a = prev.data[i * step] as i16;
-        let b = cur.data[i * step] as i16;
+        let a = i16::from(prev.data[i * step]);
+        let b = i16::from(cur.data[i * step]);
         if (a - b).abs() > d {
             changed += 1;
         }
@@ -215,6 +217,7 @@ impl<E: DetectEngine + ?Sized> LiveSession<E> {
         }
     }
 
+    #[must_use] 
     pub fn stats(&self) -> &LiveStats {
         &self.stats
     }
@@ -231,13 +234,12 @@ impl<E: DetectEngine + ?Sized> LiveSession<E> {
 
         // Sampler, ahead of the gate: a frame we never look at costs nothing,
         // not even the diff.
-        if self.cfg.sample_every > 1 && (self.stats.frames - 1) % self.cfg.sample_every != 0 {
-            if let Some(prev) = &self.last {
+        if self.cfg.sample_every > 1 && (self.stats.frames - 1) % self.cfg.sample_every != 0
+            && let Some(prev) = &self.last {
                 self.stats.sampled_out += 1;
                 return Ok(prev.clone());
             }
             // No previous result to serve; fall through and run.
-        }
 
         let gate = match (&self.prev, &self.last) {
             (Some(p), Some(l)) => {

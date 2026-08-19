@@ -1,4 +1,4 @@
-//! Bias + SiLU applied IN PLACE on the matmul's own output buffer.
+//! Bias + `SiLU` applied IN PLACE on the matmul's own output buffer.
 //!
 //! # The graph-execution difference this closes
 //!
@@ -105,7 +105,7 @@ impl InplaceOp1 for Epilogue {
                 // SAFETY: `avx2_enabled()` verified avx2+fma at runtime.
                 #[allow(unsafe_code)]
                 unsafe {
-                    crate::silu_avx2::silu_in_place(chunk)
+                    crate::silu_avx2::silu_in_place(chunk);
                 }
             } else if act {
                 for e in chunk.iter_mut() {
@@ -123,7 +123,7 @@ impl InplaceOp1 for Epilogue {
     }
 }
 
-/// Apply bias and optionally SiLU to `y` in place, returning it.
+/// Apply bias and optionally `SiLU` to `y` in place, returning it.
 ///
 /// `y` must be the uniquely-owned output of a matmul shaped `[c_out,
 /// per_channel]`. Falls back to nothing when there is no work.
@@ -149,7 +149,7 @@ fn out_of_place() -> bool {
     match C.load(Ordering::Relaxed) {
         u8::MAX => {
             let on = std::env::var("FFAI_DIANA_NO_INPLACE").is_ok_and(|v| v == "1");
-            C.store(on as u8, Ordering::Relaxed);
+            C.store(u8::from(on), Ordering::Relaxed);
             on
         }
         v => v == 1,
@@ -184,7 +184,7 @@ fn apply_out_of_place(
                     // SAFETY: avx2+fma verified at runtime.
                     #[allow(unsafe_code)]
                     unsafe {
-                        crate::silu_avx2::silu_in_place(dst)
+                        crate::silu_avx2::silu_in_place(dst);
                     }
                 } else if act {
                     for e in dst.iter_mut() {
@@ -202,7 +202,7 @@ fn apply_out_of_place(
         // SAFETY: chunks of `per_channel` cover exactly `n_out`, all written.
         #[allow(unsafe_code)]
         unsafe {
-            v.set_len(n_out)
+            v.set_len(n_out);
         };
         Ok((v, (dims[0], dims[1]).into()))
     })
@@ -230,7 +230,7 @@ mod tests {
 
         let mut want = src;
         for c in 0..c_out {
-            for e in want[c * n..(c + 1) * n].iter_mut() {
+            for e in &mut want[c * n..(c + 1) * n] {
                 *e = crate::silu::silu_scalar_pub(*e + bias[c]);
             }
         }
@@ -265,7 +265,7 @@ mod tests {
     }
 }
 
-/// Bias + SiLU on an NHWC activation `[OHW, Cout]`, staying NHWC.
+/// Bias + `SiLU` on an NHWC activation `[OHW, Cout]`, staying NHWC.
 ///
 /// The bias VECTOR repeats along the fast axis here, where the NCHW form
 /// broadcasts one scalar over a contiguous run. Measured at 1.37x the NCHW
@@ -324,7 +324,7 @@ impl InplaceOp1 for EpilogueNhwc {
     }
 }
 
-/// Bias + SiLU applied while TRANSPOSING `[OHW, Cout]` into `[Cout, OHW]`.
+/// Bias + `SiLU` applied while TRANSPOSING `[OHW, Cout]` into `[Cout, OHW]`.
 ///
 /// The NHWC convolution path produces its result pixel-major and the rest of
 /// the graph is channel-major, so something has to transpose. Doing it as its
@@ -380,7 +380,7 @@ pub fn apply_transposed(
                 // SAFETY: `avx2_enabled()` verified avx2+fma at runtime.
                 #[allow(unsafe_code)]
                 unsafe {
-                    crate::silu_avx2::silu_in_place(row)
+                    crate::silu_avx2::silu_in_place(row);
                 }
             } else if act {
                 for e in row.iter_mut() {
