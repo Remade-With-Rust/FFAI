@@ -12,6 +12,27 @@
 # because the tokenizer oracle skips without cached whisper weights, so the change
 # would be unverified on the ASR correctness path.
 
+# THE BUDGET, AND WHAT "30 DAYS" IS WORTH IN COMPUTE
+#
+# H-27 asks for ">=30 days of coverage-guided fuzzing (or equivalent)". This job
+# is what defines that number, so the arithmetic belongs here rather than in
+# whoever's head:
+#
+#     10 minutes  x  4 targets  x  30 nights  =  1,200 target-minutes
+#                                             =  20 core-hours
+#
+# So "30 days" of THIS schedule is 20 core-hours of libFuzzer. A machine with
+# cores to spare can deliver the same compute in an afternoon, and the criterion's
+# "(or equivalent)" is what permits that.
+#
+# It is NOT the same thing in every respect, and the audit row says so: 30 nights
+# also fuzz 30 successive revisions of the code, which concentrated compute cannot
+# reproduce. Equivalent compute is a floor on effort, not a substitute for
+# continuous coverage - which is why this schedule stays on.
+#
+# Raise `minutes` via workflow_dispatch to buy more; the corpus cache means the
+# extra time compounds instead of restarting.
+
 name: Fuzz
 
 on:
