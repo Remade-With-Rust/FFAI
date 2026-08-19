@@ -287,13 +287,13 @@ crate's [threat model](docs/threat-model.md).
 
 **Tier** critical-path · **Audited** 2026-08-15 (survey) · **v1.0.0 gates** 13/16 · [Full checklist](docs/plans/use-protection-please.md)
 
-`████████████████░░░░` **83%** &nbsp;·&nbsp; 35 Completed · 0 Scheduled · 7 Incomplete · 13 N/A
+`████████████████░░░░` **83%** &nbsp;·&nbsp; 35 Completed · 1 Scheduled · 6 Incomplete · 13 N/A
 
 | Phase | ✅ Completed | 🗓 Scheduled | ⬜ Incomplete | · N/A |
 |---|--:|--:|--:|--:|
 | 0 — Threat modeling | 2 | 0 | 0 | 0 |
 | 1 — Toolchain | 3 | 0 | 1 | 0 |
-| 2 — Supply chain | 6 | 0 | 2 | 0 |
+| 2 — Supply chain | 6 | 1 | 1 | 0 |
 | 3 — Code level | 7 | 0 | 0 | 0 |
 | 4 — Static analysis | 1 | 0 | 0 | 0 |
 | 5 — Dynamic analysis | 3 | 0 | 0 | 0 |
@@ -304,7 +304,9 @@ crate's [threat model](docs/threat-model.md).
 | 10 — Cryptography | 0 | 0 | 0 | 3 |
 | 11 — CI/CD, release, and operations | 4 | 0 | 1 | 0 |
 | 12 — Compliance controls | 5 | 0 | 2 | 7 |
-| **Total** | **35** | **0** | **7** | **13** |
+| **Total** | **35** | **1** | **6** | **13** |
+
+**Next up** — H-10 `cargo vet` coverage complete (Tim, expires 2026-11-15)
 
 **Compliance** — *technical controls evidenced by this audit. NOT a certification, an attestation, or an auditor's opinion.*
 
