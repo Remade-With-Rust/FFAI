@@ -17,15 +17,18 @@ A pure-Rust document OCR pipeline on candle. The default document engine is
 (~16 MB, an 18 385-class CJK+Latin head). No VLM, CPU only, ~9–17 s/page.
 
 **Current banked standing** — OmniDocBench v1.6, all 1 651 pages, scored by
-their official evaluator:
+their official evaluator (§52 arm: `FFAI_ROUTE=1` + `FFAI_ORDER_SELECT=2`,
+`odb_pred_fullv2`):
 
 | | score | context |
 |---|---:|---|
-| Text^Edit | **0.1307** | published range 0.0326 (PaddleOCR-VL) – 0.157 (Marker) |
-| ReadOrder^Edit | **0.2348** | published range 0.116 – 0.243 |
+| Text^Edit | **0.1269** | published range 0.0326 (PaddleOCR-VL) – 0.157 (Marker) |
+| ReadOrder^Edit | **0.2093** | published range 0.116 – 0.243 |
 
-Ahead of the worst published row on both columns, well behind the leaders.
-English-only the engine reads ~0.107 text; non-English ~0.15.
+Ahead of the worst published row on both columns, well behind the text
+leaders; order is now mid-pack. ~0.0045 of the text figure is evaluator
+timeout tax on 8 pages the engine reads fine (§50); timeout-excluded the
+standing reads 0.1229 / 0.2071. The campaign opened at 0.1307 / 0.2348.
 
 **Speed is not the problem.** Roughly 9× faster than the reference VLM — our
 CPU against its GPU. Every open lever is quality. Spend speed for quality
@@ -63,6 +66,10 @@ our favour** and produced a year of confident, wrong competitive conclusions
 8. **Suspect any number that agrees too exactly, or moves too much.** A guard
    toggle that changes 6 pages cannot move the metric 5× — when it appeared to,
    the aggregate file was stale from a previous run.
+9. **Two evaluator runs from different sessions must exclude the UNION of both
+   runs' `stage_execution` fallback pages.** The matching timeout is
+   load-dependent: 7 timeout pages faked a +0.0263 "gain" on byte-identical
+   predictions (§50). ~0.0045 of the banked text headline is this timeout tax.
 
 ### Harness traps, all hit at least once
 
@@ -90,7 +97,9 @@ our favour** and produced a year of confident, wrong competitive conclusions
 
 Engine toggles that exist: `FFAI_ORDER_GATE`, `FFAI_ORDER_PROBE`,
 `FFAI_ORDER_VERIFY`, `FFAI_ORDER_GUARD`, `FFAI_CJK_FLUENCY`, `FFAI_BODY_ONLY`,
-`FFAI_DB_BIN`, `FFAI_DB_BOX`, `FFAI_DB_UNCLIP`, `FFAI_ARM_ENGINE`.
+`FFAI_DB_BIN`, `FFAI_DB_BOX`, `FFAI_DB_UNCLIP`, `FFAI_ARM_ENGINE`;
+`FFAI_ROUTE` (+`FFAI_ROUTE_SCORE`/`RETAIN`/`COVER`/`ABSORB`, §48–§51);
+`FFAI_ORDER_SELECT=2` (+`FFAI_ORDER_V2_MARGIN`, §51).
 
 ---
 
@@ -104,6 +113,9 @@ Engine toggles that exist: `FFAI_ORDER_GATE`, `FFAI_ORDER_PROBE`,
 | Script-aware `join_fluency` (CJK arm) | +0.0073 text, CI excludes 0 | §18 |
 | **Body-only suppression OFF** | **+0.0089/+0.0582 EN, +0.0486/+0.1096 non-EN** | §16, §19 |
 | Harness repair (crashes scored as 1.0) | +0.0056 text, +0.0033 order | §28 |
+| **Region routing** (`FFAI_ROUTE=1`, opt-in) | **−0.0186 order**, text neutral | §49 |
+| Routing absorption cap (default on inside routing) | +0.0010 text / +0.0012 order; 2 catastrophes rescued, 0 hurt | §51 |
+| **Ordering selection v2** (`FFAI_ORDER_SELECT=2`) | **+0.0035 order, CI excludes 0; text 0.0000** | §51 |
 
 ### Confirmed real on the correct instrument
 
@@ -125,6 +137,7 @@ Engine toggles that exist: `FFAI_ORDER_GATE`, `FFAI_ORDER_PROBE`,
 | Leading/trailing furniture strip | −0.0041 text, CI excludes 0 |
 | `FFAI_DB_BIN` / `BOX` / `UNCLIP` sweeps | flat — detection thresholds are not the mechanism |
 | Dropping the §8.157 guard | changes **6 of 755 pages**, net −0.000023. Inert |
+| Raster as an ordering-pool challenger | wins the contiguity PROXY, loses Text^Edit −0.0185 (CI excl. 0) — contiguity is blind to interleaving (§51) |
 
 ---
 
@@ -162,6 +175,12 @@ post-processing (§31 audited every filter), it is NOT detection thresholds
 (§28), and recognition is demonstrably good — sampled CJK output is
 character-accurate against GT. Something else is wrong and nobody has found it.
 That is the honest frontier.
+
+**The ordering prize survived the §49 routing win** (re-priced §50): a
+text-lines-only oracle still reads **+0.0190 text / +0.0449 order** over the
+banked baseline, floats contribute ~zero as a reorder, and the deficit splits
+~70 % pool ceiling / ~30 % selector regret
+(`docs/plans/carmenta-ordering-audit.md` has the executed plan and sequencing).
 
 **A quarter of remaining ORDER error is the metric's degenerate case** — pages
 with ≤1 orderable region scoring 0.6–0.7 where no sequence exists to get wrong.
