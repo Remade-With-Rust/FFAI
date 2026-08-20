@@ -1,12 +1,40 @@
 # ffai-carmenta
 
-**OCR in pure Rust — documents, screens, and a LIVE streaming mode no mainstream OCR tool ships.** Text detection, mixed-case recognition, computed reading order, and a change-gated frame reader that never re-rolls on noise. No Python, no C/C++ by default, no gated weights, nothing GPL.
+[![crates.io](https://img.shields.io/crates/v/ffai-carmenta?logo=rust)](https://crates.io/crates/ffai-carmenta)
+[![docs.rs](https://img.shields.io/docsrs/ffai-carmenta?logo=docsdotrs)](https://docs.rs/ffai-carmenta)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/Remade-With-Rust/FFAI)
+[![Remade With Rust](https://img.shields.io/badge/Remade%20With-Rust-000?logo=rust&logoColor=fff)](https://github.com/Remade-With-Rust)
+[![By Mata Network](https://img.shields.io/badge/by-Mata%20Network-5b2be0)](https://www.mata.network/)
 
-Carmenta is [FFai](https://github.com/Remade-With-Rust/FFAI)'s OCR component, named for the Roman goddess who adapted the Greek alphabet into Latin letters. Standalone landing page: [Remade-With-Rust/carmenta](https://github.com/Remade-With-Rust/carmenta).
+> **OCR in pure Rust — documents, screens, and a LIVE streaming mode no
+> mainstream OCR tool ships.** Text detection, mixed-case recognition, computed
+> reading order, and a change-gated frame reader that never re-rolls on noise.
+> No Python, no gated weights, nothing GPL — the OCR component of the
+> [FFai](https://github.com/Remade-With-Rust/FFAI) toolkit.
+
+**Most users want the whole toolkit — [FFai](https://github.com/Remade-With-Rust/FFAI)
+and its `ffai` binary.** Depend on this crate directly when OCR is the only
+component you need: it brings the detection and recognition engines, the
+computed reading order and `LiveSession`, and nothing else.
+
+Carmenta is named for the Roman goddess who adapted the Greek alphabet into
+Latin letters. Standalone landing page:
+[Remade-With-Rust/carmenta](https://github.com/Remade-With-Rust/carmenta).
+
+Part of **[Remade With Rust](https://github.com/Remade-With-Rust)** by
+**[Mata Network](https://www.mata.network/)**.
+
+---
+
+## Install
+
+```sh
+cargo add ffai-carmenta ffai-core ffai-media
+```
 
 ```toml
 [dependencies]
-ffai-carmenta = "0.6"
+ffai-carmenta = "0.8"
 ffai-core = "0.6"
 ffai-media = "0.6"
 ```
@@ -15,9 +43,9 @@ ffai-media = "0.6"
 
 ```rust
 use ffai_core::engine::{OcrEngine, OcrOptions};
-use ffai_carmenta::engine::CraftCrnn;
+use ffai_carmenta::engine::{CraftCrnn, RecStage};
 
-let engine = CraftCrnn::new_mobiledet(RecStage::Crnn);   // mobiledet-crnn
+let engine = CraftCrnn::new_mobiledet(RecStage::Svtr);   // mobiledet-svtr
 let image  = ffai_media::load_image("page.png")?;
 let out = engine.recognize(&image, &OcrOptions::default())?;
 println!("{}", out.text());
@@ -36,50 +64,41 @@ Engines are selected by lineage name, like codecs in ffmpeg:
 
 | Engine | Detector | Recognition | Where it wins (measured) |
 |---|---|---|---|
-| `mobiledet-crnn` | PP-OCRv5 mobile (4.7 MB) | line CTC | **documents** — the strongest on real pages |
+| `mobiledet-svtr` | PP-OCRv5 mobile (4.7 MB) | SVTR CTC (CJK+Latin) | **documents** — the strongest on real pages, English and Chinese |
+| `mobiledet-crnn` | PP-OCRv5 mobile | line CTC | lighter documents fallback |
 | `craft-crnn` | CRAFT VGG16-BN | line CTC | clean UI/screen text, LIVE |
 | `craft-parseq` | CRAFT | word AR (PARSeq-tiny) | photographs — **1.5 % CER on real-photo crops where PaddleOCR's own recognizer reads 3.0 %**, 2.6x faster |
 
 ## Documents
 
-Reading order is **computed, not learned**: a recursive XY-cut over the boxes the
-detector already produced, routed per-node between a column grid and a
-projection cut. No layout model, no extra weights.
+The document engine is `mobiledet-svtr`: DBNet detection (4.7 MB) plus
+PP-OCRv5 SVTR recognition (16 MB, an 18 385-class CJK+Latin head). Reading
+order is **computed, not learned**: several candidate orderings are built per
+page from the boxes the detector already produced and the most self-coherent
+is kept — no layout model required. Tables and isolated formulas can
+additionally be routed to dedicated structure models (`FFAI_ROUTE=1`,
+experimental: pure-Rust ports of PP-DocLayout-S, SLANet-plus and
+PP-FormulaNet-S, each matched against its reference runtime).
 
-Measured on the [OmniDocBench](https://github.com/opendatalab/OmniDocBench)
-English holdout (236 pages, Apache-2.0 — the benchmark Baidu's Unlimited-OCR
-states its record on):
+Measured by [OmniDocBench](https://github.com/opendatalab/OmniDocBench)'s
+**own evaluator** — the benchmark PaddleOCR-VL and Baidu's Unlimited-OCR state
+their records on — over all 1 651 pages of v1.6, English and Chinese:
 
-| 236 real document pages | CER | correctness |
+| all 1 651 pages, official metric (lower is better) | Carmenta, CPU | published range |
 |---|---:|---|
-| `mobiledet-crnn` | **18.88 %** micro · 30.25 % macro | 236/236 PASS |
+| Text edit distance | **0.127** | 0.033 (PaddleOCR-VL) – 0.157 (Marker) |
+| Reading-order edit distance | **0.209** | 0.116 – 0.243 |
 
-Reading order is worth **5.9 points of CER** on this corpus and the recursive cut
-is worth **3.4x** against raster ordering. The page picks its own ordering at run
-time — three strategies are computed and the most column-coherent kept, which no
-single strategy matches. An oracle layout model would be worth
-a further ~12 points — measured, and the ceiling every ordering idea competes
-for.
+Ahead of published pipelines on reading order's worst rows, well behind the
+VLM leaders on text — and the gap is *characterised*, not guessed: on the
+236-page English holdout with no tables or formulas (content the pipeline
+fully represents), Carmenta reads **0.041**, between PaddleOCR-VL's 0.033
+(a 3B-class model on GPU) and PP-StructureV3's 0.079 (the full Paddle
+pipeline). Most of the remaining headline gap is formula/table coverage,
+which the routing stage exists to close, not character accuracy.
 
-On a 43-page subset where all three engines ran through the same harness and the
-same metric:
-
-| 43 pages | CER | pages/s | memory |
-|---|---:|---:|---:|
-| Unlimited-OCR (Baidu, 3B MoE, **GPU**) | 15.51 % | 0.01 | 8745 MiB peak |
-| PP-StructureV3 | 19.14 % | 0.02 | 1481 MiB steady |
-| **`mobiledet-crnn` (ours, CPU)** | **23.76 %** | **0.15** | **425 MiB steady** |
-
-Carmenta's row was **25.91 %** before per-node reading-order routing landed; the
-same 43 pages, same harness, same metric now read **23.76 %**. The deficit
-against the 3B GPU reference fell from **10.40 pp to 8.25 pp** — a 21 %
-reduction, from ordering alone, with no new weights.
-
-Behind on quality, **17x the throughput on a machine with no GPU, from 4.7 MB of
-detector weights against 6.4 GB**. Where the remaining gap lives is measured:
-**89 % of it is sequence, not characters** — order-free CER sits 1.40 pp from
-PP-StructureV3 (69 pages, z = +2.29). We read the characters about as well; we
-assemble them worse.
+All of this on CPU at ~9–17 s/page — roughly 9× the reference VLM's measured
+throughput on the same machine, from megabytes of weights against gigabytes.
 
 ## LIVE: point it at a screen
 
@@ -140,24 +159,62 @@ tilt-sensitive line grouping, with deskew as the named fix.
 
 ## Status: `experimental`, honestly
 
-Documents are the strongest surface: 236/236 correctness on OmniDocBench, and a
-gap to the 3B GPU reference that is now characterised rather than guessed. LIVE
-holds zero-churn and beats its own batch mode on accuracy; its batch-parity
-check currently reports breaks that trace to the change gate's tolerance rather
-than to lost accuracy, and that gate definition is being fixed rather than
-explained away. Photographs trail PaddleOCR.
+Documents are the strongest surface: 1651/1651 pages processed with zero
+engine failures on OmniDocBench v1.6, scored by the benchmark's own evaluator,
+and a gap to the VLM leaders that is characterised rather than guessed. The
+table/formula routing stage is opt-in and experimental — its model weights are
+not yet wired into the `ffai-models` cache. LIVE holds zero-churn and beats
+its own batch mode on accuracy; its batch-parity check currently reports
+breaks that trace to the change gate's tolerance rather than to lost accuracy,
+and that gate definition is being fixed rather than explained away.
+Photographs trail PaddleOCR.
 
-Run-to-run CER varies by ~0.5 pp on identical inputs (non-deterministic parallel
-reduction), so single-run differences below that are not results.
+Every number traces to the campaign log at
+[`docs/plans/benching-history-made.md`](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/plans/benching-history-made.md),
+which records the losses and refuted hypotheses beside the wins — including
+the ordering variants that failed, the instrument errors that produced
+retracted findings, and the scorer bias that forced this page's earlier
+numbers to be re-measured on the official evaluator.
 
-Every number traces to a line in
-[`bench/ledger.jsonl`](https://github.com/Remade-With-Rust/FFAI/blob/master/bench/ledger.jsonl);
-the [mission plan](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/Carmenta-mission-plan.md)
-records the losses and refuted hypotheses beside the wins — including five
-ordering variants that failed and the instrument errors that produced two
-retracted findings.
+## Where this sits
+
+| Crate | Role |
+|---|---|
+| [`ffai-cli`](https://crates.io/crates/ffai-cli) | the `ffai` binary — every component behind one command |
+| [`ffai-core`](https://crates.io/crates/ffai-core) | engine traits, shared types, the registry; candle is the tensor spine |
+| [`ffai-media`](https://crates.io/crates/ffai-media) | ingest and egress — images, audio, video, subtitle formats |
+| [`ffai-models`](https://crates.io/crates/ffai-models) | hash-verified weight manifests and the local cache |
+| **[`ffai-carmenta`](https://crates.io/crates/ffai-carmenta)** | **← you are here** — OCR: detection, recognition, reading order, LIVE |
+| [`ffai-mercury`](https://crates.io/crates/ffai-mercury) | speech — ASR (Whisper/WhisperX-class) and TTS (VITS/piper-class) |
+| [`ffai-diana`](https://crates.io/crates/ffai-diana) | object detection, depth and tracking (YOLO26) |
+| [`ffai-argus`](https://crates.io/crates/ffai-argus) | vision-language captioning — pending build |
+| [`ffai-bench`](https://crates.io/crates/ffai-bench) | the measurement harness every number on this page comes from |
+
+Engines are selected by lineage name, like codecs in ffmpeg; `ffai engines`
+lists them all with status.
+
+## The Remade With Rust ecosystem
+
+<!-- ORG BOILERPLATE — keep identical across repos -->
+
+**Remade With Rust** is an initiative by **[Mata Network](https://www.mata.network/)**
+to rebuild essential C and C++ tools in Rust — for the memory safety, the
+predictable performance, and the freedom of a permissive license. Each project
+is a reimplementation, not a fork: same wire protocols and file formats, new
+code you can actually depend on. No copyleft. No surprises.
+
+| Project | What it is |
+|---|---|
+| 🎬 **[remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)** | **Our FFmpeg alternative.** Drop-in `ffmpeg` and `ffprobe` binaries — demux → decode → filter → encode → mux, rebuilt as composable Rust crates with **zero GPL/LGPL**. Apache-2.0. `rusty_h264` is its H.264 codec. |
+| 🧠 **[FFAI](https://github.com/Remade-With-Rust/FFAI)** | **Our sister project: media *for* AI.** "The AI media toolkit, remade with rust." Embedded ASR + TTS (**Mercury**), OCR (**Carmenta**) and vision-language captioning (**Argus**) behind an ffmpeg-style, swap-by-name architecture — no Python, no CUDA. MIT OR Apache-2.0. |
+| 🌐 **[Mata Network](https://www.mata.network/)** | **The home page.** *"Stop sacrificing your privacy for convenience."* Sovereign, self-hostable privacy infrastructure — wallet & identity, password manager, contact manager, and a browser extension that stops information leaking as you browse. Remade With Rust is its open-source arm. |
+
+→ All projects: **[github.com/Remade-With-Rust](https://github.com/Remade-With-Rust)**
+
+<!-- /ORG BOILERPLATE -->
 
 ## License
 
-MIT OR Apache-2.0. Model weights carry their own licenses, surfaced at selection
-time.
+MIT OR Apache-2.0, at your option. **Model weights are not covered by it** —
+each carries its own license, surfaced at selection time and in
+`ffai models`.

@@ -1,0 +1,32 @@
+# Language statistics overrides (GitHub Linguist).
+#
+# Nothing in this file deletes, ignores, or hides anything — every path below
+# stays fully tracked, diffed and reviewed. The only effect is on the language
+# bar GitHub prints at the top of the repo page.
+#
+# The reason it needs saying: this project gates every Rust port on a reference
+# oracle, and every reference implementation worth gating against — Ultralytics,
+# PaddleOCR, SVTR, CRNN, MobileDet, Piper, Whisper — is Python. So each port
+# arrives with a Python twin that dumps the fixtures, produces the oracle
+# digests the Rust tests read, and scores the external baseline. As of the
+# Diana and Carmenta campaigns that is 65 files and 358 KB, which is ~11% of
+# the bytes Linguist counts, which puts Python second on the bar of a repo
+# whose whole premise is that it is Rust. The bar was measuring the evidence
+# layer, not the deliverable.
+#
+# `linguist-detectable=false` is the honest attribute for that. `-vendored`
+# would claim this is third-party code we merely carry (it is first-party, and
+# written here); `-generated` would additionally collapse these files in diffs,
+# which is exactly wrong for scripts whose review is how a fixture gets
+# trusted. Detectable-false says the one true thing: not part of the shipped
+# artifact, so not part of its language stats.
+#
+# SCOPED TO DIRECTORIES, NOT TO `*.py`. A blanket `*.py` rule would also
+# silence any Python that ever lands inside a crate — and Python inside a crate
+# is precisely the thing that should be loud. These two directories hold no
+# shipped code by construction: tools/ is 44 .py + 3 .sh + 2 .ps1 harnesses and
+# nothing else, corpora/refs/ is 21 .py alongside the fixtures they generate.
+# If that ever stops being true, this rule is wrong and should be narrowed.
+
+tools/**        linguist-detectable=false
+corpora/refs/** linguist-detectable=false

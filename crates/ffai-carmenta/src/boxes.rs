@@ -97,11 +97,44 @@ pub fn group_lines(mut boxes: Vec<DetBox>) -> Vec<Vec<DetBox>> {
         let frac = env_f32("FFAI_LINE_OVERLAP", 0.5);
         let back = std::env::var("FFAI_LINE_BACK").ok()
             .and_then(|v| v.parse().ok()).unwrap_or(3usize);
+        // §1.4: X-ADJACENCY. The join test above is vertical overlap ALONE, so a
+        // box at the right margin joins a line built entirely at the left margin
+        // whenever they share a y-band — which is how a two-column page becomes
+        // one line per row across both columns. `FFAI_LINE_XGAP` requires the
+        // box to sit within N line-heights of the line's current extent.
+        //
+        // Measured in LINE HEIGHTS, not pixels or page fractions: the quantity
+        // that decides whether two words belong to the same line is the space
+        // between them relative to the type size, and that is scale-free across
+        // a 640 px frame and a 2400 px receipt.
+        //
+        // DEFAULT 0.0 = OFF, so the shipped path is byte-identical until a gate
+        // says otherwise. This condition was built once before (§42), swept over
+        // four tolerances, and returned numbers identical to the last digit —
+        // because it was measured on `mobiledet-svtr`, where `group_lines` is
+        // NEVER CALLED. It is only reachable from the CRAFT path (engine.rs:370)
+        // and Composed's orphan boxes (engine.rs:517), so it must be gated on
+        // the LIVE and photo corpora, never on OmniDocBench.
+        let xgap = env_f32("FFAI_LINE_XGAP", 0.0);
         let joined = lines.iter_mut().rev().take(back).find(|line| {
             let (ly0, ly1) = line_span(line);
             let inter = b.y1.min(ly1).saturating_sub(b.y0.max(ly0));
             let min_h = (b.y1 - b.y0).min(ly1 - ly0).max(1);
-            inter as f32 > min_h as f32 * frac
+            if inter as f32 <= min_h as f32 * frac {
+                return false;
+            }
+            if xgap <= 0.0 {
+                return true;
+            }
+            let lb = line_bbox(line);
+            let gap = if b.x0 >= lb.x1 {
+                (b.x0 - lb.x1) as f32
+            } else if lb.x0 >= b.x1 {
+                (lb.x0 - b.x1) as f32
+            } else {
+                0.0 // overlapping in x — already the same column
+            };
+            gap <= xgap * (ly1 - ly0).max(1) as f32
         });
         match joined {
             Some(line) => line.push(b),
@@ -400,7 +433,14 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("cost") => xy_cut_cost(lines, page_w, 0),
         Ok("span") => xy_cut_span(lines, page_w, 0),
         _ => {
-            let out = order_by_selection(lines, page_w);
+            // §51: `FFAI_ORDER_SELECT=2` swaps the selection for the v2
+            // objective + raster challenger. Unset, the shipped selection runs
+            // and output is byte-identical — one binary, two env settings.
+            let out = if std::env::var("FFAI_ORDER_SELECT").as_deref() == Ok("2") {
+                order_by_selection_v2(lines, page_w)
+            } else {
+                order_by_selection(lines, page_w)
+            };
             // §8.156 SPARSE-PAGE GATE, default ON. `FFAI_ORDER_GATE=0` disables.
             // Measured through the engine on 236 holdout pages, one binary and
             // two env settings with the arms interleaved: macro 20.459 % ->
@@ -735,6 +775,81 @@ fn order_by_selection(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(_, c)| c)
         .unwrap_or_else(Vec::new)
+}
+
+/// §51 selection objective: `wreset + 0.5·yback + 2·scat`, lower is better.
+///
+/// The reset score's documented failure — "a wrong ordering can be more
+/// column-coherent than a right one" — is that it counts leftward jumps and
+/// sees nothing else. This prices three failure modes at once: `wreset` weighs
+/// leftward jumps by their SIZE (a false column reset across the page costs
+/// more than a ragged margin), `yback` charges orderings that move UP the page
+/// (the signature of a wrong cut emitting a right column before a left one has
+/// finished), and `scat` (the §8.156 sparse-scatter) charges sequences that
+/// leap vertically. Weights fixed offline on the 1469-page census
+/// (`stage34_pool.py`): the optimum is FLAT across 1–2× on every term, so
+/// these are round numbers from a plateau, not a knife-edge fit.
+fn order_objective(ord: &[Vec<DetBox>], page_w: usize) -> f32 {
+    if ord.len() < 2 {
+        return 0.0;
+    }
+    let n1 = (ord.len() - 1) as f32;
+    let bb: Vec<DetBox> = ord.iter().map(|l| line_bbox(l)).collect();
+    let xs: Vec<f32> =
+        bb.iter().map(|b| (b.x0 + b.x1) as f32 / 2.0 / page_w.max(1) as f32).collect();
+    let wreset: f32 = xs.windows(2).map(|w| (w[0] - w[1]).max(0.0)).sum::<f32>() / n1;
+    let mut hs: Vec<f32> = bb.iter().map(|b| (b.y1 - b.y0) as f32).collect();
+    hs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let med_h = if hs.len() % 2 == 1 {
+        hs[hs.len() / 2]
+    } else {
+        (hs[hs.len() / 2 - 1] + hs[hs.len() / 2]) / 2.0
+    }
+    .max(1.0);
+    let ys: Vec<f32> = bb.iter().map(|b| (b.y0 + b.y1) as f32 / 2.0).collect();
+    let yback =
+        ys.windows(2).filter(|w| w[1] < w[0] - med_h).count() as f32 / n1;
+    wreset + 0.5 * yback + 2.0 * sparse_scatter(ord)
+}
+
+/// §51 selection v2 — the same three candidates scored by `order_objective`.
+/// A RASTER challenger exists behind `FFAI_ORDER_V2_MARGIN`, REFUTED as a
+/// default.
+///
+/// §1.1's note-page sign-flip (raster beats ordering there, 0.940 vs 0.785
+/// contiguity) argued for raster in the menu, and on the CONTIGUITY PROXY a
+/// margin-guarded challenger won (+0.004 mean). The evaluator refused it: on
+/// the 170 pages the challenger took at margin 0.04, Text^Edit read **−0.0185
+/// (EN −0.0375), CI excluding zero** — a raster-assembled multi-column page
+/// keeps its blocks index-compact (what contiguity sees) while interleaving
+/// them across columns (what block matching sees). The objective swap alone,
+/// same instrument, read order +0.0106 / text +0.0004. So the default margin
+/// is beyond reach and the challenger fires only when explicitly asked —
+/// salvage, if any, is a sparse-page-only condition, not a lower bar.
+///
+/// Reached only via `FFAI_ORDER_SELECT=2`; the §8.156 sparse gate still runs
+/// on whatever this returns.
+fn order_by_selection_v2(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>> {
+    if lines.len() < 6 || page_w == 0 {
+        return xy_cut_pernode(lines, page_w, 0);
+    }
+    let incumbents = [
+        xy_cut_pernode(lines.clone(), page_w, 0),
+        xy_cut(lines.clone(), page_w, 0),
+        xy_cut_vfirst(lines.clone(), page_w, 0),
+    ];
+    let challenger = sorted_by_y(lines);
+    let (inc_obj, inc) = incumbents
+        .into_iter()
+        .map(|c| (order_objective(&c, page_w), c))
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .expect("three candidates");
+    let margin = env_f32("FFAI_ORDER_V2_MARGIN", f32::INFINITY);
+    if order_objective(&challenger, page_w) < inc_obj - margin {
+        challenger
+    } else {
+        inc
+    }
 }
 
 /// Route between grid and recursion at every NODE, not once per page.
@@ -1279,6 +1394,74 @@ fn element_tops(lines: &[Vec<DetBox>], page_w: usize, lh: f32) -> Vec<usize> {
 /// A 3.5x separation, against the 1.05-vs-1.03 that box HEIGHT gave. At 0.8x it
 /// catches 17 of 20 merges and touches 1.9 % of everything else; at 1.0x, 15 of
 /// 20 and 0.7 %.
+/// Split a TALL-NARROW box into upright glyph cells — vertical CJK typesetting.
+///
+/// §43. Detection is not the defect on these pages: on `page-942ac90d` DBNet's
+/// probability map reads 0.242 inside the GT text against 0.002 outside, and
+/// `boxes_from_probability` passes 16 of 19 components with a median shape of
+/// **19 x 1115**. Those boxes are the text columns, found correctly. The loss is
+/// in recognition: `svtr_input` scales every crop to height 48 and derives the
+/// width from the aspect, so a 1115-pixel column collapses to the 8-px floor and
+/// the page emits ONE character.
+///
+/// **Rotation was tried first and REFUTED.** PaddleOCR turns a crop 90° when
+/// height/width exceeds ~1.5, and that rule is for genuinely ROTATED lines. In
+/// classical CJK vertical typesetting the glyphs stay UPRIGHT and stack
+/// downward, so rotating the column lays every glyph on its side. Measured: 1
+/// character became 43, of which nearly all were rotation-symmetric forms
+/// (`一`, `。`, `十`, `日`, `）`) against 719 GT characters. The output was the
+/// hypothesis refuting itself.
+///
+/// The transform that matches the typesetting is to CUT the column into cells
+/// about as tall as it is wide. Each cell is one upright glyph, which the
+/// recognizer already handles — it is just a very short line.
+///
+/// ## The threshold is 4.0, and it was chosen by blast radius, not by recovery
+///
+/// A vertical column and a tall glyph are not close: the columns measure
+/// **aspect ~59** (19x1115), while the tallest single glyphs in the corpus —
+/// digits like `27x69 '4'` and `72x171 '2'` in books — sit at **2.4-2.6**.
+/// Counting every box the engine currently emits, by threshold:
+///
+/// | thr | boxes split OUTSIDE vertical pages | pages hit |
+/// |---|---:|---:|
+/// | 2.0 | **199** | 92 |
+/// | 3.0 | 1 | 1 |
+/// | **4.0** | **0** | **0** |
+///
+/// At 2.0 the split would slice 199 tall digits into meaningless strips. At 4.0
+/// nothing the engine currently emits is touched anywhere in the corpus, and
+/// recovery is unchanged — 270 / 72 / 446 characters on the three vertical pages
+/// against 270 / 72 / 464 at 2.0. So the safe threshold costs 18 characters on
+/// one page and removes every measured regression.
+///
+/// DEFAULT ON at 4.0. `FFAI_VSPLIT_ASPECT=0` disables it, and the disabled path
+/// is byte-identical to the pre-§43 engine, so it stays the oracle.
+pub fn split_vertical_columns(boxes: Vec<DetBox>) -> Vec<DetBox> {
+    let thr = env_f32("FFAI_VSPLIT_ASPECT", 4.0);
+    if thr <= 0.0 {
+        return boxes;
+    }
+    let mut out = Vec::with_capacity(boxes.len());
+    for b in boxes {
+        let (bw, bh) = (b.x1.saturating_sub(b.x0), b.y1.saturating_sub(b.y0));
+        if bw == 0 || (bh as f32) <= thr * bw as f32 {
+            out.push(b);
+            continue;
+        }
+        // cells about as tall as the column is wide: one glyph each
+        let n = ((bh as f32 / bw as f32).round() as usize).max(1);
+        for i in 0..n {
+            let y0 = b.y0 + bh * i / n;
+            let y1 = b.y0 + bh * (i + 1) / n;
+            if y1 > y0 + 1 {
+                out.push(DetBox { x0: b.x0, y0, x1: b.x1, y1, score: b.score });
+            }
+        }
+    }
+    out
+}
+
 pub fn split_at_white_corridor(
     boxes: Vec<DetBox>,
     gray: &[f32],

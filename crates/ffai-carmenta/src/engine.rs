@@ -104,6 +104,9 @@ pub struct CraftCrnn {
     manifest_dir: std::path::PathBuf,
     rec: RecStage,
     det: DetStage,
+    /// §48: the three ONNX stages, loaded on first ROUTED page. Separate from
+    /// `models` because a run with routing off must not pay for them at all.
+    router: OnceLock<std::result::Result<crate::route::Router, String>>,
 }
 
 impl CraftCrnn {
@@ -133,6 +136,7 @@ impl CraftCrnn {
             manifest_dir: Path::new("models").to_path_buf(),
             rec,
             det,
+            router: OnceLock::new(),
         }
     }
 
@@ -142,6 +146,14 @@ impl CraftCrnn {
             manifest_dir: dir.to_path_buf(),
             rec: RecStage::Crnn,
             det: DetStage::Craft,
+            router: OnceLock::new(),
+        }
+    }
+
+    fn router(&self) -> Result<&crate::route::Router> {
+        match self.router.get_or_init(|| crate::route::Router::new().map_err(|e| e.to_string())) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(Error::Model(e.clone())),
         }
     }
 
@@ -413,6 +425,9 @@ impl OcrEngine for CraftCrnn {
                         // it reads 1.000 at the very gutter that was bridged,
                         // and that hallucination is the defect.
                         let mut b = boxes::split_at_white_corridor(b, &gray, w, h);
+                        // §43: vertical CJK columns into upright glyph cells.
+                        // Off by default; see `split_vertical_columns`.
+                        b = boxes::split_vertical_columns(b);
                         if std::env::var("FFAI_DET_DEBUG").is_ok() {
                             eprintln!(
                                 "mobiledet: {} boxes; image {w}x{h} -> map {pw}x{ph} (sx {sx:.3} sy {sy:.3})",
@@ -761,6 +776,41 @@ impl OcrEngine for CraftCrnn {
         };
         let out_lines =
             crate::suppress::probe_reorder(out_lines, &probe_stats, lowconf, w as f32, h as f32);
+
+        // §48: REGION ROUTING. Runs last, on the finished sequence, so the
+        // reading order §29–§43 earned is spliced into rather than rebuilt.
+        // Opt-in (`FFAI_ROUTE=1`) — a stage that replaces read text with a
+        // model's rendering must be asked for until a gate says it pays.
+        let out_lines = if crate::route::enabled() {
+            let r = self.router()?;
+            // The router reads TABLE CELLS with whatever recognizer this engine
+            // was built with — it is the only place that knows which one ran.
+            let rec_box = |x0: usize, y0: usize, x1: usize, y1: usize| -> Option<String> {
+                match self.rec {
+                    RecStage::Svtr => {
+                        let (svtr, charset) = m.svtr.as_ref()?;
+                        let crop = crate::svtr::svtr_input(img, x0, y0, x1, y1, &m.device).ok()?;
+                        let probs = svtr.forward(&crop).ok()?;
+                        crate::svtr::ctc_greedy(&probs, charset).ok().map(|(t, _)| t)
+                    }
+                    RecStage::Crnn => {
+                        let crnn = m.crnn.as_ref()?;
+                        let crop =
+                            image::crnn_input(&gray, w, h, x0, y0, x1, y1, &m.device).ok()?;
+                        let logits = crnn.forward(&crop).ok()?;
+                        crnn.decode(&logits).ok().map(|(t, _)| t)
+                    }
+                    // PARSeq is word-level with its own splitting; a cell crop
+                    // is not the unit it takes, so the line fallback applies.
+                    RecStage::Parseq => None,
+                }
+            };
+            crate::profile::timed(|p| &p.boxes, || {
+                crate::route::apply(r, img, out_lines, &rec_box)
+            })?
+        } else {
+            out_lines
+        };
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.

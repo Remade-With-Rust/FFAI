@@ -340,6 +340,30 @@ pub fn svtr_input(
             }
         }
     }
+    // R.1 ORACLE HAND-OFF. `FFAI_SVTR_DUMP=<dir>` writes the exact tensor this
+    // recognizer is about to read, so the reference weights can be given
+    // BYTE-IDENTICAL input under onnxruntime.
+    //
+    // Handing the reference our IMAGE instead would re-run its own
+    // preprocessing and compare two different things — §48 learned that the
+    // hard way, where a token-perfect ORT match validated the executor while a
+    // white-padding bug sat untouched in the preprocessing the oracle never saw.
+    //
+    // Pair with `FFAI_REC_SERIAL=1`: lines are recognised in parallel above a
+    // threshold, and a shared counter would not match the emitted line order.
+    if let Ok(dir) = std::env::var("FFAI_SVTR_DUMP") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let _ = std::fs::create_dir_all(&dir);
+        let mut b = Vec::with_capacity(8 + planes.len() * 4);
+        b.extend_from_slice(&(w as u32).to_le_bytes());
+        b.extend_from_slice(&(H as u32).to_le_bytes());
+        for v in &planes {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{n:05}.bin")), b);
+    }
     Tensor::from_vec(planes, (1, 3, H, w), device)
 }
 
@@ -367,6 +391,58 @@ pub fn ctc_greedy(probs: &Tensor, charset: &[String]) -> Result<(String, Option<
     }
     let _ = n;
     Ok((out, if kept == 0 { None } else { Some(sum / kept as f32) }))
+}
+
+/// One emitted run of characters, with WHERE ON THE LINE it came from.
+#[derive(Debug, Clone)]
+pub struct CharSpan {
+    /// byte offset of this run within the decoded string
+    pub byte: usize,
+    /// fraction along the crop, 0..1, of the timestep that emitted it
+    pub x: f32,
+}
+
+/// `ctc_greedy`, plus the x-position of every emitted character run.
+///
+/// F.2 of the recognition audit. Splicing a formula's LaTeX into a line needs to
+/// know WHERE in the decoded string a pixel span falls, and CTC already knows:
+/// the decoder walks T timesteps left to right across the resized crop, so a
+/// kept timestep IS an x-position. Timestep `i` of `t` sits at `(i + 0.5) / t`
+/// along the crop, which the caller maps back to page pixels through the crop
+/// rectangle it built.
+///
+/// No model change and no second forward pass — the information was always in
+/// the loop, simply discarded. Kept as a SEPARATE function so `ctc_greedy` stays
+/// byte-identical: F.2's gate is that the emitted text does not move, and the
+/// cheapest way to pass a byte-identity gate is to not touch the code that
+/// produces the bytes.
+pub fn ctc_greedy_spans(
+    probs: &Tensor,
+    charset: &[String],
+) -> Result<(String, Option<f32>, Vec<CharSpan>)> {
+    let (_, t, _) = probs.dims3()?;
+    let best = probs.argmax(D::Minus1)?.flatten_all()?.to_vec1::<u32>()?;
+    let conf = probs.max(D::Minus1)?.flatten_all()?.to_vec1::<f32>()?;
+    let mut out = String::new();
+    let mut spans = Vec::new();
+    let (mut sum, mut kept) = (0f32, 0usize);
+    let mut prev = u32::MAX;
+    for i in 0..t {
+        let k = best[i];
+        if k != 0 && k != prev {
+            if let Some(s) = charset.get(k as usize - 1) {
+                spans.push(CharSpan {
+                    byte: out.len(),
+                    x: (i as f32 + 0.5) / t as f32,
+                });
+                out.push_str(s);
+            }
+            sum += conf[i];
+            kept += 1;
+        }
+        prev = k;
+    }
+    Ok((out, if kept == 0 { None } else { Some(sum / kept as f32) }, spans))
 }
 
 /// Charset in head order from the file `carmenta_svtr_prepare.py` writes.

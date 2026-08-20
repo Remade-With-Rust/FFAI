@@ -42,6 +42,11 @@ pub mod live;
 pub mod suppress;
 pub mod svtr;
 pub mod mobiledet;
+pub mod onnx_graph;
+pub mod doclayout;
+pub mod table;
+pub mod formula;
+pub mod route;
 pub mod parseq;
 pub mod profile;
 

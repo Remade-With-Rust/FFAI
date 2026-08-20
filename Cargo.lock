@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "candle-nn",
  "candle-transformers",

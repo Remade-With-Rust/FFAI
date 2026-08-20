@@ -48,6 +48,7 @@ fn main() {
     let cfg = BenchConfig {
         engine: Some(engine),
         skip_engine: false,
+        skip_references: false,
         corpus,
         references,
         // Best-of-1: CER is deterministic, and the timings this suite produces

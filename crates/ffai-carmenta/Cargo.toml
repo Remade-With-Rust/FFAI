@@ -9,7 +9,14 @@ description = "Carmenta — pure-Rust OCR: documents, screens, and a change-gate
 # for the same page is a compatibility break for anyone who pinned text.
 # The previous behaviour stays reachable at run time via `FFAI_ORDER=xycut`.
 # Its dependencies stay at the published 0.6.1.
-version = "0.7.0"
+# 0.8.0: the document stack (§43–§52). Vertical-CJK column splitting is ON by
+# default (changed text on vertical pages = the same compatibility rule as
+# 0.7.0; disable with `FFAI_VSPLIT_ASPECT=0`). Adds the opt-in table/formula
+# routing stage (`FFAI_ROUTE=1`: PP-DocLayout-S + SLANet-plus + PP-FormulaNet-S
+# ports, absorption-capped) and the opt-in ordering selection v2
+# (`FFAI_ORDER_SELECT=2`, banked +0.0035 ReadOrder at text-neutral on the
+# official OmniDocBench evaluator). README re-measured on that evaluator.
+version = "0.8.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
