@@ -32,6 +32,15 @@ def main():
         if attr.get("language") != "english": continue
         cats = {d["category_type"] for d in p["layout_dets"]}
         if not (cats & {"table", "equation_isolated"}): continue   # v1 has the rest
+        # §8.164 repair: carry table/equation/figure POLYGONS into the sidecar so
+        # their innards stop wearing the orphan label. The labeler calls a line
+        # orphan when it sits inside NO region; with mask polys present, table
+        # junk becomes "annotated" and the remaining orphans are the holdout-like
+        # ghost class. Mask regions carry no text and order=-1: they must never
+        # enter the .txt reference.
+        masks = [d for d in p["layout_dets"]
+                 if d["category_type"] in {"table", "equation_isolated", "figure"}
+                 and d.get("poly")]
         regions = [d for d in p["layout_dets"]
                    if d["category_type"] in TEXT_CATS
                    and str(d.get("ignore", "False")) != "True"
@@ -39,19 +48,22 @@ def main():
         if len(regions) < 3: continue
         regions.sort(key=lambda d: int(d.get("order", 0)))
         img = SRC / "images" / info["image_path"]
-        if img.exists(): kept.append((info, attr, regions, img))
+        if img.exists(): kept.append((info, attr, regions, img, masks))
     lines = ['name = "carmenta-omnidoc-train2"', "version = 1", 'task = "ocr"', ""]
     counts, n = Counter(), 0
-    for info, attr, regions, img in kept:
+    for info, attr, regions, img, masks in kept:
         stem = f"omnx-{n:04}"
-        shutil.copyfile(img, OUT / f"{stem}.png")
+        if not (OUT / f"{stem}.png").exists():
+            shutil.copyfile(img, OUT / f"{stem}.png")
         (OUT / f"{stem}.txt").write_text("\n".join(r["text"].strip() for r in regions), encoding="utf-8")
         (OUT / f"{stem}.json").write_text(json.dumps({
             "layout": attr.get("layout", "unknown"), "data_source": attr.get("data_source"),
             "page_size": [info.get("width"), info.get("height")],
             "source_image": info["image_path"],
             "regions": [{"order": int(r.get("order", 0)), "class": r["category_type"],
-                         "poly": r.get("poly"), "text": r["text"]} for r in regions],
+                         "poly": r.get("poly"), "text": r["text"]} for r in regions]
+                       + [{"order": -1, "class": m["category_type"],
+                           "poly": m["poly"], "text": ""} for m in masks],
         }, indent=1), encoding="utf-8")
         digest = hashlib.sha256((OUT / f"{stem}.png").read_bytes()).hexdigest()
         lines += ["[[clips]]", f'id = "{stem}"',

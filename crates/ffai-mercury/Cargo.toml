@@ -6,7 +6,9 @@ description = "Mercury — FFai's voice component: pure-Rust ASR (Whisper/Whispe
 # to 0.6.1 -- the API is purely additive, but this crate advertises byte-stable
 # determinism, so a changed waveform is a compatibility break for anyone who
 # pinned bytes. Its dependencies stay at the published 0.6.1.
-version = "0.7.0"
+# 0.7.1 is a documentation-only republish: README restructured to the shared
+# Remade With Rust page layout. No code, API or output change.
+version = "0.7.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

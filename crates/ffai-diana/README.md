@@ -1,8 +1,35 @@
 # ffai-diana
 
-**Object detection in pure Rust.** YOLO26 — the real graph, C3k2 / SPPF / C2PSA / attention and the NMS-free one2one head — running on candle from official Ultralytics checkpoints. No Python runtime, no ONNX, and **no vendored weights**.
+[![crates.io](https://img.shields.io/crates/v/ffai-diana?logo=rust)](https://crates.io/crates/ffai-diana)
+[![docs.rs](https://img.shields.io/docsrs/ffai-diana?logo=docsdotrs)](https://docs.rs/ffai-diana)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/Remade-With-Rust/FFAI)
+[![Remade With Rust](https://img.shields.io/badge/Remade%20With-Rust-000?logo=rust&logoColor=fff)](https://github.com/Remade-With-Rust)
+[![By Mata Network](https://img.shields.io/badge/by-Mata%20Network-5b2be0)](https://www.mata.network/)
 
-Diana is [FFai](https://github.com/Remade-With-Rust/FFAI)'s detection component. Standalone landing page: [Remade-With-Rust/diana](https://github.com/Remade-With-Rust/diana).
+> **Object detection in pure Rust.** YOLO26 — the real graph, C3k2 / SPPF /
+> C2PSA / attention and the NMS-free one2one head — running on candle from
+> official Ultralytics checkpoints, plus metric depth and ByteTrack tracking.
+> No Python runtime, no ONNX, and **no vendored weights** — the detection
+> component of the [FFai](https://github.com/Remade-With-Rust/FFAI) toolkit.
+
+**Most users want the whole toolkit — [FFai](https://github.com/Remade-With-Rust/FFAI)
+and its `ffai` binary.** Depend on this crate directly when detection is the
+only component you need: it brings the graph, the depth head, the tracker and
+the LIVE gate, and nothing else.
+
+Diana is named for the Roman goddess of the hunt. Standalone landing page:
+[Remade-With-Rust/diana](https://github.com/Remade-With-Rust/diana).
+
+Part of **[Remade With Rust](https://github.com/Remade-With-Rust)** by
+**[Mata Network](https://www.mata.network/)**.
+
+---
+
+## Install
+
+```sh
+cargo add ffai-diana ffai-core ffai-media
+```
 
 ```toml
 [dependencies]
@@ -458,7 +485,55 @@ The full campaign, every reverted experiment and every retracted number
 included:
 [docs/whys/diana-latency.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/whys/diana-latency.md).
 
+
+## Features
+
+| Feature | Default | Effect |
+|---|:--:|---|
+| `mkl` | — | **Diagnostic, not a shipping default.** Routes candle's matmul to Intel MKL to answer whether the GEMM *is* the gap to ONNX Runtime. It is a C library, which is what FFai exists not to depend on — the number it produces is evidence about where to aim, not a result to ship. |
+| `prometheus-telemetry` | — | Per-decision telemetry for the Prometheus harvester. Zero-cost when off (the hooks compile to empty bodies) and additive only — an instrumented engine must produce byte-identical output, which the oracle and determinism tests enforce. |
+| `alloc-rusty` / `alloc-sys` | — | Allocator arms for `examples/alloc_ab.rs`. Selecting one changes exactly one `#[global_allocator]` line and nothing else, which is what makes the A/B a measurement of the allocator rather than of two builds. |
+
+## Where this sits
+
+| Crate | Role |
+|---|---|
+| [`ffai-cli`](https://crates.io/crates/ffai-cli) | the `ffai` binary — every component behind one command |
+| [`ffai-core`](https://crates.io/crates/ffai-core) | engine traits, shared types, the registry; candle is the tensor spine |
+| [`ffai-media`](https://crates.io/crates/ffai-media) | ingest and egress — images, video (ten containers), audio |
+| [`ffai-models`](https://crates.io/crates/ffai-models) | hash-verified weight manifests and the local cache |
+| **[`ffai-diana`](https://crates.io/crates/ffai-diana)** | **← you are here** — detection, depth, tracking, the LIVE gate |
+| [`ffai-mercury`](https://crates.io/crates/ffai-mercury) | speech — ASR (Whisper/WhisperX-class) and TTS (VITS/piper-class) |
+| [`ffai-carmenta`](https://crates.io/crates/ffai-carmenta) | OCR — detection, recognition, computed reading order, LIVE |
+| [`ffai-argus`](https://crates.io/crates/ffai-argus) | vision-language captioning — pending build |
+| [`ffai-wasm`](https://crates.io/crates/ffai-wasm) | this crate's whole graph compiled to WebAssembly |
+| [`ffai-bench`](https://crates.io/crates/ffai-bench) | the measurement harness every number on this page comes from |
+
+Engines are selected by name, like codecs in ffmpeg; `ffai engines` lists them
+all with status.
+
+## The Remade With Rust ecosystem
+
+<!-- ORG BOILERPLATE — keep identical across repos -->
+
+**Remade With Rust** is an initiative by **[Mata Network](https://www.mata.network/)**
+to rebuild essential C and C++ tools in Rust — for the memory safety, the
+predictable performance, and the freedom of a permissive license. Each project
+is a reimplementation, not a fork: same wire protocols and file formats, new
+code you can actually depend on. No copyleft. No surprises.
+
+| Project | What it is |
+|---|---|
+| 🎬 **[remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)** | **Our FFmpeg alternative.** Drop-in `ffmpeg` and `ffprobe` binaries — demux → decode → filter → encode → mux, rebuilt as composable Rust crates with **zero GPL/LGPL**. Apache-2.0. `rusty_h264` is its H.264 codec. |
+| 🧠 **[FFAI](https://github.com/Remade-With-Rust/FFAI)** | **Our sister project: media *for* AI.** "The AI media toolkit, remade with rust." Embedded ASR + TTS (**Mercury**), OCR (**Carmenta**) and vision-language captioning (**Argus**) behind an ffmpeg-style, swap-by-name architecture — no Python, no CUDA. MIT OR Apache-2.0. |
+| 🌐 **[Mata Network](https://www.mata.network/)** | **The home page.** *"Stop sacrificing your privacy for convenience."* Sovereign, self-hostable privacy infrastructure — wallet & identity, password manager, contact manager, and a browser extension that stops information leaking as you browse. Remade With Rust is its open-source arm. |
+
+→ All projects: **[github.com/Remade-With-Rust](https://github.com/Remade-With-Rust)**
+
+<!-- /ORG BOILERPLATE -->
+
 ## License
 
-MIT OR Apache-2.0. **Model weights are not covered by it** — YOLO26
-checkpoints are AGPL-3.0 and you supply your own.
+MIT OR Apache-2.0, at your option. **Model weights are not covered by it** —
+YOLO26 checkpoints are AGPL-3.0 and you supply your own, converted offline by
+`tools/diana_convert.py`.
