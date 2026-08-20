@@ -16,6 +16,19 @@
 //! `corpora/refs/dump_piper_weights.py` into the model cache — see
 //! `models/piper-vits-lessac-medium.toml`. Weights are data, never vendored.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -45,15 +58,19 @@ struct Loaded {
 impl PiperCandle {
     /// The default engine: compiled-in manifests, weights from the cache.
     /// Works from any working directory.
-    pub fn new() -> Self {
-        PiperCandle { manifest_dir: None, loaded: OnceLock::new() }
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            manifest_dir: None,
+            loaded: OnceLock::new(),
+        }
     }
 
     /// Read the `cmudict` and voice manifests from `dir` instead of using the
     /// compiled-in copies — for a caller who ships their own manifests (a
     /// different voice, a relocated cache, a pinned checksum).
     pub fn with_manifest_dir(dir: impl AsRef<Path>) -> Self {
-        PiperCandle {
+        Self {
             manifest_dir: Some(dir.as_ref().to_path_buf()),
             loaded: OnceLock::new(),
         }
@@ -80,7 +97,11 @@ impl PiperCandle {
                 let onnx = resolved
                     .files
                     .iter()
-                    .find(|(n, _)| n.ends_with(".onnx"))
+                    .find(|(n, _)| {
+                        std::path::Path::new(n.as_str())
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("onnx"))
+                    })
                     .map(|(_, p)| p.clone())
                     .ok_or_else(|| Error::Model("voice manifest lists no .onnx".into()))?;
                 let config = resolved
@@ -127,6 +148,7 @@ impl Default for PiperCandle {
     }
 }
 
+#[allow(dead_code)] // default-voice path helper, retained for the manifest-free fallback
 fn model_dir() -> PathBuf {
     ffai_models::cache_dir().join("models").join(DEFAULT_VOICE)
 }
@@ -149,22 +171,23 @@ impl TtsEngine for PiperCandle {
     }
 
     fn synthesize(&self, text: &str, opts: &TtsOptions) -> Result<AudioBuffer> {
-        if let Some(voice) = &opts.voice {
-            if voice != DEFAULT_VOICE && voice != "en_US-lessac-medium" {
-                return Err(Error::Model(format!(
-                    "voice `{voice}` is not converted — {DEFAULT_VOICE} is the M-T2 voice; \
+        if let Some(voice) = &opts.voice
+            && voice != DEFAULT_VOICE
+            && voice != "en_US-lessac-medium"
+        {
+            return Err(Error::Model(format!(
+                "voice `{voice}` is not converted — {DEFAULT_VOICE} is the M-T2 voice; \
                      the tier sweep lands in M-T4"
-                )));
-            }
+            )));
         }
         let loaded = self.load()?;
         let defaults = loaded.vits.defaults;
         let synth = SynthesisOptions {
             // speed is the user knob; length_scale is its reciprocal. The
             // noise knobs default to the voice's own values (`None`).
-            length_scale: defaults.length_scale / opts.speed.max(0.1) as f64,
-            noise_scale: opts.noise_scale.map(f64::from).unwrap_or(defaults.noise_scale),
-            noise_w: opts.noise_w.map(f64::from).unwrap_or(defaults.noise_w),
+            length_scale: defaults.length_scale / f64::from(opts.speed.max(0.1)),
+            noise_scale: opts.noise_scale.map_or(defaults.noise_scale, f64::from),
+            noise_w: opts.noise_w.map_or(defaults.noise_w, f64::from),
             seed: opts.seed,
         };
 
@@ -186,7 +209,11 @@ impl TtsEngine for PiperCandle {
                 "piper-candle: {total_unknown} phoneme(s) outside the voice's id map, skipped"
             );
         }
-        Ok(AudioBuffer { samples, sample_rate, channels: 1 })
+        Ok(AudioBuffer {
+            samples,
+            sample_rate,
+            channels: 1,
+        })
     }
 }
 

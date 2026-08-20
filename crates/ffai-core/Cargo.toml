@@ -6,7 +6,7 @@ description = "FFai shared types, engine traits, and the engine registry"
 # published, so the crates.io copy of 0.6.1 cannot build ffai-diana — a gap
 # invisible locally, where path dependencies mask it, and caught only by
 # `cargo publish --dry-run`.
-version = "0.6.4"
+version = "0.6.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -27,5 +27,36 @@ thiserror = { workspace = true }
 cuda = ["candle-core/cuda"]
 metal = ["candle-core/metal"]
 
-[lints]
-workspace = true
+[lints.rust]
+# Mirrors [workspace.lints.rust]; restated because this crate needs its own
+# [lints.clippy] table, and `[lints] workspace = true` is all-or-nothing.
+unsafe_code = "warn"
+
+# Gate H-15: ffai-core is the first crate under pedantic + nursery.
+#
+# 94 findings became 0. Most were mechanical (`cargo clippy --fix` cleared 63:
+# use_self, doc_markdown, must_use_candidate). The SAFETY-relevant ones - eight
+# numeric casts and one suspicious_operation_groupings - were reviewed
+# individually and allowed AT THE SITE with the reasoning written down, so the
+# lints stay live for future code. That matters here: unchecked arithmetic on
+# outside values is the bug class this audit found five of.
+#
+# The allows below are the residue: documentation and style, nothing that can
+# change behaviour.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# 14 sites. Real documentation debt rather than a bad lint - worth doing, not
+# worth blocking on today. Revisit 2026-11-15.
+missing_errors_doc = "allow"
+# `out.push_str(&format!(..))` in the caption writers. `write!` avoids the
+# intermediate String; the difference is unmeasurable while building a subtitle
+# file, and the push_str form reads better.
+format_push_string = "allow"
+# nursery. `map_or_else` is not clearer than the `if let` it replaces here.
+option_if_let_else = "allow"
+# A config struct with four independent switches. Bundling them into an enum
+# would invent states that do not exist.
+struct_excessive_bools = "allow"
+# Style preference about the first doc line's length.
+too_long_first_doc_paragraph = "allow"

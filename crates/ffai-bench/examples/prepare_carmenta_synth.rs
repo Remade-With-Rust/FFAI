@@ -55,21 +55,115 @@ impl Rng {
 /// punctuation-bearing tokens, so case/digit/punctuation accuracy — the parts
 /// `Mode::Ocr` deliberately scores — are all exercised.
 const WORDS: &[&str] = &[
-    "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then", "walks",
-    "north", "toward", "harbour", "lights", "while", "morning", "traffic", "builds", "along",
-    "river", "road", "seven", "small", "boats", "carry", "fresh", "catch", "market", "stalls",
-    "open", "early", "vendors", "arrange", "crates", "apples", "pears", "plums", "under",
-    "canvas", "awnings", "children", "watch", "gulls", "circle", "above", "pier", "old",
-    "clock", "tower", "strikes", "quarter", "hour", "ferry", "departs", "exactly", "schedule",
-    "passengers", "read", "papers", "coffee", "steam", "rises", "from", "paper", "cups",
-    "signal", "changes", "green", "trucks", "roll", "forward", "past", "warehouse", "doors",
-    "painted", "blue", "numbers", "stencilled", "white", "letters", "faded", "sun", "rain",
-    "wind", "salt", "air", "keeps", "everything", "honest", "measured", "recorded", "ledger",
+    "the",
+    "quick",
+    "brown",
+    "fox",
+    "jumps",
+    "over",
+    "lazy",
+    "dog",
+    "and",
+    "then",
+    "walks",
+    "north",
+    "toward",
+    "harbour",
+    "lights",
+    "while",
+    "morning",
+    "traffic",
+    "builds",
+    "along",
+    "river",
+    "road",
+    "seven",
+    "small",
+    "boats",
+    "carry",
+    "fresh",
+    "catch",
+    "market",
+    "stalls",
+    "open",
+    "early",
+    "vendors",
+    "arrange",
+    "crates",
+    "apples",
+    "pears",
+    "plums",
+    "under",
+    "canvas",
+    "awnings",
+    "children",
+    "watch",
+    "gulls",
+    "circle",
+    "above",
+    "pier",
+    "old",
+    "clock",
+    "tower",
+    "strikes",
+    "quarter",
+    "hour",
+    "ferry",
+    "departs",
+    "exactly",
+    "schedule",
+    "passengers",
+    "read",
+    "papers",
+    "coffee",
+    "steam",
+    "rises",
+    "from",
+    "paper",
+    "cups",
+    "signal",
+    "changes",
+    "green",
+    "trucks",
+    "roll",
+    "forward",
+    "past",
+    "warehouse",
+    "doors",
+    "painted",
+    "blue",
+    "numbers",
+    "stencilled",
+    "white",
+    "letters",
+    "faded",
+    "sun",
+    "rain",
+    "wind",
+    "salt",
+    "air",
+    "keeps",
+    "everything",
+    "honest",
+    "measured",
+    "recorded",
+    "ledger",
 ];
 
-const CAPS: &[&str] = &["Mercury", "Carmenta", "Argus", "Whisper", "Tesseract", "Rust", "Monday", "October"];
+const CAPS: &[&str] = &[
+    "Mercury",
+    "Carmenta",
+    "Argus",
+    "Whisper",
+    "Tesseract",
+    "Rust",
+    "Monday",
+    "October",
+];
 
-const NUMBERS: &[&str] = &["1274", "38.2", "07:45", "2026", "500", "16", "99.5%", "$42", "No. 7", "3rd"];
+const NUMBERS: &[&str] = &[
+    "1274", "38.2", "07:45", "2026", "500", "16", "99.5%", "$42", "No. 7", "3rd",
+];
 
 /// HUD-style short lines for the frames corpus.
 const HUD: &[&str] = &[
@@ -101,11 +195,23 @@ struct Canvas {
 
 impl Canvas {
     fn new(w: usize, h: usize, bg: u8) -> Self {
-        Canvas { w, h, buf: vec![bg; w * h] }
+        Canvas {
+            w,
+            h,
+            buf: vec![bg; w * h],
+        }
     }
 
     /// Draw one line of text at (x, baseline). Returns the advance in px.
-    fn draw_text(&mut self, font: &fontdue::Font, text: &str, px: f32, x: f32, baseline: f32, fg: u8) -> f32 {
+    fn draw_text(
+        &mut self,
+        font: &fontdue::Font,
+        text: &str,
+        px: f32,
+        x: f32,
+        baseline: f32,
+        fg: u8,
+    ) -> f32 {
         let mut cursor = x;
         for ch in text.chars() {
             let (m, bitmap) = font.rasterize(ch, px);
@@ -128,12 +234,15 @@ impl Canvas {
     }
 
     fn width_of(font: &fontdue::Font, text: &str, px: f32) -> f32 {
-        text.chars().map(|c| font.metrics(c, px).advance_width).sum()
+        text.chars()
+            .map(|c| font.metrics(c, px).advance_width)
+            .sum()
     }
 
     fn save_png(&self, path: &Path) -> std::io::Result<()> {
         let file = std::fs::File::create(path)?;
-        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), self.w as u32, self.h as u32);
+        let mut enc =
+            png::Encoder::new(std::io::BufWriter::new(file), self.w as u32, self.h as u32);
         enc.set_color(png::ColorType::Grayscale);
         enc.set_depth(png::BitDepth::Eight);
         let mut writer = enc.write_header()?;
@@ -183,7 +292,11 @@ fn sentence(rng: &mut Rng) -> String {
 fn render_page(fonts: &Fonts, rng: &mut Rng) -> (Canvas, String) {
     let (w, h, margin) = (816usize, 1056usize, 72.0f32);
     let mut canvas = Canvas::new(w, h, 255);
-    let font = if rng.chance(50) { &fonts.serif } else { &fonts.sans };
+    let font = if rng.chance(50) {
+        &fonts.serif
+    } else {
+        &fonts.sans
+    };
     let px = [17.0, 20.0, 23.0, 27.0][rng.below(4)];
     let line_h = px * 1.45;
     let mut truth = String::new();
@@ -238,7 +351,11 @@ fn render_page(fonts: &Fonts, rng: &mut Rng) -> (Canvas, String) {
 fn render_frame(fonts: &Fonts, rng: &mut Rng) -> (Canvas, String) {
     let (w, h) = (1280usize, 720usize);
     let mut canvas = Canvas::new(w, h, 28);
-    let font = if rng.chance(60) { &fonts.mono } else { &fonts.sans };
+    let font = if rng.chance(60) {
+        &fonts.mono
+    } else {
+        &fonts.sans
+    };
     let mut truth = String::new();
 
     let lines = 4 + rng.below(4);
@@ -251,7 +368,11 @@ fn render_frame(fonts: &Fonts, rng: &mut Rng) -> (Canvas, String) {
             idx = rng.below(HUD.len());
         }
         used.push(idx);
-        let text = if rng.chance(30) { sentence(rng) } else { HUD[idx].to_string() };
+        let text = if rng.chance(30) {
+            sentence(rng)
+        } else {
+            HUD[idx].to_string()
+        };
         let px = [19.0, 22.0, 26.0][rng.below(3)];
         canvas.draw_text(font, &text, px, 64.0, y, 235);
         if !truth.is_empty() {
@@ -295,8 +416,12 @@ fn parse_args() -> Args {
 fn main() {
     let args = parse_args();
     let load = |name: &str| {
-        let bytes = std::fs::read(args.fonts.join(name))
-            .unwrap_or_else(|e| panic!("reading {name} from {}: {e} — fetch DejaVu 2.37 first (see module docs)", args.fonts.display()));
+        let bytes = std::fs::read(args.fonts.join(name)).unwrap_or_else(|e| {
+            panic!(
+                "reading {name} from {}: {e} — fetch DejaVu 2.37 first (see module docs)",
+                args.fonts.display()
+            )
+        });
         fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).expect("font parses")
     };
     let fonts = Fonts {
@@ -330,7 +455,9 @@ fn main() {
             let id = format!("{prefix}-{i:02}");
             let png_rel = format!("clips/{corpus}/{id}.png");
             let txt_rel = format!("clips/{corpus}/{id}.txt");
-            canvas.save_png(&args.out.join(&png_rel)).expect("write png");
+            canvas
+                .save_png(&args.out.join(&png_rel))
+                .expect("write png");
             std::fs::write(args.out.join(&txt_rel), &truth).expect("write gt");
             let sha = file_sha256(&std::fs::read(args.out.join(&png_rel)).unwrap());
             // Every 4th clip is train; claims run on the holdout rest.
@@ -342,7 +469,11 @@ fn main() {
             writeln!(manifest, "ground_truth = \"{txt_rel}\"").unwrap();
             writeln!(manifest, "class = \"{class}\"").unwrap();
             writeln!(manifest, "split = \"{split}\"").unwrap();
-            writeln!(manifest, "license = \"CC0-1.0 (synthetic, generated by prepare_carmenta_synth)\"").unwrap();
+            writeln!(
+                manifest,
+                "license = \"CC0-1.0 (synthetic, generated by prepare_carmenta_synth)\""
+            )
+            .unwrap();
             writeln!(manifest, "sha256 = \"{sha}\"").unwrap();
         }
 
@@ -425,16 +556,28 @@ fn generate_screencast(fonts: &Fonts, out: &std::path::Path) {
         writeln!(manifest, "ground_truth = \"{txt_rel}\"").unwrap();
         writeln!(manifest, "class = \"video\"").unwrap();
         writeln!(manifest, "split = \"holdout\"").unwrap();
-        writeln!(manifest, "license = \"CC0-1.0 (synthetic, generated by prepare_carmenta_synth)\"").unwrap();
+        writeln!(
+            manifest,
+            "license = \"CC0-1.0 (synthetic, generated by prepare_carmenta_synth)\""
+        )
+        .unwrap();
         writeln!(manifest, "sha256 = \"{sha}\"").unwrap();
     }
 
     let manifest_path = out.join(format!("{corpus}-v1.toml"));
     std::fs::write(&manifest_path, manifest).expect("write manifest");
     // The change timeline, for the stability oracle: which frames changed.
-    let timeline = changes.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(",");
+    let timeline = changes
+        .iter()
+        .map(|f| f.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     std::fs::write(clip_dir.join("changes.csv"), timeline).expect("write timeline");
-    println!("wrote {} ({FRAMES} frames, {} change events)", manifest_path.display(), changes.len());
+    println!(
+        "wrote {} ({FRAMES} frames, {} change events)",
+        manifest_path.display(),
+        changes.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -476,7 +619,12 @@ struct Region {
 
 impl Region {
     fn boxed(class: &'static str, order: usize, b: (f32, f32, f32, f32), text: String) -> Self {
-        Region { class, order, quad: [(b.0, b.1), (b.2, b.1), (b.2, b.3), (b.0, b.3)], text }
+        Region {
+            class,
+            order,
+            quad: [(b.0, b.1), (b.2, b.1), (b.2, b.3), (b.0, b.3)],
+            text,
+        }
     }
 }
 
@@ -604,14 +752,23 @@ fn render_doc_page(
         let t = doc_title.to_string();
         let w = Canvas::width_of(&fonts.sans, &t, 22.0);
         canvas.draw_text(&fonts.sans, &t, 22.0, DOC_MARGIN, y, 90);
-        regions.push(Region::boxed("page-header", order, (DOC_MARGIN, y - 22.0, DOC_MARGIN + w, y + 6.0), t));
+        regions.push(Region::boxed(
+            "page-header",
+            order,
+            (DOC_MARGIN, y - 22.0, DOC_MARGIN + w, y + 6.0),
+            t,
+        ));
         order += 1;
         y += 60.0;
     } else {
         let w = Canvas::width_of(&fonts.serif, doc_title, 52.0);
         canvas.draw_text(&fonts.serif, doc_title, 52.0, DOC_MARGIN, y + 40.0, 10);
-        regions.push(Region::boxed("title", order,
-            (DOC_MARGIN, y - 12.0, DOC_MARGIN + w, y + 54.0), doc_title.to_string()));
+        regions.push(Region::boxed(
+            "title",
+            order,
+            (DOC_MARGIN, y - 12.0, DOC_MARGIN + w, y + 54.0),
+            doc_title.to_string(),
+        ));
         order += 1;
         y += 130.0;
     }
@@ -620,8 +777,16 @@ fn render_doc_page(
     // right — which is exactly the reading order a raster-order reader gets
     // wrong, and the reason this corpus exists.
     let usable = DOC_W as f32 - 2.0 * DOC_MARGIN;
-    let (cols, col_w) = if two_col { (2usize, (usable - 60.0) / 2.0) } else { (1usize, usable) };
-    let col_top = if page_no == 0 { DOC_MARGIN + 160.0 } else { DOC_MARGIN + 90.0 };
+    let (cols, col_w) = if two_col {
+        (2usize, (usable - 60.0) / 2.0)
+    } else {
+        (1usize, usable)
+    };
+    let col_top = if page_no == 0 {
+        DOC_MARGIN + 160.0
+    } else {
+        DOC_MARGIN + 90.0
+    };
     for col in 0..cols {
         let x0 = DOC_MARGIN + col as f32 * (col_w + 60.0);
         let mut cy = if col == 0 { y } else { col_top };
@@ -630,7 +795,16 @@ fn render_doc_page(
                 let nw = 2 + rng.below(3);
                 let h = doc_sentence(rng, nw);
                 let h = h.trim_end_matches('.').to_string();
-                match draw_column_block(&mut canvas, &fonts.sans, &h, 30.0, x0, &mut cy, col_w, bottom) {
+                match draw_column_block(
+                    &mut canvas,
+                    &fonts.sans,
+                    &h,
+                    30.0,
+                    x0,
+                    &mut cy,
+                    col_w,
+                    bottom,
+                ) {
                     Some((b, t)) => {
                         regions.push(Region::boxed("section-header", order, b, t));
                         order += 1;
@@ -655,9 +829,23 @@ fn render_doc_page(
                 }
                 p
             };
-            match draw_column_block(&mut canvas, &fonts.serif, &body, 26.0, x0, &mut cy, col_w, bottom) {
+            match draw_column_block(
+                &mut canvas,
+                &fonts.serif,
+                &body,
+                26.0,
+                x0,
+                &mut cy,
+                col_w,
+                bottom,
+            ) {
                 Some((b, t)) => {
-                    regions.push(Region::boxed(if is_list { "list-item" } else { "text" }, order, b, t));
+                    regions.push(Region::boxed(
+                        if is_list { "list-item" } else { "text" },
+                        order,
+                        b,
+                        t,
+                    ));
                     order += 1;
                 }
                 None => break,
@@ -670,7 +858,12 @@ fn render_doc_page(
     let fx = (DOC_W as f32 - fw) / 2.0;
     let fy = DOC_H as f32 - DOC_MARGIN + 20.0;
     canvas.draw_text(&fonts.sans, &foot, 22.0, fx, fy, 90);
-    regions.push(Region::boxed("page-footer", order, (fx, fy - 22.0, fx + fw, fy + 6.0), foot));
+    regions.push(Region::boxed(
+        "page-footer",
+        order,
+        (fx, fy - 22.0, fx + fw, fy + 6.0),
+        foot,
+    ));
 
     (canvas, regions)
 }
@@ -697,7 +890,11 @@ fn generate_docs(fonts: &Fonts, out: &Path) {
         // unable to say WHICH variable did it. A corpus that cannot attribute
         // is half-built.
         let two_col = (doc / 2) % 2 == 1;
-        let skew = if doc % 2 == 1 { 0.8 + (doc as f32) * 0.4 } else { 0.0 };
+        let skew = if doc % 2 == 1 {
+            0.8 + (doc as f32) * 0.4
+        } else {
+            0.0
+        };
         // Documents split WHOLE — one straddling the split would leak the
         // moment M-C4 groups pages by `doc_id` — and each split gets one
         // document from every cell, so neither is missing a condition.
@@ -717,26 +914,47 @@ fn generate_docs(fonts: &Fonts, out: &Path) {
             };
 
             let stem = format!("doc-{n:03}");
-            canvas.save_png(&clip_dir.join(format!("{stem}.png"))).expect("write page");
+            canvas
+                .save_png(&clip_dir.join(format!("{stem}.png")))
+                .expect("write page");
             regions.sort_by_key(|r| r.order);
-            let truth: String =
-                regions.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n");
+            let truth: String = regions
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             std::fs::write(clip_dir.join(format!("{stem}.txt")), &truth).expect("write truth");
 
             let mut js = String::from("{\n");
-            writeln!(js, " \"doc_id\": \"doc-{doc:02}\", \"page\": {page}, \"n_pages\": {PAGES},").unwrap();
-            writeln!(js, " \"columns\": {}, \"skew_deg\": {skew:.2},", if two_col { 2 } else { 1 }).unwrap();
+            writeln!(
+                js,
+                " \"doc_id\": \"doc-{doc:02}\", \"page\": {page}, \"n_pages\": {PAGES},"
+            )
+            .unwrap();
+            writeln!(
+                js,
+                " \"columns\": {}, \"skew_deg\": {skew:.2},",
+                if two_col { 2 } else { 1 }
+            )
+            .unwrap();
             writeln!(js, " \"page_size\": [{DOC_W}, {DOC_H}],").unwrap();
             writeln!(js, " \"regions\": [").unwrap();
             for (i, r) in regions.iter().enumerate() {
-                let q: Vec<String> =
-                    r.quad.iter().map(|p| format!("[{:.1},{:.1}]", p.0, p.1)).collect();
+                let q: Vec<String> = r
+                    .quad
+                    .iter()
+                    .map(|p| format!("[{:.1},{:.1}]", p.0, p.1))
+                    .collect();
                 writeln!(
                     js,
                     "  {{\"order\": {}, \"class\": \"{}\", \"quad\": [{}], \"text\": {:?}}}{}",
-                    r.order, r.class, q.join(","), r.text,
+                    r.order,
+                    r.class,
+                    q.join(","),
+                    r.text,
                     if i + 1 == regions.len() { "" } else { "," }
-                ).unwrap();
+                )
+                .unwrap();
             }
             js.push_str(" ]\n}\n");
             std::fs::write(clip_dir.join(format!("{stem}.json")), js).expect("write layout");
@@ -751,13 +969,19 @@ fn generate_docs(fonts: &Fonts, out: &Path) {
             // layout ground truth belongs anyway.
             writeln!(manifest, "class = \"document_scan\"").unwrap();
             writeln!(manifest, "split = \"{split}\"").unwrap();
-            writeln!(manifest,
-                     "license = \"synthetic (CC0) — regenerate with prepare_carmenta_synth\"").unwrap();
+            writeln!(
+                manifest,
+                "license = \"synthetic (CC0) — regenerate with prepare_carmenta_synth\""
+            )
+            .unwrap();
             writeln!(manifest, "sha256 = \"{sha}\"").unwrap();
             writeln!(manifest).unwrap();
             n += 1;
         }
     }
     std::fs::write(out.join("carmenta-doc-v1.toml"), manifest).expect("write doc manifest");
-    println!("carmenta-doc: {n} pages across {DOCS} documents -> {}", clip_dir.display());
+    println!(
+        "carmenta-doc: {n} pages across {DOCS} documents -> {}",
+        clip_dir.display()
+    );
 }

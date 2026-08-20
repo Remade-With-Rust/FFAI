@@ -1,0 +1,279 @@
+# The hardening gate. Gates H-37 (runs on every PR), H-06 (the tool set exists and is
+# pinned), H-22 (analysis beyond the default linter), C-12 (changes are traceable).
+#
+# Action versions are pinned to a major tag and the token is read-only by default:
+# a workflow that can write to the repo is a supply-chain target in its own right.
+
+name: Hardening gate
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  schedule:
+    # Advisories land between commits; a weekly run catches them without a push (H-40).
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # NOTE: no global `RUSTFLAGS: -D warnings`. It would apply to the test job too, and the
+  # workspace deliberately sets `unsafe_code = "warn"` as an INVENTORY signal (tracked in
+  # each crate's UNSAFE.md) rather than as a build failure. Denying warnings globally
+  # would turn that signal into a broken build.
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt }
+      # BLOCKING for ffai-mercury: that crate is now rustfmt-clean, so a
+      # regression there fails the build.
+      - name: Format (blocking - clean crates)
+        run: cargo fmt -p ffai-mercury -p ffai-media --check
+
+      # ADVISORY for the rest: ~1500 pre-existing rustfmt diffs across the other
+      # crates. Blocking today would make the gate red on arrival, which teaches
+      # people to ignore CI.
+      # TO FLIP a crate: `cargo fmt -p <crate>` in a single mechanical commit when
+      # no other work is in flight, then move it into the blocking step above.
+      - name: Format (advisory - workspace)
+        continue-on-error: true
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      # BLOCKING for ffai-mercury: its lib is clippy-clean (267 findings -> 0), so
+      # a regression there fails the build. This is the incremental-adoption
+      # pattern - a crate becomes blocking the moment it is clean, instead of
+      # waiting for the whole workspace.
+      # `-A unsafe_code` is permanent and deliberate: that lint is an INVENTORY
+      # signal, and UNSAFE.md plus tools/lint_invariants.py are what enforce it.
+      # BLOCKING for every crate that is clean. A crate joins this list the moment
+      # it reaches zero, rather than waiting for the whole workspace - which is
+      # how the debt shrinks without CI ever being red.
+      # ALL TWELVE crates are under PEDANTIC + NURSERY, enforced by their own
+      # manifests (so `-D warnings` promotes those lints).
+      #
+      # carmenta and diana joined last and are NOT equivalent to the other ten:
+      # both allow cast_possible_truncation / cast_sign_loss / cast_possible_wrap
+      # wholesale, where the other ten cleared those casts one at a time against
+      # the trust boundary. Read the comment in either Cargo.toml before treating
+      # a green tick here as a clean parse surface.
+      #
+      # NOTE for anyone measuring this: do NOT pass `-W clippy::pedantic` on the
+      # command line to check a single crate. It re-lints DEPENDENCIES and
+      # overrides their manifest allows, so a clean crate reports its
+      # dependencies' findings as its own. Filter by path, or rely on -D warnings
+      # with the manifest policies as this job does.
+      - name: Clippy (blocking - clean crates)
+        run: |
+          # --no-deps is REQUIRED: without it `-D warnings` promotes warnings from
+          # DEPENDENCIES into this gate, and it goes red on code it is not checking.
+          cargo clippy --no-deps -p ffai-core -p ffai-models -p ffai-media                        -p ffai-argus -p ffai-mercury -p ffai-bench                        --lib -- -D warnings -A unsafe_code
+          # Binary and binding crates: --all-targets, since several have no lib.
+          cargo clippy --no-deps -p ffai-cli -p ffai-demo -p ffai-py -p ffai-wasm                        --all-targets -- -D warnings -A unsafe_code
+          # carmenta and diana: --all-targets, which also covers their examples -
+          # that is where the never-loop and uninit-vec findings actually were.
+          cargo clippy --no-deps -p ffai-carmenta -p ffai-diana                        --all-targets -- -D warnings -A unsafe_code
+
+      # ADVISORY for the rest: other crates still carry pre-existing findings.
+      # TO FLIP: clear a crate, move it into the blocking step above. 2026-09-30.
+      - name: Clippy (advisory - workspace)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets -- -D warnings -A unsafe_code
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Compile EVERY target, not just the libs. Two examples had rotted against
+      # a `BenchConfig` field added to ffai-bench - `cargo test --lib` never
+      # compiles an example, so nothing noticed until cargo-mutants tried to
+      # build the tree. An example that does not compile is dead documentation.
+      # nasm assembles OpenH264's SIMD kernels, reached through rusty_h264 in
+      # ffai-media. Without it the link fails with a wall of "undefined symbol:
+      # DeblockChromaEq4H_ssse3" and similar - a missing BUILD TOOL, not broken
+      # code. Windows developers never see it because the toolchain there ships
+      # an assembler.
+      # Time-boxed with retries. nasm is REQUIRED - without it the OpenH264 SIMD
+      # kernels never assemble and the link fails - so this cannot be skipped
+      # the way the H-31 diagnostic can. What it CAN do is fail fast instead of
+      # hanging: an apt stall held a release for 35 minutes today, and this same
+      # step then hung a PR for 22.
+      - name: Install nasm (OpenH264 SIMD)
+        timeout-minutes: 6
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 nasm
+          nasm -v
+      - run: cargo check --workspace --all-targets
+      # Lib AND integration tests.
+      #
+      # This said "Lib + integration tests" while running `--lib`, which runs
+      # NEITHER integration tests NOR doc tests. Everything under `tests/` -
+      # properties.rs, miri_safe.rs, the oracle suites, the fuzz corpus replay -
+      # had never run in CI at all.
+      #
+      # The cause was two oracle tests that asserted `ran > 0` and so went red on
+      # any machine without model fixtures. Pinning to `--lib` silenced them and
+      # took every other integration test with it. Those two now skip cleanly
+      # when fixtures are absent and fail loudly under FFAI_REQUIRE_ORACLES=1,
+      # which is set below so a runner that DOES have fixtures cannot pass
+      # vacuously.
+      #
+      # 368 tests across 22 binaries, versus the lib-only subset before.
+      - run: cargo test --workspace --lib --tests
+      # Belt and braces: on a runner with fixtures present, a silent skip is a
+      # regression. Harmless where they are absent - the guard only fires if the
+      # variable is set AND nothing ran.
+      - name: Oracle suites must not skip vacuously when fixtures exist
+        if: hashFiles('corpora/cache/*.safetensors') != ''
+        env:
+          FFAI_REQUIRE_ORACLES: '1'
+        run: cargo test -p ffai-diana --tests
+
+  supply-chain:
+    name: Supply chain (deny + audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Run cargo-deny DIRECTLY, not via cargo-deny-action@v2. The action executes
+      # in a musl container that cannot resolve the toolchain this repo pins
+      # ("override toolchain '1.95.0-x86_64-unknown-linux-musl' is not
+      # installed"), and it then failed licences on `intel-mkl-src` - a crate
+      # `deny.toml` already excludes by setting `[graph] all-features = false`,
+      # because it is an optional `mkl`-feature backend with no SPDX expression.
+      # Running it here honours this repo's deny.toml and its own toolchain.
+      - name: cargo-deny
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+      # Run cargo-audit DIRECTLY rather than via rustsec/audit-check@v2. That
+      # action executes inside a musl container, where `rust-toolchain.toml`
+      # pins 1.95.0 and rustup then fails with "override toolchain
+      # '1.95.0-x86_64-unknown-linux-musl' is not installed". The advisory scan
+      # is the point; the container is not.
+      - name: cargo-audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+      # cargo-vet is a RATCHET, not a score. The 474 exemptions record the tree as
+      # it stood when vetting was introduced; what this step enforces is that a
+      # NEW dependency cannot arrive without either an imported audit covering it
+      # or an explicit, reviewed exemption. That is the property worth having on
+      # every PR - the burn-down is a separate, slower programme.
+      - name: cargo-vet
+        run: |
+          cargo install cargo-vet --locked
+          cargo vet check
+
+  miri:
+    name: Miri (UB interpreter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with: { components: miri }
+      - uses: Swatinem/rust-cache@v2
+      # Scoped to tests/miri_safe.rs on purpose, and BLOCKING because that scope
+      # is verified green. Miri interprets Rust: it cannot run x86 SIMD
+      # intrinsics (rustfft, reached via mel::compute) or foreign functions (the
+      # Win32 memory instrumentation). Pointing it at --lib or tests/properties.rs
+      # fails for those reasons and not because the code is wrong, which is
+      # exactly the sort of red CI that teaches people to ignore CI.
+      # TO WIDEN: move a test into miri_safe.rs once it avoids SIMD and FFI.
+      #
+      # `cargo +nightly` is REQUIRED, not decorative. `rust-toolchain.toml` pins
+      # 1.95.0 and rustup honours that file over whatever the job installed, so a
+      # bare `cargo miri` resolves to 1.95.0 and dies with "the 'miri' component
+      # ... is not available for the '1.95.0' toolchain". Miri ships on nightly
+      # only. This was invisible until the first PR, because the workflow triggers
+      # on push to master/main and pull_request - never on a topic-branch push.
+      - run: cargo +nightly miri test -p ffai-mercury --test miri_safe
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+
+  kani:
+    name: Kani (bounded proofs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked kani-verifier && cargo kani setup
+      # BLOCKING since 2026-08-18. All 13 harnesses were executed under Kani
+      # 0.67.0 (on WSL2 Ubuntu, since Kani does not run on Windows) and every one
+      # verified, so this no longer claims a proof nobody has run.
+      #
+      # Two flags/facts this run cost, so nobody has to rediscover them:
+      #
+      # --ignore-global-asm: the `pulp` crate (SIMD, via gemm) contains global
+      #   asm, which Kani cannot translate and refuses outright. It is a
+      #   DEPENDENCY, not code under proof - every harness here reasons about
+      #   pure integer index arithmetic - but Kani's warning that "verification
+      #   results may be impacted" is retained honestly rather than hidden.
+      #
+      # MSRV: Kani 0.67 bundles rustc 1.93-nightly while this workspace declares
+      #   1.95, and that is not merely a manifest number - `asr::vad` calls
+      #   `f32::mul_add` inside a `const fn`, stabilised in 1.95. lib.rs carries
+      #   `#![cfg_attr(kani, feature(const_mul_add))]` for exactly this; the
+      #   attribute does not exist on a normal build. If Kani ships a newer rustc
+      #   the gate becomes a no-op and can go.
+      - name: Verify
+        run: |
+          # Kani 0.67 bundles rustc 1.93-nightly; this workspace declares MSRV
+          # 1.95. Cargo refuses on the DECLARED VERSION ALONE, before compiling
+          # anything, so the run dies with "rustc 1.93.0-nightly is not supported
+          # by the following packages". Relax the declaration for this step only
+          # and restore it immediately - the code itself still builds, because
+          # lib.rs gates the one 1.95 feature it needs behind
+          # `#![cfg_attr(kani, feature(const_mul_add))]`.
+          #
+          # Delete this dance the moment Kani ships a rustc >= the workspace MSRV.
+          cp Cargo.toml /tmp/Cargo.toml.bak
+          sed -i 's/^rust-version = .*/rust-version = "1.85"/' Cargo.toml
+          cargo kani -p ffai-mercury -Z unstable-options --ignore-global-asm
+          status=$?
+          cp /tmp/Cargo.toml.bak Cargo.toml
+          exit $status
+
+  invariants:
+    name: Project invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      # Clippy checks Rust; this checks FFai. Every rule exists because an audit
+      # found the thing it prevents - see tools/lint_invariants.py --list.
+      - run: python tools/lint_invariants.py
+
+  hardening-tables:
+    name: Hardening tables current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      # The README blocks are GENERATED from each crate's plan file. This fails the build
+      # when a plan file was edited without re-rendering, which is the only thing keeping
+      # a published hardening claim honest.
+      - run: python tools/render_hardening_table.py --all --root . --check

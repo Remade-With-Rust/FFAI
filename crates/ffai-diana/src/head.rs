@@ -21,9 +21,9 @@
 //!       Conv2d(80->80, k1, raw)
 //! ```
 //!
-//! The two final 1x1s are raw `Conv2d` with bias and **no** BatchNorm in the
+//! The two final 1x1s are raw `Conv2d` with bias and **no** `BatchNorm` in the
 //! checkpoint, so the conversion passes them through unfused; every other
-//! conv here is fused and carries SiLU — including the depthwise ones,
+//! conv here is fused and carries `SiLU` — including the depthwise ones,
 //! which an earlier probe missed because `DWConv` subclasses `Conv` and a
 //! name-equality test skipped all twelve of them.
 //!
@@ -58,7 +58,7 @@ impl BoxBranch {
     /// `c2` is the branch's internal width, `max(16, ch[0]/4, reg_max*4)` —
     /// 16 at the n tier, 32 at s.
     fn new(vb: VarBuilder, c_in: usize, c2: usize) -> Result<Self> {
-        Ok(BoxBranch {
+        Ok(Self {
             c0: ConvAct::new(vb.pp(0), c_in, c2, 3, 1, 1, true)?,
             c1: ConvAct::new(vb.pp(1), c2, c2, 3, 1, 1, true)?,
             out: conv2d(c2, 4, 1, Conv2dConfig::default(), vb.pp(2))?,
@@ -90,7 +90,7 @@ impl ClsBranch {
     /// that is correct only because two unrelated numbers coincide at one
     /// configuration is exactly the kind a second configuration exposes.
     fn new(vb: VarBuilder, c_in: usize, c3: usize, nc: usize) -> Result<Self> {
-        Ok(ClsBranch {
+        Ok(Self {
             // groups == channels: depthwise. SiLU on all four, verified per
             // module rather than assumed from the class name.
             dw0: ConvAct::new(vb.pp(0).pp(0), c_in, c_in, 3, 1, c_in, true)?,
@@ -134,10 +134,11 @@ impl Head {
             boxes.push(BoxBranch::new(m.pp("one2one_cv2").pp(i), c, c2)?);
             scores.push(ClsBranch::new(m.pp("one2one_cv3").pp(i), c, c3, nc)?);
         }
-        Ok(Head { boxes, scores, nc, strides })
+        Ok(Self { boxes, scores, nc, strides })
     }
 
     /// The three feature widths the neck hands over, at this tier.
+    #[must_use] 
     pub fn level_channels(d: Dims) -> [usize; 3] {
         [d.ch(256), d.ch(512), d.ch(1024)]
     }
@@ -188,6 +189,7 @@ impl Head {
         Ok(AnchorGrid { levels })
     }
 
+    #[must_use] 
     pub fn nc(&self) -> usize {
         self.nc
     }
@@ -331,10 +333,12 @@ pub struct AnchorGrid {
 
 impl AnchorGrid {
     /// Total positions across all levels (8400 at 640x640).
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.levels.iter().map(|(h, w, _)| h * w).sum()
     }
 
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -344,6 +348,7 @@ impl AnchorGrid {
     /// Cell centres are `index + 0.5`, matching `make_anchors`'s
     /// `grid_cell_offset` — the reference's own constant, not a guess.
     #[inline]
+    #[must_use] 
     pub fn at(&self, i: usize) -> (f32, f32, f32) {
         let mut base = 0;
         for &(h, w, stride) in &self.levels {

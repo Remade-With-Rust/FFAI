@@ -64,7 +64,12 @@ impl Int8Vocab {
             }
             rowsum[v] = sum;
         }
-        Int8Vocab { q, scale, rowsum, vocab }
+        Int8Vocab {
+            q,
+            scale,
+            rowsum,
+            vocab,
+        }
     }
 
     fn bytes(&self) -> usize {
@@ -122,7 +127,10 @@ unsafe fn dot_i8(w: &[i8], xu: &[u8]) -> i32 {
         k += 32;
     }
     let acc = _mm256_add_epi32(acc0, acc1);
-    let s = _mm_add_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256(acc, 1));
+    let s = _mm_add_epi32(
+        _mm256_castsi256_si128(acc),
+        _mm256_extracti128_si256(acc, 1),
+    );
     let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b01_00_11_10));
     let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b00_01_00_01));
     let mut tail = _mm_cvtsi128_si32(s);

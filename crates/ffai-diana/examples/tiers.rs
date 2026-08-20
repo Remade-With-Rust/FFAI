@@ -43,15 +43,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let names = engine.class_names();
                 let top = out
                     .detections
-                    .first()
-                    .map(|d| {
+                    .first().map_or_else(|| "none".into(), |d| {
                         format!(
                             "{} {:.3}",
-                            names.get(d.class_id as usize).map(String::as_str).unwrap_or("?"),
+                            names.get(d.class_id as usize).map_or("?", String::as_str),
                             d.confidence
                         )
-                    })
-                    .unwrap_or_else(|| "none".into());
+                    });
                 println!(
                     "{tier:<10} {:>10} {ms:>9.1} {:>8}  {top}",
                     "loaded",

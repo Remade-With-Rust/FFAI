@@ -9,13 +9,14 @@
 //! straight to 0.8's own Decoder, bypassing the pinned adapter entirely.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args().nth(1).expect("usage: h264_v8_probe <clip.mp4>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: h264_v8_probe <clip.mp4>");
     let file = std::fs::File::open(&path)?;
 
     let mut formats = rff_format::FormatRegistry::new();
     rff_format_mp4::register(&mut formats);
-    let mut demux =
-        formats.open_demuxer("mp4", Box::new(std::io::BufReader::new(file)))?;
+    let mut demux = formats.open_demuxer("mp4", Box::new(std::io::BufReader::new(file)))?;
     let streams = demux.read_header()?;
     let (vidx, vstream) = streams
         .iter()
@@ -69,10 +70,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let el = t0.elapsed().as_secs_f64();
     println!("packets {packets}  frames {frames}  errors {errs}");
-    println!("decode {:.3} s = {:.2} ms/frame", el, el*1000.0/frames.max(1) as f64);
+    println!(
+        "decode {:.3} s = {:.2} ms/frame",
+        el,
+        el * 1000.0 / frames.max(1) as f64
+    );
     println!("first error: {}", first_err.unwrap_or_else(|| "-".into()));
     let pct = 100.0 * nonzero as f64 / ylen.max(1) as f64;
-    println!("frame 1: {}x{} luma {} bytes, {} carrying signal ({:.0} pct)",
-        dims.0, dims.1, ylen, nonzero, pct);
+    println!(
+        "frame 1: {}x{} luma {} bytes, {} carrying signal ({:.0} pct)",
+        dims.0, dims.1, ylen, nonzero, pct
+    );
     Ok(())
 }

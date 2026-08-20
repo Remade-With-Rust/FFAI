@@ -1,4 +1,4 @@
-//! Python bindings for FFai — Diana detection over numpy, PIL and torch arrays.
+//! Python bindings for `FFai` — Diana detection over numpy, PIL and torch arrays.
 //!
 //! ```python
 //! import ffai, numpy as np
@@ -10,7 +10,7 @@
 //! # Why this exists
 //!
 //! Ultralytics accepts a numpy array, a PIL image or a torch tensor directly.
-//! FFai already accepted in-memory pixels in Rust — `detect(&ImageBuffer, ..)` —
+//! `FFai` already accepted in-memory pixels in Rust — `detect(&ImageBuffer, ..)` —
 //! so the gap was never the engine, it was that there was no way to call it from
 //! Python at all. This is that, and nothing more: the model, the letterbox and
 //! the decode are the same code the CLI runs.
@@ -24,7 +24,7 @@
 //! array" is the kind of API friction that makes people keep using the other
 //! library.
 //!
-//! **RGB is assumed, and that is a real decision.** OpenCV hands out BGR, so
+//! **RGB is assumed, and that is a real decision.** `OpenCV` hands out BGR, so
 //! `cv2.imread(...)` needs `cv2.cvtColor(..., COLOR_BGR2RGB)` first — same as
 //! Ultralytics requires. Silently accepting BGR would shift every colour-
 //! dependent detection with no error, so `from_bgr=True` is offered explicitly
@@ -129,7 +129,7 @@ impl Detector {
             other => {
                 return Err(PyValueError::new_err(format!(
                     "geometry must be 'rect' or 'square', got '{other}'"
-                )))
+                )));
             }
         };
         let engine: Arc<dyn DetectEngine> =
@@ -143,7 +143,7 @@ impl Detector {
                  .pt with tools/diana_convert.py — FFai ships none, they are AGPL."
             )));
         }
-        Ok(Detector {
+        Ok(Self {
             engine,
             names: PyList::new(py, &names)?.unbind(),
         })
@@ -173,8 +173,11 @@ impl Detector {
         };
         // Release the GIL: detection is pure Rust and takes tens of ms, so
         // holding it would serialise any caller threading over frames.
+        //
+        // `detach` is `allow_threads` under its pyo3 0.28+ name; the semantics
+        // are unchanged.
         let out = py
-            .allow_threads(|| self.engine.detect(&buf, &opts))
+            .detach(|| self.engine.detect(&buf, &opts))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let mut xyxy = Vec::with_capacity(out.detections.len() * 4);
@@ -203,7 +206,7 @@ fn to_image_buffer(a: &PyReadonlyArrayDyn<'_, u8>, from_bgr: bool) -> PyResult<I
         n => {
             return Err(PyValueError::new_err(format!(
                 "expected a 2-D (HxW) or 3-D (HxWxC) uint8 array, got {n} dimensions"
-            )))
+            )));
         }
     };
     let format = match c {
@@ -213,15 +216,13 @@ fn to_image_buffer(a: &PyReadonlyArrayDyn<'_, u8>, from_bgr: bool) -> PyResult<I
         other => {
             return Err(PyValueError::new_err(format!(
                 "expected 1, 3 or 4 channels, got {other}"
-            )))
+            )));
         }
     };
     // `as_slice` requires C-contiguity; a sliced or transposed view is not, and
     // reading it as if it were would silently scramble the image.
     let data = a.as_slice().map_err(|_| {
-        PyValueError::new_err(
-            "array must be C-contiguous — call numpy.ascontiguousarray(a) first",
-        )
+        PyValueError::new_err("array must be C-contiguous — call numpy.ascontiguousarray(a) first")
     })?;
     let mut data = data.to_vec();
     if from_bgr && c >= 3 {
@@ -229,6 +230,10 @@ fn to_image_buffer(a: &PyReadonlyArrayDyn<'_, u8>, from_bgr: bool) -> PyResult<I
             px.swap(0, 2);
         }
     }
+    // `w`/`h` come from a numpy array's shape, so they are bounded by an array
+    // that actually exists in memory: a dimension past u32::MAX would be four
+    // billion pixels on a side. ImageBuffer's fields are u32 by design.
+    #[allow(clippy::cast_possible_truncation)]
     Ok(ImageBuffer {
         width: w as u32,
         height: h as u32,

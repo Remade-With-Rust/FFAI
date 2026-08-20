@@ -52,7 +52,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- arm A: the Python converter's safetensors ----
     let st = converted.join("vits.safetensors");
     if !st.exists() {
-        eprintln!("missing {} — run corpora/refs/dump_piper_weights.py", st.display());
+        eprintln!(
+            "missing {} — run corpora/refs/dump_piper_weights.py",
+            st.display()
+        );
         std::process::exit(2);
     }
     let theirs = ffai_core::candle::safetensors::load(&st, &ffai_core::candle::Device::Cpu)?;
@@ -66,10 +69,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !only_ours.is_empty() || !only_theirs.is_empty() {
         println!("\nNAME MISMATCH");
         if !only_ours.is_empty() {
-            println!("  only in rust  ({}): {:?}", only_ours.len(), &only_ours[..only_ours.len().min(8)]);
+            println!(
+                "  only in rust  ({}): {:?}",
+                only_ours.len(),
+                &only_ours[..only_ours.len().min(8)]
+            );
         }
         if !only_theirs.is_empty() {
-            println!("  only in python ({}): {:?}", only_theirs.len(), &only_theirs[..only_theirs.len().min(8)]);
+            println!(
+                "  only in python ({}): {:?}",
+                only_theirs.len(),
+                &only_theirs[..only_theirs.len().min(8)]
+            );
         }
         std::process::exit(1);
     }
@@ -83,10 +94,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let b: Vec<f32> = theirs[*name].flatten_all()?.to_vec1()?;
         let b_dims = theirs[*name].dims().to_vec();
         if a.dims != b_dims {
-            println!("\nSHAPE MISMATCH {name}: rust {:?} vs python {:?}", a.dims, b_dims);
+            println!(
+                "\nSHAPE MISMATCH {name}: rust {:?} vs python {:?}",
+                a.dims, b_dims
+            );
             std::process::exit(1);
         }
-        let differing = a.data.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+        let differing = a
+            .data
+            .iter()
+            .zip(&b)
+            .filter(|(x, y)| x.to_bits() != y.to_bits())
+            .count();
         if differing > 0 && worst.as_ref().is_none_or(|(_, n)| differing > *n) {
             worst = Some(((*name).to_string(), differing));
         }
@@ -103,7 +122,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- geometry ----
     let graph_json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(converted.join("vits-graph.json"))?)?;
-    let attrs = graph_json.get("conv_attrs").and_then(|v| v.as_object()).unwrap();
+    let attrs = graph_json
+        .get("conv_attrs")
+        .and_then(|v| v.as_object())
+        .unwrap();
     let mut geom_bad = 0;
     for (name, g) in &ours.geometry {
         let Some(a) = attrs.get(name) else {
@@ -129,7 +151,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if geom_bad > 0 || ours.geometry.len() != attrs.len() {
-        println!("\nGEOMETRY MISMATCH ({geom_bad} bad, {} vs {})", ours.geometry.len(), attrs.len());
+        println!(
+            "\nGEOMETRY MISMATCH ({geom_bad} bad, {} vs {})",
+            ours.geometry.len(),
+            attrs.len()
+        );
         std::process::exit(1);
     }
     println!("geom  : {} convolutions identical", ours.geometry.len());
@@ -149,7 +175,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Synthesis throughput must be unaffected: the tensors are identical, so
     // any difference would mean the LOADER changed memory layout.
-    let ids_bench = a.id_map.sentence_to_ids("ðə bˈɜːtʃ kənˈuː slˈɪd ɔnðə smˈuːð plˈæŋks.").0;
+    let ids_bench = a
+        .id_map
+        .sentence_to_ids("ðə bˈɜːtʃ kənˈuː slˈɪd ɔnðə smˈuːð plˈæŋks.")
+        .0;
     let bench_opts = ffai_mercury::tts::vits::SynthesisOptions {
         noise_scale: 0.667,
         length_scale: 1.0,
@@ -166,7 +195,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!(
         "synth : onnx {:.0} ms vs safetensors {:.0} ms (best of 5, interleaved) — {:.2}x",
-        best[0], best[1], best[1] / best[0]
+        best[0],
+        best[1],
+        best[1] / best[0]
     );
     let ids = a.id_map.sentence_to_ids("ðə bˈɜːtʃ kənˈuː slˈɪd.").0;
     let opts = ffai_mercury::tts::vits::SynthesisOptions {
@@ -181,12 +212,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "audio : {} samples each, {}",
         wav_a.len(),
-        if identical { "byte-identical" } else { "DIFFERENT" }
+        if identical {
+            "byte-identical"
+        } else {
+            "DIFFERENT"
+        }
     );
 
     println!(
         "\nverdict: {}",
-        if identical { "ONNX loader matches the Python converter" } else { "MISMATCH" }
+        if identical {
+            "ONNX loader matches the Python converter"
+        } else {
+            "MISMATCH"
+        }
     );
     let _ = Path::new("");
     std::process::exit(if identical { 0 } else { 1 });

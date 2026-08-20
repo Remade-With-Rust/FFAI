@@ -52,7 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .take(20)
         .map(|c| {
             let t = std::fs::read_to_string(manifest.clip_path(c)).unwrap();
-            vits.id_map.sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap()).0
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap())
+                .0
         })
         .collect();
 
@@ -67,7 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let frames: usize = zs.iter().map(|z| z.dim(2).unwrap()).sum();
     let samples = frames * 256; // three upsampling stages, 256x overall
-    println!("20 sentences: {frames} latent frames -> {samples} samples ({:.1}s audio)", samples as f64 / 22050.0);
+    println!(
+        "20 sentences: {frames} latent frames -> {samples} samples ({:.1}s audio)",
+        samples as f64 / 22050.0
+    );
 
     // Warm.
     for z in &zs {

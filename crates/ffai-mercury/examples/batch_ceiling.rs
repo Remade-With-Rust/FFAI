@@ -51,7 +51,10 @@ fn main() {
         let _ = whisper.model.encoder.forward(&one, true).expect("warmup");
     }
 
-    println!("{:>5}  {:>10}  {:>12}  {:>10}  {:>9}", "batch", "total ms", "ms/window", "vs b=1", "verdict");
+    println!(
+        "{:>5}  {:>10}  {:>12}  {:>10}  {:>9}",
+        "batch", "total ms", "ms/window", "vs b=1", "verdict"
+    );
     println!("{}", "-".repeat(56));
 
     let mut baseline_per_window = 0.0f64;
@@ -60,7 +63,10 @@ fn main() {
         let batched = if b == 1 {
             one.clone()
         } else {
-            Tensor::cat(&vec![&one; b], 0).expect("stack").to_dtype(DType::F32).expect("dtype")
+            Tensor::cat(&vec![&one; b], 0)
+                .expect("stack")
+                .to_dtype(DType::F32)
+                .expect("dtype")
         };
 
         // Best-of-3: the fastest run is the one least disturbed by whatever
@@ -68,10 +74,18 @@ fn main() {
         let mut best = f64::MAX;
         for _ in 0..3 {
             let t = Instant::now();
-            let out = whisper.model.encoder.forward(&batched, true).expect("encoder");
+            let out = whisper
+                .model
+                .encoder
+                .forward(&batched, true)
+                .expect("encoder");
             // Force materialisation; candle is lazy enough that timing a
             // graph build instead of a computation is a real hazard.
-            let _ = out.sum_all().expect("materialise").to_scalar::<f32>().expect("scalar");
+            let _ = out
+                .sum_all()
+                .expect("materialise")
+                .to_scalar::<f32>()
+                .expect("scalar");
             best = best.min(t.elapsed().as_secs_f64() * 1e3);
         }
 

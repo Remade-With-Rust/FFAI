@@ -100,7 +100,7 @@ fn photo_tensor(path: &std::path::Path, device: &Device) -> Tensor {
     let mut data = vec![0f32; 3 * w * h];
     for (px, chunk) in img.data.chunks_exact(3).enumerate() {
         for c in 0..3 {
-            data[c * w * h + px] = chunk[c] as f32 / 255.0;
+            data[c * w * h + px] = f32::from(chunk[c]) / 255.0;
         }
     }
     Tensor::from_vec(data, (1, 3, h, w), device).expect("photo tensor")
@@ -255,11 +255,18 @@ fn full_graph_matches_the_reference_on_every_converted_tier() {
             ran.push(tier);
         }
     }
-    assert!(
-        !ran.is_empty(),
-        "no tier could be oracled — convert at least one checkpoint with \
-         tools/diana_convert.py before trusting this suite"
-    );
+    // Same split as depth_oracle.rs: "nothing to verify" is not "verification
+    // failed". Unconditionally asserting here made this test red on every machine
+    // without converted checkpoints, which is what pinned CI to `--lib` and so
+    // stopped ALL integration tests in the workspace from running.
+    //
+    // FFAI_REQUIRE_ORACLES=1 restores the hard failure where fixtures are expected.
+    if ran.is_empty() {
+        let required = std::env::var("FFAI_REQUIRE_ORACLES").is_ok_and(|v| v != "0");
+        assert!(!required, "FFAI_REQUIRE_ORACLES is set but no tier could be oracled");
+        eprintln!("oracles: no converted checkpoints present, skipping");
+        return;
+    }
     eprintln!("oracled tiers: {ran:?}");
 }
 

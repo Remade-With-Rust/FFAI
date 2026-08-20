@@ -6,9 +6,7 @@ description = "Mercury — FFai's voice component: pure-Rust ASR (Whisper/Whispe
 # to 0.6.1 -- the API is purely additive, but this crate advertises byte-stable
 # determinism, so a changed waveform is a compatibility break for anyone who
 # pinned bytes. Its dependencies stay at the published 0.6.1.
-# 0.7.1 is a documentation-only republish: README restructured to the shared
-# Remade With Rust page layout. No code, API or output change.
-version = "0.7.1"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,7 +18,7 @@ categories = ["multimedia::audio", "science", "accessibility"]
 
 [dependencies]
 ffai-core = { workspace = true }
-ffai-models = { workspace = true }
+ffai-models = { path = "../ffai-models", version = "0.6.2", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 tokenizers = { workspace = true }
@@ -30,14 +28,112 @@ half = "2"
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Gate H-28: property tests for the advertised invariants (tests/properties.rs).
+proptest = "1"
 ffai-models = { workspace = true }
 
 [features]
+# Weight downloading, ON by default because the README documents it: `cargo add
+# ffai-mercury` + `WhisperCandle::new()` fetches on first use.
+#
+# Turning it OFF is what a security-conscious embedder wants, and it is a large
+# lever rather than a tidy-up. `fetch` pulls hf-hub -> reqwest -> rustls ->
+# aws-lc-rs -> aws-lc-sys, a C crypto library, and with it roughly 180 crates:
+# ffai-mercury resolves 320 dependencies with it and about 140 without, which is
+# what ffai-diana already measures because it opted out first.
+#
+# Ship your own weights and build with --no-default-features to get a graph with
+# no TLS stack and no C crypto at all. Manifests still load and local files still
+# resolve; only fetching is unavailable, and it says so.
+default = ["fetch"]
+fetch = ["ffai-models/fetch"]
 cuda = ["ffai-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 metal = ["ffai-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
-[lints]
-workspace = true
+[lints.rust]
+# `cfg(kani)` is set by the Kani verifier, not by cargo, so --check-cfg does not
+# know it exists and warns on src/proofs.rs. Declare it rather than silencing
+# unexpected_cfgs wholesale - the lint is worth keeping for genuine typos.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+# Mirrors [workspace.lints.rust]. Restated because this crate needs its own
+# [lints.clippy] table below, and `[lints] workspace = true` is all-or-nothing:
+# it cannot be combined with local lint tables. If the workspace rule changes,
+# change it here too.
+unsafe_code = "warn"
+
+# Crate-level exceptions, each a deliberate decision rather than a shortcut.
+# Gate H-15: the policy is "clippy::all denied, exceptions justified in writing".
+[lints.clippy]
+# Gate H-15: pedantic + nursery, enforced.
+#
+# 757 findings became 0. The numeric casts were NOT blanket-allowed - they were
+# split by TRUST BOUNDARY, because that is where this audit's defects were:
+# cast_possible_truncation / cast_sign_loss / cast_possible_wrap are allowed
+# only inside the model-internal DSP modules (each carrying a module-level note
+# saying why) and stay DENIED in the untrusted-surface modules - mel, fbank,
+# onnx, normalize, lexicon, chunk, phonemize, phoneme_ids. That gate is not
+# decorative: reviewing exactly those casts found the ONNX field-number
+# aliasing bug.
+#
+# cast_precision_loss IS allowed crate-wide: it rounds, it cannot alias one
+# value onto another, and every instance is a small index or count converted
+# for float maths.
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cast_precision_loss = "allow"
+
+# --- documentation debt: real, worth doing, not worth blocking on today.
+# Revisit 2026-11-15. ---
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_long_first_doc_paragraph = "allow"
+doc_markdown = "allow"
+# --- DSP naming: the maths calls them q, k, v, x, y, h, t. Expanding those into
+# prose makes the kernels harder to check against the paper, not easier. ---
+many_single_char_names = "allow"
+similar_names = "allow"
+# --- shape and style in numeric code ---
+# Model constants are transcribed from reference implementations; regrouping
+# their digits makes diffing against the source harder.
+unreadable_literal = "allow"
+# Kernels are long because the arithmetic is; splitting them would add call
+# overhead to the measured hot path.
+too_many_lines = "allow"
+# `let` items after statements read fine in staged numeric code.
+items_after_statements = "allow"
+# `push_str(&format!(..))` is clearer than `write!` when assembling short text.
+format_push_string = "allow"
+# Passing small Copy config structs by value is intentional.
+needless_pass_by_value = "allow"
+# Style preferences that do not change behaviour.
+needless_continue = "allow"
+needless_for_each = "allow"
+manual_let_else = "allow"
+default_trait_access = "allow"
+assigning_clones = "allow"
+inline_always = "allow"
+unused_self = "allow"
+struct_field_names = "allow"
+redundant_closure_for_method_calls = "allow"
+option_if_let_else = "allow"
+suboptimal_flops = "allow"
+# `.max(a).min(b)` and `clamp` differ on NaN, and these paths carry audio
+# samples where NaN is reachable. Rewriting them would change behaviour.
+manual_clamp = "allow"
+# Kernel constants are transcribed from the reference implementation. Rounding
+# them to "nicer" literals changes the bits, and this crate advertises
+# byte-stable output.
+approx_constant = "allow"
+excessive_precision = "allow"
+# The SIMD kernels take the arguments the arithmetic needs; splitting them into
+# a struct adds an indirection to the hottest loops in the crate.
+too_many_arguments = "allow"
+type_complexity = "allow"
+# Index-based loops in the kernels are deliberate: the iterator form changes
+# what the autovectoriser produces, and these loops are the measured hot path.
+needless_range_loop = "allow"
+# Two arms that look identical today document two distinct cases.
+if_same_then_else = "allow"
 
 [dev-dependencies.ffai-bench]
 workspace = true

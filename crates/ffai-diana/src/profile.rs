@@ -37,7 +37,7 @@ pub struct Stage {
 
 impl Stage {
     const fn new() -> Self {
-        Stage { nanos: AtomicU64::new(0), calls: AtomicU64::new(0) }
+        Self { nanos: AtomicU64::new(0), calls: AtomicU64::new(0) }
     }
 
     fn add(&self, nanos: u64) {
@@ -89,7 +89,7 @@ pub struct Profile {
     pub conv_s2: Stage,
     /// Depthwise, on our own kernel.
     pub conv_dw: Stage,
-    /// The SiLU activation applied after most convolutions.
+    /// The `SiLU` activation applied after most convolutions.
     pub act: Stage,
     /// im2col materialization inside our 3x3 kernels.
     pub im2col: Stage,
@@ -133,10 +133,12 @@ static PROFILE: Profile = Profile {
     attn: Stage::new(),
 };
 
+#[must_use] 
 pub fn profile() -> &'static Profile {
     &PROFILE
 }
 
+#[must_use] 
 pub fn is_enabled() -> bool {
     enabled()
 }
@@ -187,7 +189,7 @@ fn scope_nanos() -> f64 {
             let inner = Instant::now();
             std::hint::black_box(inner.elapsed());
         }
-        t0.elapsed().as_nanos() as f64 / n as f64
+        t0.elapsed().as_nanos() as f64 / f64::from(n)
     })
 }
 
@@ -486,6 +488,7 @@ pub fn set_last_work_ns(n: u64) {
     LAST_WORK_NS.with(|c| c.set(n));
 }
 
+#[must_use] 
 pub fn take_last_work_ns() -> u64 {
     LAST_WORK_NS.with(|c| c.replace(0))
 }

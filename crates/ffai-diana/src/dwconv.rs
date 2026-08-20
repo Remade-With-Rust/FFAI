@@ -9,7 +9,7 @@
 //! single-channel convolutions**, each through the full im2col machinery,
 //! plus 256 allocations and a 256-way concatenation.
 //!
-//! Measured on YOLO26n's head (`examples/dwconv_prize.rs`):
+//! Measured on `YOLO26n`'s head (`examples/dwconv_prize.rs`):
 //!
 //! | depthwise | ms | GFLOP/s |
 //! |---|---:|---:|
@@ -89,7 +89,7 @@ pub fn depthwise3x3(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>) -> Resul
                 }
             }
             // The two edge columns, where the horizontal taps clamp.
-            for &x in [0usize, w.saturating_sub(1)].iter() {
+            for &x in &[0usize, w.saturating_sub(1)] {
                 if w == 0 {
                     continue;
                 }

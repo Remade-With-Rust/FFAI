@@ -21,19 +21,20 @@ pub enum GateKind {
 }
 
 impl GateKind {
-    pub const ALL: [GateKind; 4] = [
-        GateKind::Correctness,
-        GateKind::Quality,
-        GateKind::Speed,
-        GateKind::Footprint,
+    pub const ALL: [Self; 4] = [
+        Self::Correctness,
+        Self::Quality,
+        Self::Speed,
+        Self::Footprint,
     ];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            GateKind::Correctness => "correctness",
-            GateKind::Quality => "quality",
-            GateKind::Speed => "speed",
-            GateKind::Footprint => "footprint",
+            Self::Correctness => "correctness",
+            Self::Quality => "quality",
+            Self::Speed => "speed",
+            Self::Footprint => "footprint",
         }
     }
 }
@@ -50,9 +51,9 @@ pub enum GateOutcome {
 impl fmt::Display for GateOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            GateOutcome::Pass => "PASS",
-            GateOutcome::Fail => "FAIL",
-            GateOutcome::Skipped => "SKIP",
+            Self::Pass => "PASS",
+            Self::Fail => "FAIL",
+            Self::Skipped => "SKIP",
         })
     }
 }
@@ -69,7 +70,12 @@ pub struct GateResult {
 
 impl GateResult {
     pub fn skipped(kind: GateKind, reason: impl Into<String>) -> Self {
-        GateResult { kind, outcome: GateOutcome::Skipped, metric: None, detail: reason.into() }
+        Self {
+            kind,
+            outcome: GateOutcome::Skipped,
+            metric: None,
+            detail: reason.into(),
+        }
     }
 }
 
@@ -81,8 +87,9 @@ pub struct GateReport {
 
 impl GateReport {
     /// Fresh report: all four gates `Skipped("not run")`.
+    #[must_use]
     pub fn new() -> Self {
-        GateReport {
+        Self {
             results: GateKind::ALL
                 .iter()
                 .map(|&k| GateResult::skipped(k, "not run"))
@@ -98,16 +105,18 @@ impl GateReport {
         }
     }
 
+    #[must_use]
     pub fn get(&self, kind: GateKind) -> Option<&GateResult> {
         self.results.iter().find(|r| r.kind == kind)
     }
 
     /// True only if **every** gate is `Pass` — a skipped gate has not cleared
     /// the bar. This is the rule that keeps public claims honest.
+    #[must_use]
     pub fn all_passed(&self) -> bool {
-        GateKind::ALL.iter().all(|&k| {
-            self.get(k).map(|r| r.outcome == GateOutcome::Pass).unwrap_or(false)
-        })
+        GateKind::ALL
+            .iter()
+            .all(|&k| self.get(k).is_some_and(|r| r.outcome == GateOutcome::Pass))
     }
 }
 
@@ -131,7 +140,12 @@ mod tests {
         let mut r = GateReport::new();
         for k in GateKind::ALL {
             assert!(!r.all_passed());
-            r.set(GateResult { kind: k, outcome: GateOutcome::Pass, metric: None, detail: "ok".into() });
+            r.set(GateResult {
+                kind: k,
+                outcome: GateOutcome::Pass,
+                metric: None,
+                detail: "ok".into(),
+            });
         }
         assert!(r.all_passed());
         r.set(GateResult {

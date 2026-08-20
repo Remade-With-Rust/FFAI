@@ -54,8 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SetPriorityClass(GetCurrentProcess(), 0x0000_0080); // HIGH_PRIORITY_CLASS
     }
     let null = std::env::var("FFAI_AB_NULL").is_ok();
-    let rounds: usize =
-        std::env::var("FFAI_AB_ROUNDS").ok().and_then(|s| s.parse().ok()).unwrap_or(21);
+    let rounds: usize = std::env::var("FFAI_AB_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(21);
 
     let cache = std::env::var("FFAI_CACHE")
         .map(PathBuf::from)
@@ -69,7 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .take(20)
         .map(|c| {
             let t = std::fs::read_to_string(manifest.clip_path(c)).unwrap();
-            vits.id_map.sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap()).0
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap())
+                .0
         })
         .collect();
 
@@ -85,7 +89,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hiddens.push((hidden, ids.len()));
     }
 
-    let workloads: Vec<(&str, Box<dyn Fn() -> Result<(), Box<dyn std::error::Error>>>)> = vec![
+    let workloads: Vec<(
+        &str,
+        Box<dyn Fn() -> Result<(), Box<dyn std::error::Error>>>,
+    )> = vec![
         (
             "whole pipeline",
             Box::new(|| {
@@ -166,7 +173,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
              P+E wins {pe_wins}/{rounds}  z {z:+.2}  -> {}",
             mp / mpe,
             if z.abs() > 2.0 {
-                if z > 0.0 { "E-cores HELP" } else { "E-cores HURT (straggler real)" }
+                if z > 0.0 {
+                    "E-cores HELP"
+                } else {
+                    "E-cores HURT (straggler real)"
+                }
             } else {
                 "inside noise"
             }

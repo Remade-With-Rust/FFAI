@@ -25,7 +25,7 @@ pub struct Stage {
 
 impl Stage {
     const fn new() -> Self {
-        Stage { nanos: AtomicU64::new(0), calls: AtomicU64::new(0) }
+        Self { nanos: AtomicU64::new(0), calls: AtomicU64::new(0) }
     }
 
     pub(crate) fn add(&self, nanos: u64) {
@@ -58,7 +58,7 @@ pub struct Profile {
     pub decode: Stage,
     /// Inside `rec_fwd`: the CRNN's 7-conv backbone (per line).
     pub rec_cnn: Stage,
-    /// Inside `rec_fwd`: the two BiLSTMs — candle's `LSTM::seq`, which walks
+    /// Inside `rec_fwd`: the two `BiLSTMs` — candle's `LSTM::seq`, which walks
     /// timesteps SEQUENTIALLY at batch 1, so every gate matmul takes the
     /// m=1 vector path. Split out to test that hypothesis (§8.100).
     pub rec_rnn: Stage,
@@ -78,10 +78,12 @@ static PROFILE: Profile = Profile {
     rec_head: Stage::new(),
 };
 
+#[must_use] 
 pub fn profile() -> &'static Profile {
     &PROFILE
 }
 
+#[must_use] 
 pub fn is_enabled() -> bool {
     enabled()
 }

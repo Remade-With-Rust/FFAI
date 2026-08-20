@@ -51,11 +51,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let texts: Vec<String> = manifest
         .holdout()
         .take(20)
-        .map(|c| std::fs::read_to_string(manifest.clip_path(c)).unwrap().trim().to_string())
+        .map(|c| {
+            std::fs::read_to_string(manifest.clip_path(c))
+                .unwrap()
+                .trim()
+                .to_string()
+        })
         .collect();
     let ids_list: Vec<Vec<i64>> = texts
         .iter()
-        .map(|t| vits.id_map.sentence_to_ids(&phonemizer.phonemize(t).unwrap()).0)
+        .map(|t| {
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t).unwrap())
+                .0
+        })
         .collect();
 
     // Each layer's input, captured once so every part is measured on the real
@@ -66,29 +75,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inputs.push((hidden, ids.len()));
     }
     let total_t: usize = inputs.iter().map(|(_, t)| *t).sum();
-    println!("20 sentences, {total_t} phoneme columns (mean {:.1})", total_t as f64 / 20.0);
+    println!(
+        "20 sentences, {total_t} phoneme columns (mean {:.1})",
+        total_t as f64 / 20.0
+    );
 
-    let bench = |label: &str, gflop: f64, f: &dyn Fn() -> Result<(), Box<dyn std::error::Error>>| {
-        // Warm.
-        let _ = f();
-        let (mut best, mut best_cpu) = (f64::MAX, f64::MAX);
-        for _ in 0..7 {
-            let (t0, c0) = (Instant::now(), cpu_secs());
+    let bench =
+        |label: &str, gflop: f64, f: &dyn Fn() -> Result<(), Box<dyn std::error::Error>>| {
+            // Warm.
             let _ = f();
-            let w = t0.elapsed().as_secs_f64();
-            if w < best {
-                best = w;
-                best_cpu = cpu_secs() - c0;
+            let (mut best, mut best_cpu) = (f64::MAX, f64::MAX);
+            for _ in 0..7 {
+                let (t0, c0) = (Instant::now(), cpu_secs());
+                let _ = f();
+                let w = t0.elapsed().as_secs_f64();
+                if w < best {
+                    best = w;
+                    best_cpu = cpu_secs() - c0;
+                }
             }
-        }
-        println!(
-            "  {label:<16} {:>8.1} ms  {:>6.2} cores  {:>7.1} GFLOP/s",
-            best * 1000.0,
-            best_cpu / best,
-            gflop / best
-        );
-        best
-    };
+            println!(
+                "  {label:<16} {:>8.1} ms  {:>6.2} cores  {:>7.1} GFLOP/s",
+                best * 1000.0,
+                best_cpu / best,
+                gflop / best
+            );
+            best
+        };
 
     let t = total_t as f64;
     // Per column, summed over 6 layers.
@@ -97,16 +110,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ffn: conv k3 192->768 then 768->192
     let g_ffn = LAYERS as f64 * t * (HIDDEN * 768.0 * 3.0 * 2.0 * 2.0) / 1e9;
 
-    let whole = bench(
-        "whole encoder",
-        g_attn + g_ffn,
-        &|| {
-            for ids in &ids_list {
-                std::hint::black_box(vits.text_encoder(ids)?);
-            }
-            Ok(())
-        },
-    );
+    let whole = bench("whole encoder", g_attn + g_ffn, &|| {
+        for ids in &ids_list {
+            std::hint::black_box(vits.text_encoder(ids)?);
+        }
+        Ok(())
+    });
     let attn = bench("attention x6", g_attn, &|| {
         for (x, t_len) in &inputs {
             for l in 0..LAYERS {

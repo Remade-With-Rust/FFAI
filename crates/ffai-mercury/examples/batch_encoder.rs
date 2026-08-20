@@ -90,12 +90,22 @@ fn main() {
             exact = false;
         }
         worst = worst.max(diff);
-        println!("  window {i}: max |Δ| = {diff:.3e}{}", if got == single[i] { "  (bit-exact)" } else { "" });
+        println!(
+            "  window {i}: max |Δ| = {diff:.3e}{}",
+            if got == single[i] {
+                "  (bit-exact)"
+            } else {
+                ""
+            }
+        );
     }
 
     // A batch bug that broadcasts item 0 shows up here and nowhere else.
     let all_same = (1..N).all(|i| single[i] == single[0]);
-    assert!(!all_same, "test windows are not distinct — the check proves nothing");
+    assert!(
+        !all_same,
+        "test windows are not distinct — the check proves nothing"
+    );
 
     println!(
         "\n  verdict: {}",
@@ -118,7 +128,11 @@ fn main() {
         .expect("readback");
     println!(
         "\nGATE null arm — batch of 1 reproduces unbatched: {}",
-        if null == single[0] { "PASS (bit-exact)" } else { "FAIL" }
+        if null == single[0] {
+            "PASS (bit-exact)"
+        } else {
+            "FAIL"
+        }
     );
 
     // ---- speed, on OUR kernels ----
@@ -130,7 +144,11 @@ fn main() {
         for _ in 0..3 {
             let t = Instant::now();
             let out = whisper.encoder.forward(&input).expect("encoder");
-            let _ = out.sum_all().expect("materialise").to_scalar::<f32>().expect("scalar");
+            let _ = out
+                .sum_all()
+                .expect("materialise")
+                .to_scalar::<f32>()
+                .expect("scalar");
             best = best.min(t.elapsed().as_secs_f64() * 1e3);
         }
         let each = best / size as f64;

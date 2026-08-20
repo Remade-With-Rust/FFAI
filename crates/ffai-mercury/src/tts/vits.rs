@@ -16,13 +16,26 @@
 //! Conv geometry (dilations, strides, pads, groups) is READ from
 //! `vits-graph.json` — extracted from the ONNX graph, never assumed — and
 //! two export quirks are reproduced deliberately: the duration predictor's
-//! first ConvFlow (`dp.flows.1`) is skipped at inference (the VITS
+//! first `ConvFlow` (`dp.flows.1`) is skipped at inference (the VITS
 //! `flows[:-2] + [flows[-1]]` reversal, confirmed present in the graph), and
 //! only the TOTAL length is clamped, not per-phoneme durations.
 //!
 //! Determinism: all noise flows through a seeded xorshift/Box–Muller
 //! generator; `noise_scale = noise_w = 0` bypasses it entirely, which is the
 //! configuration the acoustic oracle pins.
+
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -126,7 +139,7 @@ impl Vits {
     }
 
     /// Load from a converted-voice directory: `vits.safetensors`,
-    /// `vits-graph.json`, `voice-config.json` (see dump_piper_weights.py).
+    /// `vits-graph.json`, `voice-config.json` (see `dump_piper_weights.py`).
     /// Kept as the in-repo path and as the oracle the ONNX loader is gated
     /// against.
     pub fn load(dir: &Path) -> Result<Self> {
@@ -144,9 +157,8 @@ impl Vits {
                     a.get(k)
                         .and_then(|v| v.as_array())
                         .and_then(|v| v.first())
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as usize)
-                        .unwrap_or(d)
+                        .and_then(serde_json::Value::as_u64)
+                        .map_or(d, |v| v as usize)
                 };
                 geom.insert(
                     name.clone(),
@@ -176,10 +188,15 @@ impl Vits {
             .map_err(|e| Error::Model(format!("voice-config.json: {e}")))?;
         let sample_rate = config
             .pointer("/audio/sample_rate")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| Error::Model("voice config has no audio.sample_rate".into()))?
             as u32;
-        let knob = |k: &str, d: f64| config.pointer(&format!("/inference/{k}")).and_then(|v| v.as_f64()).unwrap_or(d);
+        let knob = |k: &str, d: f64| {
+            config
+                .pointer(&format!("/inference/{k}"))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(d)
+        };
         let defaults = SynthesisOptions {
             noise_scale: knob("noise_scale", 0.667),
             length_scale: knob("length_scale", 1.0),
@@ -213,7 +230,9 @@ impl Vits {
                 let g = geom.get(name).copied().unwrap_or_default();
                 (g.pad, g.stride.max(1), g.dilation.max(1))
             };
-            Some(super::decoder_kernels::FlatFlow::from_weights(&get, &geom_of, HIDDEN)?)
+            Some(super::decoder_kernels::FlatFlow::from_weights(
+                &get, &geom_of, HIDDEN,
+            )?)
         };
         let fused_qkv = {
             let mut v = Vec::new();
@@ -224,7 +243,11 @@ impl Vits {
                         .ok_or_else(|| Error::Model(format!("missing {base}.{n}")))
                 };
                 let wq = Tensor::cat(
-                    &[t("conv_q.weight")?, t("conv_k.weight")?, t("conv_v.weight")?],
+                    &[
+                        t("conv_q.weight")?,
+                        t("conv_k.weight")?,
+                        t("conv_v.weight")?,
+                    ],
                     0,
                 )
                 .e()?;
@@ -238,7 +261,17 @@ impl Vits {
             v
         };
 
-        Ok(Vits { w, geom, device, flat_dec, flat_flow, fused_qkv, sample_rate, id_map, defaults })
+        Ok(Self {
+            w,
+            geom,
+            device,
+            flat_dec,
+            flat_flow,
+            fused_qkv,
+            sample_rate,
+            id_map,
+            defaults,
+        })
     }
 
     /// Full synthesis: interleaved phoneme ids → mono f32 samples.
@@ -259,7 +292,7 @@ impl Vits {
 
     // ---------------------------------------------------------------- stage 1
 
-    /// Text encoder: ids → (m_p, logs_p, hidden), each `[1, 192, T]`.
+    /// Text encoder: ids → (`m_p`, `logs_p`, hidden), each `[1, 192, T]`.
     pub fn text_encoder(&self, ids: &[i64]) -> Result<(Tensor, Tensor, Tensor)> {
         let t_len = ids.len();
         let idx = Tensor::from_slice(ids, (t_len,), &self.device).e()?;
@@ -278,9 +311,11 @@ impl Vits {
         for i in 0..N_LAYERS {
             let base = format!("enc_p.encoder.attn_layers.{i}");
             let y = self.rel_attention(&base, i, &x, t_len)?;
-            x = self.layer_norm_named(&format!("enc_p.encoder.norm_layers_1.{i}"), &(&x + y).e()?)?;
+            x =
+                self.layer_norm_named(&format!("enc_p.encoder.norm_layers_1.{i}"), &(&x + y).e()?)?;
             let y = self.ffn(&format!("enc_p.encoder.ffn_layers.{i}"), &x)?;
-            x = self.layer_norm_named(&format!("enc_p.encoder.norm_layers_2.{i}"), &(&x + y).e()?)?;
+            x =
+                self.layer_norm_named(&format!("enc_p.encoder.norm_layers_2.{i}"), &(&x + y).e()?)?;
         }
         let stats = self.conv("enc_p.proj", &x)?;
         let m_p = stats.narrow(1, 0, HIDDEN).e()?;
@@ -334,7 +369,7 @@ impl Vits {
                 let ck = (HIDDEN + h * hd + d) * t_len;
                 let cv = (2 * HIDDEN + h * hd + d) * t_len;
                 for t in 0..t_len {
-                    q[(h * t_len + t) * hd + d] = (qkv_v[cq + t] as f64 * scale) as f32;
+                    q[(h * t_len + t) * hd + d] = (f64::from(qkv_v[cq + t]) * scale) as f32;
                     kk[(h * t_len + t) * hd + d] = qkv_v[ck + t];
                     vv[(h * t_len + t) * hd + d] = qkv_v[cv + t];
                 }
@@ -365,7 +400,7 @@ impl Vits {
                 *pj = s;
             }
             // Softmax over the row, in place.
-            let m = p.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let m = p.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let mut sum = 0f32;
             for pj in p.iter_mut() {
                 *pj = (*pj - m).exp();
@@ -491,7 +526,10 @@ impl Vits {
             if use_gemm {
                 return super::decoder_kernels::conv1d_k3_gemm(x, w, b, &self.device);
             }
-            x.conv1d(w, 1, 1, 1, 1).e()?.broadcast_add(&b.reshape((1, c, 1)).e()?).e()
+            x.conv1d(w, 1, 1, 1, 1)
+                .e()?
+                .broadcast_add(&b.reshape((1, c, 1)).e()?)
+                .e()
         };
         let h = conv(&format!("{base}.conv_1"), x)?.relu().e()?;
         conv(&format!("{base}.conv_2"), &h)
@@ -531,7 +569,9 @@ impl Vits {
 
         // z starts as noise * noise_w over 2 channels.
         let mut z = if noise_w > 0.0 {
-            rng.tensor(&[1, 2, t_len], &self.device)?.affine(noise_w, 0.0).e()?
+            rng.tensor(&[1, 2, t_len], &self.device)?
+                .affine(noise_w, 0.0)
+                .e()?
         } else {
             Tensor::zeros((1, 2, t_len), DType::F32, &self.device).e()?
         };
@@ -549,7 +589,10 @@ impl Vits {
         z = z.broadcast_sub(&m).e()?.broadcast_mul(&exp_neg_logs).e()?;
 
         let logw: Vec<f32> = z.i((0, 0)).e()?.to_vec1().e()?;
-        Ok(logw.iter().map(|lw| (lw.exp() as f64) * length_scale).collect())
+        Ok(logw
+            .iter()
+            .map(|lw| f64::from(lw.exp()) * length_scale)
+            .collect())
     }
 
     /// Frames per phoneme — the integer contract the graph's `w_ceil` pins.
@@ -583,8 +626,8 @@ impl Vits {
         self.durations_raw(hidden, noise_w, length_scale, rng)
     }
 
-    /// DDSConv: depthwise-separable dilated conv stack with channel
-    /// LayerNorms and exact-erf GELU (the graph uses Erf, not tanh-GELU).
+    /// `DDSConv`: depthwise-separable dilated conv stack with channel
+    /// `LayerNorms` and exact-erf GELU (the graph uses Erf, not tanh-GELU).
     fn dds_conv(&self, base: &str, x: &Tensor, g: Option<&Tensor>) -> Result<Tensor> {
         let mut x = match g {
             Some(g) => (x + g).e()?,
@@ -627,7 +670,7 @@ impl Vits {
         normed.broadcast_mul(&gamma).e()?.broadcast_add(&beta).e()
     }
 
-    /// ConvFlow reverse: spline-transform the second channel conditioned on
+    /// `ConvFlow` reverse: spline-transform the second channel conditioned on
     /// the first (rational-quadratic, linear tails, 10 bins, bound 5).
     fn conv_flow_reverse(&self, base: &str, z: &Tensor, g: &Tensor) -> Result<Tensor> {
         let t_len = z.dim(2).e()?;
@@ -650,13 +693,13 @@ impl Vits {
             let mut heights = [0f64; SPLINE_BINS];
             let mut derivs = [0f64; SPLINE_BINS - 1];
             for b in 0..SPLINE_BINS {
-                widths[b] = params[b][t] as f64 * filt_scale;
-                heights[b] = params[SPLINE_BINS + b][t] as f64 * filt_scale;
+                widths[b] = f64::from(params[b][t]) * filt_scale;
+                heights[b] = f64::from(params[SPLINE_BINS + b][t]) * filt_scale;
             }
             for (b, d) in derivs.iter_mut().enumerate() {
-                *d = params[2 * SPLINE_BINS + b][t] as f64;
+                *d = f64::from(params[2 * SPLINE_BINS + b][t]);
             }
-            rq_spline_inverse(z1v[t] as f64, &widths, &heights, &derivs) as f32
+            rq_spline_inverse(f64::from(z1v[t]), &widths, &heights, &derivs) as f32
         };
         // Parallelising this loop was rejected at T~88, then RE-TESTED across a
         // length sweep, because a mixed win/lose outcome is an unfinished
@@ -713,7 +756,7 @@ impl Vits {
         Ok((m, logs))
     }
 
-    /// Residual coupling flow, reversed: z_p → z.
+    /// Residual coupling flow, reversed: `z_p` → z.
     ///
     /// The flat fused-gate version exists (`FFAI_FLAT_FLOW=1`) and is
     /// oracle-exact, but the interleaved paired A/B scored it a WASH —
@@ -723,13 +766,13 @@ impl Vits {
     pub fn flow_reverse(&self, z_p: &Tensor) -> Result<Tensor> {
         // Flat is the default (42/45 paired wins, §6.14);
         // FFAI_CANDLE_FLOW=1 restores the candle path for A/B.
-        if let Some(flat_flow) = &self.flat_flow {
-            if std::env::var("FFAI_CANDLE_FLOW").is_err() {
-                let len = z_p.dim(2).e()?;
-                let mut zv: Vec<f32> = z_p.flatten_all().e()?.to_vec1().e()?;
-                flat_flow.run(&mut zv, len)?;
-                return Tensor::from_vec(zv, (1, HIDDEN, len), &self.device).e();
-            }
+        if let Some(flat_flow) = &self.flat_flow
+            && std::env::var("FFAI_CANDLE_FLOW").is_err()
+        {
+            let len = z_p.dim(2).e()?;
+            let mut zv: Vec<f32> = z_p.flatten_all().e()?.to_vec1().e()?;
+            flat_flow.run(&mut zv, len)?;
+            return Tensor::from_vec(zv, (1, HIDDEN, len), &self.device).e();
         }
         let half = HIDDEN / 2;
         let mut z = z_p.clone();
@@ -823,7 +866,7 @@ impl Vits {
     }
 
     /// Conv/ConvTranspose by canonical name, geometry from the graph JSON,
-    /// bias applied when present (conv_post has none).
+    /// bias applied when present (`conv_post` has none).
     ///
     /// Decoder-stage convs route through the cache-blocked direct kernels
     /// ([`super::decoder_kernels`]) — profiled 82.7 % of synthesis, and
@@ -917,7 +960,8 @@ impl Vits {
             return super::decoder_kernels::conv1d_k1_gemm(x, weight, bias, &self.device);
         }
         let y = if g.transpose {
-            x.conv_transpose1d(weight, g.pad, 0, g.stride, g.dilation, 1).e()?
+            x.conv_transpose1d(weight, g.pad, 0, g.stride, g.dilation, 1)
+                .e()?
         } else {
             x.conv1d(weight, g.pad, g.stride, g.dilation, groups).e()?
         };
@@ -963,6 +1007,7 @@ fn gelu_erf(x: &Tensor) -> Result<Tensor> {
 
 /// `[h, T, 2T-1]` relative logits → `[h, T, T]` absolute (the VITS pad /
 /// reshape / slice trick, verified by the hand example in the tests).
+#[allow(dead_code)] // relative-attention path: verified by the hand example in tests, kept for when it is wired up
 fn relative_to_absolute(x: &Tensor) -> Result<Tensor> {
     let (h, t, _span) = x.dims3().e()?;
     let x = x.pad_with_zeros(2, 0, 1).e()?; // [h,T,2T]
@@ -973,6 +1018,7 @@ fn relative_to_absolute(x: &Tensor) -> Result<Tensor> {
 }
 
 /// `[h, T, T]` attention weights → `[h, T, 2T-1]` relative positions.
+#[allow(dead_code)] // inverse of relative_to_absolute; same reason
 fn absolute_to_relative(x: &Tensor) -> Result<Tensor> {
     let (h, t, _) = x.dims3().e()?;
     let x = x.pad_with_zeros(2, 0, t - 1).e()?; // [h,T,2T-1]
@@ -983,7 +1029,7 @@ fn absolute_to_relative(x: &Tensor) -> Result<Tensor> {
 }
 
 /// Inverse monotonic rational-quadratic spline with linear tails
-/// (Durkan et al.; the transform `dp`'s ConvFlows apply to durations).
+/// (Durkan et al.; the transform `dp`'s `ConvFlows` apply to durations).
 fn rq_spline_inverse(y: f64, uw: &[f64], uh: &[f64], ud: &[f64]) -> f64 {
     let nb = uw.len();
     if !(-SPLINE_TAIL..=SPLINE_TAIL).contains(&y) {
@@ -992,10 +1038,12 @@ fn rq_spline_inverse(y: f64, uw: &[f64], uh: &[f64], ud: &[f64]) -> f64 {
     // Normalized bin widths/heights (softmax with a minimum), cumulative
     // over [-B, B].
     let norm = |u: &[f64]| -> Vec<f64> {
-        let m = u.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let m = u.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let exps: Vec<f64> = u.iter().map(|v| (v - m).exp()).collect();
         let s: f64 = exps.iter().sum();
-        exps.iter().map(|e| MIN_BIN + (1.0 - MIN_BIN * nb as f64) * e / s).collect()
+        exps.iter()
+            .map(|e| MIN_BIN + MIN_BIN.mul_add(-(nb as f64), 1.0) * e / s)
+            .collect()
     };
     let widths = norm(uw);
     let heights = norm(uh);
@@ -1003,8 +1051,8 @@ fn rq_spline_inverse(y: f64, uw: &[f64], uh: &[f64], ud: &[f64]) -> f64 {
     let mut cw = vec![-SPLINE_TAIL];
     let mut ch = vec![-SPLINE_TAIL];
     for b in 0..nb {
-        cw.push(cw[b] + widths[b] * span);
-        ch.push(ch[b] + heights[b] * span);
+        cw.push(widths[b].mul_add(span, cw[b]));
+        ch.push(heights[b].mul_add(span, ch[b]));
     }
     cw[nb] = SPLINE_TAIL;
     ch[nb] = SPLINE_TAIL;
@@ -1027,16 +1075,16 @@ fn rq_spline_inverse(y: f64, uw: &[f64], uh: &[f64], ud: &[f64]) -> f64 {
     let delta = h_k / w_k;
     let (d0, d1) = (deriv(bin), deriv(bin + 1));
     let dy = y - y_k;
-    let a = dy * (d0 + d1 - 2.0 * delta) + h_k * (delta - d0);
-    let b = h_k * d0 - dy * (d0 + d1 - 2.0 * delta);
+    let a = dy.mul_add(2.0f64.mul_add(-delta, d0 + d1), h_k * (delta - d0));
+    let b = h_k.mul_add(d0, -(dy * 2.0f64.mul_add(-delta, d0 + d1)));
     let c = -delta * dy;
-    let disc = (b * b - 4.0 * a * c).max(0.0);
+    let disc = b.mul_add(b, -(4.0 * a * c)).max(0.0);
     let theta = 2.0 * c / (-b - disc.sqrt());
     x_k + theta * w_k
 }
 
 fn softplus(x: f64) -> f64 {
-    if x > 20.0 { x } else { (1.0 + x.exp()).ln() }
+    if x > 20.0 { x } else { x.exp().ln_1p() }
 }
 
 /// Deterministic gaussian noise: xorshift64* + Box–Muller. Same seed, same
@@ -1047,8 +1095,12 @@ pub struct GaussRng {
 }
 
 impl GaussRng {
-    pub fn new(seed: u64) -> Self {
-        GaussRng { state: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1, spare: None }
+    #[must_use]
+    pub const fn new(seed: u64) -> Self {
+        Self {
+            state: seed.wrapping_mul(0x9E3779B97F4A7C15) | 1,
+            spare: None,
+        }
     }
 
     fn uniform(&mut self) -> f64 {

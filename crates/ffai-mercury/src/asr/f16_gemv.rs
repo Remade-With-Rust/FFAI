@@ -43,12 +43,21 @@
 //! but its error compounds through the residual stream and it failed the
 //! corpus quality gate at 8.39 % WER. f16 keeps ~3 decimal digits.
 
+// `_mm_loadu_si128` is the UNALIGNED load - the `u` is the whole point - so
+// casting a *const u16 to *const __m128i for it is correct, not a latent
+// misalignment. clippy cannot see the consumer.
+#![allow(clippy::cast_ptr_alignment)]
+
 use ffai_core::candle::{
     CpuStorage, CustomOp1, DType, Device, Layout, Result as CandleResult, Shape, Tensor,
 };
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use std::arch::x86_64::{
+    __m128i, _mm_add_ps, _mm_add_ss, _mm_cvtss_f32, _mm_loadu_si128, _mm_movehl_ps, _mm_shuffle_ps,
+    _mm256_add_ps, _mm256_castps256_ps128, _mm256_cvtph_ps, _mm256_extractf128_ps, _mm256_fmadd_ps,
+    _mm256_loadu_ps, _mm256_setzero_ps,
+};
 
 /// f16 weights in (out, in) row-major — the layout `QLinear` already stores,
 /// so no transpose is needed.
@@ -92,9 +101,16 @@ impl F16Gemv {
         if in_dim % 8 != 0 {
             return Ok(None);
         }
-        let half = weight.to_dtype(DType::F16)?.flatten_all()?.to_vec1::<half::f16>()?;
-        let w = std::sync::Arc::new(half.into_iter().map(|h| h.to_bits()).collect::<Vec<u16>>());
-        Ok(Some(F16Gemv { w, out_dim, in_dim }))
+        let half = weight
+            .to_dtype(DType::F16)?
+            .flatten_all()?
+            .to_vec1::<half::f16>()?;
+        let w = std::sync::Arc::new(
+            half.into_iter()
+                .map(half::f16::to_bits)
+                .collect::<Vec<u16>>(),
+        );
+        Ok(Some(Self { w, out_dim, in_dim }))
     }
 
     /// `x` is (1, in) f32 → (1, out) f32. The activation is never converted.
@@ -138,6 +154,10 @@ impl CustomOp1 for F16GemvOp {
         let x = &xf[l.start_offset()..l.start_offset() + d];
         let mut out = vec![0f32; o];
         for (i, slot) in out.iter_mut().enumerate() {
+            // SAFETY: avx2+fma+f16c - the op is only constructed when `have_f16c()` passes
+            // (see the guard above), so this call cannot be reached on a CPU without them.
+            // Pointer bounds: `w` holds out_dim*in_dim f16 weights and `i < out_dim`, so
+            // `w.add(i*d)` addresses a full `d`-element row inside the allocation.
             *slot = unsafe { dot_f16(self.w.as_ptr().add(i * d), x, d) };
         }
         Ok((CpuStorage::F32(out), Shape::from_dims(&[1, o])))
@@ -150,31 +170,40 @@ impl CustomOp1 for F16GemvOp {
 /// reduction happens once per output row, amortized over `d` contractions.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma,f16c")]
+// SAFETY: caller must ensure avx2+fma+f16c, and that `w` points at `d` readable
+// f16 values. The only call site is guarded by `have_f16c()` and slices a
+// single weight row.
 unsafe fn dot_f16(w: *const u16, x: &[f32], d: usize) -> f32 {
-    let mut acc0 = _mm256_setzero_ps();
-    let mut acc1 = _mm256_setzero_ps();
-    let xp = x.as_ptr();
-    let mut k = 0;
-    while k + 16 <= d {
-        let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
-        acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
-        let w1 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k + 8) as *const __m128i));
-        acc1 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(xp.add(k + 8)), acc1);
-        k += 16;
+    unsafe {
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+        let xp = x.as_ptr();
+        let mut k = 0;
+        while k + 16 <= d {
+            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k).cast::<__m128i>()));
+            acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
+            let w1 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k + 8).cast::<__m128i>()));
+            acc1 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(xp.add(k + 8)), acc1);
+            k += 16;
+        }
+        while k + 8 <= d {
+            let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k).cast::<__m128i>()));
+            acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
+            k += 8;
+        }
+        let acc = _mm256_add_ps(acc0, acc1);
+        let s = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+        let s = _mm_add_ps(s, _mm_movehl_ps(s, s));
+        let s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
+        _mm_cvtss_f32(s)
     }
-    while k + 8 <= d {
-        let w0 = _mm256_cvtph_ps(_mm_loadu_si128(w.add(k) as *const __m128i));
-        acc0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp.add(k)), acc0);
-        k += 8;
-    }
-    let acc = _mm256_add_ps(acc0, acc1);
-    let s = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
-    let s = _mm_add_ps(s, _mm_movehl_ps(s, s));
-    let s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
-    _mm_cvtss_f32(s)
 }
 
 #[cfg(not(target_arch = "x86_64"))]
+// SAFETY: non-x86 stub. It is `unsafe fn` only to match the signature of the
+// x86 kernel it stands in for, and its body is `unreachable!` - the runtime
+// feature check that guards every call site can never pass on this target,
+// so there is no reachable code here to be unsound.
 unsafe fn dot_f16(_w: *const u16, _x: &[f32], _d: usize) -> f32 {
     unreachable!("guarded by have_f16c()")
 }

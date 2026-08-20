@@ -8,7 +8,7 @@
 //!
 //! Clean-room boundary: espeak-ng is GPL and is consulted only as an
 //! out-of-process ORACLE (its output on the pinned corpus). The rules below
-//! come from CMUdict (BSD) plus conventions inferred from the TRAIN split of
+//! come from `CMUdict` (BSD) plus conventions inferred from the TRAIN split of
 //! those fixtures — the closed-class function-word table, the collocation
 //! glue table, and the vowel-context rules. Holdout sentences were never
 //! read while writing this file (holdout discipline).
@@ -47,8 +47,13 @@ impl Phonemizer {
         Ok(Self::new(Lexicon::from_manifest(manifest)?))
     }
 
+    #[must_use]
     pub fn new(lexicon: Lexicon) -> Self {
-        Phonemizer { lexicon, function_words: function_words(), collocations: collocations() }
+        Self {
+            lexicon,
+            function_words: function_words(),
+            collocations: collocations(),
+        }
     }
 
     /// Phonemize one sentence. Multi-sentence input is the caller's problem
@@ -88,25 +93,19 @@ impl Phonemizer {
 
                     // Collocation glue: `on the`, `was a`, ... fuse into one
                     // token with espeak's own internal sandhi.
-                    if let Some(Token::Word(w2)) = tokens.get(i + 1) {
-                        if let Some(forms) =
-                            self.collocations.get(&(w.as_str(), w2.as_str()))
-                        {
-                            let vowel_next = next_word(i + 2)
-                                .map(|w| self.starts_with_vowel_sound(w))
-                                .unwrap_or(false);
-                            pieces.push(Piece::Word(
-                                forms[usize::from(vowel_next)].to_string(),
-                            ));
-                            i += 2;
-                            continue;
-                        }
+                    if let Some(Token::Word(w2)) = tokens.get(i + 1)
+                        && let Some(forms) = self.collocations.get(&(w.as_str(), w2.as_str()))
+                    {
+                        let vowel_next =
+                            next_word(i + 2).is_some_and(|w| self.starts_with_vowel_sound(w));
+                        pieces.push(Piece::Word(forms[usize::from(vowel_next)].to_string()));
+                        i += 2;
+                        continue;
                     }
 
                     let is_last_word = next_word(i + 1).is_none();
-                    let vowel_next = next_word(i + 1)
-                        .map(|w| self.starts_with_vowel_sound(w))
-                        .unwrap_or(false);
+                    let vowel_next =
+                        next_word(i + 1).is_some_and(|w| self.starts_with_vowel_sound(w));
                     let mut ipa = self.word_ipa(w, vowel_next)?;
                     // Linking sounds before a vowel-initial word: ɚ surfaces
                     // its r (`buyer at` → bˈaɪɚɹ æ...), happY-final i grows
@@ -124,25 +123,24 @@ impl Phonemizer {
                     {
                         ipa.push('ʲ');
                     }
-    // Utterance-final prominence applies to PARTICLES, not
+                    // Utterance-final prominence applies to PARTICLES, not
                     // pronouns: `walking on.` → ˈɔn, `plunge in.` → ˈɪn,
                     // but `moved it.` → ɪt and `faced us.` → ˌʌs. (A
                     // promote-everything rule was tried and was net-wrong.)
                     const FINAL_PROMOTED: &[&str] = &[
-                        "in", "on", "up", "out", "off", "over", "down", "through", "by",
-                        "about", "around",
+                        "in", "on", "up", "out", "off", "over", "down", "through", "by", "about",
+                        "around",
                     ];
                     if is_last_word && FINAL_PROMOTED.contains(&w.as_str()) {
                         if let Some(stripped) = ipa.strip_prefix('ˌ') {
                             ipa = format!("ˈ{stripped}");
-                        } else if !ipa.contains('ˈ') {
-                            if let Some(pos) = ipa
+                        } else if !ipa.contains('ˈ')
+                            && let Some(pos) = ipa
                                 .char_indices()
                                 .find(|(_, c)| "aeiouæɐɑɒɔəɚɛɜɪʊʌᵻ".contains(*c))
                                 .map(|(p, _)| p)
-                            {
-                                ipa.insert(pos, 'ˈ');
-                            }
+                        {
+                            ipa.insert(pos, 'ˈ');
                         }
                     }
                     // Cross-word flapping is narrower still: `it` flaps
@@ -177,7 +175,7 @@ impl Phonemizer {
         Ok(out)
     }
 
-    /// One word to IPA: function table → CMUdict → letter-to-sound fallback.
+    /// One word to IPA: function table → `CMUdict` → letter-to-sound fallback.
     fn word_ipa(&self, word: &str, vowel_next: bool) -> Result<String> {
         if let Some(forms) = self.function_words.get(word) {
             let form = forms[usize::from(vowel_next)];
@@ -197,10 +195,10 @@ impl Phonemizer {
     /// Does a word BEGIN with a vowel sound (not letter)? Decides ðə/ðɪʲ,
     /// tə/tʊ and linking ɹ. Table + lexicon, falling back to orthography.
     fn starts_with_vowel_sound(&self, word: &str) -> bool {
-        if let Some(forms) = self.function_words.get(word) {
-            if !forms[0].is_empty() {
-                return starts_with_ipa_vowel(forms[0]);
-            }
+        if let Some(forms) = self.function_words.get(word)
+            && !forms[0].is_empty()
+        {
+            return starts_with_ipa_vowel(forms[0]);
         }
         if let Some(phones) = self.lexicon.lookup(word) {
             return phones.first().is_some_and(|p| {
@@ -243,6 +241,10 @@ impl Phonemizer {
                     'o' => ("ɑː", 1),
                     'u' => ("ʌ", 1),
                     'y' => ("i", 1),
+                    // Identical bodies on purpose: different graphemes map to
+                    // the same phoneme. Merging the arms would hide which
+                    // letters the table actually covers.
+                    #[allow(clippy::match_same_arms)]
                     'c' => ("k", 1),
                     'g' => ("ɡ", 1),
                     'j' => ("dʒ", 1),
@@ -281,7 +283,9 @@ fn tokenize(text: &str) -> Vec<Token> {
             word.extend(c.to_lowercase());
         } else {
             if !word.is_empty() {
-                out.push(Token::Word(std::mem::take(&mut word).trim_matches('\'').to_string()));
+                out.push(Token::Word(
+                    std::mem::take(&mut word).trim_matches('\'').to_string(),
+                ));
             }
             if matches!(c, '.' | ',' | '?' | '!' | ';' | ':') {
                 out.push(Token::Punct(c));
@@ -301,7 +305,7 @@ fn starts_with_ipa_vowel(ipa: &str) -> bool {
         .is_some_and(|c| "aeiouæɐɑɒɔəɚɛɜɪʊʌᵻ".contains(c))
 }
 
-/// Map one CMUdict pronunciation to espeak en-us IPA conventions.
+/// Map one `CMUdict` pronunciation to espeak en-us IPA conventions.
 ///
 /// The conventions, each inferred from the train fixtures:
 /// - stress marks sit immediately BEFORE the stressed vowel (`kənˈuː`);
@@ -315,7 +319,7 @@ fn starts_with_ipa_vowel(ipa: &str) -> bool {
 /// - sibilant plural `-es` → ᵻz (`busses` → bˈʌsᵻz), `-ed` after t/d → ᵻd;
 /// - flapping: T between a vowel/R and an unstressed vowel → ɾ (`water`);
 /// - ɡ is U+0261, ɹ not r — espeak's exact codepoints, which is what the
-///   voice's phoneme_id_map keys on.
+///   voice's `phoneme_id_map` keys on.
 fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
     let primary_idx = phones.iter().position(|p| p.stress == 1);
     let mut out = String::new();
@@ -328,7 +332,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
         }
         let prev = i.checked_sub(1).map(|j| phones[j]);
         let next = phones.get(i + 1);
-        let next_sym = next.map(|n| n.symbol());
+        let next_sym = next.map(super::lexicon::Phone::symbol);
 
         if p.is_vowel() && p.stress == 1 {
             out.push('ˈ');
@@ -382,8 +386,10 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     || (is_suffix_vowel(word, phones, i, "ed")
                         && next_sym == Some("D")
                         && matches!(
-                            phones.get(i.wrapping_sub(1)).map(|q| q.symbol()),
-                            Some("T") | Some("D")
+                            phones
+                                .get(i.wrapping_sub(1))
+                                .map(super::lexicon::Phone::symbol),
+                            Some("T" | "D")
                         ))
                 {
                     // `-es` after sibilants and `-ed` after t/d: espeak ᵻ
@@ -414,7 +420,9 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     // only reaches here when the t/d test above declined it.
                     out.push('ɪ');
                 } else if phones[i + 1..].iter().all(|q| !q.is_vowel())
-                    && ["uct", "ucts", "um", "ums", "umn"].iter().any(|s| word.ends_with(s))
+                    && ["uct", "ucts", "um", "ums", "umn"]
+                        .iter()
+                        .any(|s| word.ends_with(s))
                 {
                     // Spelled-u final syllables: `product` → ʌ, `column` → ʌm.
                     // NOT a general u rule — `watchful`/`famous` keep ə.
@@ -431,7 +439,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
             "AY" => out.push_str("aɪ"),
             "EH" => out.push('ɛ'),
             "ER" => {
-                if p.stress == 0 && next.is_some_and(|n| n.is_vowel()) {
+                if p.stress == 0 && next.is_some_and(super::lexicon::Phone::is_vowel) {
                     // ER0 before a vowel: word-initially it keeps its vowel
                     // (`around` ER0 AW1.. → ɚɹˈaʊnd); mid-word it elides to
                     // plain ɹ (`every` → ˈɛvɹi). The elide-always version
@@ -446,11 +454,11 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     // Stressed ER keeps its ɹ word-finally and before a
                     // vowel (`fur` → fˈɜːɹ, `courage` → kˈɜːɹɪdʒ) — but not
                     // before a consonant (`girl` → ɡˈɜːl).
-                    if next.is_none_or(|n| n.is_vowel()) {
+                    if next.is_none_or(super::lexicon::Phone::is_vowel) {
                         out.push('ɹ');
                     }
                 } else {
-                    out.push_str("ɚ");
+                    out.push('ɚ');
                 }
             }
             "EY" => out.push_str("eɪ"),
@@ -474,7 +482,10 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                 if next_sym == Some("R") {
                     // Before R: ɪ when the R closes the syllable (`here` →
                     // hˈɪɹ), iə when a vowel follows (`hero` → hˈiəɹoʊ).
-                    if phones.get(i + 2).is_some_and(|q| q.is_vowel()) {
+                    if phones
+                        .get(i + 2)
+                        .is_some_and(super::lexicon::Phone::is_vowel)
+                    {
                         out.push_str("iə");
                     } else {
                         out.push('ɪ');
@@ -513,7 +524,9 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
                     && matches!(next_sym, Some("AH"))
                     && next.is_some_and(|n| n.stress == 0)
                     && phones.get(i + 2).is_some_and(|n| n.symbol() == "N")
-                    && phones.get(i + 3).is_none_or(|n| matches!(n.symbol(), "S" | "Z"));
+                    && phones
+                        .get(i + 3)
+                        .is_none_or(|n| matches!(n.symbol(), "S" | "Z"));
                 if glottal {
                     out.push_str("ʔn̩");
                     skip = 2;
@@ -540,9 +553,7 @@ fn arpa_to_espeak(word: &str, phones: &[Phone]) -> String {
             "R" => {
                 // aɪ + ɹ collapses to aɪɚ when no vowel follows (`admire`
                 // → ɐdmˈaɪɚ) — the r-colored schwa absorbs the ɹ.
-                if prev.is_some_and(|q| q.symbol() == "AY")
-                    && next.is_none_or(|n| !n.is_vowel())
-                {
+                if prev.is_some_and(|q| q.symbol() == "AY") && next.is_none_or(|n| !n.is_vowel()) {
                     out.push('ɚ');
                 } else {
                     out.push('ɹ');
@@ -562,7 +573,7 @@ fn is_suffix_vowel(word: &str, phones: &[Phone], i: usize, suffix: &str) -> bool
     i + 2 == phones.len() && word.ends_with(suffix)
 }
 
-/// Words where espeak's lexicon disagrees with CMUdict's first variant or
+/// Words where espeak's lexicon disagrees with `CMUdict`'s first variant or
 /// with the mapping rules — each observed in the train fixtures, none
 /// generalized. (`read`: CMU lists the past-tense form first, espeak says
 /// ɹˈiːd; `faced`/`thirty`/`sixteen` are espeak's own quirks.)
@@ -802,8 +813,10 @@ eyes AY1 Z\n\
 buyer B AY1 ER0\n\
 sand S AE1 N D\n\
 edge EH1 JH\n";
-        let path = std::env::temp_dir()
-            .join(format!("ffai_phonemize_test_{}_{unique}.dict", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "ffai_phonemize_test_{}_{unique}.dict",
+            std::process::id()
+        ));
         std::fs::write(&path, dict).unwrap();
         let lex = Lexicon::load(&path).unwrap();
         std::fs::remove_file(&path).ok();
@@ -816,7 +829,8 @@ edge EH1 JH\n";
         // the vowel, ðə, glued nothing, final period attached.
         let p = phonemizer();
         assert_eq!(
-            p.phonemize("The birch canoe slid on the smooth planks.").unwrap(),
+            p.phonemize("The birch canoe slid on the smooth planks.")
+                .unwrap(),
             "ðə bˈɜːtʃ kənˈuː slˈɪd ɔnðə smˈuːð plˈæŋks."
         );
     }
@@ -842,7 +856,10 @@ edge EH1 JH\n";
     fn context_dependent_function_words_and_gluing() {
         let p = phonemizer();
         // `the` and glued `in the` take the ðɪʲ form before a vowel sound.
-        assert_eq!(p.phonemize("in the eyes of the girl").unwrap(), "ɪnðɪʲ ˈaɪz ʌvðə ɡˈɜːl");
+        assert_eq!(
+            p.phonemize("in the eyes of the girl").unwrap(),
+            "ɪnðɪʲ ˈaɪz ʌvðə ɡˈɜːl"
+        );
         // `was a` fuses with reduction; `at a` fuses with a flap.
         assert_eq!(p.phonemize("it was a boss").unwrap(), "ɪt wʌzɐ bˈɔs");
         assert_eq!(p.phonemize("at a dogs").unwrap(), "æɾə dˈɑːɡz");

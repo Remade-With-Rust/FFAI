@@ -33,5 +33,58 @@ png = "0.17"
 clap = { workspace = true }
 csv = "1.3"
 
-[lints]
-workspace = true
+[lints.rust]
+# Mirrors [workspace.lints.rust]; restated because this crate needs its own
+# [lints.clippy] table, and `[lints] workspace = true` is all-or-nothing.
+unsafe_code = "warn"
+
+# Gate H-15: pedantic + nursery, enforced.
+#
+# ffai-bench is MEASUREMENT tooling, not a shipped path, so the standard's
+# proportionality rule applies - but the casts were still read rather than
+# waved through, and that found the zero-sample-rate allocation abort in
+# `resample` (see the crate's tests).
+#
+# What remains is inherent to a statistics crate: counts, durations and sample
+# indices converted to f64 to average them. `cast_precision_loss` ROUNDS and
+# cannot alias one value onto another; the truncating casts are all on values
+# bounded by a corpus that this crate itself produced.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# Win32 handle plumbing in footprint.rs.
+ptr_as_ptr = "allow"
+# Documentation debt: revisit 2026-11-15.
+missing_errors_doc = "allow"
+too_long_first_doc_paragraph = "allow"
+# Style in numeric/reporting code.
+similar_names = "allow"
+items_after_statements = "allow"
+too_many_lines = "allow"
+struct_field_names = "allow"
+format_collect = "allow"
+default_trait_access = "allow"
+derive_partial_eq_without_eq = "allow"
+literal_string_with_formatting_args = "allow"
+manual_midpoint = "allow"
+or_fun_call = "allow"
+redundant_clone = "allow"
+redundant_closure_for_method_calls = "allow"
+suboptimal_flops = "allow"
+# `push_str(&format!(..))` is clearer than `write!` when assembling report text.
+format_push_string = "allow"
+# `const fn` on reporting helpers buys nothing and constrains future edits.
+missing_const_for_fn = "allow"
+# Win32 handle plumbing again: `&x as *const _` is how the API is called.
+borrow_as_ptr = "allow"
+ref_as_ptr = "allow"
+# Style preferences that do not change behaviour.
+option_if_let_else = "allow"
+nonminimal_bool = "allow"
+# `if !predecode { .. } else { .. }` reads in the order the reader cares about.
+if_not_else = "allow"
+match_same_arms = "allow"

@@ -28,7 +28,7 @@
 use candle_nn::{Conv1d, Conv1dConfig, LayerNorm, Module, VarBuilder};
 use ffai_core::candle::{Result as CandleResult, Tensor};
 
-use super::text_decoder::{fast_gelu, EncoderAttention, Precision, QLinear};
+use super::text_decoder::{EncoderAttention, Precision, QLinear, fast_gelu};
 
 /// Conv1d as im2col + GEMM, in CHANNEL-MAJOR orientation.
 ///
@@ -61,7 +61,7 @@ fn conv1d_gemm(
 ) -> CandleResult<Tensor> {
     let batch = x.dim(0)?;
     let l_in = x.dim(2)?;
-    let l_out = (l_in + 2 * 1 - 3) / stride + 1;
+    let l_out = (l_in + 2 - 3) / stride + 1;
     let src: Vec<f32> = x.flatten_all()?.to_vec1()?;
 
     // im2col for every batch item into ONE buffer, laid out so the columns of
@@ -92,7 +92,11 @@ fn conv1d_gemm(
                 } else {
                     for (i, o) in dst.iter_mut().enumerate() {
                         let idx = stride * i + k;
-                        *o = if idx == 0 { 0.0 } else { *s.get(idx - 1).unwrap_or(&0.0) };
+                        *o = if idx == 0 {
+                            0.0
+                        } else {
+                            *s.get(idx - 1).unwrap_or(&0.0)
+                        };
                     }
                 }
             }
@@ -131,7 +135,7 @@ struct Block {
 
 impl Block {
     fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
-        Ok(Block {
+        Ok(Self {
             attn: EncoderAttention::load(n_state, n_head, vb.pp("self_attn"), p)?,
             attn_ln: layer_norm(n_state, vb.pp("self_attn_layer_norm"))?,
             mlp_ln: layer_norm(n_state, vb.pp("final_layer_norm"))?,
@@ -164,6 +168,8 @@ impl Block {
 /// Whisper's audio encoder: log-mel spectrogram → audio features.
 pub struct AudioEncoder {
     conv1: Conv1d,
+    #[allow(dead_code)]
+    // superseded by the GEMM path; kept so the module mirrors the reference layout
     conv2: Conv1d,
     /// (cout, cin*3) reshapes of the conv weights, for the GEMM path.
     conv1_wm: Tensor,
@@ -187,18 +193,27 @@ impl AudioEncoder {
             cfg.num_mel_bins,
             n_state,
             3,
-            Conv1dConfig { padding: 1, ..Default::default() },
+            Conv1dConfig {
+                padding: 1,
+                ..Default::default()
+            },
             vb.pp("conv1"),
         )?;
         let conv2 = candle_nn::conv1d(
             n_state,
             n_state,
             3,
-            Conv1dConfig { padding: 1, stride: 2, ..Default::default() },
+            Conv1dConfig {
+                padding: 1,
+                stride: 2,
+                ..Default::default()
+            },
             vb.pp("conv2"),
         )?;
-        let positional_embedding =
-            vb.get((cfg.max_source_positions, n_state), "embed_positions.weight")?;
+        let positional_embedding = vb.get(
+            (cfg.max_source_positions, n_state),
+            "embed_positions.weight",
+        )?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| Block::load(n_state, n_head, vb.pp(format!("layers.{i}")), precision))
             .collect::<CandleResult<Vec<_>>>()?;
@@ -214,7 +229,7 @@ impl AudioEncoder {
         };
         let conv1_b = vb.pp("conv1").get(n_state, "bias")?;
         let conv2_b = vb.pp("conv2").get(n_state, "bias")?;
-        Ok(AudioEncoder {
+        Ok(Self {
             conv1,
             conv2,
             conv1_wm,
@@ -227,7 +242,7 @@ impl AudioEncoder {
         })
     }
 
-    /// `mel`: (batch, n_mels, frames) → features (batch, frames/2, d_model).
+    /// `mel`: (batch, `n_mels`, frames) → features (batch, frames/2, `d_model`).
     pub fn forward(&self, mel: &Tensor) -> CandleResult<Tensor> {
         let p = super::profile::profile();
         let x = super::profile::timed(&p.enc_conv, || -> CandleResult<Tensor> {
@@ -282,7 +297,9 @@ mod tests {
 
         // Weights laid out as the GEMM path expects: (cout, cin*3).
         let wm = Tensor::from_vec(
-            (0..cout * cin * 3).map(|i| (i as f32 % 7.0 - 3.0) / 11.0).collect::<Vec<f32>>(),
+            (0..cout * cin * 3)
+                .map(|i| (i as f32 % 7.0 - 3.0) / 11.0)
+                .collect::<Vec<f32>>(),
             (cout, cin * 3),
             &dev,
         )
@@ -292,8 +309,16 @@ mod tests {
         let y = conv1d_gemm(&x, &wm, &bias, cin, 1).expect("conv runs");
         assert_eq!(y.dim(0).expect("batch"), 2, "batch dimension lost");
 
-        let a: Vec<f32> = y.i(0).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("item 0");
-        let b: Vec<f32> = y.i(1).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("item 1");
+        let a: Vec<f32> = y
+            .i(0)
+            .and_then(|t| t.flatten_all())
+            .and_then(|t| t.to_vec1())
+            .expect("item 0");
+        let b: Vec<f32> = y
+            .i(1)
+            .and_then(|t| t.flatten_all())
+            .and_then(|t| t.to_vec1())
+            .expect("item 1");
         assert_eq!(a.len(), b.len());
         assert_ne!(
             a, b,
@@ -313,7 +338,9 @@ mod tests {
         let two: Vec<f32> = (0..cin * frames).map(|i| (i as f32).cos()).collect();
 
         let wm = Tensor::from_vec(
-            (0..cout * cin * 3).map(|i| (i as f32 % 5.0 - 2.0) / 9.0).collect::<Vec<f32>>(),
+            (0..cout * cin * 3)
+                .map(|i| (i as f32 % 5.0 - 2.0) / 9.0)
+                .collect::<Vec<f32>>(),
             (cout, cin * 3),
             &dev,
         )
@@ -335,11 +362,21 @@ mod tests {
         for stride in [1usize, 2] {
             let yb = conv1d_gemm(&batched, &wm, &bias, cin, stride).expect("batched");
             let ys = conv1d_gemm(&solo, &wm, &bias, cin, stride).expect("solo");
-            let from_batch: Vec<f32> =
-                yb.i(1).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("item 1");
-            let alone: Vec<f32> =
-                ys.i(0).and_then(|t| t.flatten_all()).and_then(|t| t.to_vec1()).expect("alone");
-            assert_eq!(from_batch.len(), alone.len(), "stride {stride}: length differs");
+            let from_batch: Vec<f32> = yb
+                .i(1)
+                .and_then(|t| t.flatten_all())
+                .and_then(|t| t.to_vec1())
+                .expect("item 1");
+            let alone: Vec<f32> = ys
+                .i(0)
+                .and_then(|t| t.flatten_all())
+                .and_then(|t| t.to_vec1())
+                .expect("alone");
+            assert_eq!(
+                from_batch.len(),
+                alone.len(),
+                "stride {stride}: length differs"
+            );
             for (i, (p, q)) in from_batch.iter().zip(alone.iter()).enumerate() {
                 assert!(
                     (p - q).abs() < 1e-6,

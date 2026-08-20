@@ -5,13 +5,26 @@
 //! algorithm stays model-free and the model stays transcript-free; this is the
 //! only place that knows both exist.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::path::Path;
 
 use ffai_core::candle::{DType, Device};
 use ffai_core::error::{Error, Result};
 use ffai_core::types::TimedSegment;
 
-use super::align::{align_words, CtcAlphabet};
+use super::align::{CtcAlphabet, align_words};
 use super::wav2vec2::{Config, Wav2Vec2Ctc};
 
 /// Default manifest name. English only — the alignment model is per-language
@@ -78,7 +91,11 @@ impl Aligner {
         let mode = std::env::var("FFAI_ALIGN_DTYPE").unwrap_or_default();
         // Weights are read as f32 whatever the mode: Q8_0 quantizes FROM f32,
         // and f16 is only kept as the documented dead end above.
-        let dtype = if mode == "f16" { DType::F16 } else { DType::F32 };
+        let dtype = if mode == "f16" {
+            DType::F16
+        } else {
+            DType::F32
+        };
         let quantized = mode == "q8_0";
 
         // SAFETY: as in `model.rs` — the Hugging Face cache blob is immutable
@@ -105,7 +122,7 @@ impl Aligner {
         // the first COMPLETE pass, never before work, "where trimming what you
         // are about to touch again only buys page faults". The Whisper path
         // gets it right; this one had to learn it twice.
-        Ok(Aligner {
+        Ok(Self {
             model,
             alphabet: CtcAlphabet::wav2vec2_english(),
             sample_rate: super::mel::SAMPLE_RATE,
@@ -114,7 +131,7 @@ impl Aligner {
 
     /// Align each segment's own text against its own audio.
     ///
-    /// Per segment rather than whole-file, matching WhisperX: it bounds the
+    /// Per segment rather than whole-file, matching `WhisperX`: it bounds the
     /// trellis (which is `frames × characters`, and quadratic growth on an
     /// hour of audio is not a rounding error), and it keeps a
     /// misrecognised word from dragging every later timestamp with it.

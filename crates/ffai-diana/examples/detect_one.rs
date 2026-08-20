@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for d in &out.detections {
         println!(
             "  {:<16} {:.3}  [{:7.1}, {:7.1}, {:7.1}, {:7.1}]",
-            names.get(d.class_id as usize).map(String::as_str).unwrap_or("?"),
+            names.get(d.class_id as usize).map_or("?", String::as_str),
             d.confidence,
             d.x0,
             d.y0,

@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..reps {
         for f in &frames {
             let img = ffai_media::load_image(f)?;
-            px += (img.width as u64) * (img.height as u64);
+            px += u64::from(img.width) * u64::from(img.height);
         }
     }
     let ms = t.elapsed().as_secs_f64() * 1e3;

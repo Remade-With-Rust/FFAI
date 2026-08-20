@@ -17,11 +17,15 @@ use ffai_core::engine::{AsrEngine, AsrOptions};
 use ffai_mercury::asr::WhisperCandle;
 
 fn peak_mib() -> f64 {
-    ffai_bench::footprint::peak_self().map(|p| p.mib()).unwrap_or(f64::NAN)
+    ffai_bench::footprint::peak_self()
+        .map(|p| p.mib())
+        .unwrap_or(f64::NAN)
 }
 
 fn current_mib() -> f64 {
-    ffai_bench::footprint::current_self().map(|p| p.mib()).unwrap_or(f64::NAN)
+    ffai_bench::footprint::current_self()
+        .map(|p| p.mib())
+        .unwrap_or(f64::NAN)
 }
 
 fn phase(label: &str, prev: &mut f64) {
@@ -47,11 +51,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     paths.sort();
     paths.truncate(16);
-    let clips: Vec<_> =
-        paths.iter().map(|p| ffai_media::load_audio(p)).collect::<Result<Vec<_>, _>>()?;
-    let audio_mib: f64 =
-        clips.iter().map(|a| (a.samples.len() * 4) as f64).sum::<f64>() / (1024.0 * 1024.0);
-    phase(&format!("{} clips decoded ({audio_mib:.1} MiB of samples)", clips.len()), &mut prev);
+    let clips: Vec<_> = paths
+        .iter()
+        .map(|p| ffai_media::load_audio(p))
+        .collect::<Result<Vec<_>, _>>()?;
+    let audio_mib: f64 = clips
+        .iter()
+        .map(|a| (a.samples.len() * 4) as f64)
+        .sum::<f64>()
+        / (1024.0 * 1024.0);
+    phase(
+        &format!(
+            "{} clips decoded ({audio_mib:.1} MiB of samples)",
+            clips.len()
+        ),
+        &mut prev,
+    );
 
     let engine = WhisperCandle::new();
     phase("engine constructed (no weights yet)", &mut prev);

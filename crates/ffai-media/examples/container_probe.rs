@@ -15,9 +15,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut formats = rff_format::FormatRegistry::new();
     rff_format_mp4::register(&mut formats);
-    rff_format_mkv::register(&mut formats);   // registers as "matroska"
+    rff_format_mkv::register(&mut formats); // registers as "matroska"
     rff_format_avi::register(&mut formats);
-    rff_format_ts::register(&mut formats);    // registers as "mpegts"
+    rff_format_ts::register(&mut formats); // registers as "mpegts"
 
     let file = std::fs::File::open(&path)?;
     let mut demux = match formats.open_demuxer(&kind, Box::new(std::io::BufReader::new(file))) {
@@ -85,9 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    println!(
-        "{kind}: packets {pk}  frames {fr}  errors {er}  annexB-looking {annexb}/{pk}"
-    );
+    println!("{kind}: packets {pk}  frames {fr}  errors {er}  annexB-looking {annexb}/{pk}");
     if !first.is_empty() {
         println!("{kind}: first error -> {first}");
     }

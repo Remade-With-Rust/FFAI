@@ -72,7 +72,14 @@ unsafe fn hsum256(v: __m256) -> f32 {
 /// major; `v` is (keys, HD). `out` is HD floats.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn xattn_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], keys: usize, s: &mut [f32]) {
+unsafe fn xattn_head(
+    q: &[f32],
+    kt: &[f32],
+    v: &[f32],
+    out: &mut [f32],
+    keys: usize,
+    s: &mut [f32],
+) {
     // ---- scores = q @ K, contraction outermost so the inner loop is an AXPY
     // over keys with no horizontal reduction ----
     s[..keys].fill(0.0);
@@ -99,7 +106,11 @@ unsafe fn xattn_head(q: &[f32], kt: &[f32], v: &[f32], out: &mut [f32], keys: us
         vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(s.as_ptr().add(j)));
         j += 8;
     }
-    let mut mx = if keys >= 8 { hmax256(vmax) } else { f32::NEG_INFINITY };
+    let mut mx = if keys >= 8 {
+        hmax256(vmax)
+    } else {
+        f32::NEG_INFINITY
+    };
     for &x in s[j..keys].iter() {
         mx = mx.max(x);
     }
@@ -215,9 +226,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..rounds {
         let (a, b) = if i % 2 == 0 {
             let a = t(|| fused(&qv, &kv, &vv, &mut ours, heads, keys));
-            (a, t(|| {
-                std::hint::black_box(candle_path());
-            }))
+            (
+                a,
+                t(|| {
+                    std::hint::black_box(candle_path());
+                }),
+            )
         } else {
             let b = t(|| {
                 std::hint::black_box(candle_path());
@@ -237,12 +251,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = (2 * heads * keys * HD * 4) as f64;
 
     println!("\ncross-attention, one decode step (6 heads, 1 query, 1500 keys)");
-    println!("  fused kernel    med {ma:7.3} ms   {:5.1} GB/s", bytes / (ma / 1e3) / 1e9);
-    println!("  candle three-op med {mb:7.3} ms   {:5.1} GB/s", bytes / (mb / 1e3) / 1e9);
+    println!(
+        "  fused kernel    med {ma:7.3} ms   {:5.1} GB/s",
+        bytes / (ma / 1e3) / 1e9
+    );
+    println!(
+        "  candle three-op med {mb:7.3} ms   {:5.1} GB/s",
+        bytes / (mb / 1e3) / 1e9
+    );
     println!(
         "  fused won {wins}/{rounds} (z={z:+.1}) ratio {:.2}x -> {}",
         mb / ma,
-        if z > 2.0 { "FUSED FASTER" } else if z < -2.0 { "candle FASTER" } else { "INCONCLUSIVE" }
+        if z > 2.0 {
+            "FUSED FASTER"
+        } else if z < -2.0 {
+            "candle FASTER"
+        } else {
+            "INCONCLUSIVE"
+        }
     );
     Ok(())
 }

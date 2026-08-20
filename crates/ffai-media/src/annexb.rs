@@ -38,6 +38,7 @@ const START: [u8; 4] = [0, 0, 0, 1];
 /// Returns `None` for anything that is not an `avcC` — an empty `extradata`, or
 /// a container that already handed us Annex-B — so the caller can pass packets
 /// through untouched rather than mangling them.
+#[must_use]
 pub fn parse_avcc(extradata: &[u8]) -> Option<AvcC> {
     // configurationVersion(1) profile(1) compat(1) level(1) lengthSizeMinusOne(1)
     // numOfSPS(1) then the sets. Anything shorter cannot be an avcC.
@@ -65,7 +66,10 @@ pub fn parse_avcc(extradata: &[u8]) -> Option<AvcC> {
         i += n;
     }
     if i >= extradata.len() {
-        return Some(AvcC { parameter_sets: out, nal_length_size });
+        return Some(AvcC {
+            parameter_sets: out,
+            nal_length_size,
+        });
     }
     let num_pps = extradata[i] as usize;
     i += 1;
@@ -82,7 +86,10 @@ pub fn parse_avcc(extradata: &[u8]) -> Option<AvcC> {
         out.extend_from_slice(&extradata[i..i + n]);
         i += n;
     }
-    Some(AvcC { parameter_sets: out, nal_length_size })
+    Some(AvcC {
+        parameter_sets: out,
+        nal_length_size,
+    })
 }
 
 /// Rewrite one AVCC packet as Annex-B.
@@ -102,6 +109,7 @@ pub fn parse_avcc(extradata: &[u8]) -> Option<AvcC> {
 /// Returns `None` only when the data does not parse as a chain of
 /// length-prefixed NALs, which means the caller's premise was wrong; passing
 /// the packet through unchanged is then better than emitting garbage.
+#[must_use]
 pub fn to_annexb(data: &[u8], nal_length_size: usize) -> Option<Vec<u8>> {
     if data.len() < nal_length_size {
         return None;

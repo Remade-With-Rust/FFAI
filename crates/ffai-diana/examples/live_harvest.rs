@@ -30,7 +30,7 @@ fn with_noise(src: &ImageBuffer, amp: i16) -> ImageBuffer {
     for (i, p) in out.data.iter_mut().enumerate() {
         let sign = if (i * 2654435761) % 2 == 0 { 1 } else { -1 };
         let mag = ((i * 40503) % (amp as usize + 1)) as i16;
-        *p = (*p as i16 + sign * mag).clamp(0, 255) as u8;
+        *p = (i16::from(*p) + sign * mag).clamp(0, 255) as u8;
     }
     out
 }

@@ -63,8 +63,10 @@ fn set_arm_serial(serial: bool) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let null = std::env::var("FFAI_AB_NULL").is_ok();
-    let rounds: usize =
-        std::env::var("FFAI_AB_ROUNDS").ok().and_then(|s| s.parse().ok()).unwrap_or(31);
+    let rounds: usize = std::env::var("FFAI_AB_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(31);
 
     let cache = std::env::var("FFAI_CACHE")
         .map(PathBuf::from)
@@ -79,7 +81,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .take(20)
         .map(|c| {
             let t = std::fs::read_to_string(manifest.clip_path(c)).unwrap();
-            vits.id_map.sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap()).0
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap())
+                .0
         })
         .collect();
 
@@ -120,7 +124,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for ids in &ids_list {
             std::hint::black_box(vits.text_encoder(ids)?);
         }
-        Ok(if use_cpu { cpu_secs() - c0 } else { t0.elapsed().as_secs_f64() })
+        Ok(if use_cpu {
+            cpu_secs() - c0
+        } else {
+            t0.elapsed().as_secs_f64()
+        })
     };
 
     run_once(false)?;
@@ -156,14 +164,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{} rounds, metric = {}{}",
         rounds,
-        if use_cpu { "CPU TIME (load-robust)" } else { "wall" },
+        if use_cpu {
+            "CPU TIME (load-robust)"
+        } else {
+            "wall"
+        },
         if null { "  [NULL ARM]" } else { "" }
     );
-    println!("  parallel median {mp:8.2} ms   serial median {ms:8.2} ms   ratio {:.3}x", ms / mp);
+    println!(
+        "  parallel median {mp:8.2} ms   serial median {ms:8.2} ms   ratio {:.3}x",
+        ms / mp
+    );
     println!(
         "  parallel wins {par_wins}/{rounds}  z = {z:+.2}  -> {}",
         if z.abs() > 2.0 {
-            if z > 0.0 { "PARALLEL faster (real)" } else { "SERIAL faster (real)" }
+            if z > 0.0 {
+                "PARALLEL faster (real)"
+            } else {
+                "SERIAL faster (real)"
+            }
         } else {
             "INSIDE NOISE — no verdict"
         }

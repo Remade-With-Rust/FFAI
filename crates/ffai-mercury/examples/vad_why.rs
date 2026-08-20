@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use ffai_bench::corpus::Manifest;
 use ffai_bench::metrics::{cer, wer};
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::{vad, WhisperCandle};
+use ffai_mercury::asr::{WhisperCandle, vad};
 
 struct Row {
     id: String,
@@ -43,21 +43,37 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "corpora/librispeech-test-clean-v2.toml".to_string());
     let manifest = Manifest::load(&PathBuf::from(&corpus)).expect("corpus loads");
-    let limit: usize =
-        std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
+    let limit: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(usize::MAX);
 
     let engine = WhisperCandle::new();
-    let off = AsrOptions { vad: false, ..Default::default() };
-    let on = AsrOptions { vad: true, ..Default::default() };
+    let off = AsrOptions {
+        vad: false,
+        ..Default::default()
+    };
+    let on = AsrOptions {
+        vad: true,
+        ..Default::default()
+    };
 
     let mut rows = Vec::new();
     for clip in manifest.clips.iter().take(limit) {
         let path = manifest.clip_path(clip);
-        let Ok(audio) = ffai_media::load_audio(&path) else { continue };
-        let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+        let Ok(audio) = ffai_media::load_audio(&path) else {
+            continue;
+        };
+        let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+            continue;
+        };
 
-        let Ok(t_off) = engine.transcribe(&audio, &off) else { continue };
-        let Ok(t_on) = engine.transcribe(&audio, &on) else { continue };
+        let Ok(t_off) = engine.transcribe(&audio, &off) else {
+            continue;
+        };
+        let Ok(t_on) = engine.transcribe(&audio, &on) else {
+            continue;
+        };
 
         let mono = audio.to_mono();
         let duration = mono.samples.len() as f64 / 16_000.0;
@@ -92,7 +108,10 @@ fn main() {
     let mean_on: f64 = rows.iter().map(|r| r.wer_on).sum::<f64>() / n;
 
     println!("\n=== WHY 1: is the gain spread, or a few clips? ===");
-    println!("clips {n}   mean per-clip WER  off {:.4}  on {:.4}", mean_off, mean_on);
+    println!(
+        "clips {n}   mean per-clip WER  off {:.4}  on {:.4}",
+        mean_off, mean_on
+    );
     let improved = rows.iter().filter(|r| r.wer_on < r.wer_off - 1e-9).count();
     let worsened = rows.iter().filter(|r| r.wer_on > r.wer_off + 1e-9).count();
     let same = rows.len() - improved - worsened;
@@ -112,13 +131,25 @@ fn main() {
     println!("\n=== WHY 2: does the gain track how much silence was trimmed? ===");
     // If trimming silence is the mechanism, clips with more trimmed should
     // improve more. Correlation is the discriminator.
-    let trims: Vec<f64> = rows.iter().map(|r| r.lead_trimmed + r.tail_trimmed).collect();
+    let trims: Vec<f64> = rows
+        .iter()
+        .map(|r| r.lead_trimmed + r.tail_trimmed)
+        .collect();
     let gains: Vec<f64> = rows.iter().map(|r| r.wer_off - r.wer_on).collect();
-    println!("corr(silence trimmed, WER gain) = {:.3}", pearson(&trims, &gains));
+    println!(
+        "corr(silence trimmed, WER gain) = {:.3}",
+        pearson(&trims, &gains)
+    );
     let lead: Vec<f64> = rows.iter().map(|r| r.lead_trimmed).collect();
     let tail: Vec<f64> = rows.iter().map(|r| r.tail_trimmed).collect();
-    println!("  corr(LEAD trimmed,  WER gain) = {:.3}", pearson(&lead, &gains));
-    println!("  corr(TAIL trimmed,  WER gain) = {:.3}", pearson(&tail, &gains));
+    println!(
+        "  corr(LEAD trimmed,  WER gain) = {:.3}",
+        pearson(&lead, &gains)
+    );
+    println!(
+        "  corr(TAIL trimmed,  WER gain) = {:.3}",
+        pearson(&tail, &gains)
+    );
     println!(
         "  mean lead {:.2}s  mean tail {:.2}s  mean duration {:.2}s",
         lead.iter().sum::<f64>() / n,
@@ -129,16 +160,23 @@ fn main() {
     println!("\n=== WHY 3: did the window COUNT change? ===");
     // A different number of encoder passes is a different decode entirely,
     // and would be a confound rather than a mechanism.
-    let split_differently =
-        rows.iter().filter(|r| r.windows_on != r.windows_off).count();
-    println!("clips where window count differs: {split_differently} / {}", rows.len());
+    let split_differently = rows
+        .iter()
+        .filter(|r| r.windows_on != r.windows_off)
+        .count();
+    println!(
+        "clips where window count differs: {split_differently} / {}",
+        rows.len()
+    );
     let multi = rows.iter().filter(|r| r.windows_off > 1).count();
     println!("clips longer than one 30 s window: {multi}");
 
     println!("\n=== WHY 4: what actually changed in the text? ===");
     let mut by_gain: Vec<&Row> = rows.iter().collect();
     by_gain.sort_by(|a, b| {
-        (b.wer_off - b.wer_on).partial_cmp(&(a.wer_off - a.wer_on)).unwrap()
+        (b.wer_off - b.wer_on)
+            .partial_cmp(&(a.wer_off - a.wer_on))
+            .unwrap()
     });
     for r in by_gain.iter().take(6) {
         println!(

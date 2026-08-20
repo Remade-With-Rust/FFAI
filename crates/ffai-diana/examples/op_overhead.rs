@@ -19,7 +19,7 @@ fn main() -> candle_core::Result<()> {
         let iters = if n > 65536 { 50 } else { 2000 };
         let t = Instant::now();
         for _ in 0..iters { std::hint::black_box(ffai_diana::silu::silu(&x)?); }
-        let per = t.elapsed().as_secs_f64() / iters as f64 * 1e6;
+        let per = t.elapsed().as_secs_f64() / f64::from(iters) * 1e6;
         // The kernel itself, from the corrected microbench: ~1.30 Gelem/s.
         let kernel = n as f64 / 1.30e9 * 1e6;
         println!("{n:>12} {per:>14.2} {kernel:>14.2} {:>12.2}", per - kernel);

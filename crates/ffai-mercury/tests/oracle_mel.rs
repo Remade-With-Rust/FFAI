@@ -36,13 +36,20 @@ fn load_fixture(path: &str) -> Option<(usize, usize, Vec<f32>)> {
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes(c.try_into().expect("4 bytes")))
         .collect();
-    assert_eq!(data.len(), n_mels * n_frames, "fixture header disagrees with its payload");
+    assert_eq!(
+        data.len(),
+        n_mels * n_frames,
+        "fixture header disagrees with its payload"
+    );
     Some((n_mels, n_frames, data))
 }
 
 #[test]
 fn mel_matches_openai_whisper() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mel_oracle_80.f32");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/mel_oracle_80.f32"
+    );
     let Some((n_mels, n_frames, expected)) = load_fixture(path) else {
         panic!("missing oracle fixture {path} — regenerate with corpora/refs/dump_whisper_mel.py");
     };
@@ -51,7 +58,10 @@ fn mel_matches_openai_whisper() {
     let ours = MelSpectrogram::new(n_mels).compute(&samples);
 
     assert_eq!(ours.n_mels, n_mels);
-    assert_eq!(ours.n_frames, n_frames, "frame count must match torch.stft's");
+    assert_eq!(
+        ours.n_frames, n_frames,
+        "frame count must match torch.stft's"
+    );
 
     let mut max_abs = 0.0f32;
     let mut worst = (0usize, 0usize);

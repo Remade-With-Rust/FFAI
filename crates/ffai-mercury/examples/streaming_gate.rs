@@ -25,10 +25,10 @@
 use std::path::PathBuf;
 
 use ffai_bench::corpus::Manifest;
-use ffai_bench::der::{diarization_error_rate, parse_rttm, Turn};
+use ffai_bench::der::{Turn, diarization_error_rate, parse_rttm};
 use ffai_core::engine::{AsrEngine, AsrOptions};
 use ffai_core::types::AudioBuffer;
-use ffai_mercury::asr::{diarize, WhisperCandle};
+use ffai_mercury::asr::{WhisperCandle, diarize};
 
 const COLLAR: f64 = 0.25;
 /// How much audio each call sees. Short enough to be a stream, long enough to
@@ -52,7 +52,10 @@ fn main() {
     // `sweep` calibrates ENROL_MARGIN, the one knob the streaming arm turns
     // and the one that has never been measured.
     if std::env::args().any(|a| a == "sweep") {
-        println!("{:>7} {:>6} {:>10} {:>28}", "margin", "match", "DER", "labels emitted / true");
+        println!(
+            "{:>7} {:>6} {:>10} {:>28}",
+            "margin", "match", "DER", "labels emitted / true"
+        );
         println!("{}", "-".repeat(56));
         let mut margin = 0.00f32;
         while margin <= 0.401 {
@@ -61,8 +64,12 @@ fn main() {
             let (mut err, mut refs) = (0.0, 0.0);
             let mut counts = Vec::new();
             for clip in &manifest.clips {
-                let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
-                let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+                let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else {
+                    continue;
+                };
+                let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+                    continue;
+                };
                 let reference = parse_rttm(&truth);
                 let true_n = reference
                     .iter()
@@ -91,7 +98,9 @@ fn main() {
                         diarize_threshold: diarize::DEFAULT_THRESHOLD,
                         ..Default::default()
                     };
-                    let Ok(t) = engine.transcribe(&chunk, &opts) else { continue };
+                    let Ok(t) = engine.transcribe(&chunk, &opts) else {
+                        continue;
+                    };
                     let offset = a as f64 / SR as f64;
                     for s in t.speakers.iter().flatten() {
                         turns.push(Turn::new(s.start + offset, s.end + offset, s.value.clone()));
@@ -127,8 +136,12 @@ fn main() {
     let (mut b_err, mut b_ref, mut s_err, mut s_ref) = (0.0, 0.0, 0.0, 0.0);
 
     for clip in &manifest.clips {
-        let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
-        let Ok(Some(truth)) = manifest.ground_truth(clip) else { continue };
+        let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else {
+            continue;
+        };
+        let Ok(Some(truth)) = manifest.ground_truth(clip) else {
+            continue;
+        };
         let reference = parse_rttm(&truth);
         let true_n = reference
             .iter()
@@ -171,7 +184,9 @@ fn main() {
                     stream_offset_secs: offset,
                     ..Default::default()
                 };
-                let Ok(t) = engine.transcribe(&chunk, &opts) else { continue };
+                let Ok(t) = engine.transcribe(&chunk, &opts) else {
+                    continue;
+                };
                 for s in t.speakers.iter().flatten() {
                     // Chunk-local times shift into the conversation's clock;
                     // labels are taken AS-IS, which is exactly what is under

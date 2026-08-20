@@ -18,8 +18,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for ch in 0..c {
         let plane = &v[ch * h * w..(ch + 1) * h * w];
         let mean: f32 = plane.iter().sum::<f32>() / plane.len() as f32;
-        let mn = plane.iter().cloned().fold(f32::MAX, f32::min);
-        let mx = plane.iter().cloned().fold(f32::MIN, f32::max);
+        let mn = plane.iter().copied().fold(f32::MAX, f32::min);
+        let mx = plane.iter().copied().fold(f32::MIN, f32::max);
         println!("  ch{ch}: mean {mean:.6} min {mn:.4} max {mx:.4}");
     }
     // A few interior pixels, well away from the letterbox padding.

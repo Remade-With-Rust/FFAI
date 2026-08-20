@@ -38,11 +38,11 @@ use ffai_core::registry::EngineRegistry;
 
 use crate::corpus::{ClipEntry, Manifest};
 use crate::gate::GateReport;
-use crate::ledger::{append, BenchRecord, Environment, RunSummary, LEDGER_SCHEMA};
+use crate::ledger::{BenchRecord, Environment, LEDGER_SCHEMA, RunSummary, append};
 use crate::metrics::{cer_with, wer_with};
 use crate::normalize::Mode;
 use crate::reference::{ReferenceSpec, TtsBatchResult};
-use crate::runner::{fill_gates, BenchConfig, QualityMetric};
+use crate::runner::{BenchConfig, QualityMetric, fill_gates};
 use crate::speed::{best_of_n, real_time_factor};
 
 /// The judge's required input format (whisper-family ASR).
@@ -76,13 +76,18 @@ pub fn run_tts(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     }
     let holdout: Vec<&ClipEntry> = manifest.holdout().collect();
     if holdout.is_empty() {
-        return Err(Error::Other("corpus has no holdout clips — nothing to measure".into()));
+        return Err(Error::Other(
+            "corpus has no holdout clips — nothing to measure".into(),
+        ));
     }
     let paths: Vec<PathBuf> = holdout.iter().map(|c| manifest.clip_path(c)).collect();
 
     let (tts_refs, judges): (Vec<&ReferenceSpec>, Vec<&ReferenceSpec>) =
         cfg.references.iter().partition(|r| r.task == "tts");
-    let judges: Vec<&ReferenceSpec> = judges.into_iter().filter(|r| r.task == "tts-judge").collect();
+    let judges: Vec<&ReferenceSpec> = judges
+        .into_iter()
+        .filter(|r| r.task == "tts-judge")
+        .collect();
     let judge = match judges.as_slice() {
         [one] => *one,
         [] => {
@@ -91,20 +96,24 @@ pub fn run_tts(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
                  reference in corpora/references.toml (a frozen third-party ASR; never a \
                  Mercury engine)"
                     .into(),
-            ))
+            ));
         }
         many => {
             return Err(Error::Other(format!(
                 "{} tts-judge references configured — exactly one, or scores in the same table \
                  would carry different judge error floors",
                 many.len()
-            )))
+            )));
         }
     };
 
     let mut references = Vec::new();
     for spec in &tts_refs {
-        eprintln!("running reference `{}` over {} utterances ...", spec.name, holdout.len());
+        eprintln!(
+            "running reference `{}` over {} utterances ...",
+            spec.name,
+            holdout.len()
+        );
         match run_tts_reference(spec, judge, &manifest, &holdout, &paths, cfg.runs) {
             Ok(summary) => references.push(summary),
             Err(e) => {
@@ -124,11 +133,23 @@ pub fn run_tts(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
     let engine_summary = if cfg.skip_engine {
         None
     } else {
-        Some(run_tts_engine(reg, cfg.engine.as_deref(), judge, &manifest, &holdout, cfg.runs)?)
+        Some(run_tts_engine(
+            reg,
+            cfg.engine.as_deref(),
+            judge,
+            &manifest,
+            &holdout,
+            cfg.runs,
+        )?)
     };
 
     let mut gates = GateReport::new();
-    fill_gates(&mut gates, engine_summary.as_ref(), &references, QualityMetric::Wer);
+    fill_gates(
+        &mut gates,
+        engine_summary.as_ref(),
+        &references,
+        QualityMetric::Wer,
+    );
 
     let (id, appended_at) = BenchRecord::now_id("tts");
     let record = BenchRecord {
@@ -199,13 +220,19 @@ fn run_tts_reference(
         holdout.len(),
         Vec::new(),
     );
-    summary.notes.extend(batches[best_run].1.meta.iter().cloned());
+    summary
+        .notes
+        .extend(batches[best_run].1.meta.iter().cloned());
 
     // Judge every run's audio; the kept run also fills clips_ok/media_secs.
     let mut draws: Vec<(f64, f64)> = Vec::new();
     for (run, (run_dir, batch)) in batches.iter().enumerate() {
         let mut scratch = empty_summary(String::new(), None, None, Default::default(), 0, vec![]);
-        let target = if run == best_run { &mut summary } else { &mut scratch };
+        let target = if run == best_run {
+            &mut summary
+        } else {
+            &mut scratch
+        };
         let judged = prepare_judge_wavs(batch, holdout, paths, run_dir, target)?;
         score_with_judge(judge, &judged, manifest, Mode::English, target)?;
         if let (Some(w), Some(c)) = (target.wer, target.cer) {
@@ -236,8 +263,10 @@ fn run_tts_reference(
     summary.wall_secs = Some(wall_secs);
     summary.load_secs = batch.load_secs;
     summary.rtf_e2e = Some(real_time_factor(media_secs, wall_secs));
-    summary.rtf_warm =
-        batch.synth_secs().map(|t| real_time_factor(media_secs, t)).or(summary.rtf_e2e);
+    summary.rtf_warm = batch
+        .synth_secs()
+        .map(|t| real_time_factor(media_secs, t))
+        .or(summary.rtf_e2e);
     summary.peak_bytes = batch.peak_bytes;
     summary.steady_bytes = batch.steady_bytes;
 
@@ -278,9 +307,15 @@ fn run_tts_engine(
     // name is Mercury's documented convention (piper_candle::DEFAULT_VOICE
     // is en_US-lessac-medium) — the same our-convention-not-a-guess
     // reasoning as ASR's engine_comparison_key.
-    let voice = opts.voice.clone().unwrap_or_else(|| "en_US-lessac-medium".to_string());
+    let voice = opts
+        .voice
+        .clone()
+        .unwrap_or_else(|| "en_US-lessac-medium".to_string());
     let mut config = std::collections::BTreeMap::new();
-    config.insert(crate::runner::DECODE_KEY.to_string(), format!("{voice}/defaults"));
+    config.insert(
+        crate::runner::DECODE_KEY.to_string(),
+        format!("{voice}/defaults"),
+    );
     let mut summary = empty_summary(
         tts.info().name,
         Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -313,10 +348,10 @@ fn run_tts_engine(
         let (sampling, out) = (sampling.clone(), our_samples.clone());
         std::thread::spawn(move || {
             while sampling.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Some(b) = crate::footprint::current_self() {
-                    if let Ok(mut v) = out.lock() {
-                        v.push(b.0);
-                    }
+                if let Some(b) = crate::footprint::current_self()
+                    && let Ok(mut v) = out.lock()
+                {
+                    v.push(b.0);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -386,12 +421,17 @@ fn run_tts_engine(
             if runs > 1 {
                 let mut draws = vec![summary.wer.unwrap_or(f64::NAN)];
                 for seed in 1..runs as u64 {
-                    let seeded = TtsOptions { seed, ..opts.clone() };
+                    let seeded = TtsOptions {
+                        seed,
+                        ..opts.clone()
+                    };
                     let sdir = judge_dir.join(format!("seed{seed}"));
                     std::fs::create_dir_all(&sdir)?;
                     let mut sjudged = Vec::new();
                     for (clip, text) in &texts {
-                        let Ok(buf) = tts.synthesize(text, &seeded) else { continue };
+                        let Ok(buf) = tts.synthesize(text, &seeded) else {
+                            continue;
+                        };
                         let jwav = sdir.join(format!("{}.wav", clip.id));
                         ffai_media::save_wav(
                             &jwav,
@@ -409,9 +449,9 @@ fn run_tts_engine(
                 let ok: Vec<f64> = draws.iter().copied().filter(|w| w.is_finite()).collect();
                 if ok.len() > 1 {
                     let mean = ok.iter().sum::<f64>() / ok.len() as f64;
-                    let (lo, hi) = ok.iter().fold((f64::MAX, f64::MIN), |(a, b), w| {
-                        (a.min(*w), b.max(*w))
-                    });
+                    let (lo, hi) = ok
+                        .iter()
+                        .fold((f64::MAX, f64::MIN), |(a, b), w| (a.min(*w), b.max(*w)));
                     summary.notes.push(format!(
                         "WER across {} seeds: mean {:.2} %, range {:.2}-{:.2} % (seed 0 = {:.2} %);                          scored as the mean, matching the reference's multi-draw treatment",
                         ok.len(),
@@ -424,7 +464,9 @@ fn run_tts_engine(
                 }
             }
         }
-        Err(e) => summary.notes.push(first_error.unwrap_or_else(|| e.to_string())),
+        Err(e) => summary
+            .notes
+            .push(first_error.unwrap_or_else(|| e.to_string())),
     }
 
     sampling.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -457,7 +499,9 @@ fn prepare_judge_wavs(
     let mut media_secs = 0.0f64;
     for (clip, path) in holdout.iter().zip(paths) {
         let Some(result) = batch.clip_for(path) else {
-            summary.notes.push(format!("{}: no result returned", clip.id));
+            summary
+                .notes
+                .push(format!("{}: no result returned", clip.id));
             continue;
         };
         match ffai_media::load_audio(&result.wav) {
@@ -468,7 +512,9 @@ fn prepare_judge_wavs(
                 judged.push((clip.id.clone(), jwav));
                 summary.clips_ok += 1;
             }
-            Err(e) => summary.notes.push(format!("{}: generated wav unreadable: {e}", clip.id)),
+            Err(e) => summary
+                .notes
+                .push(format!("{}: generated wav unreadable: {e}", clip.id)),
         }
     }
     summary.media_secs = Some(media_secs);
@@ -494,7 +540,9 @@ fn score_with_judge(
     for (id, jwav) in judged {
         let clip = manifest.clips.iter().find(|c| &c.id == id);
         let (Some(clip), Some(hypothesis)) = (clip, transcripts.text_for(jwav)) else {
-            summary.notes.push(format!("{id}: judge returned no transcript"));
+            summary
+                .notes
+                .push(format!("{id}: judge returned no transcript"));
             continue;
         };
         if let Some(truth) = manifest.ground_truth(clip)? {

@@ -13,22 +13,23 @@ pub fn to_gray_f32(img: &ImageBuffer) -> Result<Vec<f32>> {
     let n = (img.width * img.height) as usize;
     let data = &img.data;
     Ok(match img.format {
-        PixelFormat::Gray8 => data.iter().map(|&p| p as f32).collect(),
+        PixelFormat::Gray8 => data.iter().map(|&p| f32::from(p)).collect(),
         PixelFormat::Rgb8 => (0..n)
             .map(|i| {
-                0.299 * data[3 * i] as f32 + 0.587 * data[3 * i + 1] as f32 + 0.114 * data[3 * i + 2] as f32
+                0.299 * f32::from(data[3 * i]) + 0.587 * f32::from(data[3 * i + 1]) + 0.114 * f32::from(data[3 * i + 2])
             })
             .collect(),
         PixelFormat::Rgba8 => (0..n)
             .map(|i| {
-                0.299 * data[4 * i] as f32 + 0.587 * data[4 * i + 1] as f32 + 0.114 * data[4 * i + 2] as f32
+                0.299 * f32::from(data[4 * i]) + 0.587 * f32::from(data[4 * i + 1]) + 0.114 * f32::from(data[4 * i + 2])
             })
             .collect(),
     })
 }
 
-/// Bilinear resize of a single-channel plane, align_corners=false semantics
+/// Bilinear resize of a single-channel plane, `align_corners=false` semantics
 /// (the PyTorch/OpenCV default this whole lineage was trained under).
+#[must_use] 
 pub fn resize_bilinear(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
     if sw == dw && sh == dh {
         return src.to_vec();
@@ -58,6 +59,7 @@ pub fn resize_bilinear(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) 
 /// sharpness class of the reference stack's Lanczos crop resizing. Used on
 /// the recognition path only; detection keeps bilinear, matching its own
 /// reference preprocessing.
+#[must_use] 
 pub fn resize_bicubic(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
     if sw == dw && sh == dh {
         return src.to_vec();
@@ -99,8 +101,8 @@ pub fn resize_bicubic(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -
 }
 
 /// CRAFT input from a grayscale plane: optional scale (canvas 2560, mag 1.0 —
-/// EasyOCR's detect defaults), pad to multiples of 32 with black, replicate
-/// grey to RGB, normalize per channel with ImageNet mean/std.
+/// `EasyOCR`'s detect defaults), pad to multiples of 32 with black, replicate
+/// grey to RGB, normalize per channel with `ImageNet` mean/std.
 ///
 /// Returns the (1,3,H,W) tensor and the scale that maps ORIGINAL image
 /// coordinates to tensor coordinates (boxes divide by it on the way back).
@@ -186,6 +188,7 @@ pub fn crnn_input(
 /// where Otsu costs a histogram. §8.145 measured Otsu separability at 0.882 on
 /// exactly these crops — they are cleanly bimodal, which is what makes the cheap
 /// split safe.
+#[must_use] 
 pub fn is_reversed(crop: &[f32], w: usize, h: usize) -> bool {
     if crop.len() < w * h || w < 3 || h < 3 {
         return false;
@@ -308,7 +311,7 @@ pub fn crnn_input_patch(crop: &[f32], cw: usize, ch: usize, device: &Device) -> 
 }
 
 /// Detection scale (default 1.0 = native resolution, the reference's
-/// mag_ratio). `FFAI_DET_SCALE` overrides for the speed campaign's sweeps:
+/// `mag_ratio`). `FFAI_DET_SCALE` overrides for the speed campaign's sweeps:
 /// the profiler puts CRAFT's forward at 62-89% of recognition time and VGG
 /// cost is ~linear in pixels, so half scale is ~4x less detection work.
 /// Recognition always crops from the ORIGINAL image, so this trades
@@ -326,7 +329,7 @@ fn det_scale() -> f32 {
 /// ~8px glyph floor (7 of the 13 worst per-clip spikes were 576x864
 /// receipts with ~10px text) and camera-resolution monsters get capped
 /// (10.5s / 7.8GB class). `FFAI_DET_TARGET=0` disables (fixed-scale
-/// behaviour); FFAI_DET_SCALE still multiplies on top for sweeps.
+/// behaviour); `FFAI_DET_SCALE` still multiplies on top for sweeps.
 fn det_target() -> f32 {
     use std::sync::OnceLock;
     static T: OnceLock<f32> = OnceLock::new();
@@ -348,9 +351,10 @@ pub(crate) fn det_effective_scale(long_side: f32) -> f32 {
 /// deviation from the strip's median level exceeds a small threshold, padded
 /// by one strip-height each side (context for the recognizer). Falls back to
 /// the full width when nothing exceeds the threshold.
+#[must_use] 
 pub fn ink_extent(gray: &[f32], w: usize, h: usize) -> (usize, usize) {
     let mut sample: Vec<f32> = gray.iter().copied().step_by(97).collect();
-    sample.sort_by(|a, b| a.total_cmp(b));
+    sample.sort_by(f32::total_cmp);
     let median = sample.get(sample.len() / 2).copied().unwrap_or(128.0);
     const DEV: f32 = 25.0;
     let mut first = None;
@@ -380,6 +384,7 @@ pub fn ink_extent(gray: &[f32], w: usize, h: usize) -> (usize, usize) {
 /// whose dips cut words mid-glyph (measured: "October" -> "Oo"+"ccober" on
 /// region-only, truncations like "Exa[ctly]" on region|affinity), while
 /// image-space gaps at this rendering are unambiguous.
+#[must_use] 
 pub fn split_ink_words(
     gray: &[f32],
     img_w: usize,
@@ -394,7 +399,7 @@ pub fn split_ink_words(
         .flat_map(|y| gray[y * img_w + x0..y * img_w + x1].iter().copied())
         .step_by(53)
         .collect();
-    sample.sort_by(|a, b| a.total_cmp(b));
+    sample.sort_by(f32::total_cmp);
     let median = sample.get(sample.len() / 2).copied().unwrap_or(128.0);
     const DEV: f32 = 25.0;
     let ink: Vec<bool> = (x0..x1)
@@ -446,7 +451,7 @@ pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, 
     const STD: [f32; 3] = [0.229, 0.224, 0.225];
     let mut chw = vec![0f32; 3 * cw * ch];
     for c in 0..3 {
-        let plane: Vec<f32> = (0..w * h).map(|i| img.data[i * bpp + c] as f32).collect();
+        let plane: Vec<f32> = (0..w * h).map(|i| f32::from(img.data[i * bpp + c])).collect();
         let resized = resize_bilinear(&plane, w, h, rw, rh);
         let (mean, std) = (MEAN[c], STD[c]);
         let dst = &mut chw[c * cw * ch..(c + 1) * cw * ch];
@@ -470,7 +475,7 @@ pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, 
 ///
 /// ## The policy is a MINIMUM side, not a maximum, and that is the whole ball game
 ///
-/// The obvious reading of `inference.yml` — "resize_long: 960", so scale the
+/// The obvious reading of `inference.yml` — "`resize_long`: 960", so scale the
 /// long side to 960 — is wrong, and wrong by a factor of 17 in pixel count.
 /// The reference resizes only to bring the SHORT side UP to `min_side`, leaves
 /// larger images alone, and then caps the long side at `max_side`. A 2376x4224
@@ -483,8 +488,8 @@ pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, 
 /// did paddle's own postprocess on paddle's own probability map at that size.
 /// The detector was never the problem; the input was.
 ///
-/// One faithful oddity, deliberate: channels are **BGR**. PaddleOCR decodes BGR
-/// and then normalizes with ImageNet's *RGB* statistics, so mean 0.485 lands on
+/// One faithful oddity, deliberate: channels are **BGR**. `PaddleOCR` decodes BGR
+/// and then normalizes with `ImageNet`'s *RGB* statistics, so mean 0.485 lands on
 /// the blue channel. It looks like a bug and is not one — it is what these
 /// weights were trained against.
 pub fn mobiledet_input(
@@ -523,7 +528,7 @@ pub fn mobiledet_input(
     for c in 0..3 {
         // Tensor channel 0 is blue; a grey source replicates its single plane.
         let src_c = if bpp == 1 { 0 } else { 2 - c };
-        let plane: Vec<f32> = (0..w * h).map(|i| img.data[i * bpp + src_c] as f32).collect();
+        let plane: Vec<f32> = (0..w * h).map(|i| f32::from(img.data[i * bpp + src_c])).collect();
         let resized = resize_bilinear(&plane, w, h, cw, ch);
         let (mean, std) = (MEAN[c], STD[c]);
         let dst = &mut chw[c * cw * ch..(c + 1) * cw * ch];
@@ -535,6 +540,7 @@ pub fn mobiledet_input(
     Ok((t, cw as f32 / w as f32, ch as f32 / h as f32))
 }
 
+#[must_use] 
 pub fn candle_err(e: candle_core::Error) -> Error {
     Error::Other(format!("candle: {e}"))
 }

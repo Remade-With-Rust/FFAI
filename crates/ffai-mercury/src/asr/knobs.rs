@@ -31,6 +31,19 @@
 //! for models loaded *after* the change — so a harness A/B's them by holding
 //! two engines, one built under each setting, not by flipping mid-run.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::sync::atomic::{AtomicI64, Ordering};
 
 /// Sentinel meaning "not yet resolved from the environment".
@@ -45,8 +58,13 @@ pub struct Flag {
 }
 
 impl Flag {
+    #[must_use]
     pub const fn new(name: &'static str, word: &'static str) -> Self {
-        Self { name, word, v: AtomicI64::new(UNSET) }
+        Self {
+            name,
+            word,
+            v: AtomicI64::new(UNSET),
+        }
     }
 
     #[inline]
@@ -56,13 +74,13 @@ impl Flag {
             return cur != 0;
         }
         let on = std::env::var(self.name).as_deref() == Ok(self.word);
-        self.v.store(on as i64, Ordering::Relaxed);
+        self.v.store(i64::from(on), Ordering::Relaxed);
         on
     }
 
     /// Override for the duration of a measurement. Not for shipped code paths.
     pub fn set(&self, on: bool) {
-        self.v.store(on as i64, Ordering::Relaxed);
+        self.v.store(i64::from(on), Ordering::Relaxed);
     }
 
     /// Drop back to whatever the environment says.
@@ -82,7 +100,12 @@ pub struct Num {
 
 impl Num {
     pub const fn new(name: &'static str, default: i64, valid: fn(i64) -> bool) -> Self {
-        Self { name, default, valid, v: AtomicI64::new(UNSET) }
+        Self {
+            name,
+            default,
+            valid,
+            v: AtomicI64::new(UNSET),
+        }
     }
 
     #[inline]

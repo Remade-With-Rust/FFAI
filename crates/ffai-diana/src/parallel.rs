@@ -2,7 +2,7 @@
 //! it should not always go to the same place.
 //!
 //! Every hand-written kernel here fans out with `par_chunks_mut`, once per
-//! layer. YOLO26n has ~60 convolutions and ~60 activations, so a single
+//! layer. `YOLO26n` has ~60 convolutions and ~60 activations, so a single
 //! image pays on the order of a hundred fork-joins, each one waking every
 //! worker in the pool and waiting for the slowest to arrive. Measured cost
 //! of that, at the n tier on a 16-physical/24-logical box, as CPU time per
@@ -103,47 +103,10 @@ fn nested_par_forced() -> bool {
     match CACHED.load(Ordering::Relaxed) {
         u8::MAX => {
             let on = std::env::var("FFAI_DIANA_NESTED_PAR").is_ok_and(|v| v == "1");
-            CACHED.store(on as u8, Ordering::Relaxed);
+            CACHED.store(u8::from(on), Ordering::Relaxed);
             on
         }
         v => v == 1,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_to_parallel() {
-        assert!(!serial_kernels());
-    }
-
-    #[test]
-    fn scope_sets_and_restores() {
-        assert!(!serial_kernels());
-        serial_scope(|| assert!(serial_kernels()));
-        assert!(!serial_kernels());
-    }
-
-    #[test]
-    fn nested_scopes_restore_the_outer_value() {
-        serial_scope(|| {
-            serial_scope(|| assert!(serial_kernels()));
-            assert!(serial_kernels(), "inner scope must not clear the outer one");
-        });
-        assert!(!serial_kernels());
-    }
-
-    /// The flag must not survive a panic, or a rayon worker reused for the
-    /// next image would silently run it serially inside a LATENCY call.
-    #[test]
-    fn unwinding_restores_the_flag() {
-        let r = std::panic::catch_unwind(|| {
-            serial_scope(|| panic!("kernel blew up"));
-        });
-        assert!(r.is_err());
-        assert!(!serial_kernels(), "flag leaked past an unwind");
     }
 }
 
@@ -225,6 +188,7 @@ mod tests {
 /// useful work is simply SMALL, and spreading it wider costs more in barriers
 /// than it recovers. Reaching 53 ms would need either ~4.2 cores busy on this
 /// work — near-perfect scaling — or less work.
+#[must_use] 
 pub fn no_pool() -> bool {
     std::env::var("FFAI_DIANA_THREADS").is_ok_and(|v| v == "0")
 }
@@ -233,7 +197,7 @@ pub fn no_pool() -> bool {
 pub fn latency_pool() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
         // Env first: the basin's location is a property of the machine and
         // the model, and a deployment on different hardware should be able to
         // re-measure it with `examples/scaling.rs` and set it.
@@ -249,4 +213,41 @@ pub fn latency_pool() -> &'static rayon::ThreadPool {
             .build()
             .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().expect("default pool"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_parallel() {
+        assert!(!serial_kernels());
+    }
+
+    #[test]
+    fn scope_sets_and_restores() {
+        assert!(!serial_kernels());
+        serial_scope(|| assert!(serial_kernels()));
+        assert!(!serial_kernels());
+    }
+
+    #[test]
+    fn nested_scopes_restore_the_outer_value() {
+        serial_scope(|| {
+            serial_scope(|| assert!(serial_kernels()));
+            assert!(serial_kernels(), "inner scope must not clear the outer one");
+        });
+        assert!(!serial_kernels());
+    }
+
+    /// The flag must not survive a panic, or a rayon worker reused for the
+    /// next image would silently run it serially inside a LATENCY call.
+    #[test]
+    fn unwinding_restores_the_flag() {
+        let r = std::panic::catch_unwind(|| {
+            serial_scope(|| panic!("kernel blew up"));
+        });
+        assert!(r.is_err());
+        assert!(!serial_kernels(), "flag leaked past an unwind");
+    }
 }

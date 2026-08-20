@@ -3,11 +3,11 @@
 //! [`super::diarize`] answers "who spoke when" **inside one call**, and its
 //! labels are arbitrary names for clusters: `SPEAKER_00` is whoever spoke
 //! first in *that* audio. That is the standard definition, it is what DER
-//! measures under an optimal label mapping, and it is what WhisperX does.
+//! measures under an optimal label mapping, and it is what `WhisperX` does.
 //!
 //! It is also useless for a stream. Feed a live microphone in one-second
 //! chunks and the same person becomes `SPEAKER_00` in one chunk and
-//! `SPEAKER_01` in the next, because each call starts from nothing. FFai's
+//! `SPEAKER_01` in the next, because each call starts from nothing. `FFai`'s
 //! principle 5 says *"streaming-first — engines process chunks; whole-file is
 //! the degenerate case"*, and diarization that only works whole-file inverts
 //! that exactly.
@@ -96,6 +96,7 @@ impl SpeakerRegistry {
     /// `batch_threshold` is the same number [`super::diarize::cluster`] uses;
     /// the registry tightens it by [`ENROL_MARGIN`] itself, so callers pass
     /// one threshold and do not have to remember the relationship.
+    #[must_use]
     pub fn new(batch_threshold: f32, max_speakers: Option<usize>) -> Self {
         // FFAI_ENROL_MARGIN overrides the margin for calibration, the same
         // A/B convention the other knobs use. Not a user-facing switch.
@@ -108,15 +109,22 @@ impl SpeakerRegistry {
     }
 
     /// Explicit matching distance, bypassing the margin derivation.
-    pub fn with_match_threshold(match_threshold: f32, max_speakers: Option<usize>) -> Self {
-        SpeakerRegistry { known: Vec::new(), match_threshold, max_speakers }
+    #[must_use]
+    pub const fn with_match_threshold(match_threshold: f32, max_speakers: Option<usize>) -> Self {
+        Self {
+            known: Vec::new(),
+            match_threshold,
+            max_speakers,
+        }
     }
 
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.known.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.known.is_empty()
     }
 
@@ -128,6 +136,7 @@ impl SpeakerRegistry {
     /// The distance to the nearest known speaker, if any — exposed so a
     /// caller can see *how* confident an assignment was rather than only
     /// which label came back.
+    #[must_use]
     pub fn nearest(&self, embedding: &[f32]) -> Option<(usize, f32)> {
         self.known
             .iter()
@@ -153,13 +162,16 @@ impl SpeakerRegistry {
                 let k = &mut self.known[i];
                 let total = k.weight + weight;
                 for (c, e) in k.centroid.iter_mut().zip(embedding.iter()) {
-                    *c = (*c * k.weight + *e * weight) / total;
+                    *c = (*c).mul_add(k.weight, *e * weight) / total;
                 }
                 k.weight = total;
                 i
             }
             _ => {
-                self.known.push(Known { centroid: embedding.to_vec(), weight });
+                self.known.push(Known {
+                    centroid: embedding.to_vec(),
+                    weight,
+                });
                 self.known.len() - 1
             }
         }
@@ -218,7 +230,11 @@ mod tests {
     #[test]
     fn labels_are_assigned_in_order_of_first_appearance() {
         let mut r = SpeakerRegistry::new(0.80, None);
-        assert_eq!(r.assign(&voice_b(), 1.0), 0, "first voice heard is SPEAKER_00");
+        assert_eq!(
+            r.assign(&voice_b(), 1.0),
+            0,
+            "first voice heard is SPEAKER_00"
+        );
         assert_eq!(r.assign(&voice_a(), 1.0), 1);
         assert_eq!(r.assign(&near(&voice_b(), 0.02), 1.0), 0);
     }
@@ -279,7 +295,10 @@ mod tests {
         r.assign(&voice_a(), 1.0);
         let (idx, d) = r.nearest(&voice_a()).expect("one speaker known");
         assert_eq!(idx, 0);
-        assert!(d < 1e-6, "identical embedding should be at distance 0, got {d}");
+        assert!(
+            d < 1e-6,
+            "identical embedding should be at distance 0, got {d}"
+        );
         assert!(r.nearest(&voice_b()).expect("still one").1 > 0.5);
     }
 

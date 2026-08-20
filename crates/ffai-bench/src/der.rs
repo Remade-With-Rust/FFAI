@@ -42,9 +42,17 @@ pub struct Turn {
 
 impl Turn {
     pub fn new(start: f64, end: f64, speaker: impl Into<String>) -> Self {
-        Turn { start, end, speaker: speaker.into() }
+        Self {
+            start,
+            end,
+            speaker: speaker.into(),
+        }
     }
 
+    // Unused today: DER is computed from overlaps rather than per-turn
+    // durations. Kept because it is the obvious accessor and every future
+    // metric that weights by turn length wants exactly this, clamped at zero.
+    #[allow(dead_code)]
     fn duration(&self) -> f64 {
         (self.end - self.start).max(0.0)
     }
@@ -65,6 +73,7 @@ impl DerBreakdown {
     /// The headline number. `None` when the reference contains no speech —
     /// dividing by zero would report 0.0, which reads as a perfect score for
     /// a recording nobody could have got wrong.
+    #[must_use]
     pub fn der(&self) -> Option<f64> {
         if self.reference_secs <= 0.0 {
             return None;
@@ -87,7 +96,7 @@ fn boundaries(reference: &[Turn], hypothesis: &[Turn]) -> Vec<f64> {
     points
 }
 
-fn speaker_at<'a>(turns: &'a [Turn], start: f64, end: f64) -> Option<&'a str> {
+fn speaker_at(turns: &[Turn], start: f64, end: f64) -> Option<&str> {
     let mid = (start + end) / 2.0;
     turns
         .iter()
@@ -115,6 +124,7 @@ fn distinct(turns: &[Turn]) -> Vec<&str> {
 /// [`MAX_EXACT_SPEAKERS`] it falls back to greedy assignment and **says so**
 /// in the returned flag rather than quietly reporting an approximation as a
 /// measurement.
+#[must_use]
 pub fn diarization_error_rate(
     reference: &[Turn],
     hypothesis: &[Turn],
@@ -127,7 +137,12 @@ pub fn diarization_error_rate(
     let collared: Vec<(f64, f64)> = if collar > 0.0 {
         reference
             .iter()
-            .flat_map(|t| [(t.start - collar, t.start + collar), (t.end - collar, t.end + collar)])
+            .flat_map(|t| {
+                [
+                    (t.start - collar, t.start + collar),
+                    (t.end - collar, t.end + collar),
+                ]
+            })
             .collect()
     } else {
         Vec::new()
@@ -201,8 +216,17 @@ fn best_mapping(overlap: &[f64], n_ref: usize, n_hyp: usize) -> (Vec<Option<usiz
         let mut best: Option<(f64, Vec<Option<usize>>)> = None;
         let mut current = vec![None; n_ref];
         let mut used = vec![false; n_hyp];
-        permute(overlap, n_hyp, 0, n_ref, &mut current, &mut used, 0.0, &mut best);
-        return (best.map(|(_, m)| m).unwrap_or_else(|| vec![None; n_ref]), true);
+        permute(
+            overlap,
+            n_hyp,
+            0,
+            n_ref,
+            &mut current,
+            &mut used,
+            0.0,
+            &mut best,
+        );
+        return (best.map_or_else(|| vec![None; n_ref], |(_, m)| m), true);
     }
     // Greedy: take the largest remaining overlap until none is left.
     let mut mapping = vec![None; n_ref];
@@ -267,6 +291,7 @@ fn permute(
 /// truth. Only `SPEAKER` lines are read; anything else is ignored.
 ///
 /// `SPEAKER <file> <chan> <start> <dur> <ortho> <stype> <name> <conf> <slat>`
+#[must_use]
 pub fn parse_rttm(text: &str) -> Vec<Turn> {
     text.lines()
         .filter_map(|line| {
@@ -329,7 +354,10 @@ mod tests {
     #[test]
     fn speech_invented_in_silence_is_false_alarm() {
         let r = vec![Turn::new(0.0, 10.0, "A")];
-        let h = vec![Turn::new(0.0, 10.0, "SPEAKER_00"), Turn::new(12.0, 15.0, "SPEAKER_00")];
+        let h = vec![
+            Turn::new(0.0, 10.0, "SPEAKER_00"),
+            Turn::new(12.0, 15.0, "SPEAKER_00"),
+        ];
         // 3 s invented against 10 s of reference speech.
         assert!((der_of(&r, &h, 0.0) - 0.3).abs() < 1e-6);
     }
@@ -358,7 +386,10 @@ mod tests {
     #[test]
     fn empty_reference_reports_none_not_zero() {
         let (b, _) = diarization_error_rate(&[], &[Turn::new(0.0, 1.0, "X")], 0.0);
-        assert!(b.der().is_none(), "no reference speech must not read as perfect");
+        assert!(
+            b.der().is_none(),
+            "no reference speech must not read as perfect"
+        );
     }
 
     #[test]
@@ -372,10 +403,7 @@ mod tests {
         // Reference A overlaps h0 slightly more than h1, but taking it greedily
         // forces B onto a much worse partner. The exhaustive search must find
         // the assignment with the larger TOTAL overlap.
-        let r = vec![
-            Turn::new(0.0, 10.0, "A"),
-            Turn::new(10.0, 20.0, "B"),
-        ];
+        let r = vec![Turn::new(0.0, 10.0, "A"), Turn::new(10.0, 20.0, "B")];
         let h = vec![
             Turn::new(0.0, 6.0, "h0"),
             Turn::new(6.0, 10.0, "h1"),
@@ -390,7 +418,10 @@ mod tests {
     #[test]
     fn breakdown_components_sum_to_the_rate() {
         let r = vec![Turn::new(0.0, 5.0, "A"), Turn::new(5.0, 10.0, "B")];
-        let h = vec![Turn::new(0.0, 8.0, "SPEAKER_00"), Turn::new(11.0, 12.0, "SPEAKER_01")];
+        let h = vec![
+            Turn::new(0.0, 8.0, "SPEAKER_00"),
+            Turn::new(11.0, 12.0, "SPEAKER_01"),
+        ];
         let (b, _) = diarization_error_rate(&r, &h, 0.0);
         let sum = b.missed_secs + b.false_alarm_secs + b.confusion_secs;
         assert!((b.der().expect("speech") - sum / b.reference_secs).abs() < 1e-9);

@@ -26,7 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("models/ here: {}\n", scratch.join("models").exists());
 
     // ---- manifests resolve with no directory at all ----
-    for name in ["whisper-tiny-en", "wav2vec2-base-960h", "ecapa-tdnn-voxceleb", "cmudict"] {
+    for name in [
+        "whisper-tiny-en",
+        "wav2vec2-base-960h",
+        "ecapa-tdnn-voxceleb",
+        "cmudict",
+    ] {
         let m = ffai_mercury::manifests::resolve(None, name)?;
         println!("manifest {name:<24} ok  (licence: {})", m.license);
     }
@@ -41,7 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let asr = WhisperCandle::new();
     match asr.transcribe(&audio, &AsrOptions::default()) {
-        Ok(t) => println!("\nASR ok — {} segment(s), text {:?}", t.segments.len(), t.text().trim()),
+        Ok(t) => println!(
+            "\nASR ok — {} segment(s), text {:?}",
+            t.segments.len(),
+            t.text().trim()
+        ),
         Err(e) => {
             println!("\nASR FAILED: {e}");
             std::process::exit(1);
@@ -50,7 +59,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ---- TTS ----
     let tts = PiperCandle::new();
-    match tts.synthesize("The birch canoe slid on the smooth planks.", &TtsOptions::default()) {
+    match tts.synthesize(
+        "The birch canoe slid on the smooth planks.",
+        &TtsOptions::default(),
+    ) {
         Ok(a) => println!(
             "TTS ok — {:.2} s of audio at {} Hz",
             a.duration_secs(),

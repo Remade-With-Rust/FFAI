@@ -100,12 +100,18 @@ pub struct BatchResult {
 impl BatchResult {
     /// Adapter-reported processing time for the batch: the sum of per-clip
     /// timings when available, otherwise the reported aggregate.
+    #[must_use]
     pub fn transcribe_secs(&self) -> Option<f64> {
         let sum: f64 = self.clips.iter().filter_map(|c| c.transcribe_secs).sum();
-        if sum > 0.0 { Some(sum) } else { self.batch_transcribe_secs }
+        if sum > 0.0 {
+            Some(sum)
+        } else {
+            self.batch_transcribe_secs
+        }
     }
 
     /// Look up a clip's text by the path the adapter echoed back.
+    #[must_use]
     pub fn text_for(&self, path: &Path) -> Option<&str> {
         let want = path.to_string_lossy().replace('\\', "/");
         self.clips
@@ -134,16 +140,16 @@ impl ReferenceFile {
 }
 
 impl ReferenceSpec {
+    #[must_use]
     pub fn supports_batch(&self) -> bool {
         self.batch_command.is_some()
     }
 
     /// Run the whole corpus in one invocation (see module docs).
     pub fn run_batch(&self, inputs: &[PathBuf]) -> Result<BatchResult> {
-        let argv = self
-            .batch_command
-            .as_ref()
-            .ok_or_else(|| Error::Other(format!("reference `{}` has no batch_command", self.name)))?;
+        let argv = self.batch_command.as_ref().ok_or_else(|| {
+            Error::Other(format!("reference `{}` has no batch_command", self.name))
+        })?;
 
         let listing: String = inputs
             .iter()
@@ -195,9 +201,9 @@ impl ReferenceSpec {
         use std::io::Read;
         use std::process::Stdio;
 
-        let (prog, args) = argv
-            .split_first()
-            .ok_or_else(|| Error::Other(format!("reference `{}` has an empty command", self.name)))?;
+        let (prog, args) = argv.split_first().ok_or_else(|| {
+            Error::Other(format!("reference `{}` has an empty command", self.name))
+        })?;
         let mut child = Command::new(prog)
             .args(args)
             .stdout(Stdio::piped())
@@ -220,7 +226,21 @@ impl ReferenceSpec {
         // us. Both impossible, both plausible-looking in a table.
         let job = std::sync::Arc::new(crate::footprint::Job::create());
         if let Some(j) = job.as_ref() {
-            j.assign(&child);
+            // The return value MATTERS and was being dropped. This job object is
+            // the whole reason the measurement is trustworthy: without it we
+            // measured the Python launcher instead of the process doing the
+            // work, and reported 5 MiB for a reference that loads a 77.7 MB
+            // model. If the assignment fails and nobody says so, the harness
+            // silently reverts to producing exactly that number - impossible,
+            // and plausible-looking in a table.
+            //
+            // `create()` returns None on non-Windows, so reaching here means a
+            // real job object exists and the failure is worth shouting about.
+            if !j.assign(&child) {
+                eprintln!(
+                    "WARNING: could not assign the reference process to its job object;                      footprint numbers from this run measure the direct child only and                      must not be compared against ours"
+                );
+            }
         }
         // Sample the tree's resident memory while it runs and keep the maximum.
         // Sampling is not optional here: a process's counters die with it, and
@@ -235,17 +255,21 @@ impl ReferenceSpec {
         // footprint.
         let samples = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
         let sampler = {
-            let (job, done, peak_seen, samples) =
-                (job.clone(), done.clone(), peak_seen.clone(), samples.clone());
+            let (job, done, peak_seen, samples) = (
+                job.clone(),
+                done.clone(),
+                peak_seen.clone(),
+                samples.clone(),
+            );
             std::thread::spawn(move || {
                 use std::sync::atomic::Ordering;
                 while !done.load(Ordering::Relaxed) {
                     if let Some(ws) = job.as_ref().as_ref().and_then(|j| j.working_set_now()) {
                         peak_seen.fetch_max(ws, Ordering::Relaxed);
-                        if ws > 0 {
-                            if let Ok(mut v) = samples.lock() {
-                                v.push(ws);
-                            }
+                        if ws > 0
+                            && let Ok(mut v) = samples.lock()
+                        {
+                            v.push(ws);
                         }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -267,7 +291,10 @@ impl ReferenceSpec {
         });
 
         let status = child.wait().map_err(|e| {
-            Error::Other(format!("reference `{}` could not be waited on: {e}", self.name))
+            Error::Other(format!(
+                "reference `{}` could not be waited on: {e}",
+                self.name
+            ))
         })?;
         done.store(true, std::sync::atomic::Ordering::Relaxed);
         sampler.join().ok();
@@ -300,6 +327,7 @@ impl ReferenceSpec {
 
     /// The argv this reference invokes, with placeholders left intact — the
     /// decode configuration as recorded in the ledger.
+    #[must_use]
     pub fn command_line(&self) -> String {
         self.batch_command
             .as_ref()
@@ -309,12 +337,20 @@ impl ReferenceSpec {
     }
 
     /// Best-effort version string (first line of `version_command` output).
+    #[must_use]
     pub fn version(&self) -> Option<String> {
         let argv = self.version_command.as_ref()?;
         let (prog, args) = argv.split_first()?;
         let out = Command::new(prog).args(args).output().ok()?;
-        let text = if out.stdout.trim_ascii().is_empty() { out.stderr } else { out.stdout };
-        String::from_utf8_lossy(&text).lines().next().map(|s| s.trim().to_string())
+        let text = if out.stdout.trim_ascii().is_empty() {
+            out.stderr
+        } else {
+            out.stdout
+        };
+        String::from_utf8_lossy(&text)
+            .lines()
+            .next()
+            .map(|s| s.trim().to_string())
     }
 }
 
@@ -339,7 +375,11 @@ fn parse_batch_output(stdout: &str, name: &str) -> Result<BatchResult> {
         }
         if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
             out.clips.push(ClipResult {
-                path: value.get("path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                path: value
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
                 text: text.to_string(),
                 transcribe_secs: value.get("transcribe_secs").and_then(|v| v.as_f64()),
             });
@@ -368,7 +408,7 @@ pub struct TtsClipResult {
     pub wav: PathBuf,
     /// Synthesis-only seconds (model loaded, WAV writing excluded).
     pub synth_secs: Option<f64>,
-    /// Time-to-first-audio: synthesize() call to first chunk. For a
+    /// Time-to-first-audio: `synthesize()` call to first chunk. For a
     /// single-sentence input a non-streaming engine reports ttfa == synth.
     pub ttfa_secs: Option<f64>,
 }
@@ -388,12 +428,16 @@ pub struct TtsBatchResult {
 
 impl TtsBatchResult {
     /// Look up an utterance's result by input text path.
+    #[must_use]
     pub fn clip_for(&self, path: &Path) -> Option<&TtsClipResult> {
         let want = path.to_string_lossy().replace('\\', "/");
-        self.clips.iter().find(|c| c.path.replace('\\', "/") == want)
+        self.clips
+            .iter()
+            .find(|c| c.path.replace('\\', "/") == want)
     }
 
     /// Adapter-reported synthesis time for the whole batch.
+    #[must_use]
     pub fn synth_secs(&self) -> Option<f64> {
         let sum: f64 = self.clips.iter().filter_map(|c| c.synth_secs).sum();
         if sum > 0.0 { Some(sum) } else { None }
@@ -406,12 +450,11 @@ impl ReferenceSpec {
     /// must write WAVs into. JSONL contract: a `{"load_secs": ...}` line,
     /// optional metadata lines (any object with a `"voice"` key), and one
     /// `{"path": ..., "wav": ..., "synth_secs": ..., "ttfa_secs": ...}` per
-    /// utterance. See corpora/refs/piper_ref.py for the working example.
+    /// utterance. See `corpora/refs/piper_ref.py` for the working example.
     pub fn run_batch_tts(&self, inputs: &[PathBuf], outdir: &Path) -> Result<TtsBatchResult> {
-        let argv = self
-            .batch_command
-            .as_ref()
-            .ok_or_else(|| Error::Other(format!("reference `{}` has no batch_command", self.name)))?;
+        let argv = self.batch_command.as_ref().ok_or_else(|| {
+            Error::Other(format!("reference `{}` has no batch_command", self.name))
+        })?;
 
         std::fs::create_dir_all(outdir)?;
         let listing: String = inputs
@@ -461,7 +504,11 @@ fn parse_tts_batch_output(stdout: &str, name: &str) -> Result<TtsBatchResult> {
         }
         if let Some(wav) = value.get("wav").and_then(|v| v.as_str()) {
             out.clips.push(TtsClipResult {
-                path: value.get("path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                path: value
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
                 wav: PathBuf::from(wav),
                 synth_secs: value.get("synth_secs").and_then(|v| v.as_f64()),
                 ttfa_secs: value.get("ttfa_secs").and_then(|v| v.as_f64()),
@@ -496,7 +543,10 @@ mod tts_tests {
         assert_eq!(r.meta.len(), 1);
         assert!(r.meta[0].contains("voice_sha256"));
         assert!((r.synth_secs().unwrap() - 0.12).abs() < 1e-9);
-        assert_eq!(r.clip_for(Path::new("b.txt")).unwrap().wav, PathBuf::from("out/b.wav"));
+        assert_eq!(
+            r.clip_for(Path::new("b.txt")).unwrap().wav,
+            PathBuf::from("out/b.wav")
+        );
         // Windows paths from the adapter still match POSIX-style queries.
         let win = parse_tts_batch_output(
             "{\"path\": \"corpora\\\\texts\\\\a.txt\", \"wav\": \"o.wav\"}\n",

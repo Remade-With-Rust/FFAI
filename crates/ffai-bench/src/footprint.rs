@@ -31,6 +31,7 @@
 pub struct PeakBytes(pub u64);
 
 impl PeakBytes {
+    #[must_use]
     pub fn mib(self) -> f64 {
         self.0 as f64 / (1024.0 * 1024.0)
     }
@@ -110,7 +111,7 @@ mod imp {
 
     pub fn peak_child(child: &std::process::Child) -> Option<u64> {
         use std::os::windows::io::AsRawHandle;
-        query(child.as_raw_handle() as *mut c_void)
+        query(child.as_raw_handle())
     }
 
     /// DIAGNOSTIC ONLY — ask the OS to trim this process's working set.
@@ -215,22 +216,24 @@ mod imp {
     unsafe impl Sync for Job {}
 
     impl Job {
+        #[must_use]
         pub fn create() -> Option<Self> {
             // SAFETY: null attributes and a null name request an unnamed job
             // with default security, which is what the API documents.
             let h = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
-            (!h.is_null()).then_some(Job(h))
+            (!h.is_null()).then_some(Self(h))
         }
 
         /// Assign a freshly-spawned child. Descendants it creates AFTER this
         /// call inherit membership; anything it spawned in the microseconds
         /// before would be missed, which is why this runs immediately after
         /// `spawn`.
+        #[must_use]
         pub fn assign(&self, child: &std::process::Child) -> bool {
             use std::os::windows::io::AsRawHandle;
             // SAFETY: `self.0` is a live job handle owned by this struct and
             // the child handle is owned by a `Child` that is still alive.
-            unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle() as *mut c_void) != 0 }
+            unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
         }
 
         /// Peak COMMITTED memory across the job.
@@ -238,7 +241,7 @@ mod imp {
         /// **Do not use this as a footprint figure.** Calibration
         /// (`examples/footprint_calibrate.rs`) shows `whisper-cli --help` —
         /// which prints a help message and exits — reporting **2953 MiB** here
-        /// against 8 MiB of working set. That is OpenBLAS committing per-thread
+        /// against 8 MiB of working set. That is `OpenBLAS` committing per-thread
         /// buffers it never touches; commit counts address space that was
         /// reserved, not memory that occupies RAM. Reporting it as "footprint"
         /// would have claimed a 7x memory advantage built almost entirely out
@@ -246,6 +249,7 @@ mod imp {
         ///
         /// Kept because it is the right question for "will this fit in a
         /// commit limit", which is not the question this gate asks.
+        #[must_use]
         pub fn peak_commit(&self) -> Option<u64> {
             let mut info = JobExtendedLimitInformation::default();
             let mut returned = 0u32;
@@ -273,6 +277,7 @@ mod imp {
         /// It has to be sampled rather than read at the end, because a
         /// process's counters die with it and the interesting process (the
         /// grandchild doing the work) exits before we look.
+        #[must_use]
         pub fn working_set_now(&self) -> Option<u64> {
             let mut list = JobBasicProcessIdList {
                 number_of_assigned_processes: 0,
@@ -377,6 +382,13 @@ mod imp {
     /// not available and the gate skips rather than reporting a partial one.
     pub struct Job;
 
+    // The non-Windows stub. Every method is a constant-valued placeholder, so
+    // clippy::pedantic wants `#[must_use]` on all of them - but ONLY here: the
+    // Windows impl returns real handles and does not trip the lint. Annotating
+    // the stub to match a lint the real implementation never fires would be
+    // noise, so it is allowed at the impl with the reason recorded.
+    // Surfaced by the first Linux CI run, never by a local Windows build.
+    #[allow(clippy::must_use_candidate)]
     impl Job {
         pub fn create() -> Option<Self> {
             None
@@ -400,6 +412,7 @@ pub fn peak_self() -> Option<PeakBytes> {
 
 /// DIAGNOSTIC: trim the working set, to distinguish memory that is HELD
 /// because it is needed from memory the allocator simply has not returned.
+#[must_use]
 pub fn trim_working_set() -> bool {
     imp::trim_working_set()
 }
@@ -432,6 +445,7 @@ pub use imp::Job;
 
 /// Whether this platform can measure at all, so the gate can say why it
 /// skipped instead of silently reporting nothing.
+#[must_use]
 pub fn supported() -> bool {
     cfg!(windows)
 }
@@ -443,7 +457,10 @@ mod tests {
     #[test]
     fn our_own_peak_is_plausible() {
         let Some(p) = peak_self() else {
-            assert!(!supported(), "peak_self returned None on a supported platform");
+            assert!(
+                !supported(),
+                "peak_self returned None on a supported platform"
+            );
             return;
         };
         // A running test process holds at least a megabyte and nothing like a

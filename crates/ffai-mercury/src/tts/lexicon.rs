@@ -1,4 +1,4 @@
-//! CMUdict: word → ARPABET pronunciations.
+//! `CMUdict`: word → ARPABET pronunciations.
 //!
 //! The permissively-licensed (BSD-2-Clause) lexicon backbone of Mercury's
 //! G2P. The dictionary is DATA, not code — fetched into the model cache and
@@ -29,31 +29,53 @@ pub const SYMBOLS: &[&str] = &[
 ];
 
 impl Phone {
+    #[must_use]
     pub fn symbol(&self) -> &'static str {
         SYMBOLS[self.sym as usize]
     }
 
     /// ARPABET vowels are exactly the symbols that carry stress digits.
+    #[must_use]
     pub fn is_vowel(&self) -> bool {
         matches!(
             self.symbol(),
-            "AA" | "AE" | "AH" | "AO" | "AW" | "AY" | "EH" | "ER" | "EY" | "IH" | "IY" | "OW"
-                | "OY" | "UH" | "UW"
+            "AA" | "AE"
+                | "AH"
+                | "AO"
+                | "AW"
+                | "AY"
+                | "EH"
+                | "ER"
+                | "EY"
+                | "IH"
+                | "IY"
+                | "OW"
+                | "OY"
+                | "UH"
+                | "UW"
         )
     }
 
-    fn parse(token: &str) -> Option<Phone> {
+    fn parse(token: &str) -> Option<Self> {
         let (sym, stress) = match token.as_bytes().last() {
             Some(d @ b'0'..=b'2') => (&token[..token.len() - 1], d - b'0'),
             _ => (token, 0),
         };
-        SYMBOLS.binary_search(&sym).ok().map(|i| Phone { sym: i as u8, stress })
+        // `i as u8` is bounded by construction: `i` is an index INTO `SYMBOLS`,
+        // a const array of ~39 ARPABET symbols. That same invariant is what
+        // makes `symbol()`'s `SYMBOLS[self.sym as usize]` unreachable-by-panic
+        // (docs/panic-audit.md).
+        #[allow(clippy::cast_possible_truncation)]
+        SYMBOLS.binary_search(&sym).ok().map(|i| Self {
+            sym: i as u8,
+            stress,
+        })
     }
 }
 
 /// The dictionary: lowercase word → first-listed pronunciation.
 ///
-/// CMUdict orders variants by frequency of use; espeak likewise picks one
+/// `CMUdict` orders variants by frequency of use; espeak likewise picks one
 /// form per word. Only the first is kept — variant selection by context is
 /// out of scope until a corpus shows it costing intelligibility.
 pub struct Lexicon {
@@ -64,9 +86,15 @@ impl Lexicon {
     /// Load from the `cmudict` manifest in a manifest directory (`models/`).
     pub fn from_manifest_dir(dir: &Path) -> Result<Self> {
         let manifests = ffai_models::load_dir(dir)?;
-        let manifest = manifests.into_iter().find(|m| m.name == "cmudict").ok_or_else(|| {
-            Error::Model(format!("no `cmudict` manifest in {} — see models/cmudict.toml", dir.display()))
-        })?;
+        let manifest = manifests
+            .into_iter()
+            .find(|m| m.name == "cmudict")
+            .ok_or_else(|| {
+                Error::Model(format!(
+                    "no `cmudict` manifest in {} — see models/cmudict.toml",
+                    dir.display()
+                ))
+            })?;
         Self::from_manifest(&manifest)
     }
 
@@ -87,17 +115,18 @@ impl Lexicon {
         let mut entries = HashMap::new();
         for line in text.lines() {
             let line = line.split('#').next().unwrap_or("").trim();
-            let Some((word, phones)) = line.split_once(' ') else { continue };
+            let Some((word, phones)) = line.split_once(' ') else {
+                continue;
+            };
             // `word(2)`+ are alternates; first listed wins (see type docs).
             if word.ends_with(')') {
                 continue;
             }
-            let parsed: Option<Vec<Phone>> =
-                phones.split_whitespace().map(Phone::parse).collect();
-            if let Some(p) = parsed {
-                if !p.is_empty() {
-                    entries.entry(word.to_ascii_lowercase()).or_insert(p);
-                }
+            let parsed: Option<Vec<Phone>> = phones.split_whitespace().map(Phone::parse).collect();
+            if let Some(p) = parsed
+                && !p.is_empty()
+            {
+                entries.entry(word.to_ascii_lowercase()).or_insert(p);
             }
         }
         if entries.is_empty() {
@@ -106,17 +135,19 @@ impl Lexicon {
                 path.display()
             )));
         }
-        Ok(Lexicon { entries })
+        Ok(Self { entries })
     }
 
     pub fn lookup(&self, word: &str) -> Option<&[Phone]> {
         self.entries.get(word).map(Vec::as_slice)
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -134,16 +165,18 @@ mod tests {
 
     #[test]
     fn parses_words_stress_and_skips_variants() {
-        let path = write_temp(
-            "canoe K AH0 N UW1\nbirch B ER1 CH\nthe DH AH0\nthe(2) DH IY0\n# comment\n",
-        );
+        let path =
+            write_temp("canoe K AH0 N UW1\nbirch B ER1 CH\nthe DH AH0\nthe(2) DH IY0\n# comment\n");
         let lex = Lexicon::load(&path).unwrap();
         std::fs::remove_file(&path).ok();
 
         // Content assertions, not shape: the exact phones and stresses.
         let canoe = lex.lookup("canoe").unwrap();
         assert_eq!(
-            canoe.iter().map(|p| (p.symbol(), p.stress)).collect::<Vec<_>>(),
+            canoe
+                .iter()
+                .map(|p| (p.symbol(), p.stress))
+                .collect::<Vec<_>>(),
             vec![("K", 0), ("AH", 0), ("N", 0), ("UW", 1)]
         );
         assert!(canoe[1].is_vowel() && !canoe[0].is_vowel());

@@ -54,7 +54,7 @@ fn main() -> candle_core::Result<()> {
         let n_w = co * ci * 9;
         let inp: Vec<f32> = (0..n_in).map(|i| ((i * 37 % 251) as f32 / 251.0) - 0.5).collect();
         let wv: Vec<f32> = (0..n_w).map(|i| ((i * 53 % 197) as f32 / 197.0) - 0.5).collect();
-        let bias = vec![0f32; co];
+        let _bias = vec![0f32; co];
 
         let t_in = Tensor::from_vec(inp.clone(), (1, ci, h, wd), &dev)?;
         let t_w = Tensor::from_vec(wv.clone(), (co, ci, 3, 3), &dev)?;
@@ -76,8 +76,11 @@ fn main() -> candle_core::Result<()> {
         // measures what ships — including the CustomOp2 plumbing — rather than
         // a private copy that can drift from it.
         let conv = Conv2d::new(t_w.clone(), None, Conv2dConfig { padding: 1, ..Default::default() });
-        let mut mine;
+        let mine;
         let mut best_d = f64::INFINITY;
+        // Runs once by construction; kept as a loop so the early-exit path
+        // below stays visible next to the rep loop that follows.
+        #[allow(clippy::never_loop)]
         loop {
             let t = Instant::now();
             let o = ffai_carmenta::conv3x3::apply(&t_in, &conv)?;
@@ -113,8 +116,8 @@ fn main() -> candle_core::Result<()> {
                                 if iy == 0 || iy > h || ix == 0 || ix > wd {
                                     continue;
                                 }
-                                acc += wv[(c * ci + k) * 9 + ky * 3 + kx] as f64
-                                    * inp[k * h * wd + (iy - 1) * wd + (ix - 1)] as f64;
+                                acc += f64::from(wv[(c * ci + k) * 9 + ky * 3 + kx])
+                                    * f64::from(inp[k * h * wd + (iy - 1) * wd + (ix - 1)]);
                             }
                         }
                     }
@@ -124,7 +127,7 @@ fn main() -> candle_core::Result<()> {
         }
         let scale = r64.iter().fold(0f64, |m, v| m.max(v.abs())).max(1e-9);
         let err = |v: &[f32]| {
-            v.iter().zip(&r64).fold(0f64, |m, (a, b)| m.max((*a as f64 - b).abs())) / scale
+            v.iter().zip(&r64).fold(0f64, |m, (a, b)| m.max((f64::from(*a) - b).abs())) / scale
         };
         let (e_candle, e_mine) = (err(&candle_out), err(&mine));
         let max_rel = e_mine as f32;

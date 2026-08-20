@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("tier {tier} · {} images from {clips_dir} · rayon threads {}", images.len(), rayon::current_num_threads());
-    println!("{:>4}  {:>10} {:>10} {:>10}  {}", "img", "wall ms", "cpu ms", "occupancy", "dets");
+    println!("{:>4}  {:>10} {:>10} {:>10}  dets", "img", "wall ms", "cpu ms", "occupancy");
 
     let (mut tw, mut tc) = (0f64, 0f64);
     let (mut walls, mut cpus) = (Vec::new(), Vec::new());

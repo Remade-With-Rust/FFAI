@@ -24,8 +24,10 @@ use ffai_mercury::tts::vits::{GaussRng, Vits};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let knob = std::env::var("FFAI_AB_KNOB").unwrap_or_else(|_| "FFAI_SERIAL_ATTN".into());
     let null = std::env::var("FFAI_AB_NULL").is_ok();
-    let rounds: usize =
-        std::env::var("FFAI_AB_ROUNDS").ok().and_then(|s| s.parse().ok()).unwrap_or(21);
+    let rounds: usize = std::env::var("FFAI_AB_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(21);
 
     let set_arm = |on: bool| {
         // SAFETY: single-threaded at the flip; the rayon pool is idle between rounds.
@@ -51,7 +53,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .take(20)
         .map(|c| {
             let t = std::fs::read_to_string(manifest.clip_path(c)).unwrap();
-            vits.id_map.sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap()).0
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t.trim()).unwrap())
+                .0
         })
         .collect();
 
@@ -100,12 +104,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let z = (off_wins as f64 - n / 2.0) / (0.5 * n.sqrt());
     let (mo, mn) = (median(&mut off_times), median(&mut on_times));
 
-    println!("knob={knob} {rounds} rounds{}", if null { "  [NULL ARM]" } else { "" });
-    println!("  knob-unset median {mo:8.1} ms   knob-set median {mn:8.1} ms   ratio {:.3}x", mn / mo);
+    println!(
+        "knob={knob} {rounds} rounds{}",
+        if null { "  [NULL ARM]" } else { "" }
+    );
+    println!(
+        "  knob-unset median {mo:8.1} ms   knob-set median {mn:8.1} ms   ratio {:.3}x",
+        mn / mo
+    );
     println!(
         "  knob-unset wins {off_wins}/{rounds}  z = {z:+.2}  -> {}",
         if z.abs() > 2.0 {
-            if z > 0.0 { "UNSET faster (real)" } else { "SET faster (real)" }
+            if z > 0.0 {
+                "UNSET faster (real)"
+            } else {
+                "SET faster (real)"
+            }
         } else {
             "INSIDE NOISE — no verdict"
         }

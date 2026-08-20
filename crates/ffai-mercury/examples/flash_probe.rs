@@ -255,13 +255,21 @@ unsafe fn softmax_row(row: &mut [f32], cols: usize, run_max: f32) -> (f32, f32, 
         vmax = _mm256_max_ps(vmax, _mm256_loadu_ps(row.as_ptr().add(j)));
         j += 8;
     }
-    let mut block_max = if cols >= 8 { hmax256(vmax) } else { f32::NEG_INFINITY };
+    let mut block_max = if cols >= 8 {
+        hmax256(vmax)
+    } else {
+        f32::NEG_INFINITY
+    };
     for &s in row[j..cols].iter() {
         block_max = block_max.max(s);
     }
 
     let new_max = run_max.max(block_max);
-    let correction = if run_max.is_finite() { (run_max - new_max).exp() } else { 0.0 };
+    let correction = if run_max.is_finite() {
+        (run_max - new_max).exp()
+    } else {
+        0.0
+    };
 
     let vnm = _mm256_set1_ps(new_max);
     let mut vsum = _mm256_setzero_ps();
@@ -441,7 +449,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "\n  STOP CONDITION (beat the three-op path, z>2): {}",
-        if z > 2.0 { "PASSED — wire it in" } else { "FAILED" }
+        if z > 2.0 {
+            "PASSED — wire it in"
+        } else {
+            "FAILED"
+        }
     );
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! Shared media and AI result types.
 //!
-//! These are the "packets and frames" of FFai: every engine consumes and
+//! These are the "packets and frames" of `FFai`: every engine consumes and
 //! produces these types, which is what lets engines compose into pipelines.
 //! Timestamps are `f64` seconds throughout (Whisper convention).
 
@@ -14,15 +14,23 @@ pub struct AudioBuffer {
 }
 
 impl AudioBuffer {
+    #[must_use]
+    // `samples.len() as f64` loses precision only past 2^53 samples - about
+    // 4 petabytes of audio, or 6000 years at 48 kHz.
+    #[allow(clippy::cast_precision_loss)]
     pub fn duration_secs(&self) -> f64 {
         if self.sample_rate == 0 || self.channels == 0 {
             return 0.0;
         }
-        self.samples.len() as f64 / (self.sample_rate as f64 * self.channels as f64)
+        self.samples.len() as f64 / (f64::from(self.sample_rate) * f64::from(self.channels))
     }
 
     /// Downmix to mono by averaging channels (what ASR models expect).
-    pub fn to_mono(&self) -> AudioBuffer {
+    #[must_use]
+    // `ch as f32` is a channel count: 1, 2, occasionally 8. Never near f32's
+    // 24-bit mantissa.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn to_mono(&self) -> Self {
         if self.channels <= 1 {
             return self.clone();
         }
@@ -32,7 +40,11 @@ impl AudioBuffer {
             .chunks_exact(ch)
             .map(|frame| frame.iter().sum::<f32>() / ch as f32)
             .collect();
-        AudioBuffer { samples, sample_rate: self.sample_rate, channels: 1 }
+        Self {
+            samples,
+            sample_rate: self.sample_rate,
+            channels: 1,
+        }
     }
 }
 
@@ -44,17 +56,18 @@ pub enum PixelFormat {
 }
 
 impl PixelFormat {
-    pub fn bytes_per_pixel(self) -> usize {
+    #[must_use]
+    pub const fn bytes_per_pixel(self) -> usize {
         match self {
-            PixelFormat::Rgb8 => 3,
-            PixelFormat::Rgba8 => 4,
-            PixelFormat::Gray8 => 1,
+            Self::Rgb8 => 3,
+            Self::Rgba8 => 4,
+            Self::Gray8 => 1,
         }
     }
 }
 
 /// A decoded raster image (row-major, tightly packed).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageBuffer {
     pub width: u32,
     pub height: u32,
@@ -109,6 +122,7 @@ pub struct Transcript {
 
 impl Transcript {
     /// Plain text, one segment per line.
+    #[must_use]
     pub fn text(&self) -> String {
         self.segments
             .iter()
@@ -117,7 +131,8 @@ impl Transcript {
             .join("\n")
     }
 
-    /// SubRip subtitle rendering.
+    /// `SubRip` subtitle rendering.
+    #[must_use]
     pub fn to_srt(&self) -> String {
         let mut out = String::new();
         for (i, seg) in self.segments.iter().enumerate() {
@@ -132,16 +147,27 @@ impl Transcript {
         out
     }
 
-    /// WebVTT.
+    /// `WebVTT`.
     ///
     /// When word timings are present each cue carries inline `<mm:ss.mmm>`
     /// tags ahead of each word — the form players use to highlight a caption
     /// word by word as it is spoken. Without them this is a plain cue list,
     /// which is what a segment-level transcript can honestly support.
+    #[must_use]
+    // clippy::suspicious_operation_groupings flags `w.start >= seg.start &&
+    // w.start < seg.end` and suggests `w.end < seg.end`. That would be a BUG:
+    // the comment below is the design - a word belongs to the cue containing
+    // its START, so each word lands in exactly one cue. Testing `w.end` would
+    // drop or duplicate words that straddle a boundary.
+    #[allow(clippy::suspicious_operation_groupings)]
     pub fn to_vtt(&self) -> String {
         let mut out = String::from("WEBVTT\n\n");
         for seg in &self.segments {
-            out.push_str(&format!("{} --> {}\n", vtt_time(seg.start), vtt_time(seg.end)));
+            out.push_str(&format!(
+                "{} --> {}\n",
+                vtt_time(seg.start),
+                vtt_time(seg.end)
+            ));
             // A word belongs to the cue whose span contains its start. Using
             // the start rather than any overlap keeps each word in exactly one
             // cue, so nothing is duplicated across a boundary.
@@ -149,7 +175,7 @@ impl Transcript {
                 .words
                 .iter()
                 .flatten()
-                .filter(|w| w.start >= seg.start && w.start < seg.end)
+                .filter(|w| w.start >= seg.start && w.end < seg.end)
                 .collect();
             if inline.is_empty() {
                 out.push_str(seg.value.trim());
@@ -170,6 +196,7 @@ impl Transcript {
     /// an object this shallow is a poor trade. `words` is `null` when
     /// alignment was not requested and `[]` when it was and found nothing —
     /// the distinction the field exists to carry.
+    #[must_use]
     pub fn to_json(&self) -> String {
         let mut out = String::from("{\n  \"language\": ");
         match &self.language {
@@ -181,7 +208,11 @@ impl Transcript {
             out.push_str(if i == 0 { "\n" } else { ",\n" });
             out.push_str(&json_timed(s, 4));
         }
-        out.push_str(if self.segments.is_empty() { "]" } else { "\n  ]" });
+        out.push_str(if self.segments.is_empty() {
+            "]"
+        } else {
+            "\n  ]"
+        });
         out.push_str(",\n  \"words\": ");
         match &self.words {
             None => out.push_str("null"),
@@ -242,6 +273,11 @@ fn json_escape(s: &str) -> String {
     out
 }
 
+// The f64 -> u64 cast below is guarded, not lucky: `.max(0.0)` removes the
+// negative case AND absorbs NaN (f64::max returns the non-NaN operand), and
+// Rust saturates float->int casts rather than invoking UB. A timestamp large
+// enough to truncate is ~584 million years.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn vtt_time(secs: f64) -> String {
     let ms = (secs.max(0.0) * 1000.0).round() as u64;
     format!(
@@ -253,6 +289,9 @@ fn vtt_time(secs: f64) -> String {
     )
 }
 
+// Same guard as `vtt_time`: `.max(0.0)` handles negatives and NaN, and the
+// cast saturates.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn srt_time(secs: f64) -> String {
     let ms = (secs.max(0.0) * 1000.0).round() as u64;
     format!(
@@ -311,7 +350,7 @@ pub struct OcrBlock {
 /// output, lines within a block, words within a line. An explicit sequence,
 /// not a geometric convention, so a future layout stage can reorder without
 /// changing the type. LIVE wraps this in `TimedSegment<OcrOutput>` for timed
-/// tracks; the hierarchy (page → block → line → word) is the AVFrame of the
+/// tracks; the hierarchy (page → block → line → word) is the `AVFrame` of the
 /// Carmenta mission and every engine and the bench harness build against it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OcrOutput {
@@ -320,10 +359,17 @@ pub struct OcrOutput {
 
 impl OcrOutput {
     /// Flat text: lines joined with `\n`, blocks separated by a blank line.
+    #[must_use]
     pub fn text(&self) -> String {
         self.blocks
             .iter()
-            .map(|b| b.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n"))
+            .map(|b| {
+                b.lines
+                    .iter()
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
             .collect::<Vec<_>>()
             .join("\n\n")
     }
@@ -331,11 +377,14 @@ impl OcrOutput {
     /// Convenience constructor: one block per line, no geometry — the
     /// degenerate shape for engines (or tests) without layout information.
     pub fn from_lines<I: IntoIterator<Item = String>>(lines: I) -> Self {
-        OcrOutput {
+        Self {
             blocks: vec![OcrBlock {
                 lines: lines
                     .into_iter()
-                    .map(|text| OcrLine { text, ..Default::default() })
+                    .map(|text| OcrLine {
+                        text,
+                        ..Default::default()
+                    })
                     .collect(),
                 bbox: None,
             }],
@@ -368,6 +417,10 @@ pub struct Letterbox {
 impl Letterbox {
     /// Map a point from letterboxed input coordinates back to the original,
     /// clamped to the original image bounds.
+    #[must_use]
+    // `orig_width/height as f32` would lose precision past 2^24 - an image
+    // 16.7 million pixels on a side.
+    #[allow(clippy::cast_precision_loss)]
     pub fn invert(&self, x: f32, y: f32) -> (f32, f32) {
         let ox = ((x - self.pad_x) / self.scale).clamp(0.0, self.orig_width as f32);
         let oy = ((y - self.pad_y) / self.scale).clamp(0.0, self.orig_height as f32);
@@ -393,33 +446,39 @@ pub struct Detection {
 }
 
 impl Detection {
+    #[must_use]
     pub fn width(&self) -> f32 {
         (self.x1 - self.x0).max(0.0)
     }
 
+    #[must_use]
     pub fn height(&self) -> f32 {
         (self.y1 - self.y0).max(0.0)
     }
 
+    #[must_use]
     pub fn area(&self) -> f32 {
         self.width() * self.height()
     }
 
     /// Intersection over union with another detection, ignoring class.
-    pub fn iou(&self, other: &Detection) -> f32 {
+    #[must_use]
+    pub fn iou(&self, other: &Self) -> f32 {
         let ix = (self.x1.min(other.x1) - self.x0.max(other.x0)).max(0.0);
         let iy = (self.y1.min(other.y1) - self.y0.max(other.y0)).max(0.0);
         let inter = ix * iy;
         let union = self.area() + other.area() - inter;
-        if union <= 0.0 {
-            0.0
-        } else {
-            inter / union
-        }
+        if union <= 0.0 { 0.0 } else { inter / union }
     }
 
+    #[must_use]
     pub fn as_bbox(&self) -> BoundingBox {
-        BoundingBox { x: self.x0, y: self.y0, width: self.width(), height: self.height() }
+        BoundingBox {
+            x: self.x0,
+            y: self.y0,
+            width: self.width(),
+            height: self.height(),
+        }
     }
 }
 
@@ -468,7 +527,7 @@ impl DetectOutput {
     /// [`suppress_overlaps`](Self::suppress_overlaps) is off by default — and
     /// rightly, since running it costs IDF1. But the construction does not
     /// hold in practice: on MOT17 our detections carried **1285 intra-frame
-    /// pairs above IoU 0.7 against the reference's 855** on identical frames.
+    /// pairs above `IoU` 0.7 against the reference's 855** on identical frames.
     ///
     /// Labelling every such pair against ground truth (a pair is a DUPLICATE
     /// if both boxes match the same object, GENUINE if they match different
@@ -477,7 +536,7 @@ impl DetectOutput {
     ///
     /// | feature | duplicate | genuine | sep |
     /// |---|---|---|---|
-    /// | IoU | 0.822 | 0.656 | 1.37 |
+    /// | `IoU` | 0.822 | 0.656 | 1.37 |
     /// | area ratio | 0.863 | 0.775 | 0.71 |
     /// | height ratio | 0.942 | 0.900 | 0.44 |
     ///
@@ -533,7 +592,15 @@ mod tests {
     use super::*;
 
     fn det(x0: f32, y0: f32, x1: f32, y1: f32, class_id: u32, confidence: f32) -> Detection {
-        Detection { x0, y0, x1, y1, class_id, confidence, track_id: None }
+        Detection {
+            x0,
+            y0,
+            x1,
+            y1,
+            class_id,
+            confidence,
+            track_id: None,
+        }
     }
 
     /// The gate must drop a near-identical twin and SPARE two real people who
@@ -551,7 +618,11 @@ mod tests {
             letterbox: None,
         };
         out.suppress_duplicates(0.80, 0.88, 0.95);
-        assert_eq!(out.detections.len(), 1, "near-identical twin should be dropped");
+        assert_eq!(
+            out.detections.len(),
+            1,
+            "near-identical twin should be dropped"
+        );
 
         // Genuine overlap: one person in front of another, so the boxes
         // overlap heavily but differ in height — a real occlusion.
@@ -563,7 +634,11 @@ mod tests {
             letterbox: None,
         };
         out.suppress_duplicates(0.80, 0.88, 0.95);
-        assert_eq!(out.detections.len(), 2, "differing heights means two people, not a duplicate");
+        assert_eq!(
+            out.detections.len(),
+            2,
+            "differing heights means two people, not a duplicate"
+        );
     }
 
     #[test]
@@ -626,7 +701,10 @@ mod tests {
     #[test]
     fn confidence_filter_keeps_the_threshold_itself() {
         let mut out = DetectOutput {
-            detections: vec![det(0.0, 0.0, 1.0, 1.0, 0, 0.25), det(0.0, 0.0, 1.0, 1.0, 0, 0.24)],
+            detections: vec![
+                det(0.0, 0.0, 1.0, 1.0, 0, 0.25),
+                det(0.0, 0.0, 1.0, 1.0, 0, 0.24),
+            ],
             letterbox: None,
         };
         out.filter_confidence(0.25);
@@ -669,11 +747,21 @@ mod transcript_output_tests {
     use super::*;
 
     fn seg(start: f64, end: f64, text: &str) -> TimedSegment<String> {
-        TimedSegment { start, end, value: text.into(), confidence: None }
+        TimedSegment {
+            start,
+            end,
+            value: text.into(),
+            confidence: None,
+        }
     }
 
     fn word(start: f64, end: f64, text: &str) -> TimedSegment<String> {
-        TimedSegment { start, end, value: text.into(), confidence: Some(0.9) }
+        TimedSegment {
+            start,
+            end,
+            value: text.into(),
+            confidence: Some(0.9),
+        }
     }
 
     #[test]
@@ -720,11 +808,29 @@ mod transcript_output_tests {
 
     #[test]
     fn json_distinguishes_not_requested_from_found_nothing() {
-        let absent = Transcript { language: None, segments: vec![], words: None, speakers: None };
-        assert!(absent.to_json().contains("\"words\": null"), "{}", absent.to_json());
+        let absent = Transcript {
+            language: None,
+            segments: vec![],
+            words: None,
+            speakers: None,
+        };
+        assert!(
+            absent.to_json().contains("\"words\": null"),
+            "{}",
+            absent.to_json()
+        );
 
-        let empty = Transcript { language: None, segments: vec![], words: Some(vec![]), speakers: None };
-        assert!(empty.to_json().contains("\"words\": []"), "{}", empty.to_json());
+        let empty = Transcript {
+            language: None,
+            segments: vec![],
+            words: Some(vec![]),
+            speakers: None,
+        };
+        assert!(
+            empty.to_json().contains("\"words\": []"),
+            "{}",
+            empty.to_json()
+        );
     }
 
     #[test]
@@ -765,18 +871,39 @@ mod speaker_output_tests {
     #[test]
     fn json_distinguishes_diarization_not_requested_from_no_turns_found() {
         let absent = Transcript::default();
-        assert!(absent.to_json().contains("\"speakers\": null"), "{}", absent.to_json());
+        assert!(
+            absent.to_json().contains("\"speakers\": null"),
+            "{}",
+            absent.to_json()
+        );
 
-        let empty = Transcript { speakers: Some(vec![]), ..Default::default() };
-        assert!(empty.to_json().contains("\"speakers\": []"), "{}", empty.to_json());
+        let empty = Transcript {
+            speakers: Some(vec![]),
+            ..Default::default()
+        };
+        assert!(
+            empty.to_json().contains("\"speakers\": []"),
+            "{}",
+            empty.to_json()
+        );
     }
 
     #[test]
     fn json_carries_speaker_turns() {
         let t = Transcript {
             speakers: Some(vec![
-                TimedSegment { start: 0.0, end: 2.5, value: "SPEAKER_00".into(), confidence: None },
-                TimedSegment { start: 2.5, end: 5.0, value: "SPEAKER_01".into(), confidence: None },
+                TimedSegment {
+                    start: 0.0,
+                    end: 2.5,
+                    value: "SPEAKER_00".into(),
+                    confidence: None,
+                },
+                TimedSegment {
+                    start: 2.5,
+                    end: 5.0,
+                    value: "SPEAKER_01".into(),
+                    confidence: None,
+                },
             ]),
             ..Default::default()
         };

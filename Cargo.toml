@@ -7,7 +7,7 @@ members = ["crates/*"]
 exclude = ["demo-ui"]
 
 [workspace.package]
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -16,10 +16,10 @@ authors = ["Remade With Rust"]
 
 [workspace.dependencies]
 # ---- internal crates ----
-ffai-core = { path = "crates/ffai-core", version = "0.6.4" }
+ffai-core = { path = "crates/ffai-core", version = "0.6.5" }
 ffai-media = { path = "crates/ffai-media", version = "0.6.3" }
-ffai-models = { path = "crates/ffai-models", version = "0.6.1" }
-ffai-mercury = { path = "crates/ffai-mercury", version = "0.7.1" }
+ffai-models = { path = "crates/ffai-models", version = "0.6.2" }
+ffai-mercury = { path = "crates/ffai-mercury", version = "1.0.0" }
 ffai-carmenta = { path = "crates/ffai-carmenta", version = "0.8.0" }
 ffai-diana = { path = "crates/ffai-diana", version = "0.7.3" }
 ffai-argus = { path = "crates/ffai-argus", version = "0.6.1" }
@@ -83,3 +83,18 @@ unsafe_code = "warn"
 
 [profile.release]
 lto = "thin"
+# NO `overflow-checks` here, and that is a DECISION, not an oversight.
+#
+# Hardening gate H-05 asks for it. It was measured on 2026-08-15 and costs
+# 1.060x on the TTS pipeline and 1.094x on the decoder stage (n=22 paired,
+# z=+4.26, null-arm floor 0.995 - see crates/ffai-mercury/docs/plans/
+# use-protection-please.md). The gate's justification is that we parse
+# attacker-controlled model files; we do not - model files come from a trusted
+# source and the deployer owns the cache directory. With that threat retired,
+# the 6% buys nothing and the gate is waived. The waiver is time-bounded and
+# recorded in the plan file's Waivers table.
+#
+# If model files ever become untrusted - user-supplied voice packs, a shared
+# cache, downloads without hash verification - this decision expires WITH them
+# and overflow-checks goes back on.
+codegen-units = 1

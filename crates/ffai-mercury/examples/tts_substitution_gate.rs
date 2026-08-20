@@ -51,7 +51,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .arg("corpora/fixtures/harvard-espeak-phonemes-v1.jsonl")
         .arg("--ours")
         .arg(&ours_path)
-        .args(["--model", ".piper-voices/en_US-lessac-medium.onnx", "--outdir"])
+        .args([
+            "--model",
+            ".piper-voices/en_US-lessac-medium.onnx",
+            "--outdir",
+        ])
         .arg(&outdir)
         .status()?;
     if !status.success() {
@@ -76,7 +80,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let wav = arm_dir.join(format!("{id}.wav"));
             let audio = ffai_media::load_audio(&wav)?;
             let jwav = judge_dir.join(format!("{id}.wav"));
-            ffai_media::save_wav(&jwav, &ffai_bench::resample::to_judge_format(&audio, 16_000))?;
+            ffai_media::save_wav(
+                &jwav,
+                &ffai_bench::resample::to_judge_format(&audio, 16_000),
+            )?;
             judge_paths.push(jwav);
         }
         eprintln!("judging arm `{arm}` ({} wavs) ...", judge_paths.len());
@@ -123,7 +130,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 4. Verdict.
-    println!("\nM-T1 SUBSTITUTION GATE — {} holdout sentences, zero-noise, judge: {}\n", truths.len(), judge.name);
+    println!(
+        "\nM-T1 SUBSTITUTION GATE — {} holdout sentences, zero-noise, judge: {}\n",
+        truths.len(),
+        judge.name
+    );
     println!("{:<24} {:>8} {:>8} {:>8}", "ARM", "WER%", "CER%", "SCORED");
     for (arm, wer, cer, scored) in &results {
         println!(

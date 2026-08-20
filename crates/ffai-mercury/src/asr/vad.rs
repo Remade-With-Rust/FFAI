@@ -85,8 +85,8 @@ pub struct VadWindow {
 /// not the same kind of thing. A learned VAD's threshold is a probability;
 /// this one is a decibel margin. Phase B's model replaces this function with
 /// a real probability and the flag keeps its meaning.
-fn margin_db(threshold: f32) -> f32 {
-    2.0 + 16.0 * threshold.clamp(0.0, 1.0)
+const fn margin_db(threshold: f32) -> f32 {
+    16.0f32.mul_add(threshold.clamp(0.0, 1.0), 2.0)
 }
 
 /// Per-frame RMS energy in dBFS, on the mel front-end's frame geometry.
@@ -100,11 +100,24 @@ fn frame_energies(samples: &[f32]) -> Vec<f32> {
             let frame = &samples[i * HOP_LENGTH..i * HOP_LENGTH + N_FFT];
             let sum_sq: f32 = frame.iter().map(|s| s * s).sum();
             let rms = (sum_sq / N_FFT as f32).sqrt();
-            if rms <= 0.0 { MIN_DBFS } else { (20.0 * rms.log10()).max(MIN_DBFS) }
+            if rms <= 0.0 {
+                MIN_DBFS
+            } else {
+                (20.0 * rms.log10()).max(MIN_DBFS)
+            }
         })
         .collect()
 }
 
+// The index cast is guarded twice: the `is_empty` early return below makes
+// `len - 1` safe, and the result is `.min(len - 1)` clamped before indexing, so
+// a NaN or out-of-range `p` cannot escape the slice. Rust also saturates
+// float->int casts rather than wrapping.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 fn percentile(sorted: &[f32], p: f64) -> f32 {
     if sorted.is_empty() {
         return MIN_DBFS;
@@ -120,6 +133,7 @@ fn percentile(sorted: &[f32], p: f64) -> f32 {
 /// encoder pass it helps route, so the adaptive-context dispatcher can send
 /// low-contrast (noisy) windows straight to the full 30 s context without
 /// paying for a doomed short-context attempt first.
+#[must_use]
 pub fn energy_contrast_db(samples: &[f32]) -> f32 {
     let energies = frame_energies(samples);
     if energies.is_empty() {
@@ -135,6 +149,7 @@ pub fn energy_contrast_db(samples: &[f32]) -> f32 {
 /// Returns non-overlapping, ascending regions. An empty result means "no
 /// speech here" and is a valid, common answer — silence, room tone, and a
 /// closed microphone all produce it.
+#[must_use]
 pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
     let energies = frame_energies(samples);
     if energies.is_empty() {
@@ -149,7 +164,7 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
     let onset = (floor + margin).max(ABS_SILENCE_DBFS);
     // Hysteresis: release lower than we trigger, so a frame hovering at the
     // boundary does not chop one utterance into a stutter of regions.
-    let offset = (floor + margin * 0.6).max(ABS_SILENCE_DBFS);
+    let offset = margin.mul_add(0.6, floor).max(ABS_SILENCE_DBFS);
 
     let secs_per_frame = HOP_LENGTH as f64 / SAMPLE_RATE as f64;
     let total_secs = samples.len() as f64 / SAMPLE_RATE as f64;
@@ -164,7 +179,10 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
             start_frame = i;
         } else if in_speech && db < offset {
             in_speech = false;
-            regions.push((start_frame as f64 * secs_per_frame, i as f64 * secs_per_frame));
+            regions.push((
+                start_frame as f64 * secs_per_frame,
+                i as f64 * secs_per_frame,
+            ));
         }
     }
     if in_speech {
@@ -198,7 +216,12 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
         // are non-overlapping.
         match out.last_mut() {
             Some(prev) if s <= prev.end => prev.end = e.max(prev.end),
-            _ => out.push(TimedSegment { start: s, end: e, value: (), confidence: None }),
+            _ => out.push(TimedSegment {
+                start: s,
+                end: e,
+                value: (),
+                confidence: None,
+            }),
         }
     }
     out
@@ -206,7 +229,7 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
 
 /// Pack speech regions into contiguous windows of at most `chunk_secs`.
 ///
-/// Follows WhisperX's `merge_chunks`: a window closes when *adding* the next
+/// Follows `WhisperX`'s `merge_chunks`: a window closes when *adding* the next
 /// region would make it exceed `chunk_secs`, so regions are packed together
 /// rather than cut at a fixed grid. A region longer than `chunk_secs` — a
 /// monologue with no pause — is split, because the encoder's context is fixed
@@ -218,8 +241,13 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
 /// feeds Whisper discontinuities it was never trained on. The saving here is
 /// the silence that falls *between* windows, which is where the long tails
 /// actually are.
+#[must_use]
 pub fn pack(regions: &[TimedSegment<()>], chunk_secs: f64) -> Vec<VadWindow> {
-    let chunk = if chunk_secs > 0.0 { chunk_secs } else { DEFAULT_CHUNK_SECS as f64 };
+    let chunk = if chunk_secs > 0.0 {
+        chunk_secs
+    } else {
+        f64::from(DEFAULT_CHUNK_SECS)
+    };
     let mut out = Vec::new();
     let mut cur: Option<(f64, f64)> = None;
 
@@ -304,7 +332,10 @@ mod tests {
         let regions = detect(&audio, DEFAULT_THRESHOLD);
         assert_eq!(regions.len(), 1, "expected one region, got {regions:?}");
         // Padded, so bounds are near the tone rather than exactly on it.
-        assert!(regions[0].start < 2.0 && regions[0].start > 1.5, "{regions:?}");
+        assert!(
+            regions[0].start < 2.0 && regions[0].start > 1.5,
+            "{regions:?}"
+        );
         assert!(regions[0].end > 3.5 && regions[0].end < 4.0, "{regions:?}");
     }
 
@@ -329,13 +360,24 @@ mod tests {
     }
 
     fn seg(start: f64, end: f64) -> TimedSegment<()> {
-        TimedSegment { start, end, value: (), confidence: None }
+        TimedSegment {
+            start,
+            end,
+            value: (),
+            confidence: None,
+        }
     }
 
     #[test]
     fn pack_merges_regions_inside_one_window() {
         let out = pack(&[seg(0.0, 2.0), seg(25.0, 27.0)], 30.0);
-        assert_eq!(out, vec![VadWindow { start: 0.0, end: 27.0 }]);
+        assert_eq!(
+            out,
+            vec![VadWindow {
+                start: 0.0,
+                end: 27.0
+            }]
+        );
     }
 
     #[test]
@@ -345,7 +387,16 @@ mod tests {
         let out = pack(&[seg(0.0, 2.0), seg(40.0, 42.0)], 30.0);
         assert_eq!(
             out,
-            vec![VadWindow { start: 0.0, end: 2.0 }, VadWindow { start: 40.0, end: 42.0 }]
+            vec![
+                VadWindow {
+                    start: 0.0,
+                    end: 2.0
+                },
+                VadWindow {
+                    start: 40.0,
+                    end: 42.0
+                }
+            ]
         );
     }
 
@@ -353,7 +404,10 @@ mod tests {
     fn pack_splits_a_region_longer_than_a_window() {
         let out = pack(&[seg(0.0, 70.0)], 30.0);
         assert_eq!(out.len(), 3);
-        assert!(out.iter().all(|w| w.end - w.start <= 30.0 + 1e-9), "{out:?}");
+        assert!(
+            out.iter().all(|w| w.end - w.start <= 30.0 + 1e-9),
+            "{out:?}"
+        );
         assert_eq!(out[0].start, 0.0);
         assert_eq!(out[2].end, 70.0);
     }

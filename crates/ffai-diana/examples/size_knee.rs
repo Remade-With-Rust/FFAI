@@ -54,7 +54,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and measured one point six times. Aspect ratio is the variable that
     // actually moves the letterbox.
     let eng_rect = Yolo26::build("n", Geometry::Rect, root.join("models"));
-    let mut prev: Option<(f64, f64)> = None;
     for h in [160usize, 224, 288, 352, 416, 480, 544, 608, 640] {
         let img = resized(&src, 640, h);
         let _ = eng_rect.detect(&img, &opts)?;
@@ -76,7 +75,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // SUSTAINED rise across several sizes; anything else is the spread.
         let arrow = "";
         println!("{:>6} {:>7}x{:<4} {mpx:>9.3} {ms:>13.2} {per:>8.2}{arrow}", h, 640, lb_h);
-        prev = Some((mpx, per));
     }
     println!("\n  flat ms/Mpx = linear in the work. Rising = the working set crossed something.");
     Ok(())

@@ -58,7 +58,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ff = d * 4;
     const F32: f64 = 4.0;
 
-    println!("shapes: seq={seq} d_model={d} heads={heads} head_dim={head_dim} ff={ff} layers={layers}");
+    println!(
+        "shapes: seq={seq} d_model={d} heads={heads} head_dim={head_dim} ff={ff} layers={layers}"
+    );
 
     // ---- machine ceilings, measured ----
     //
@@ -183,7 +185,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     rows.push(Row {
         name: "merge heads",
         secs: best_of(5, || {
-            v.transpose(1, 2).and_then(|t| t.flatten_from(2)).expect("merge")
+            v.transpose(1, 2)
+                .and_then(|t| t.flatten_from(2))
+                .expect("merge")
         }),
         flops: 0.0,
         bytes: 2.0 * (seq * d) as f64 * F32,
@@ -255,7 +259,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_ms += total;
         let gflops = r.flops / r.secs / 1e9;
         let gbs = r.bytes / r.secs / 1e9;
-        let intensity = if r.bytes > 0.0 { r.flops / r.bytes } else { 0.0 };
+        let intensity = if r.bytes > 0.0 {
+            r.flops / r.bytes
+        } else {
+            0.0
+        };
         // Roofline: an op is memory-bound when its intensity sits below the
         // machine's balance point (peak FLOP/s divided by peak bytes/s).
         let balance = peak_gflops / peak_gbs;
@@ -298,10 +306,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             gbs / peak_gbs * 100.0
         };
-        let of = if *bound == "CPU" { "hardware peak" } else { "memory peak" };
+        let of = if *bound == "CPU" {
+            "hardware peak"
+        } else {
+            "memory peak"
+        };
         // An impossible percentage means the ceiling is wrong, not that the op
         // is magic. Say so loudly instead of printing it as a curiosity.
-        let flag = if pct > 100.0 { "  <<< IMPOSSIBLE — ceiling is miscalibrated" } else { "" };
+        let flag = if pct > 100.0 {
+            "  <<< IMPOSSIBLE — ceiling is miscalibrated"
+        } else {
+            ""
+        };
         println!("  {total:>7.2} ms  {name:<22} {bound}-bound, {pct:.0}% of {of}{flag}");
     }
     Ok(())

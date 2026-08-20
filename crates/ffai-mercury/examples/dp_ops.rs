@@ -48,7 +48,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dev = Device::Cpu;
     let x = Tensor::randn(0f32, 1f32, (1, C, T), &dev)?;
     let xv: Vec<f32> = x.flatten_all()?.to_vec1()?;
-    println!("{C}x{T} = {} elements, {CALLS} calls/sentence x {SENTENCES} sentences\n", C * T);
+    println!(
+        "{C}x{T} = {} elements, {CALLS} calls/sentence x {SENTENCES} sentences\n",
+        C * T
+    );
 
     let g = bench("candle gelu_erf (shipped)", || {
         for _ in 0..CALLS * SENTENCES {
@@ -88,7 +91,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    println!("\n  candle vs flat-libm  {:.2}x   candle vs flat-fast {:.2}x", g / f, g / a);
+    println!(
+        "\n  candle vs flat-libm  {:.2}x   candle vs flat-fast {:.2}x",
+        g / f,
+        g / a
+    );
 
     // Accuracy of the approximation against libm, on the real range.
     let mut worst = 0f64;
@@ -131,6 +138,6 @@ fn erf(x: f64) -> f64 {
                                 + t * (-1.135_203_98
                                     + t * (1.488_515_87
                                         + t * (-0.822_152_23 + t * 0.170_872_77)))))))))
-        .exp();
+            .exp();
     if x >= 0.0 { 1.0 - tau } else { tau - 1.0 }
 }

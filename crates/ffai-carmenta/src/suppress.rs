@@ -24,7 +24,7 @@
 //! ## What the rule is, and what it cost to learn it
 //!
 //! Thirteen runtime features per line were harvested (geometry + recognised text
-//! + CTC confidence; nothing from the annotation but the label), fitted on the
+//! and CTC confidence; nothing from the annotation but the label), fitted on the
 //! TRAIN split and judged once on holdout:
 //!
 //! | model | holdout | share of the 6.96 pp prize |
@@ -78,6 +78,9 @@ struct Feat {
     /// about one pitch away.
     nn_gap: f32,
     /// CTC confidence, as reported by the recognizer.
+    // Populated but unread: the fitted rule did not select it. Retained so a
+    // refit has the feature without re-harvesting the corpus.
+    #[allow(dead_code)]
     conf: f32,
     /// Lines in the parent run, and how many other lines share this line's left
     /// edge. Both are low for the population the width branch alone kept:
@@ -305,7 +308,7 @@ fn group_blocks(idx: &[usize], boxes: &[(f32, f32, f32, f32)], lh: f32) -> Vec<V
     const H_OVERLAP: f32 = 0.15;
     let n = idx.len();
     let mut parent: Vec<usize> = (0..n).collect();
-    fn find(p: &mut Vec<usize>, mut a: usize) -> usize {
+    fn find(p: &mut [usize], mut a: usize) -> usize {
         while p[a] != a {
             p[a] = p[p[a]];
             a = p[a];
@@ -385,7 +388,7 @@ fn cv(v: &[f32]) -> f32 {
 /// cost a 463 pp disagreement on `omni-0245` — which was first misdiagnosed as a
 /// stale dump (§8.136) before the dumps were refreshed and came back
 /// byte-identical (§8.137).
-fn median(v: &mut Vec<f32>) -> f32 {
+fn median(v: &mut [f32]) -> f32 {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = v.len();
     if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
@@ -453,7 +456,7 @@ pub fn body_only(lines: Vec<OcrLine>, page_w: f32, page_h: f32) -> Vec<OcrLine> 
     let (pw, ph) = (page_w.max(1.0), page_h.max(1.0));
     let boxes: Vec<(f32, f32, f32, f32)> = lines
         .iter()
-        .map(|l| l.bbox.as_ref().map(|b| (b.x, b.y, b.width, b.height)).unwrap_or((0.0, 0.0, pw, 1.0)))
+        .map(|l| l.bbox.as_ref().map_or((0.0, 0.0, pw, 1.0), |b| (b.x, b.y, b.width, b.height)))
         .collect();
     let text_len: Vec<usize> = lines.iter().map(|l| l.text.trim().chars().count()).collect();
     let (run_chars, run_lines) = run_stats_per_line(&boxes, &text_len, pw, ph);
@@ -734,8 +737,9 @@ fn probe_cut(it: &[Item], bx: (f32, f32, f32, f32), depth: usize) -> Vec<usize> 
     }
     let (x0, y0, x1, y1) = bx;
     let nw = (x1 - x0).max(1.0);
-    let med_h = median(&mut it.iter().map(|i| i.h).collect()).max(1.0);
-    let med_cw = median(&mut it.iter().map(|i| i.w / i.chars.max(1.0)).collect()).max(1.0);
+    let med_h = median(&mut it.iter().map(|i| i.h).collect::<Vec<f32>>()).max(1.0);
+    let med_cw =
+        median(&mut it.iter().map(|i| i.w / i.chars.max(1.0)).collect::<Vec<f32>>()).max(1.0);
 
     // Vertical gutters. Spanning lines are excluded from the projection but not
     // from the node — a headline legitimately crosses any gutter. Boxes are

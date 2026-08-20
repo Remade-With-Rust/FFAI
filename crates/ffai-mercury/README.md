@@ -1,36 +1,8 @@
 # ffai-mercury
 
-[![crates.io](https://img.shields.io/crates/v/ffai-mercury?logo=rust)](https://crates.io/crates/ffai-mercury)
-[![docs.rs](https://img.shields.io/docsrs/ffai-mercury?logo=docsdotrs)](https://docs.rs/ffai-mercury)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/Remade-With-Rust/FFAI)
-[![Remade With Rust](https://img.shields.io/badge/Remade%20With-Rust-000?logo=rust&logoColor=fff)](https://github.com/Remade-With-Rust)
-[![By Mata Network](https://img.shields.io/badge/by-Mata%20Network-5b2be0)](https://www.mata.network/)
+**Speech recognition (ASR) and text-to-speech (TTS) in pure Rust.** Whisper/WhisperX-class recognition — voice activity detection, word-level timestamps, speaker diarization — and VITS/Piper-class synthesis running piper's own voices on candle. No Python runtime, no C/C++ by default, no HuggingFace token, no gated weights, and nothing GPL.
 
-> **Speech recognition (ASR) and text-to-speech (TTS) in pure Rust.**
-> Whisper/WhisperX-class recognition — voice activity detection, word-level
-> timestamps, speaker diarization — and VITS/Piper-class synthesis running
-> piper's own voices on candle. No Python runtime, no HuggingFace token, no
-> gated weights, and nothing GPL — the voice component of the
-> [FFai](https://github.com/Remade-With-Rust/FFAI) toolkit.
-
-**Most users want the whole toolkit — [FFai](https://github.com/Remade-With-Rust/FFAI)
-and its `ffai` binary.** Depend on this crate directly when voice is the only
-component you need: it brings the ASR stack, the WhisperX layer, TTS and the
-pure-Rust phonemizer, and nothing else.
-
-Mercury is named for the Roman god of language and messages. Standalone landing
-page: [Remade-With-Rust/mercury](https://github.com/Remade-With-Rust/mercury).
-
-Part of **[Remade With Rust](https://github.com/Remade-With-Rust)** by
-**[Mata Network](https://www.mata.network/)**.
-
----
-
-## Install
-
-```sh
-cargo add ffai-mercury ffai-core ffai-media
-```
+Mercury is [FFai](https://github.com/Remade-With-Rust/FFAI)'s voice component. Standalone landing page: [Remade-With-Rust/mercury](https://github.com/Remade-With-Rust/mercury).
 
 ```toml
 [dependencies]
@@ -236,6 +208,20 @@ suspect decode back to the full context. Function-by-function, Mercury is
 now ahead of whisper.cpp on **every** stage: encode ~2.0×, decode 1.1–1.2×,
 mel 1.4×, sampling 1.7–2.0×.
 
+**Accuracy is a dial, not a fixed point.** tiny.en's WER is Whisper's, not
+ours — so the lever is the model size, and `small.en` more than halves it:
+6.39 % → 5.16 % → **3.05 %** for tiny → base → small on test-clean, at
+19.9 → 8.3 → 4.2 ×realtime. At **matched size**, the comparison that prices
+the implementation rather than the weights, Mercury leads on both axes:
+**3.05 % WER / 0.88 % CER at 4.2 ×RT** against whisper.cpp small.en's
+3.38 % / 1.16 % at 3.7 ×RT (16 clips better, 8 worse, 176 tied — z = +1.63,
+under our |z| > 2 bar, so "ahead, not yet significant").
+
+**Beam search** landed too — `beam_size: 5`, what every reference runs by
+default. Pooled across both holdouts it is a significant improvement over
+greedy (WER 44 improved / 24 worsened, **z = +2.43**; CER z = +2.32), worth
+0.6–0.75 pp, at roughly 5× the cost. Greedy remains the default.
+
 **TTS** — measured against piper1-gpl on a pinned 200-sentence corpus
 (134-clip holdout): correctness 134/134, quality **5.49 % vs 5.27 %**
 round-trip WER, footprint 214 vs 217 MiB, and 19.3–21.2 ×realtime against
@@ -248,89 +234,85 @@ Every number traces to a line in [`bench/ledger.jsonl`](https://github.com/Remad
 
 Not yet `stable`: ASR word-timestamp error is gated at utterance granularity rather than milliseconds and the diarization corpus has no speaker overlap — those gate regression, not readiness. TTS is **en-US and single-voice**, against piper's 40+ languages. `any-tts` and `voirs` remain registered stubs.
 
-
-## Features
-
-| Feature | Default | Effect |
-|---|:--:|---|
-| `cuda` | — | Run the candle graphs on an NVIDIA GPU. Every number on this page is CPU-only; the gates are not re-measured for this path. |
-| `metal` | — | The same, on Apple's Metal backend. |
-
-CPU is the default and the surface everything here is measured on.
-
-## Where this sits
-
-| Crate | Role |
-|---|---|
-| [`ffai-cli`](https://crates.io/crates/ffai-cli) | the `ffai` binary — every component behind one command |
-| [`ffai-core`](https://crates.io/crates/ffai-core) | engine traits, shared types, the registry; candle is the tensor spine |
-| [`ffai-media`](https://crates.io/crates/ffai-media) | ingest and egress — audio, images, video, subtitle formats |
-| [`ffai-models`](https://crates.io/crates/ffai-models) | hash-verified weight manifests and the local cache |
-| **[`ffai-mercury`](https://crates.io/crates/ffai-mercury)** | **← you are here** — ASR, the WhisperX layer, and TTS |
-| [`ffai-carmenta`](https://crates.io/crates/ffai-carmenta) | OCR — detection, recognition, computed reading order, LIVE |
-| [`ffai-diana`](https://crates.io/crates/ffai-diana) | object detection, depth and tracking (YOLO26) |
-| [`ffai-argus`](https://crates.io/crates/ffai-argus) | vision-language captioning — pending build |
-| [`ffai-bench`](https://crates.io/crates/ffai-bench) | the measurement harness every number on this page comes from |
-
-Engines are selected by lineage name, like codecs in ffmpeg; `ffai engines`
-lists them all with status.
-
-## The Remade With Rust ecosystem
-
-<!-- ORG BOILERPLATE — keep identical across repos -->
-
-**Remade With Rust** is an initiative by **[Mata Network](https://www.mata.network/)**
-to rebuild essential C and C++ tools in Rust — for the memory safety, the
-predictable performance, and the freedom of a permissive license. Each project
-is a reimplementation, not a fork: same wire protocols and file formats, new
-code you can actually depend on. No copyleft. No surprises.
-
-| Project | What it is |
-|---|---|
-| 🎬 **[remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)** | **Our FFmpeg alternative.** Drop-in `ffmpeg` and `ffprobe` binaries — demux → decode → filter → encode → mux, rebuilt as composable Rust crates with **zero GPL/LGPL**. Apache-2.0. `rusty_h264` is its H.264 codec. |
-| 🧠 **[FFAI](https://github.com/Remade-With-Rust/FFAI)** | **Our sister project: media *for* AI.** "The AI media toolkit, remade with rust." Embedded ASR + TTS (**Mercury**), OCR (**Carmenta**) and vision-language captioning (**Argus**) behind an ffmpeg-style, swap-by-name architecture — no Python, no CUDA. MIT OR Apache-2.0. |
-| 🌐 **[Mata Network](https://www.mata.network/)** | **The home page.** *"Stop sacrificing your privacy for convenience."* Sovereign, self-hostable privacy infrastructure — wallet & identity, password manager, contact manager, and a browser extension that stops information leaking as you browse. Remade With Rust is its open-source arm. |
-
-→ All projects: **[github.com/Remade-With-Rust](https://github.com/Remade-With-Rust)**
-
-<!-- /ORG BOILERPLATE -->
-
 ## License
 
-MIT OR Apache-2.0, at your option. **Model weights are not covered by it** —
-each carries its own license, surfaced at selection time and in `ffai models`.
+MIT OR Apache-2.0. Model weights carry their own licenses, surfaced at selection time.
 
 ---
+
+## Security
+
+- **Threat model**: [docs/threat-model.md](docs/threat-model.md) — trust boundaries, STRIDE, and the highest-value attack path (the model cache is trusted and this crate does not verify it).
+- **What personal data this processes**: [docs/data-inventory.md](docs/data-inventory.md) — including the fact that diarization derives **voiceprints**, which are GDPR Art 9 special-category biometric data.
+- **`unsafe` inventory**: [UNSAFE.md](UNSAFE.md) — all 28 sites, classified, with the invariant each one rests on.
+- **Reporting a vulnerability**: [SECURITY.md](../../SECURITY.md) at the repo root.
+
+### Building without the downloader
+
+`fetch` is on by default, because `WhisperCandle::new()` is documented to fetch on
+first use. It is also the single largest thing in the dependency graph:
+
+```toml
+ffai-mercury = { version = "0.7", default-features = false }   # ship your own weights
+```
+
+| build | dependencies | C crypto |
+|---|---:|---|
+| default (`fetch`) | 320 | `aws-lc-sys` via hf-hub → reqwest → rustls |
+| `--no-default-features` | **154** | **none** |
+
+166 crates and the whole TLS stack, gone. Manifests still load and local files still
+resolve; only downloading is unavailable, and it says so. **Inference is unaffected** —
+the removed subtree is the weight downloader, not compute.
+
+### Model files are trusted input
+
+Mercury **does not validate model files**. Weights, ONNX graphs, JSON configs and
+lexicons are read from the model cache and parsed on the assumption that they came from a
+trusted source — and `asr/model.rs` memory-maps safetensors, which is undefined behaviour
+if the file is modified while mapped.
+
+That assumption is deliberate. It is why release builds do not carry `overflow-checks`:
+the protection exists for parsing attacker-controlled input, it costs ~6% of synthesis
+throughput (~10% in the decoder), and it buys nothing against a threat we do not have.
+
+**What it asks of you**: treat the model cache directory as security-relevant. Restrict
+write access to it, install voices only from sources you trust, and do not point Mercury
+at a cache that other users or untrusted processes can write to. If your deployment
+cannot guarantee that, rebuild with `overflow-checks = true` and re-verify against the
+crate's [threat model](docs/threat-model.md).
 
 <!-- HARDENING-TABLE:BEGIN generated by use-protection-please — edit docs/plans/use-protection-please.md, not this block -->
 ## Hardening status
 
-**Tier** critical-path · **Audited** 2026-08-15 (survey) · **v1.0.0 gates** 1/16 · [Full checklist](docs/plans/use-protection-please.md)
+**Tier** critical-path · **Audited** 2026-08-15 (survey) · **v1.0.0 gates** 14/16 · [Full checklist](docs/plans/use-protection-please.md)
 
-`░░░░░░░░░░░░░░░░░░░░` **5%** &nbsp;·&nbsp; 2 Completed · 0 Scheduled · 40 Incomplete · 13 N/A
+`██████████████████░░` **93%** &nbsp;·&nbsp; 39 Completed · 1 Scheduled · 2 Incomplete · 13 N/A
 
 | Phase | ✅ Completed | 🗓 Scheduled | ⬜ Incomplete | · N/A |
 |---|--:|--:|--:|--:|
-| 0 — Threat modeling | 0 | 0 | 2 | 0 |
-| 1 — Toolchain | 0 | 0 | 4 | 0 |
-| 2 — Supply chain | 2 | 0 | 6 | 0 |
-| 3 — Code level | 0 | 0 | 7 | 0 |
-| 4 — Static analysis | 0 | 0 | 1 | 0 |
-| 5 — Dynamic analysis | 0 | 0 | 3 | 0 |
-| 6 — Fuzzing and properties | 0 | 0 | 4 | 0 |
-| 7 — Formal verification | 0 | 0 | 1 | 0 |
+| 0 — Threat modeling | 2 | 0 | 0 | 0 |
+| 1 — Toolchain | 3 | 0 | 1 | 0 |
+| 2 — Supply chain | 7 | 1 | 0 | 0 |
+| 3 — Code level | 7 | 0 | 0 | 0 |
+| 4 — Static analysis | 1 | 0 | 0 | 0 |
+| 5 — Dynamic analysis | 3 | 0 | 0 | 0 |
+| 6 — Fuzzing and properties | 3 | 0 | 1 | 0 |
+| 7 — Formal verification | 1 | 0 | 0 | 0 |
 | 8 — Build and binary | 0 | 0 | 0 | 2 |
 | 9 — Runtime privilege | 0 | 0 | 0 | 1 |
 | 10 — Cryptography | 0 | 0 | 0 | 3 |
-| 11 — CI/CD, release, and operations | 0 | 0 | 5 | 0 |
-| 12 — Compliance controls | 0 | 0 | 7 | 7 |
-| **Total** | **2** | **0** | **40** | **13** |
+| 11 — CI/CD, release, and operations | 5 | 0 | 0 | 0 |
+| 12 — Compliance controls | 7 | 0 | 0 | 7 |
+| **Total** | **39** | **1** | **2** | **13** |
+
+**Next up** — H-10 `cargo vet` coverage complete (Tim, expires 2026-11-15)
 
 **Compliance** — *technical controls evidenced by this audit. NOT a certification, an attestation, or an auditor's opinion.*
 
 | Framework | Technical controls met | |
 |---|--:|:--|
-| GDPR / PII | 0 / 8 | ⬜ |
+| GDPR / PII | 8 / 8 | ✅ |
 
 **Architect** — [Nick Overlock](https://www.linkedin.com/in/nick-overlock-593235b9/)
 <!-- HARDENING-TABLE:END -->

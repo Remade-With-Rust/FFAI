@@ -12,7 +12,7 @@
 //! clips are scored, matching `run_detect`.
 
 use ffai_bench::corpus::Manifest;
-use ffai_bench::detect::{parse_detections, parse_ground_truth, MapAccumulator};
+use ffai_bench::detect::{MapAccumulator, parse_detections, parse_ground_truth};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -29,9 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let v: serde_json::Value = serde_json::from_str(line)?;
-        if let (Some(path), Some(text)) =
-            (v.get("path").and_then(|p| p.as_str()), v.get("text").and_then(|t| t.as_str()))
-        {
+        if let (Some(path), Some(text)) = (
+            v.get("path").and_then(|p| p.as_str()),
+            v.get("text").and_then(|t| t.as_str()),
+        ) {
             by_path.insert(path.replace('\\', "/").to_lowercase(), text.to_string());
         }
     }
@@ -40,17 +41,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scored = 0usize;
     for clip in manifest.holdout() {
         let clip_path = manifest.clip_path(clip);
-        let key = clip_path.to_string_lossy().replace('\\', "/").to_lowercase();
+        let key = clip_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_lowercase();
         // Adapter paths may be absolute and may differ in drive-letter case
         // (Windows), so match exact-then-suffix over case-folded keys. A clip
         // that matches nothing is reported, never silently skipped — a scorer
         // that quietly scores 0 images is the failure mode this whole file
         // exists to catch.
-        let Some(payload) =
-            by_path.get(&key).or_else(|| {
-                by_path.iter().find(|(k, _)| k.ends_with(&key)).map(|(_, v)| v)
-            })
-        else {
+        let Some(payload) = by_path.get(&key).or_else(|| {
+            by_path
+                .iter()
+                .find(|(k, _)| k.ends_with(&key))
+                .map(|(_, v)| v)
+        }) else {
             eprintln!("no detections for {key}");
             continue;
         };

@@ -18,14 +18,14 @@
 //! |---|---|
 //! | render (synthetic print) | 0.881 – 0.943 |
 //! | frames (synthetic HUD) | 0.974 – 0.995 |
-//! | capture (GDI ClearType) | 0.974 |
+//! | capture (GDI `ClearType`) | 0.974 |
 //! | CORD (real photographs) | 0.103 – 0.507 |
 //!
 //! The classes are separated by a 0.37-wide EMPTY band, so [`THRESHOLD`] is
 //! not a fitted constant — it is the middle of a gap, which is why this
 //! dispatch is expected to hold on content neither corpus contains.
 
-use ffai_core::types::{ImageBuffer, PixelFormat};
+use ffai_core::types::ImageBuffer;
 
 /// What kind of source this image is, for dispatch purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,7 @@ pub const THRESHOLD: f32 = 0.70;
 /// Fraction of horizontally-adjacent pixel pairs that are exactly equal.
 /// Rows and columns are subsampled on large inputs — the statistic is a
 /// ratio, so it is scale-free, and this keeps the cost near-zero per frame.
+#[must_use] 
 pub fn flatness(img: &ImageBuffer) -> f32 {
     let (w, h) = (img.width as usize, img.height as usize);
     if w < 2 || h < 1 {
@@ -70,6 +71,7 @@ pub fn flatness(img: &ImageBuffer) -> f32 {
 
 /// Classify, honouring `FFAI_CONTENT=rendered|photo|auto` for A/B and for
 /// callers who know their source better than a heuristic can.
+#[must_use] 
 pub fn classify(img: &ImageBuffer) -> ContentKind {
     match std::env::var("FFAI_CONTENT").as_deref() {
         Ok("rendered") => return ContentKind::Rendered,
@@ -86,6 +88,7 @@ pub fn classify(img: &ImageBuffer) -> ContentKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ffai_core::types::PixelFormat;
 
     fn img(data: Vec<u8>, w: u32, h: u32) -> ImageBuffer {
         ImageBuffer { width: w, height: h, format: PixelFormat::Gray8, data }

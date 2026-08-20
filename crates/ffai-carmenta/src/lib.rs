@@ -1,4 +1,4 @@
-//! # Carmenta — FFai's OCR component
+//! # Carmenta — `FFai`'s OCR component
 //!
 //! Named for the Roman goddess Carmenta, credited in myth with adapting the
 //! Greek alphabet into the Latin alphabet — literally the deity of turning
@@ -12,12 +12,12 @@
 //!
 //! | Engine | Lineage | Status |
 //! |---|---|---|
-//! | `craft-crnn` | CRAFT detection + english_g2 CRNN recognition (the EasyOCR stack, pure Rust on candle) | experimental — per-stage oracle-gated, corpus gates in the ledger |
+//! | `craft-crnn` | CRAFT detection + `english_g2` CRNN recognition (the `EasyOCR` stack, pure Rust on candle) | experimental — per-stage oracle-gated, corpus gates in the ledger |
 //!
 //! Naming note (M-C1 stub reconciliation): Phase 0 registered `easy-ocr` and
 //! `unlimited-ocr` as honest stubs. Engines are named by *lineage*, so the
-//! shipped engine is `craft-crnn` — it IS the EasyOCR model stack, but it is
-//! not EasyOCR, and a name that claims otherwise would be borrowed credit.
+//! shipped engine is `craft-crnn` — it IS the `EasyOCR` model stack, but it is
+//! not `EasyOCR`, and a name that claims otherwise would be borrowed credit.
 //! The document-tier engine (PP-OCRv5-class) lands with its own lineage name;
 //! `unlimited-ocr` was retired with it.
 //!
@@ -54,7 +54,7 @@ use std::sync::Arc;
 
 use ffai_core::registry::EngineRegistry;
 
-/// Word-crop pads for the PARSeq path, `(x, y)` as fractions of line
+/// Word-crop pads for the `PARSeq` path, `(x, y)` as fractions of line
 /// height. Defaults are the synthetic-render values; `FFAI_PARSEQ_PAD_X` /
 /// `FFAI_PARSEQ_PAD_Y` override for sweeps and for content-specific tuning.
 pub fn parseq_pads() -> (f32, f32) {

@@ -30,3 +30,21 @@
 
 tools/**        linguist-detectable=false
 corpora/refs/** linguist-detectable=false
+
+# Fuzz corpora are BYTES, not text.
+#
+# Without this, git's autocrlf (true on the Windows box this was authored on)
+# treats a corpus input with LFs and no NUL as a text file and rewrites the line
+# endings on checkout. That silently corrupts the input: the fuzzer's filename is
+# the SHA-1 of its content, so a mutated file no longer matches its own name, the
+# regression replay stops testing what it was seeded with, and coverage-guided
+# runs restart from inputs that no longer reach what they were minimised to reach.
+#
+# The stored blobs were verified intact when this was added; this keeps them that
+# way through every future clone.
+crates/*/fuzz/corpus/** -text -diff
+
+# Binary oracle fixtures, same reasoning.
+*.bin -text -diff
+*.npy -text -diff
+*.safetensors -text -diff

@@ -5,6 +5,19 @@
 //! each stays independently testable — the clustering has 15 tests and needs
 //! no weights, which is only possible because none of it lives here.
 
+//! Cast policy (gate H-15): `cast_possible_truncation`, `cast_sign_loss` and
+//! `cast_possible_wrap` are allowed in this module. Every value converted here
+//! is a MODEL-INTERNAL dimension, index or accumulator - bounded by weights the
+//! loader has already validated - not a number read from caller input. The lint
+//! stays DENIED in the untrusted-surface modules (`mel`, `fbank`, `onnx`,
+//! `normalize`, `lexicon`, `chunk`, `phonemize`, `phoneme_ids`), which is where
+//! this audit's arithmetic defects were actually found.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -51,6 +64,39 @@ pub struct Diarizer {
 const EMBED_CACHE_CAP: usize = 512;
 
 impl Diarizer {
+    /// Drop every cached speaker embedding.
+    ///
+    /// Two callers want this, for unrelated reasons:
+    ///
+    /// * **A measurement harness** timing a cold arm. Without it the first
+    ///   window of the "cold" arm is served from the previous arm's cache and
+    ///   the comparison is void.
+    /// * **Erasure.** These vectors are speaker embeddings — voiceprints — which
+    ///   are GDPR Art 9 special-category biometric data (see
+    ///   `docs/data-inventory.md`). They live in memory for the lifetime of this
+    ///   `Diarizer`, up to [`EMBED_CACHE_CAP`] of them. Dropping the `Diarizer`
+    ///   releases them; this is the way to release them without doing that.
+    ///
+    /// Cannot fail: a poisoned lock still yields the map through
+    /// `into_inner`-style recovery, because clearing is safe from any state.
+    pub fn clear_embed_cache(&self) {
+        match self.cache.lock() {
+            Ok(mut c) => c.clear(),
+            // A panic elsewhere poisoned the lock. Clearing is still the right
+            // thing to do — refusing would strand the data we were asked to erase.
+            Err(poisoned) => poisoned.into_inner().clear(),
+        }
+    }
+
+    /// Number of embeddings currently held. For tests and for anyone auditing
+    /// what is retained.
+    pub fn embed_cache_len(&self) -> usize {
+        match self.cache.lock() {
+            Ok(c) => c.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        }
+    }
+
     pub fn from_manifest_dir(dir: &Path, name: &str, device: Device) -> Result<Self> {
         Self::from_manifest_source(Some(dir), name, device)
     }
@@ -68,10 +114,7 @@ impl Diarizer {
     }
 
     /// Load from an already-parsed manifest.
-    pub fn from_manifest(
-        manifest: &ffai_models::ModelManifest,
-        device: Device,
-    ) -> Result<Self> {
+    pub fn from_manifest(manifest: &ffai_models::ModelManifest, device: Device) -> Result<Self> {
         let resolved = manifest.fetch()?;
         let weights = resolved.file("embedding_model.ckpt")?.to_path_buf();
 
@@ -83,7 +126,7 @@ impl Diarizer {
         let cfg = Config::default();
         let fbank = Fbank::new(cfg.n_mels);
         let model = EcapaTdnn::load(cfg, vb, device)?;
-        Ok(Diarizer {
+        Ok(Self {
             model,
             fbank,
             sample_rate: super::fbank::SAMPLE_RATE,
@@ -153,11 +196,10 @@ impl Diarizer {
                 state,
             );
         }
-        let windows =
-            {
-                let (win, hop) = diarize::geometry();
-                diarize::subsegment_at(regions, win, hop, stream_offset_secs)
-            };
+        let windows = {
+            let (win, hop) = diarize::geometry();
+            diarize::subsegment_at(regions, win, hop, stream_offset_secs)
+        };
         if windows.is_empty() {
             return Vec::new();
         }
@@ -180,7 +222,7 @@ impl Diarizer {
         }
 
         let local = diarize::cluster(&embeddings, threshold, max_speakers);
-        let n_local = local.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        let n_local = local.iter().copied().max().map_or(0, |m| m + 1);
 
         // Reduce each local cluster to its mean, then resolve that against
         // the persistent identities.
@@ -238,12 +280,17 @@ impl Diarizer {
         // A backwards jump means a different stream; drop the history rather
         // than silently refuse to embed the new audio.
         if state.note_buffer(buffer_end) {
-            self.trace("incr", &format!("stream rewound to {offset:.2} — history dropped"));
+            self.trace(
+                "incr",
+                &format!("stream rewound to {offset:.2} — history dropped"),
+            );
         }
 
         // Regions in absolute time; the state speaks only absolute.
-        let abs: Vec<(f64, f64)> =
-            regions.iter().map(|r| (offset + r.start, offset + r.end)).collect();
+        let abs: Vec<(f64, f64)> = regions
+            .iter()
+            .map(|r| (offset + r.start, offset + r.end))
+            .collect();
         let pending = state.pending(&abs, win, hop);
 
         // Embed only what is new, converting each absolute window back to a
@@ -259,10 +306,10 @@ impl Diarizer {
             if frames == 0 {
                 continue;
             }
-            if let Ok(e) = self.model.embed(&feats, frames) {
-                if e.iter().all(|v| v.is_finite()) {
-                    fresh.push((ws, we, e));
-                }
+            if let Ok(e) = self.model.embed(&feats, frames)
+                && e.iter().all(|v| v.is_finite())
+            {
+                fresh.push((ws, we, e));
             }
             CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -280,7 +327,7 @@ impl Diarizer {
         }
 
         let local = diarize::cluster(&embeddings, threshold, max_speakers);
-        let n_local = local.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        let n_local = local.iter().copied().max().map_or(0, |m| m + 1);
         let dim = embeddings[0].len();
         let mut sums = vec![vec![0.0f32; dim]; n_local];
         let mut counts = vec![0usize; n_local];
@@ -334,7 +381,7 @@ impl Diarizer {
     /// Shared front half: window -> features -> embedding, dropping whatever
     /// fails rather than substituting a zero vector.
     /// The sample rate the speaker front end expects.
-    pub fn sample_rate(&self) -> usize {
+    pub const fn sample_rate(&self) -> usize {
         self.sample_rate
     }
 
@@ -368,20 +415,22 @@ impl Diarizer {
             // what a hit saves; it does not need to be a fast hash to pay.
             let key = content_key(window);
             let caching = cache_enabled();
-            if caching {
-                if let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
-                    CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    self.trace(
-                        "win",
-                        &format!("{start:.4} {end:.4} len={} key={key:016x} HIT", b - a),
-                    );
-                    kept.push((start, end));
-                    embeddings.push(hit);
-                    continue;
-                }
+            if caching && let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned())
+            {
+                CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.trace(
+                    "win",
+                    &format!("{start:.4} {end:.4} len={} key={key:016x} HIT", b - a),
+                );
+                kept.push((start, end));
+                embeddings.push(hit);
+                continue;
             }
             CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.trace("win", &format!("{start:.4} {end:.4} len={} key={key:016x} MISS", b - a));
+            self.trace(
+                "win",
+                &format!("{start:.4} {end:.4} len={} key={key:016x} MISS", b - a),
+            );
 
             let (feats, frames) = self.fbank.compute(window);
             if frames == 0 {
@@ -450,8 +499,74 @@ fn cache_enabled() -> bool {
     std::env::var("FFAI_DIARIZE_CACHE").as_deref() != Ok("off")
 }
 
-/// Drop every cached embedding. For a harness measuring a cold arm.
+/// Reset the hit/miss COUNTERS. Does not touch the cache itself.
+///
+/// The name says counters and the body resets counters; the doc comment used to
+/// say "drop every cached embedding", which it has never done. A harness calling
+/// this to measure a cold arm got a WARM cache and a wrong number — the exact
+/// failure mode the counters above exist to prevent. To actually drop the
+/// embeddings, call [`Diarizer::clear_embed_cache`], which is per-instance
+/// because the cache is.
 pub fn clear_embed_cache_counters() {
     CACHE_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
     CACHE_MISSES.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `clear_embed_cache_counters` must reset counters and NOTHING else.
+    ///
+    /// This half needs no model, so it runs everywhere. It is the half that
+    /// pins the name to the behaviour: the function was documented as "drop
+    /// every cached embedding" while only touching these two atomics.
+    #[test]
+    fn clear_embed_cache_counters_resets_only_the_counters() {
+        use std::sync::atomic::Ordering::Relaxed;
+        CACHE_HITS.store(7, Relaxed);
+        CACHE_MISSES.store(9, Relaxed);
+        clear_embed_cache_counters();
+        assert_eq!(cache_stats(), (0, 0), "counters were not reset");
+    }
+
+    /// The retention contract: clearing the cache actually drops the
+    /// embeddings, and resetting the counters does not.
+    ///
+    /// Regression for a doc comment that promised an erasure this crate never
+    /// performed. That is a wrong number for a harness timing a cold arm, and —
+    /// because these vectors are voiceprints, GDPR Art 9 special-category data
+    /// (`docs/data-inventory.md`) — a failed erasure for anyone who called it to
+    /// purge biometric data.
+    ///
+    /// Needs the ECAPA weights, so it SKIPS where they are not cached. It is a
+    /// real guard wherever the model exists; the counter half above is the part
+    /// that always runs.
+    #[test]
+    fn clearing_the_cache_actually_drops_embeddings() {
+        let Ok(d) = Diarizer::from_manifest_source(None, "ecapa-tdnn-voxceleb", Device::Cpu) else {
+            return; // weights absent: the cache contract is untestable here
+        };
+
+        {
+            let mut c = d.cache.lock().expect("fresh mutex is not poisoned");
+            c.insert(0xdead_beef, vec![0.5f32; 192]);
+            c.insert(0xfeed_face, vec![0.25f32; 192]);
+        }
+        assert_eq!(d.embed_cache_len(), 2, "seeded two embeddings");
+
+        clear_embed_cache_counters();
+        assert_eq!(
+            d.embed_cache_len(),
+            2,
+            "clear_embed_cache_counters touched the cache; it is documented not to"
+        );
+
+        d.clear_embed_cache();
+        assert_eq!(
+            d.embed_cache_len(),
+            0,
+            "clear_embed_cache left embeddings behind"
+        );
+    }
 }

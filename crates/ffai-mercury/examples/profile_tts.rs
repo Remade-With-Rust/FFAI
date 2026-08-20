@@ -33,11 +33,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let texts: Vec<String> = manifest
         .holdout()
         .take(20)
-        .map(|c| std::fs::read_to_string(manifest.clip_path(c)).unwrap().trim().to_string())
+        .map(|c| {
+            std::fs::read_to_string(manifest.clip_path(c))
+                .unwrap()
+                .trim()
+                .to_string()
+        })
         .collect();
     let ids_list: Vec<Vec<i64>> = texts
         .iter()
-        .map(|t| vits.id_map.sentence_to_ids(&phonemizer.phonemize(t).unwrap()).0)
+        .map(|t| {
+            vits.id_map
+                .sentence_to_ids(&phonemizer.phonemize(t).unwrap())
+                .0
+        })
         .collect();
 
     // ---- stage timing, best-of-3 whole-corpus passes ----
@@ -72,10 +81,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let total: f64 = best.iter().sum();
     println!("stage timing, 20 sentences, {audio_secs:.1}s audio, best-of-3:");
-    for (name, t) in ["text_encoder", "duration_pred", "flow", "decoder"].iter().zip(best) {
-        println!("  {name:<14} {:>8.1} ms  {:>5.1} %", t * 1000.0, 100.0 * t / total);
+    for (name, t) in ["text_encoder", "duration_pred", "flow", "decoder"]
+        .iter()
+        .zip(best)
+    {
+        println!(
+            "  {name:<14} {:>8.1} ms  {:>5.1} %",
+            t * 1000.0,
+            100.0 * t / total
+        );
     }
-    println!("  {:<14} {:>8.1} ms  -> {:.1}x realtime", "total", total * 1000.0, audio_secs / total);
+    println!(
+        "  {:<14} {:>8.1} ms  -> {:.1}x realtime",
+        "total",
+        total * 1000.0,
+        audio_secs / total
+    );
 
     // ---- conv1d vs im2col+matmul at the decoder's hot shapes ----
     println!("\nconv1d vs im2col+matmul (per call, best of 5):");

@@ -18,8 +18,8 @@ use std::time::Instant;
 
 use ffai_bench::corpus::Manifest;
 use ffai_core::engine::{AsrEngine, AsrOptions};
-use ffai_mercury::asr::diarizer::cache_stats;
 use ffai_mercury::asr::WhisperCandle;
+use ffai_mercury::asr::diarizer::cache_stats;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let corpus = std::env::args()
@@ -40,24 +40,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { std::env::set_var("FFAI_DIARIZE_CACHE", "off") };
 
     println!("corpus {corpus} · cache OFF (measuring geometry, not reuse)\n");
-    println!("{:>6} {:>10} {:>12} {:>10}", "hop s", "forwards", "diarize s", "vs 0.75");
+    println!(
+        "{:>6} {:>10} {:>12} {:>10}",
+        "hop s", "forwards", "diarize s", "vs 0.75"
+    );
     let mut base = None;
     for hop in &hops {
         unsafe { std::env::set_var("FFAI_DIARIZE_HOP", hop.to_string()) };
         let (h0, m0) = cache_stats();
         let before = h0 + m0;
-        let opts = AsrOptions { diarize: true, ..AsrOptions::default() };
+        let opts = AsrOptions {
+            diarize: true,
+            ..AsrOptions::default()
+        };
 
         let t = Instant::now();
         for clip in &manifest.clips {
-            let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else { continue };
+            let Ok(audio) = ffai_media::load_audio(&manifest.clip_path(clip)) else {
+                continue;
+            };
             let _ = engine.transcribe(&audio, &opts);
         }
         let secs = t.elapsed().as_secs_f64();
         let (h1, m1) = cache_stats();
         let forwards = (h1 + m1) - before;
         let b = *base.get_or_insert(forwards as f64);
-        println!("{hop:>6.2} {forwards:>10} {secs:>12.1} {:>9.2}x", b / forwards as f64);
+        println!(
+            "{hop:>6.2} {forwards:>10} {secs:>12.1} {:>9.2}x",
+            b / forwards as f64
+        );
     }
     println!(
         "\nDER per hop comes from diarize_gate under the same FFAI_DIARIZE_HOP;\n\

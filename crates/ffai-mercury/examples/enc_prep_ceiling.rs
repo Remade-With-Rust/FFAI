@@ -86,13 +86,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proj = best_of(20, || {
         std::hint::black_box(x2.matmul(&w).unwrap());
     });
-    println!("  projection (1500,384)@(384,384)            {:6.3} ms   <- irreducible", proj * 1e3);
+    println!(
+        "  projection (1500,384)@(384,384)            {:6.3} ms   <- irreducible",
+        proj * 1e3
+    );
 
     let projected = x2.matmul(&w)?.reshape((1, seq, d))?;
 
     // ---- Q: shipped vs scale folded into the weight ----
     let q_shipped = best_of(20, || {
-        let t = (split(&projected).unwrap() * s2).unwrap().contiguous().unwrap();
+        let t = (split(&projected).unwrap() * s2)
+            .unwrap()
+            .contiguous()
+            .unwrap();
         std::hint::black_box(t);
     });
     let q_folded = best_of(20, || {
@@ -100,13 +106,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = split(&projected).unwrap().contiguous().unwrap();
         std::hint::black_box(t);
     });
-    println!("\n  Q  shipped  (split * scale).contiguous()   {:6.3} ms", q_shipped * 1e3);
-    println!("  Q  brick 1  scale folded into weight       {:6.3} ms   saves {:6.3} ms",
-        q_folded * 1e3, (q_shipped - q_folded) * 1e3);
+    println!(
+        "\n  Q  shipped  (split * scale).contiguous()   {:6.3} ms",
+        q_shipped * 1e3
+    );
+    println!(
+        "  Q  brick 1  scale folded into weight       {:6.3} ms   saves {:6.3} ms",
+        q_folded * 1e3,
+        (q_shipped - q_folded) * 1e3
+    );
 
     // ---- K: shipped strided gather vs produced already-transposed ----
     let k_shipped = best_of(20, || {
-        let t = split(&projected).unwrap().transpose(2, 3).unwrap().contiguous().unwrap();
+        let t = split(&projected)
+            .unwrap()
+            .transpose(2, 3)
+            .unwrap()
+            .contiguous()
+            .unwrap();
         std::hint::black_box(t);
     });
     // Brick 2: k^T = w^T @ x^T. `x2.t()` is a VIEW; if candle's matmul takes a
@@ -119,33 +136,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = kt.reshape((1, heads, hd, seq)).unwrap();
         std::hint::black_box(t);
     });
-    println!("\n  K  shipped  split.transpose(2,3).contig    {:6.3} ms   (+ {:6.3} projection)",
-        k_shipped * 1e3, proj * 1e3);
-    println!("  K  brick 2  w^T @ x^T, reshape only        {:6.3} ms   saves {:6.3} ms",
-        k_transposed * 1e3, (k_shipped + proj - k_transposed) * 1e3);
+    println!(
+        "\n  K  shipped  split.transpose(2,3).contig    {:6.3} ms   (+ {:6.3} projection)",
+        k_shipped * 1e3,
+        proj * 1e3
+    );
+    println!(
+        "  K  brick 2  w^T @ x^T, reshape only        {:6.3} ms   saves {:6.3} ms",
+        k_transposed * 1e3,
+        (k_shipped + proj - k_transposed) * 1e3
+    );
 
     // ---- V: shipped copy; brick 3 would remove it entirely ----
     let v_shipped = best_of(20, || {
         let t = split(&projected).unwrap().contiguous().unwrap();
         std::hint::black_box(t);
     });
-    println!("\n  V  shipped  split.contiguous()             {:6.3} ms", v_shipped * 1e3);
-    println!("  V  brick 3  projection writes head layout  {:6.3} ms   saves {:6.3} ms (ceiling)",
-        0.0, v_shipped * 1e3);
+    println!(
+        "\n  V  shipped  split.contiguous()             {:6.3} ms",
+        v_shipped * 1e3
+    );
+    println!(
+        "  V  brick 3  projection writes head layout  {:6.3} ms   saves {:6.3} ms (ceiling)",
+        0.0,
+        v_shipped * 1e3
+    );
 
     // ---- the totals that decide whether any of this is worth building ----
     let per_layer_now = q_shipped + k_shipped + v_shipped;
     let b1 = q_shipped - q_folded;
     let b2 = (k_shipped + proj - k_transposed).max(0.0);
     let b3 = v_shipped + q_folded; // removing both remaining .contiguous() copies
-    println!("\n  shipped prep per layer                     {:6.3} ms  x{layers} = {:6.2} ms/pass",
-        per_layer_now * 1e3, per_layer_now * layers as f64 * 1e3);
+    println!(
+        "\n  shipped prep per layer                     {:6.3} ms  x{layers} = {:6.2} ms/pass",
+        per_layer_now * 1e3,
+        per_layer_now * layers as f64 * 1e3
+    );
 
     // The encoder pass this must be measured against, and the pipeline share
     // that decides whether the prize clears the harness floor.
     let enc_pass_ms = 159.0;
     let enc_share = 0.527;
-    println!("\n  BRICK                          saves/layer   saves/pass   % encoder   % pipeline");
+    println!(
+        "\n  BRICK                          saves/layer   saves/pass   % encoder   % pipeline"
+    );
     for (name, save) in [
         ("1 fold scale into q weight", b1),
         ("2 produce K transposed", b2),

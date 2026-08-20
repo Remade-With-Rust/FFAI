@@ -92,7 +92,7 @@ fn same_input_gives_byte_identical_detections() {
     //   RAYON_NUM_THREADS=24 cargo test -p ffai-diana --test determinism -- --nocapture
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in &first {
-        h ^= *b as u64;
+        h ^= u64::from(*b);
         h = h.wrapping_mul(0x1000_0000_01b3);
     }
     eprintln!(

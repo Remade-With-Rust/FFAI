@@ -1,4 +1,10 @@
-//! # Mercury — FFai's voice component
+// Kani 0.67 bundles rustc 1.93-nightly, but `asr::vad` calls `f32::mul_add`
+// inside a `const fn`, which only stabilised in 1.95 - this crate's declared
+// MSRV. Under Kani that needs the feature gate; on any real build the attribute
+// does not exist, so nothing else is affected.
+#![cfg_attr(kani, feature(const_mul_add))]
+
+//! # Mercury — `FFai`'s voice component
 //!
 //! Named for the Roman god of language and messages (Greek: Hermes).
 //! Mercury owns both directions of speech: **ASR** (speech → text) and
@@ -8,22 +14,31 @@
 //!
 //! | Engine | Task | Status |
 //! |---|---|---|
-//! | `whisper-candle` | asr | **live** — OpenAI Whisper on candle: our own mel front-end, tokenizer grammar, decode loop, audio encoder, AVX2 kernels. Sizes and q8_0 variants are named configurations of the same engine |
+//! | `whisper-candle` | asr | **live** — `OpenAI` Whisper on candle: our own mel front-end, tokenizer grammar, decode loop, audio encoder, AVX2 kernels. Sizes and `q8_0` variants are named configurations of the same engine |
 //! | `piper-candle` | tts | **live** — the full VITS stack on candle, running piper's own voice files; deterministic, oracle-exact against piper's runtime |
 //! | `oxiwhisper` | asr | stub — cool-japan's pure-Rust GGUF Whisper, on the watchlist |
-//! | `any-tts` | tts | stub — trait-based candle TTS (Kokoro, Qwen3-TTS, VibeVoice, …) |
+//! | `any-tts` | tts | stub — trait-based candle TTS (Kokoro, Qwen3-TTS, `VibeVoice`, …) |
 //! | `voirs` | tts | stub — alternative G2P→acoustic→vocoder lineage |
 //!
-//! The WhisperX layer (energy VAD, wav2vec2 forced alignment for word
+//! The `WhisperX` layer (energy VAD, wav2vec2 forced alignment for word
 //! timestamps, ECAPA-TDNN diarization with cross-call speaker persistence) is
 //! exposed through [`ffai_core::engine::AsrOptions`] — `word_timestamps`,
 //! `diarize`, `persist_speakers` — as flags on any ASR engine, not a fork.
 //!
 //! TTS is decomposed the same way ([`tts`]): [`tts::phonemize`] is a
-//! clean-room pure-Rust G2P over CMUdict, so nothing GPL is linked (espeak-ng
+//! clean-room pure-Rust G2P over `CMUdict`, so nothing GPL is linked (espeak-ng
 //! — the reason piper itself is GPL — serves only as an out-of-process test
 //! oracle). Synthesis knobs live on [`ffai_core::engine::TtsOptions`], and
 //! `seed` makes output byte-identical run over run.
+
+// Bounded proofs (gate H-30). A normal build never sees this.
+//
+// `test` is included as well as `kani` on purpose: the harness BODIES stay
+// `cfg(kani)`, but the pure index helpers they reason about then type-check
+// under `cargo test` too. Without that, the whole file is dead code on every
+// machine without Kani and rots silently between Linux runs.
+#[cfg(any(kani, test))]
+mod proofs;
 
 pub mod asr;
 pub mod manifests;
@@ -133,7 +148,10 @@ mod tests {
             sample_rate: 16_000,
             channels: 1,
         };
-        let opts = ffai_core::engine::AsrOptions { diarize: true, ..Default::default() };
+        let opts = ffai_core::engine::AsrOptions {
+            diarize: true,
+            ..Default::default()
+        };
         // 160 samples of silence: too short for the speaker model to embed,
         // so this exercises the wiring rather than the network.
         //
@@ -148,15 +166,25 @@ mod tests {
         //
         // What is actually invariant: the flag is HONOURED rather than
         // silently ignored, and the old refusal is gone.
-        match reg.asr(Some("whisper-candle")).unwrap().transcribe(&audio, &opts) {
+        match reg
+            .asr(Some("whisper-candle"))
+            .unwrap()
+            .transcribe(&audio, &opts)
+        {
             Ok(t) => assert!(
                 t.speakers.is_some(),
                 "diarize was requested and the transcript carries no speaker track"
             ),
             Err(e) => {
                 let msg = e.to_string();
-                assert!(!msg.contains("not built yet"), "stale refusal still present: {msg}");
-                assert!(!msg.contains("phase D"), "stale refusal still present: {msg}");
+                assert!(
+                    !msg.contains("not built yet"),
+                    "stale refusal still present: {msg}"
+                );
+                assert!(
+                    !msg.contains("phase D"),
+                    "stale refusal still present: {msg}"
+                );
             }
         }
     }

@@ -53,7 +53,12 @@ fn interleave(rounds: usize, mut a: impl FnMut() -> f64, mut b: impl FnMut() -> 
         va.push(ta);
         vb.push(tb);
     }
-    Verdict { a_wins: wins, rounds, a: va, b: vb }
+    Verdict {
+        a_wins: wins,
+        rounds,
+        a: va,
+        b: vb,
+    }
 }
 
 fn report(name: &str, label_a: &str, label_b: &str, mut v: Verdict) {
@@ -188,7 +193,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let t = Instant::now();
                 // f16 cache, f32 softmax, with both conversions paid.
                 let qk = q16.matmul(&k16).unwrap();
-                let w = candle_nn::ops::softmax_last_dim(&qk.to_dtype(DType::F32).unwrap()).unwrap();
+                let w =
+                    candle_nn::ops::softmax_last_dim(&qk.to_dtype(DType::F32).unwrap()).unwrap();
                 let ctx = w.to_dtype(DType::F16).unwrap().matmul(&v16).unwrap();
                 std::hint::black_box(ctx);
                 t.elapsed().as_secs_f64() * 1e3
@@ -201,7 +207,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 t.elapsed().as_secs_f64() * 1e3
             },
         );
-        report("FULL cross-attn chain", "f16 K/V + conversions", "all f32", v);
+        report(
+            "FULL cross-attn chain",
+            "f16 K/V + conversions",
+            "all f32",
+            v,
+        );
     }
 
     // UNRESOLVED #3 (section 6.10): the shipped GELU against candle's, to
@@ -221,7 +232,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 t.elapsed().as_secs_f64() * 1e3
             },
         );
-        report("GELU (encoder activation)", "ours (Pade)", "candle (tanh)", v);
+        report(
+            "GELU (encoder activation)",
+            "ours (Pade)",
+            "candle (tanh)",
+            v,
+        );
     }
 
     Ok(())
