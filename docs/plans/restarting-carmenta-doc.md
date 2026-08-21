@@ -17,18 +17,18 @@ A pure-Rust document OCR pipeline on candle. The default document engine is
 (~16 MB, an 18 385-class CJK+Latin head). No VLM, CPU only, ~9–17 s/page.
 
 **Current banked standing** — OmniDocBench v1.6, all 1 651 pages, scored by
-their official evaluator (§52 arm: `FFAI_ROUTE=1` + `FFAI_ORDER_SELECT=2`,
-`odb_pred_fullv2`):
+their official evaluator (§55 arm: `FFAI_ROUTE=1` + `FFAI_ORDER_SELECT=2` +
+`FFAI_WORD_MERGE=1`, `odb_pred_wmfinal`):
 
 | | score | context |
 |---|---:|---|
-| Text^Edit | **0.1269** | published range 0.0326 (PaddleOCR-VL) – 0.157 (Marker) |
-| ReadOrder^Edit | **0.2093** | published range 0.116 – 0.243 |
+| Text^Edit | **0.1157** | published range 0.0326 (PaddleOCR-VL) – 0.157 (Marker) |
+| ReadOrder^Edit | **0.2039** | published range 0.116 – 0.243 |
 
 Ahead of the worst published row on both columns, well behind the text
 leaders; order is now mid-pack. ~0.0045 of the text figure is evaluator
 timeout tax on 8 pages the engine reads fine (§50); timeout-excluded the
-standing reads 0.1229 / 0.2071. The campaign opened at 0.1307 / 0.2348.
+standing reads 0.1132 / 0.2027. The campaign opened at 0.1307 / 0.2348.
 
 **Speed is not the problem.** Roughly 9× faster than the reference VLM — our
 CPU against its GPU. Every open lever is quality. Spend speed for quality
@@ -99,7 +99,8 @@ Engine toggles that exist: `FFAI_ORDER_GATE`, `FFAI_ORDER_PROBE`,
 `FFAI_ORDER_VERIFY`, `FFAI_ORDER_GUARD`, `FFAI_CJK_FLUENCY`, `FFAI_BODY_ONLY`,
 `FFAI_DB_BIN`, `FFAI_DB_BOX`, `FFAI_DB_UNCLIP`, `FFAI_ARM_ENGINE`;
 `FFAI_ROUTE` (+`FFAI_ROUTE_SCORE`/`RETAIN`/`COVER`/`ABSORB`, §48–§51);
-`FFAI_ORDER_SELECT=2` (+`FFAI_ORDER_V2_MARGIN`, §51).
+`FFAI_ORDER_SELECT=2` (+`FFAI_ORDER_V2_MARGIN`, §51);
+`FFAI_WORD_MERGE=1` (+`FFAI_WORD_MERGE_MIN`, §53–§55).
 
 ---
 
@@ -116,6 +117,7 @@ Engine toggles that exist: `FFAI_ORDER_GATE`, `FFAI_ORDER_PROBE`,
 | **Region routing** (`FFAI_ROUTE=1`, opt-in) | **−0.0186 order**, text neutral | §49 |
 | Routing absorption cap (default on inside routing) | +0.0010 text / +0.0012 order; 2 catastrophes rescued, 0 hurt | §51 |
 | **Ordering selection v2** (`FFAI_ORDER_SELECT=2`) | **+0.0035 order, CI excludes 0; text 0.0000** | §51 |
+| **Word-fragment merge** (`FFAI_WORD_MERGE=1`, chain-fraction gated) | **+0.0097 text AND +0.0044 order, both CIs exclude 0** | §53–§55 |
 
 ### Confirmed real on the correct instrument
 

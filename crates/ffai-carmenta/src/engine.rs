@@ -424,6 +424,12 @@ impl OcrEngine for CraftCrnn {
                         // the component walk returns raster order, and reading
                         // order is what the output contract promises.
                         b.sort_by_key(|r| (r.y0, r.x0));
+                        // §53: word fragments on large-font pages merge back
+                        // into lines BEFORE the corridor splitter, so a rare
+                        // gutter-jumping merge is re-split by the guard below.
+                        // Opt-in (`FFAI_WORD_MERGE=1`); the merged crop is
+                        // what recognition then reads, as one line.
+                        let b = boxes::merge_word_fragments(b);
                         // §8.88: split any box carrying a white corridor wide
                         // enough to be a column gutter, read from the SOURCE
                         // PIXELS. The probability map cannot arbitrate this —
@@ -810,8 +816,25 @@ impl OcrEngine for CraftCrnn {
                     RecStage::Parseq => None,
                 }
             };
+            // §54: the span-carrying twin, for the inline-formula splice. SVTR
+            // only — `ctc_greedy_spans` is its decoder; the splice never fires
+            // on the other recognizers.
+            let rec_spans = |x0: usize, y0: usize, x1: usize, y1: usize|
+                -> Option<(String, Vec<crate::svtr::CharSpan>)> {
+                match self.rec {
+                    RecStage::Svtr => {
+                        let (svtr, charset) = m.svtr.as_ref()?;
+                        let crop = crate::svtr::svtr_input(img, x0, y0, x1, y1, &m.device).ok()?;
+                        let probs = svtr.forward(&crop).ok()?;
+                        crate::svtr::ctc_greedy_spans(&probs, charset)
+                            .ok()
+                            .map(|(t, _, s)| (t, s))
+                    }
+                    _ => None,
+                }
+            };
             crate::profile::timed(|p| &p.boxes, || {
-                crate::route::apply(r, img, out_lines, &rec_box)
+                crate::route::apply(r, img, out_lines, &rec_box, &rec_spans)
             })?
         } else {
             out_lines

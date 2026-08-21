@@ -163,6 +163,22 @@ impl Router {
 /// knows which one ran — the same reason `VERIFY_LOWCONF` is passed in (§8.171).
 pub type RecFn<'a> = &'a dyn Fn(usize, usize, usize, usize) -> Option<String>;
 
+/// §54 — the recognizer with character x-positions (`ctc_greedy_spans`), for
+/// the inline-formula splice. `None` on engines whose recognizer has no span
+/// support (CRNN, PARSeq); the splice then never fires.
+pub type RecSpansFn<'a> =
+    &'a dyn Fn(usize, usize, usize, usize) -> Option<(String, Vec<crate::svtr::CharSpan>)>;
+
+/// §54 — inline-formula splice floor. Layout DOES emit inline formula regions
+/// (a 144×34 box inside a GT text block) but they score 0.43–0.45, under both
+/// the 0.45 layout floor and the 0.60 redirect bar. F.1 priced a perfect
+/// inline pipeline at **+0.0416 Text^Edit** (CI [+0.0352, +0.0483]) — the
+/// largest ceiling this campaign has measured. Unset/0 = off; the swept
+/// default when enabled is 0.40.
+fn inline_thr() -> f32 {
+    env_f32("FFAI_ROUTE_INLINE", 0.0)
+}
+
 fn crop(img: &ImageBuffer, x0: usize, y0: usize, x1: usize, y1: usize) -> ImageBuffer {
     let bpp = img.format.bytes_per_pixel();
     let (w, h) = (img.width as usize, img.height as usize);
@@ -193,8 +209,14 @@ pub fn apply(
     img: &ImageBuffer,
     lines: Vec<OcrLine>,
     rec: RecFn<'_>,
+    rec_spans: RecSpansFn<'_>,
 ) -> Result<Vec<OcrLine>> {
-    let regions = r.layout.detect(img, score_thr(), iou_thr())?;
+    // The inline splice needs the sub-floor formula regions the isolated path
+    // never sees; with it off the floor — and hence the region set every
+    // downstream decision reads — is exactly the shipped one.
+    let ithr = inline_thr();
+    let floor = if ithr > 0.0 { score_thr().min(ithr) } else { score_thr() };
+    let regions = r.layout.detect(img, floor, iou_thr())?;
     let dbg = std::env::var("FFAI_ROUTE_DEBUG").is_ok();
     if dbg {
         eprintln!("route: {} regions", regions.len());
@@ -213,7 +235,11 @@ pub fn apply(
         .iter()
         .filter(|g| (g.is_table() || g.routes_to_latex()) && g.score >= route_thr())
         .collect();
-    if targets.is_empty() {
+    // §58 FIRE-RATE BUG: this early return predates the inline passes and was
+    // silently starving them — a math page with NO ≥0.60 table/formula region
+    // is EXACTLY the page the text-driven finder exists for, and it never got
+    // to run. Return early only when the inline passes are off too.
+    if targets.is_empty() && ithr <= 0.0 {
         return Ok(lines);
     }
 
@@ -322,11 +348,288 @@ pub fn apply(
             },
         }
     }
+    // §54 — INLINE FORMULA SPLICE (`FFAI_ROUTE_INLINE`, off by default).
+    //
+    // A formula region that sits INSIDE a text line is not an isolated
+    // equation: replacing the line deletes prose, and appending a rendering
+    // duplicates it. The right move is surgical — find WHICH CHARACTERS of the
+    // host line the region covers (CTC already knows: `ctc_greedy_spans`) and
+    // replace exactly that span with `$latex$`. The evaluator normalises
+    // predictions with the same `textblock2unicode` it applies to GT
+    // (match.py:545), so matching LaTeX scores as matching text.
+    //
+    // Guards, every one refusing rather than tuning: exactly ONE host line;
+    // the region a MINORITY of it (width < 0.75×, height ≤ 2.2×); the span
+    // re-read must decode to the host's exact text (an oracle validates the
+    // span you hand it — §48's law); a degenerate LaTeX is refused. A refusal
+    // costs nothing: the line keeps the characters it already had.
+    let mut spliced: Vec<*const Region> = Vec::new();
+    if ithr > 0.0 {
+        if let Some(fm) = r.formula() {
+            for g in regions.iter().filter(|g| g.routes_to_latex() && g.score >= ithr) {
+                // regions that already replaced lines are done
+                if targets.iter().enumerate().any(|(ti, t)| emitted[ti] && std::ptr::eq(*t, g)) {
+                    continue;
+                }
+                let (rw, rh) = (g.x1 - g.x0, g.y1 - g.y0);
+                if rw <= 2.0 || rh <= 2.0 {
+                    continue;
+                }
+                let mut host = None;
+                let mut n_hosts = 0;
+                for (i, l) in out.iter().enumerate() {
+                    let Some(b) = l.bbox.as_ref() else { continue };
+                    if l.text.starts_with("$$") || l.text.starts_with("<table") {
+                        continue;
+                    }
+                    let vy = (b.y + b.height).min(g.y1) - b.y.max(g.y0);
+                    let vx = (b.x + b.width).min(g.x1) - b.x.max(g.x0);
+                    if vy > 0.5 * rh && vx > 0.0 {
+                        n_hosts += 1;
+                        host = Some(i);
+                    }
+                }
+                let (Some(hi), 1) = (host, n_hosts) else { continue };
+                let hb = out[hi].bbox.clone().expect("host had a bbox");
+                if rw >= 0.75 * hb.width || rh > 2.2 * hb.height {
+                    continue;
+                }
+                let Some((decoded, spans)) = rec_spans(
+                    hb.x as usize,
+                    hb.y as usize,
+                    (hb.x + hb.width) as usize,
+                    (hb.y + hb.height) as usize,
+                ) else {
+                    continue;
+                };
+                if decoded != out[hi].text || spans.is_empty() {
+                    continue;
+                }
+                let (mut b0, mut b1) = (usize::MAX, 0usize);
+                for (si, sp) in spans.iter().enumerate() {
+                    let px = hb.x + sp.x * hb.width;
+                    if px >= g.x0 && px <= g.x1 {
+                        b0 = b0.min(sp.byte);
+                        b1 = b1.max(spans.get(si + 1).map_or(decoded.len(), |nx| nx.byte));
+                    }
+                }
+                if b0 == usize::MAX || b1 <= b0 {
+                    continue;
+                }
+                // covering ~the whole line is the isolated path's job, not a splice
+                if b0 == 0 && b1 >= decoded.len().saturating_sub(1) {
+                    continue;
+                }
+                // §56 ANCHOR GUARD — the diagnosed order tax: a spliced line
+                // whose remainder is mostly math loses its distinguishing
+                // shape, and the evaluator's block matcher binds it to the
+                // WRONG (similar-looking) GT formula block — our sequence was
+                // unchanged on the −0.25 page; the assignment drifted. Splice
+                // only when enough plain text survives to anchor the match.
+                let anchor: usize = decoded[..b0]
+                    .chars()
+                    .chain(decoded[b1..].chars())
+                    .filter(|c| c.is_alphanumeric())
+                    .count();
+                let span_chars = decoded[b0..b1].chars().count();
+                let total_chars = decoded.chars().count().max(1);
+                if anchor < env_f32("FFAI_ROUTE_INLINE_ANCHOR", 8.0) as usize
+                    || span_chars * 10 > total_chars * 7
+                {
+                    continue;
+                }
+                let c = crop(img, g.x0 as usize, g.y0 as usize, g.x1 as usize, g.y1 as usize);
+                let Some(latex) = fm.recognize(&c).ok().map(|s| s.trim().to_string()) else {
+                    continue;
+                };
+                if latex.chars().count() < 2 {
+                    continue;
+                }
+                let mut t = out[hi].text.clone();
+                t.replace_range(b0..b1, &format!("${latex}$"));
+                if dbg {
+                    eprintln!(
+                        "   -> INLINE {:.2} [{:.0},{:.0} {:.0}x{:.0}]: line {hi} bytes {b0}..{b1} -> ${{..}}$ ({} chars)",
+                        g.score, g.x0, g.y0, rw, rh, latex.len()
+                    );
+                }
+                out[hi].text = t;
+                spliced.push(g as *const Region);
+            }
+        }
+    }
+
+    // §M/R2 — TEXT-DRIVEN span finder (`FFAI_ROUTE_INLINE_TEXT=1`).
+    //
+    // The recall census said layout regions touch 15.5 % of math blocks, and
+    // even on touched blocks cover 0.34 of the spans — while the LaTeX, where
+    // it fires, is already close (median normalised edit 0.143). The
+    // recognizer READS the math badly, which means it knows WHERE it is: a
+    // maximal run of math-shaped characters in the decode, located by
+    // `ctc_greedy_spans`, IS an inline-formula candidate — no detector
+    // involved. FormulaNet's own output is the false-positive guard: a crop
+    // that isn't math comes back degenerate or operator-free and is refused.
+    // §59: decoupled from the region-inline pass — the text finder needs no
+    // layout regions, and the region pass carries an order tax (§56/§58) the
+    // text finder measurably does not (r2b: order −0.0008 spans 0).
+    if std::env::var("FFAI_ROUTE_INLINE_TEXT").as_deref() == Ok("1") {
+        if let Some(fm) = r.formula() {
+            let is_mathy = |c: char| {
+                matches!(c, '='|'+'|'±'|'×'|'÷'|'<'|'>'|'≤'|'≥'|'≠'|'≈'|'∈'|'∼'|'∝'|'∞'|'∂'|'∇'|'√'|'∑'|'∏'|'∫'|'^'|'_'|'\\'|'|'|'∀'|'∃'|'∅'|'⊂'|'⊆'|'∪'|'∩'|'→'|'⇒'|'⇔'|'·'|'μ'|'σ'|'λ'|'α'|'β'|'γ'|'δ'|'ε'|'θ'|'π'|'ω'|'Δ'|'Ω'|'Σ'|'Φ'|'φ'|'ψ'|'ρ'|'τ'|'ξ'|'η'|'ζ'|'ν'|'κ'|'χ')
+                    || ('₀'..='₉').contains(&c) || ('⁰'..='ⁿ').contains(&c)
+            };
+            let n_lines = out.len();
+            // refusal-stage counters, printed under FFAI_ROUTE_DEBUG — the
+            // §58 fire-rate diagnosis: a count per stage, not a guess.
+            let mut st_ = [0usize; 7]; // [prefilter, decode-drift, runlen, minority, anchor, geom, confirm]
+            for hi in 0..n_lines {
+                let Some(hb) = out[hi].bbox.clone() else { continue };
+                let txt = out[hi].text.clone();
+                // cheap pre-filter: a line with no math-shaped character and no
+                // digit-letter mixture cannot host a candidate — skip the
+                // (expensive) re-recognition entirely.
+                if txt.starts_with("$$") || txt.starts_with("<table") || txt.contains('$') {
+                    continue;
+                }
+                let n_mathy = txt.chars().filter(|&c| is_mathy(c)).count();
+                if n_mathy < 2 {
+                    st_[0] += 1;
+                    continue;
+                }
+                let Some((decoded, spans)) = rec_spans(
+                    hb.x as usize,
+                    hb.y as usize,
+                    (hb.x + hb.width) as usize,
+                    (hb.y + hb.height) as usize,
+                ) else {
+                    st_[1] += 1;
+                    continue;
+                };
+                if decoded != txt || spans.is_empty() {
+                    st_[1] += 1;
+                    continue;
+                }
+                // maximal math run over the char-run sequence: a span is IN if
+                // its text carries a mathy char, or is a short (≤2-char)
+                // alnum/punct bridge between two mathy neighbours.
+                let texts: Vec<&str> = spans
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        let end = spans.get(i + 1).map_or(decoded.len(), |n| n.byte);
+                        &decoded[s.byte..end]
+                    })
+                    .collect();
+                let mathy: Vec<bool> =
+                    texts.iter().map(|t| t.chars().any(is_mathy)).collect();
+                // find the best run: longest stretch where mathy or bridging
+                let mut best: Option<(usize, usize, usize)> = None; // (i0,i1,mathy_count)
+                let mut i = 0;
+                while i < spans.len() {
+                    if !mathy[i] {
+                        i += 1;
+                        continue;
+                    }
+                    let (mut j, mut cnt) = (i, 0);
+                    let mut k = i;
+                    while k < spans.len() {
+                        if mathy[k] {
+                            cnt += 1;
+                            j = k;
+                            k += 1;
+                        } else if k + 1 < spans.len()
+                            && mathy[k + 1]
+                            && texts[k].chars().count() <= 2
+                        {
+                            k += 1; // bridge
+                        } else {
+                            break;
+                        }
+                    }
+                    if best.is_none_or(|b| cnt > b.2) {
+                        best = Some((i, j, cnt));
+                    }
+                    i = k.max(i + 1);
+                }
+                let Some((i0, i1, cnt)) = best else { st_[2] += 1; continue };
+                // §58: cnt≥3 refused 15–23 real candidates per dense page
+                // (u(x)=3x+1 has two mathy runs); FormulaNet's confirmation is
+                // the actual false-positive gate, so the run threshold is a
+                // knob, swept on the screen.
+                if cnt < env_f32("FFAI_ROUTE_INLINE_RUN", 3.0) as usize {
+                    st_[2] += 1;
+                    continue;
+                }
+                let b0 = spans[i0].byte;
+                let b1 = spans.get(i1 + 1).map_or(decoded.len(), |n| n.byte);
+                let span_chars = decoded[b0..b1].chars().count();
+                let total_chars = decoded.chars().count().max(1);
+                // same minority + anchor discipline as the region splice
+                if span_chars * 10 > total_chars * 7 {
+                    st_[3] += 1;
+                    continue;
+                }
+                let anchor: usize = decoded[..b0]
+                    .chars()
+                    .chain(decoded[b1..].chars())
+                    .filter(|c| c.is_alphanumeric())
+                    .count();
+                if anchor < env_f32("FFAI_ROUTE_INLINE_ANCHOR", 8.0) as usize {
+                    st_[4] += 1;
+                    continue;
+                }
+                // x-range of the run, padded half a char either side
+                let x_of = |frac: f32| hb.x + frac * hb.width;
+                let pad = hb.width / spans.len().max(1) as f32 * 0.5;
+                let rx0 = (x_of(spans[i0].x) - pad).max(hb.x);
+                let rx1 = spans
+                    .get(i1 + 1)
+                    .map_or(hb.x + hb.width, |n| x_of(n.x))
+                    .min(hb.x + hb.width);
+                if rx1 - rx0 < 8.0 {
+                    st_[5] += 1;
+                    continue;
+                }
+                let c = crop(img, rx0 as usize, hb.y as usize, rx1 as usize,
+                    (hb.y + hb.height) as usize);
+                let Some(latex) = fm.recognize(&c).ok().map(|s| s.trim().to_string()) else {
+                    continue;
+                };
+                // FormulaNet must AGREE this is math: an output with no
+                // operator, command, script mark or digit is a refusal.
+                let confirms = latex.chars().any(|ch| {
+                    is_mathy(ch) || ch.is_ascii_digit() || ch == '{' || ch == '}'
+                });
+                if latex.chars().count() < 2 || !confirms {
+                    st_[6] += 1;
+                    continue;
+                }
+                let mut t = txt.clone();
+                t.replace_range(b0..b1, &format!("${latex}$"));
+                if dbg {
+                    eprintln!(
+                        "   -> INLINE-TEXT line {hi} bytes {b0}..{b1} ({span_chars} chars) -> ${{..}}$ ({} chars)",
+                        latex.len()
+                    );
+                }
+                out[hi].text = t;
+            }
+            if dbg {
+                eprintln!(
+                    "   inline-text refusals: prefilter {} decode-drift {} runlen {} minority {} anchor {} geom {} confirm {}",
+                    st_[0], st_[1], st_[2], st_[3], st_[4], st_[5], st_[6]
+                );
+            }
+        }
+    }
+
     // A region that absorbed NOTHING still has content — an isolated equation
     // the text detector missed entirely is exactly the §40 case this whole
-    // stage exists for. Append those by vertical position.
+    // stage exists for. Append those by vertical position. A region the inline
+    // pass spliced is already in its host line; appending it too would
+    // duplicate the content.
     for (ti, t) in targets.iter().enumerate() {
-        if emitted[ti] {
+        if emitted[ti] || spliced.iter().any(|&p| std::ptr::eq(p, *t)) {
             continue;
         }
         let Some(text) = &rendered[ti] else { continue };

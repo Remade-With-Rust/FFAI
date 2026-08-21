@@ -437,13 +437,14 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
         Ok("cost") => xy_cut_cost(lines, page_w, 0),
         Ok("span") => xy_cut_span(lines, page_w, 0),
         _ => {
-            // §51: `FFAI_ORDER_SELECT=2` swaps the selection for the v2
-            // objective + raster challenger. Unset, the shipped selection runs
-            // and output is byte-identical — one binary, two env settings.
-            let out = if std::env::var("FFAI_ORDER_SELECT").as_deref() == Ok("2") {
-                order_by_selection_v2(lines, page_w)
-            } else {
+            // §51/§52: the v2 objective is the DEFAULT selection since 0.9.0 —
+            // +0.0035 ReadOrder with the CI excluding zero, text exactly
+            // neutral, confirmed through the full engine on all 1651 pages.
+            // `FFAI_ORDER_SELECT=1` restores the 0.8.x reset-score selection.
+            let out = if std::env::var("FFAI_ORDER_SELECT").as_deref() == Ok("1") {
                 order_by_selection(lines, page_w)
+            } else {
+                order_by_selection_v2(lines, page_w)
             };
             // §8.156 SPARSE-PAGE GATE, default ON. `FFAI_ORDER_GATE=0` disables.
             // Measured through the engine on 236 holdout pages, one binary and
@@ -1439,6 +1440,135 @@ fn element_tops(lines: &[Vec<DetBox>], page_w: usize, lh: f32) -> Vec<usize> {
 ///
 /// DEFAULT ON at 4.0. `FFAI_VSPLIT_ASPECT=0` disables it, and the disabled path
 /// is byte-identical to the pre-§43 engine, so it stays the oracle.
+/// §53 — merge WORD FRAGMENTS back into lines on the DBNet path.
+///
+/// Large-font slide and exam text defeats DBNet's line forming: detection
+/// emits one box per WORD, the orderer shuffles the word soup, and Text^Edit
+/// pays twice — scrambled within-block sequence and broken block matching.
+/// Pages fragmented this way read 3–7× worse than clean pages of the same
+/// segment (en PPT 0.276 vs 0.070).
+///
+/// The merge: cluster boxes into row bands by y-centre, then join x-adjacent
+/// neighbours when the horizontal gap is at most `k`× the pair's shorter
+/// height AND at least one partner is word-shaped (width < 5× height). The
+/// `wordish` condition is load-bearing: an ungated merge priced **−0.0213
+/// text** on the oracle (the matcher merges but cannot split — a wrong merge
+/// is irrecoverable), while the gated dispatch priced **+0.0079** (CI
+/// excluding zero). Two long lines are never joined; gutters are wider than
+/// a line height almost everywhere, and this runs BEFORE
+/// `split_at_white_corridor`, so a rare gutter-jumping merge is re-split by
+/// the corridor guard.
+///
+/// Merging happens BEFORE recognition, so the recognizer reads the merged
+/// crop as one line with full context — strictly better than concatenating
+/// separately-recognized words, which is what the +0.0079 floor measured.
+///
+/// `FFAI_WORD_MERGE` is the gap multiplier; unset/0 = off (byte-identical),
+/// `1` = the swept default.
+pub fn merge_word_fragments(boxes: Vec<DetBox>) -> Vec<DetBox> {
+    // DEFAULT ON since 0.9.0 (§55): +0.0097 text AND +0.0044 order on the full
+    // benchmark, both CIs excluding zero, no losing content class. The page
+    // gate below is what makes that safe — see it for the ungated numbers.
+    // `FFAI_WORD_MERGE=0` restores the 0.8.x behaviour exactly.
+    let k = match std::env::var("FFAI_WORD_MERGE").ok().and_then(|v| v.parse::<f32>().ok()) {
+        Some(v) if v <= 0.0 => return boxes,
+        Some(v) => v,
+        None => 1.0,
+    };
+    if boxes.len() < 2 {
+        return boxes;
+    }
+    let mut hs: Vec<usize> = boxes.iter().map(|b| b.y1.saturating_sub(b.y0)).collect();
+    hs.sort_unstable();
+    let med_h = hs[hs.len() / 2].max(1) as f32;
+
+    struct Row {
+        yc: f32,
+        h: f32,
+        items: Vec<DetBox>,
+    }
+    let mut sorted: Vec<DetBox> = boxes;
+    sorted.sort_by_key(|b| b.y0 + b.y1); // by y-centre
+    let mut rows: Vec<Row> = Vec::new();
+    for b in sorted {
+        let yc = (b.y0 + b.y1) as f32 / 2.0;
+        let h = (b.y1 - b.y0) as f32;
+        match rows
+            .iter_mut()
+            .find(|r| (yc - r.yc).abs() <= 0.5 * med_h.min(r.h))
+        {
+            Some(r) => {
+                r.items.push(b);
+                let n = r.items.len() as f32;
+                r.yc += (yc - r.yc) / n;
+                r.h = r.items.iter().map(|x| (x.y1 - x.y0) as f32).sum::<f32>() / n;
+            }
+            None => rows.push(Row { yc, h, items: vec![b] }),
+        }
+    }
+
+    let mergeable = |a: &DetBox, b: &DetBox| {
+        let gap = b.x0 as f32 - a.x1 as f32;
+        let (ah, bh) = ((a.y1 - a.y0) as f32, (b.y1 - b.y0) as f32);
+        let wordish =
+            ((a.x1 - a.x0) as f32) < 5.0 * ah || ((b.x1 - b.x0) as f32) < 5.0 * bh;
+        gap <= k * ah.min(bh) && wordish
+    };
+
+    let mut n_boxes = 0usize;
+    for r in &mut rows {
+        r.items.sort_by_key(|b| b.x0);
+        n_boxes += r.items.len();
+    }
+
+    // THE PAGE GATE, and it is load-bearing three times over: ungated the
+    // merge priced −0.0213 text; wordish-only −0.0006; gated on this signal
+    // +0.0095 text AND +0.0071 order, both CIs excluding zero. The signal is
+    // the merge's own reach — the fraction of boxes adjacent to a partner
+    // under the merge conditions. Fragmented big-font pages read 0.25+;
+    // clean pages 0.02 (multi-column rows fail the gap, full lines fail
+    // `wordish`). Plateau across 0.10–0.25; 0.20 is its middle.
+    let mut in_chain = 0usize;
+    for r in &rows {
+        let mut prev_linked = false;
+        for w in r.items.windows(2) {
+            if mergeable(&w[0], &w[1]) {
+                in_chain += usize::from(!prev_linked) + 1;
+                prev_linked = true;
+            } else {
+                prev_linked = false;
+            }
+        }
+    }
+    if (in_chain as f32) < env_f32("FFAI_WORD_MERGE_MIN", 0.20) * n_boxes as f32 {
+        let mut out: Vec<DetBox> = rows.into_iter().flat_map(|r| r.items).collect();
+        out.sort_by_key(|b| (b.y0, b.x0));
+        return out;
+    }
+
+    let mut out = Vec::with_capacity(n_boxes);
+    for r in rows {
+        let mut it = r.items.into_iter();
+        let mut cur = it.next().expect("row has at least one box");
+        for nxt in it {
+            if mergeable(&cur, &nxt) {
+                cur = DetBox {
+                    x0: cur.x0,
+                    y0: cur.y0.min(nxt.y0),
+                    x1: cur.x1.max(nxt.x1),
+                    y1: cur.y1.max(nxt.y1),
+                    score: cur.score.min(nxt.score),
+                };
+            } else {
+                out.push(cur);
+                cur = nxt;
+            }
+        }
+        out.push(cur);
+    }
+    out
+}
+
 pub fn split_vertical_columns(boxes: Vec<DetBox>) -> Vec<DetBox> {
     let thr = env_f32("FFAI_VSPLIT_ASPECT", 4.0);
     if thr <= 0.0 {

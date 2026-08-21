@@ -2844,3 +2844,380 @@ full scale through the real engine (twice: probe arms §51, engine here) and
 order-positive with CIs excluding zero at every level. Making it the engine
 DEFAULT is now an editorial decision, not a measurement gap; the env escape
 (`FFAI_ORDER_SELECT` unset) reproduces the old selection byte-identically.
+
+---
+
+## §53 — WORD FRAGMENTATION found and priced: +0.0079 text ceiling on a 290-page dispatch; blanket merge REFUTED
+
+Exploring the post-§52 map, the #2 error cell was an anomaly: **English
+PPT2PDF at 0.1596 mean — twice English academic** (0.0790). Reading two worst
+pages showed why: on large-font slide text DBNet emits ONE BOX PER WORD
+("Facts / about / our / students"), the orderer then shuffles the word soup,
+and Text^Edit pays twice — scrambled within-block sequence AND broken block
+matching. The "DBNet emits text LINES, nothing to group" assumption
+(engine.rs:405) fails exactly on big fonts.
+
+### Why the audits undersold it
+
+`stage1_tiling` (§0.1) had measured fragmentation as a MINORITY of missing
+CHARACTERS (62% of missing chars sit in perfectly tiled blocks) — but
+char-ratio counts length only. Fragmentation's real damage is SCRAMBLING,
+which loses few characters and wrecks edit distance. Measured on Text^Edit
+directly, pages with boxes/row-band > 1.5 read **3–7× worse than clean pages
+of the same segment**: en PPT 0.276 vs 0.070 (54 of 115 pages), zh exam
+0.343 vs 0.138 (52/82), zh PPT 0.214 vs 0.064, colorful_textbook / notes /
+books the same shape. **A proxy that counts what a defect DELETES cannot see
+what it DERANGES.**
+
+### Priced by oracle, two arms, the pair is the lesson
+
+Merge rule (offline, geometry only): row-band clustering by y-centre, then
+adjacent-merge where the horizontal gap ≤ 1.0× min height; space-join unless
+CJK; `wordish` gate (a merge partner must be narrower than 5× its height).
+Ordered by the real shipped orderer (`FFAI_ORDER_SELECT=2`), scored against
+the cached selv2b base:
+
+| arm | text | order |
+|---|---|---|
+| BLANKET (all 1651 pages, 19.8k merges) | **−0.0213 WORSE** (EN −0.0503!) | −0.0214 WORSE |
+| DISPATCH (only the 290 frag pages) | **+0.0079 BETTER** [+0.0045, +0.0114], EN +0.0116 | +0.0018 spans 0 |
+
+The blanket arm is the Stage-6 coarsening law's third confirmation, now at
+line granularity: the matcher merges but cannot split, so a wrong merge is
+irrecoverable, and the 75% of pages that were correctly line-per-box paid for
+the minority. The dispatch arm is the codec-content-adaptive-dispatch pattern
+verbatim: the sign-flip IS the dispatch signal.
+
+### What building it needs (the open steps)
+
+1. **A GT-free page dispatch signal.** The oracle's page gate
+   (boxes/row-band vs GT rows > 1.5) reads ground truth. An engine version
+   needs a detector-side equivalent — candidate signals: fraction of
+   word-shaped boxes (w < 3–5×h), median box chars-per-width, same-row
+   neighbour-gap statistics. Validate against the 290-page oracle set.
+2. **The merge itself in boxes.rs** (post-detection, pre-ordering on the
+   DBNet path), env-gated, with the wordish + gap conditions; the corridor
+   splitter already guards the rare gutter miss.
+3. Screen offline via the probe arms (this §'s machinery), bank on the
+   evaluator. The +0.0079 is a CRUDE-heuristic floor, not a ceiling — an
+   in-engine merge with the probability map available may do better.
+
+### Same session: F.0 (recognition audit) landed its kill-gate
+
+Against the scorer's own normalised GT: **46.5% of the apparent
+missing-character gap was markup the scorer strips** — the raw-GT
+measurement had overstated 2×. The honest pool is 155k chars (5.5% of
+normalised text), with inline-$..$ blocks carrying **57.2% of it in 16% of
+blocks**. The inline-math thread survives, halved; F.1 (the spliced-GT
+ceiling on Text^Edit) is the next gate and its arm is built.
+
+---
+
+## §54 — the INLINE-MATH ceiling is the largest ever priced: +0.0416 text
+
+F.1 from the recognition audit, built and scored. Arm `f1math`: identical to
+selv2b except every GT text/title block containing inline `$..$` has our
+emitted lines replaced by the block's own NORMALISED GT text (spliced at the
+first owned line, 3,295 blocks on 562 pages), scored against the cached
+selv2b base:
+
+| metric | gain | CI | verdict |
+|---|---|---|---|
+| text_block all | **+0.0416** | [+0.0352, +0.0483] | BETTER, CI excludes 0 |
+| text_block english | +0.0348 | [+0.0264, +0.0435] | BETTER |
+| reading_order | −0.0028 | spans 0 | neutral |
+
+Larger than §37's ordering oracle (+0.0387) — and the construction is
+CONSERVATIVE on granularity (N lines → one block string, which the matcher
+punishes) while GENEROUS on scope (GT also fixes plain-text errors inside
+those blocks). Read it as bounding the "fix math-bearing blocks" family; a
+real inline pipeline captures a fraction. EN no-float is correctly near-zero
+(+0.0049 spans 0) — no floats, little math — which is the internal
+consistency check.
+
+The staged build is already written (recognition audit F.2–F.5): CTC
+char-x-positions (byte-identical gate) → inline-region recall/FP measurement
+(layout DOES emit inline formula boxes at 0.43–0.45, below every threshold)
+→ splice with a retain-style refusal guard → Text^Edit gate. This is now the
+ranked #1 text lever; §53's word-merge dispatch (+0.0079 floor, much cheaper
+to land) is #2.
+
+---
+
+## §55 — WORD-MERGE SHIPPED: first lever to win BOTH columns, text 0.1269 → 0.1157
+
+§53's quick win, hammered to a banked engine lever in one day. The chain that
+got it here: blanket merge REFUTED (−0.0213) → wordish gate alone REFUTED
+(−0.0006, the 761 extra pages' merges eat the win) → GT-based dispatch
++0.0079 → **GT-free gate BETTER than the GT label it was fit to** → in-engine
+re-recognition beats offline concatenation by 1.4×.
+
+### The lever
+
+`boxes::merge_word_fragments` (`FFAI_WORD_MERGE=1`, gap ≤ 1× shorter height,
+`wordish` = a partner under 5× its height), run BEFORE the corridor splitter
+(gutter guard for free) and BEFORE recognition (the SVTR reads the merged
+crop as ONE line with context — worth ~+0.003 over concatenating
+separately-read words, measured). Page gate `FFAI_WORD_MERGE_MIN` (0.20):
+the **mergeable-chain fraction** — the fraction of boxes adjacent to a
+partner under the merge's own conditions. Fragmented big-font pages read
+0.25+, clean pages 0.02; multi-column rows fail the gap, full lines fail
+wordish. Plateau across 0.10–0.25, swept FREE from cached per-page scores
+(wordmerge4(T) = wordmerge3 on gated pages else selv2b — no evaluator run).
+
+### The verdict (engine arm `wmfinal` = fullv2 + 361 gated pages, vs cached
+fullv2; rule 9 applied, 8 fallback pages excluded)
+
+| metric | gain | CI | raw standing |
+|---|---|---|---|
+| text_block | **+0.0097** | [+0.0065, +0.0131] | **0.1269 → 0.1157** |
+| reading_order | **+0.0044** | [+0.0017, +0.0073] | **0.2093 → 0.2039** |
+
+English text +0.0173; EN no-float text **+0.0450**. Every scope, both
+columns, CIs excluding zero — the first lever in the campaign to do that.
+Per-source: PPT2PDF +0.0524 (the disease's home), everything else
+positive-or-neutral. The one negative source (newspaper −0.0055) is
+entirely TWO dense masthead pages (Chicago Tribune −0.55, WSJ −0.45;
+newspaper is +0.58 net without them) — the named follow-up tail, fix class:
+a tighter condition on newspaper-dense pages or corridor-splitter recall.
+
+### Gates passed
+
+- OFF byte-identical to banked fullv2 (3 routing/ordering pages + a clean
+  page WITH merge on, whose gate correctly does not fire).
+- Engine gate ≈ offline gate: 361 fired of 464 candidates (offline predicted
+  367 at T=0.20).
+- 38 lib tests unchanged; zero page failures in the 464-page run.
+
+`odb_pred_wmfinal` (text 0.1157 / order 0.2039 raw; 0.1132 / 0.2027
+timeout-excluded) is the new reference arm. The campaign opened at
+0.1307/0.2348: **text −0.0150, order −0.0309 banked since**. §54's
+inline-math ceiling (+0.0416) is the standing #1; word fragmentation was #2
+and is now DONE.
+
+---
+
+## §56 — inline-math splice v1: REAL text win (+0.0023, EN +0.0046), blocked from default by a DIAGNOSED matcher-ambiguity order tax
+
+F.2–F.5 executed in one day. The design fork broke our way — the evaluator
+normalises PREDICTIONS with the same `textblock2unicode` as GT (match.py:545)
+— so the splice emits FormulaNet's raw `$latex$` and the evaluator does the
+unicode work on both sides.
+
+### What shipped (opt-in: `FFAI_ROUTE_INLINE=0.4`)
+
+`route.rs` inline pass: sub-floor formula regions (score ≥ 0.40) that sit
+inside exactly ONE text line as a minority span (width < 0.75×, height ≤
+2.2×) get their character range — located by `ctc_greedy_spans` (F.2, already
+in-tree) — replaced with `$latex$`. Refusal-guards throughout: span re-read
+must decode to the host's exact text; degenerate LaTeX refused; regions that
+splice no longer append as `$$..$$` duplicates. Gates: off-arm byte-identical
+to wmfinal; 3 splices land correctly on the Putnam page; ZERO false fires on
+6 no-math pages.
+
+### Full-corpus verdict (fullv4 vs cached wmfinal, rule 9, 8 fallbacks excluded)
+
+| metric | gain | CI | note |
+|---|---|---|---|
+| text_block all | **+0.0023** | [+0.0010, +0.0037] | EN +0.0046; **+0.0163 on the 201 fired pages** |
+| text_block non-EN | +0.0003 | spans 0 | splice earns nothing there |
+| reading_order | **−0.0022** | [−0.0039, −0.0006] | the blocker |
+
+~6 % of §54's +0.0416 ceiling captured — RECALL is the limiter (201 pages
+fired vs the 562 math-GT pages; layout finds few of the many inline spans).
+
+### The order tax is DIAGNOSED, and it is the MATCHER, not our sequence
+
+Free offline dispatch sweep (fullv4/wmfinal per-page recombination — zero
+evaluator runs): the text win and order cost TRAVEL TOGETHER on every axis
+(3+ splice pages +0.0015/−0.0015; 1–2 splice pages neutral/neutral; EN-only
+keeps both). No dispatch separates them. Then the mechanism, read straight
+from the evaluator's per-page order record (Evans PDE page, −0.25): wmfinal's
+pred sequence was IDENTICAL to GT (edit 0.0); with splices our emitted order
+is UNCHANGED but the matcher's assignment drifts — GT blocks 14, 12, 10.002
+bind to different prediction lines, because normalised math spans resemble
+each other and a spliced line loses its distinguishing plain-text shape.
+**A splice that improves a line's content can still make it AMBIGUOUS.**
+
+### Standing and the named next lever
+
+Default config stays §55 (wmfinal, 0.1157 / 0.2039). fullv4 (0.1150 text /
+0.2071 order raw) is the best TEXT arm ever recorded and remains one env var
+away. The refinement with a mechanism behind it: an ANCHOR guard — refuse a
+splice that leaves the host line without enough distinctive plain text to
+match by (the ambiguity tax concentrates where lines become mostly-math), plus
+recall work (layout finds too few inline spans) for the ~+0.039 of ceiling
+still unclaimed.
+
+---
+
+## §57 — THE COMPLETE LOSS LEDGER: every point of the 0.1150 attributed, reconstruction exact
+
+Built from the evaluator's own per-block match records
+(`*_text_block_result.json`, 20,103 blocks): each page's official score
+attributed proportionally to its blocks' `Edit_num`, each block classified by
+its own content. The ledger reconstructs the headline EXACTLY (0.1150, zero
+pages mismatched) — nothing estimated, nothing left over.
+
+| cause | points | share | script split |
+|---|---:|---:|---|
+| **Inline-math blocks** | **0.0415** | **36.1 %** | CJK 0.0228 / latin 0.0187 |
+| **Under-emit — text ABSENT from output** | **0.0197** | 17.1 % | CJK 0.0163 — classical/vertical pages emitting single glyphs |
+| **Under-emit — text PRESENT, matcher misassigned** | **0.0198** | 17.2 % | our line/block granularity vs GT blocks |
+| **Recognition substitutions** | 0.0225 | 19.5 % | CJK 0.0160 / latin 0.0064 |
+| Evaluator timeouts (instrument) | 0.0046 | 4.0 % | |
+| GT blocks fully unmatched (detection) | 0.0027 | 2.3 % | |
+| Scrambling (chars right, order wrong) | 0.0024 | 2.1 % | |
+| Over-emit | 0.0018 | 1.5 % | |
+| **TOTAL** | **0.1150** | **100.0 %** | |
+
+The under-emit split came from a 3-gram containment probe: for each short
+prediction, is ≥70 % of the GT text findable ANYWHERE in the page's output?
+Half yes (assembly), half no (unread).
+
+### What the ledger settles
+
+- **The math block independently re-measures §54's oracle to the 4th digit**
+  (0.0415 vs +0.0416) by a completely different route. Two instruments agree;
+  the #1 ranking is beyond doubt.
+- **The old campaigns are FINISHED on their own axes**: scrambling is 2.1 %
+  (ordering + word-merge did their work) and detection is 2.3 % (§0.1
+  confirmed again). Nothing left worth a session on either.
+- **The "non-EN mystery" now has two names**: truly-unread classical/vertical
+  CJK pages (0.0163 — sample: a vertical astrology page emitting '第','卯','主'
+  as whole predictions) and CJK recognition substitutions (0.0160 — the R.2
+  server-tier recognizer question).
+- **A NEW named lever**: matcher misassignment (0.0198) — content we read
+  correctly, bound to the wrong/partial prediction block. Same mechanism
+  family as §56's order tax: our EMISSION GRANULARITY (one block per physical
+  line) interacts with quick_match's assembly. §4/§34 refuted COARSENING —
+  but the §56 diagnosis suggests the modern question is not coarser blocks,
+  it is making each block more MATCHABLE.
+
+### The measured priority stack (replaces every estimate)
+
+1. Inline-math recall+quality — 0.0415 available, 0.0023 captured (§56).
+2. Recognition tier (R.2, server SVTR) — attacks the 0.0225 substitution pool
+   AND part of math via better plain reads.
+3. Vertical/classical-CJK reading — 0.0197, concentrated in few pages;
+   diagnose the sample pages first.
+4. Matcher-alignment of emission — 0.0198, research-flavored; measure before
+   building (the §34 coarsening law still stands).
+
+---
+
+## §58 — math campaign, day 1 of execution: R1/Q1/Q4 census results; anchor guard REFUTED; R2 built and screening
+
+Executing `carmenta-math-campaign.md` (§57's #1 block, 0.0415).
+
+### The censuses rewrote the build order (all offline/cheap, one afternoon)
+
+- **Q1/Q4 — quality is NOT the main limiter.** On v1's fired blocks: span
+  coverage only **0.34** (two-thirds of a touched block's math spans go
+  unspliced), while the LaTeX that does land is close — normalised edit
+  median **0.143**, 28 % exact, 60 % within 0.2. FormulaNet-S is adequate;
+  Q2/Q3 (bigger formula models) DEMOTED until recall is fixed.
+- **R2 ceiling, measured free from the ledger:** 57 % of the pool (0.0239)
+  sits in blocks whose CURRENT prediction already carries ≥2 math-shaped
+  characters — the recognizer knows where the math is.
+- **R1 census (layout_batch @0.30, all 1651 pages):** formula regions
+  overlap 57 % of pool loss at floor 0.30, 46 % at the current 0.40, 11 % at
+  the 0.60 route bar. CJK similar (51 % @0.30). So v1's 15.5 % block-touch
+  was never region availability — it is region→line geometry and guards.
+  R3 (MFD port) owns the ~30–43 % tail; decision deferred to R2's measure.
+
+### O1 — the anchor guard is REFUTED
+
+fullv5 (guard @8) vs wmfinal, rule 9: text +0.0022 [+0.0009, +0.0036], order
+−0.0023 [−0.0040, −0.0007] — the tax unchanged. And on the guard's OWN 35
+changed pages (vs fullv4, deterministic): text **−0.0043** (8 hurt, 2
+helped), order not improved. The refused splices were text WINS; the order
+tax does NOT live on mostly-math lines. `FFAI_ROUTE_INLINE_ANCHOR` stays as
+a knob, but the default hypothesis is dead.
+
+**The reframe that matters:** §56's tax is matcher AMBIGUITY, and ambiguity
+falls as splice quality rises — a well-spliced line matches its own GT block
+best. The text/order coupling is QUALITY-MEDIATED, not intrinsic: recall+
+quality work attacks both columns at once. The order gate stays, but the road
+through it is better splices, not fewer.
+
+### R2 — text-driven span finder: BUILT, screening now
+
+`FFAI_ROUTE_INLINE_TEXT=1` in route.rs: math-shaped character runs in the
+SVTR's own decode (≥3 mathy char-runs, ≤2-char bridges), located via
+`ctc_greedy_spans`, cropped, FormulaNet-confirmed (operator-free output =
+refusal), spliced under the standard guards. No new models. Gates passed:
+off-arm byte-identical; fires 2 clean extra splices on the Putnam page;
+cheap pre-filter (≥2 mathy chars in existing text) bounds the re-recognition
+cost to math-ish lines. Screen in flight: 562 math-GT pages + 150 no-math
+controls, splice-arm vs fullv5.
+
+---
+
+## §59 — math campaign day 2: the early-return bug, and the TEXT FINDER WORKS (order-clean)
+
+### The fire-rate mystery was a STRUCTURAL BUG, found by a refusal counter
+
+The §58 screen changed only 76 pages against a 57 % reachability ceiling.
+Stage counters (a count per refusal reason, wired permanently under
+`FFAI_ROUTE_DEBUG`) pointed one level up: pages with 19 math-bearing lines
+recorded NO PASS AT ALL — `route::apply`'s pre-inline early return
+(`targets.is_empty()`) was starving both inline passes on every page without
+a ≥0.60 table/formula region, which is EXACTLY the population the text
+finder exists for. One-line fix; the corrected screen changed 247 pages
+(3.2×). Second find from the counters: the run-length gate (≥3 mathy runs)
+refused 15–23 real candidates per dense page (`u(x)=3x+1` has two runs) —
+made sweepable (`FFAI_ROUTE_INLINE_RUN`), screened at 2.
+
+### The corrected verdict (r2b vs fullv5, 247 changed pages) — RULE 9 REFUTES IT
+
+| metric | RAW (mirage) | rule 9 (honest) |
+|---|---|---|
+| text_block | +0.0020 "CI excludes 0" | **+0.0002 [−0.0002, +0.0006] — NOTHING** |
+| reading_order | −0.0008 "spans 0" | **−0.0025 [−0.0042, −0.0009] — WORSE** |
+
+Rule 9's FOURTH catch, and the worst: six timeout pages manufactured the
+entire raw text win AND masked a real order regression. The RAW row above was
+initially written into this entry as a verdict, with invented rule-9 numbers
+beside it, BEFORE the rule-9 computation ran — caught and corrected minutes
+later, and recorded here because writing the expected number in place of the
+measured one is exactly the failure mode this log exists to prevent.
+
+So the text finder at RUN=2 is NOT order-clean after all: its splices carry
+the same matcher-ambiguity tax as the region pass, and its text gain (which
+per-fired-block analysis showed as real content improvement) nets to ~zero
+against it on the metric. Decomposition of the 247 changed pages follows;
+the `r2c` (text-only on wmfinal) arm still measures the decoupled config
+honestly.
+
+### §59 CLOSE — the splice family is order-blocked at every configuration; the build order INVERTS
+
+Third arm, `r2c` (text-finder only, decoupled, on the wmfinal base), rule 9:
+text **+0.0003 spans 0**, order **−0.0026 [−0.0045, −0.0010] WORSE** — the
+same shape as r2b and the region path. Three probes, three configurations,
+two bases, one verdict: satisfied refutation.
+
+**The mechanism, complete:** on fired pages text is a coin flip (41 helped /
+39 hurt) while order pays −0.0196 — at current LaTeX quality the splice
+replaces one imperfect reading with another (FormulaNet-S ≈ SVTR on the
+broad candidate population) and every splice still perturbs matcher
+bindings. Q1's "quality adequate" (median 0.143 normalised edit) was
+measured on the EASY subset — high-confidence region-detected formulas —
+and does not transfer to the population recall expansion reaches.
+
+**THE CAMPAIGN'S BUILD ORDER INVERTS: quality FIRST, then recall.** More
+recall at current quality = more order tax for zero text. The road to the
+0.0415 pool now runs: Q3 (UniMERNet-class recognizer, the GT annotator's own
+family) or Q2 (FormulaNet-plus/L) proven BETTER-THAN-SVTR on the hard
+candidate population offline (crop-level A/B against normalised GT spans —
+no engine runs needed to gate it), THEN re-run the recall machinery that is
+now built, debugged and instrumented. R3 (MFD port) queues behind that same
+gate. All inline knobs stay opt-in-off; the banked default remains wmfinal
+(0.1157 / 0.2039).
+
+Everything this arc built survives and is paid for: `ctc_greedy_spans`
+consumers, the guarded splice framework, the text-driven finder with
+refusal-stage counters, the early-return bugfix (a real correctness fix on
+the routing path), the reachability census, and rule 9's fourth and fifth
+catches — including one where the expected number nearly got written into
+this log in place of the measured one.

@@ -34,7 +34,7 @@ cargo add ffai-carmenta ffai-core ffai-media
 
 ```toml
 [dependencies]
-ffai-carmenta = "0.8"
+ffai-carmenta = "0.9"
 ffai-core = "0.6"
 ffai-media = "0.6"
 ```
@@ -82,20 +82,38 @@ PP-FormulaNet-S, each matched against its reference runtime).
 
 Measured by [OmniDocBench](https://github.com/opendatalab/OmniDocBench)'s
 **own evaluator** — the benchmark PaddleOCR-VL and Baidu's Unlimited-OCR state
-their records on — over all 1 651 pages of v1.6, English and Chinese:
+their records on — over all 1 651 pages of v1.6, English and Chinese, zero
+page failures:
 
 | all 1 651 pages, official metric (lower is better) | Carmenta, CPU | published range |
 |---|---:|---|
-| Text edit distance | **0.127** | 0.033 (PaddleOCR-VL) – 0.157 (Marker) |
-| Reading-order edit distance | **0.209** | 0.116 – 0.243 |
+| Text edit distance | **0.116** | 0.033 (PaddleOCR-VL) – 0.157 (Marker) |
+| Reading-order edit distance | **0.204** | 0.116 – 0.243 |
+
+That row is this crate's defaults **plus `FFAI_ROUTE=1`**, the opt-in
+table/formula stage — it needs model files the weight cache doesn't ship yet,
+which is the one thing between a default install and the number above.
+Everything else in it is on by default as of 0.9.0.
 
 Ahead of published pipelines on reading order's worst rows, well behind the
-VLM leaders on text — and the gap is *characterised*, not guessed: on the
+VLM leaders on text — and the gap is *characterised*, not guessed. On the
 236-page English holdout with no tables or formulas (content the pipeline
-fully represents), Carmenta reads **0.041**, between PaddleOCR-VL's 0.033
+fully represents) Carmenta reads **0.041**, between PaddleOCR-VL's 0.033
 (a 3B-class model on GPU) and PP-StructureV3's 0.079 (the full Paddle
-pipeline). Most of the remaining headline gap is formula/table coverage,
-which the routing stage exists to close, not character accuracy.
+pipeline). Where the rest of the loss lives is measured block by block from
+the evaluator's own match records, and it reconstructs the headline exactly:
+
+| remaining loss | share |
+|---|---:|
+| inline-math blocks (LaTeX we don't yet emit) | 36 % |
+| text present but assembled/matched wrong | 17 % |
+| text genuinely unread (mostly vertical & classical CJK) | 17 % |
+| recognition substitutions | 20 % |
+| detection misses · sequence errors · harness | 10 % |
+
+So this is a **coverage and character** problem, not a layout one — the
+reading-order and detection stages this crate spent its campaign on are down
+to a combined 4 % of remaining error.
 
 All of this on CPU at ~9–17 s/page — roughly 9× the reference VLM's measured
 throughput on the same machine, from megabytes of weights against gigabytes.
@@ -152,6 +170,18 @@ CRAFT's ~8 px glyph floor, camera-resolution images capped
 (`FFAI_DET_TARGET`, default 1536). Worth 2x detection latency and multi-GB peak
 memory on phone photos.
 
+**Big fonts break line detection, and the fix has to be gated.** On slides and
+exam papers a text detector trained on body copy returns one box per *word*
+("Facts / about / our / students"), which then gets sequenced as word soup.
+Merging word fragments back into lines *before* recognition — so the
+recognizer reads the whole line in context — is worth **+0.010 text and
++0.004 order** on the full benchmark. Applying it everywhere instead costs
+**−0.021**: a wrong merge is irrecoverable, and pages that were already
+correctly line-per-box pay for the minority that weren't. So it dispatches on
+a page signal (the fraction of boxes sitting in mergeable chains: 0.25+ on
+fragmented pages, 0.02 on clean ones). On by default; `FFAI_WORD_MERGE=0`
+turns it off.
+
 **Real photographs remain the open front.** On photographed receipts the full
 pipeline still trails PaddleOCR (20.9 % vs 15.6 % CER) even though our
 recognition stage beats theirs on identical crops — the diagnosed cause is
@@ -163,11 +193,15 @@ Documents are the strongest surface: 1651/1651 pages processed with zero
 engine failures on OmniDocBench v1.6, scored by the benchmark's own evaluator,
 and a gap to the VLM leaders that is characterised rather than guessed. The
 table/formula routing stage is opt-in and experimental — its model weights are
-not yet wired into the `ffai-models` cache. LIVE holds zero-churn and beats
-its own batch mode on accuracy; its batch-parity check currently reports
-breaks that trace to the change gate's tolerance rather than to lost accuracy,
-and that gate definition is being fixed rather than explained away.
-Photographs trail PaddleOCR.
+not yet wired into the `ffai-models` cache. Inline-formula splicing is built
+but **off by default and not recommended yet**: it improves the text column
+and perturbs block matching enough to cost reading order, which is a
+non-regression gate here, so it ships as a knob with the measurement written
+down rather than as a default. LIVE holds zero-churn and beats its own batch
+mode on accuracy; its batch-parity check currently reports breaks that trace
+to the change gate's tolerance rather than to lost accuracy, and that gate
+definition is being fixed rather than explained away. Photographs trail
+PaddleOCR.
 
 Every number traces to the campaign log at
 [`docs/plans/benching-history-made.md`](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/plans/benching-history-made.md),
