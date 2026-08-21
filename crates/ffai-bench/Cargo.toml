@@ -27,7 +27,7 @@ regex = { workspace = true }
 # Only the synthetic-corpus generator examples use these; the library needs
 # neither a rasterizer nor a PNG encoder.
 fontdue = "0.9"
-png = "0.17"
+png = "0.18"
 # `suppress_optimizer` only — the rule search reads harvested CSVs. The library
 # never parses a CSV and never takes an argument.
 clap = { workspace = true }
