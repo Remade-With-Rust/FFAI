@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-bench"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "csv",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-media"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "ffai-core",
  "getrandom 0.3.4",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "candle-nn",
  "candle-transformers",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-models"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "dirs",
  "ffai-core",
@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ffai-core",
  "ffai-diana",
