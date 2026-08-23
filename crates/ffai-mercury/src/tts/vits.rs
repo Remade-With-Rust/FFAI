@@ -403,7 +403,7 @@ impl Vits {
             let m = p.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let mut sum = 0f32;
             for pj in p.iter_mut() {
-                *pj = (*pj - m).exp();
+                *pj = ffai_core::fastmath::exp(*pj - m);
                 sum += *pj;
             }
             let inv = 1.0 / sum;
@@ -796,7 +796,7 @@ impl Vits {
         let mut skip: Option<Tensor> = None;
         for i in 0..4 {
             let a = self.conv(&format!("{base}.enc.in_layers.{i}"), &x)?; // [1, 384, T]
-            let t_half = a.narrow(1, 0, HIDDEN).e()?.tanh().e()?;
+            let t_half = ffai_core::fastops::tanh(&a.narrow(1, 0, HIDDEN).e()?).e()?;
             let s_half = candle_nn::ops::sigmoid(&a.narrow(1, HIDDEN, HIDDEN).e()?).e()?;
             let acts = (t_half * s_half).e()?;
             let rs = self.conv(&format!("{base}.enc.res_skip_layers.{i}"), &acts)?;
@@ -853,7 +853,7 @@ impl Vits {
         // graph), then a bias-free projection and tanh.
         x = leaky_relu(&x, 0.01)?;
         x = self.conv("dec.conv_post", &x)?;
-        let audio = x.tanh().e()?.flatten_all().e()?;
+        let audio = ffai_core::fastops::tanh(&x).e()?.flatten_all().e()?;
         audio.to_vec1().e()
     }
 

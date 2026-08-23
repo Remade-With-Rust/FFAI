@@ -53,6 +53,7 @@ fn main() {
         skip_references: false,
         corpus,
         references,
+        scorers: Vec::new(),
         // Best-of-1: CER is deterministic, and the timings this suite produces
         // are already caveated by whatever else the box is doing.
         runs: std::env::var("FFAI_BENCH_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(1),

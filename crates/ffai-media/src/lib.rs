@@ -313,9 +313,26 @@ pub struct VideoStream {
     nal_length_size: Option<usize>,
     vidx: usize,
     tb: rff_core::Rational,
-    stride: usize,
-    /// Decoded-frame counter, for the decimation stride.
-    idx: usize,
+    /// Seconds between kept frames; `<= 0` keeps every frame.
+    ///
+    /// **Decimation is by TIMESTAMP, not by a decoded-frame stride.** The
+    /// stride version computed its source rate as `time_base.den /
+    /// time_base.num` — but a time base is a CLOCK TICK RATE, not a frame
+    /// rate. MP4 commonly uses 1/12800, so `stream_frames(path, 1.0)` asked
+    /// for one frame per second and computed a stride of 12800, returning
+    /// **exactly one frame** from every clip in the corpus. The failure is
+    /// quiet in the worst way: one frame is a perfectly good frame, so a
+    /// caller sees a plausible result rather than an error.
+    ///
+    /// A deadline in seconds needs no frame rate at all — it reads the
+    /// timestamps the container already carries — and it stays correct on
+    /// variable-frame-rate sources, where no single stride can be right.
+    interval: f64,
+    /// Timestamp the next kept frame must reach.
+    next_due: f64,
+    /// Whether any frame has been kept yet, so the first one is always taken
+    /// regardless of where its timestamp starts.
+    started: bool,
     /// Packets fed, for error messages that say WHERE it stopped.
     pkts: usize,
     path: std::path::PathBuf,
@@ -382,14 +399,25 @@ impl Iterator for VideoStream {
                 }
             };
             let Some(v) = frame else { continue };
-            let keep = self.idx.is_multiple_of(self.stride);
-            self.idx += 1;
-            if !keep {
-                continue;
-            }
             let ts = packet.pts.map_or(0.0, |p| {
                 p as f64 * f64::from(self.tb.num) / f64::from(self.tb.den.max(1))
             });
+            if self.interval > 0.0 {
+                if self.started && ts < self.next_due {
+                    continue;
+                }
+                // Advance from the DEADLINE, not from the frame's own
+                // timestamp, so the sampling grid does not drift late by half
+                // an interval on every step. Clamped forward for sources whose
+                // gaps exceed the interval, so a long gap does not leave a
+                // backlog of instantly-due frames afterwards.
+                self.next_due = if self.started {
+                    (self.next_due + self.interval).max(ts + self.interval * 0.5)
+                } else {
+                    ts + self.interval
+                };
+                self.started = true;
+            }
             return Some(from_rusty_frame(&v, ts));
         }
     }
@@ -399,14 +427,7 @@ impl Iterator for VideoStream {
 ///
 /// Demuxes with `rff-format-mp4` and decodes with `rusty_h264` — the whole path
 /// is Remade-With-Rust, no libavformat and no libavcodec.
-// `(src_fps / fps).round().max(1.0) as usize`: `.max(1.0)` fixes the low end
-// AND absorbs NaN (f64::max returns the non-NaN operand), and Rust saturates
-// float->int casts rather than wrapping.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
+#[allow(clippy::cast_precision_loss)]
 pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
     use rff_format::FormatRegistry;
 
@@ -472,16 +493,9 @@ pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
     }
 
     let tb = vstream.time_base;
-    let src_fps = if tb.num > 0 {
-        f64::from(tb.den) / f64::from(tb.num)
-    } else {
-        0.0
-    };
-    let stride = if fps > 0.0 && src_fps > 0.0 {
-        (src_fps / fps).round().max(1.0) as usize
-    } else {
-        1
-    };
+    // NOT `time_base.den / time_base.num` — see `VideoStream::interval`. That
+    // read a clock tick rate as a frame rate and decimated 12800x.
+    let interval = if fps > 0.0 { 1.0 / fps } else { 0.0 };
 
     Ok(VideoStream {
         demux,
@@ -489,8 +503,9 @@ pub fn stream_frames(path: &Path, fps: f64) -> Result<VideoStream> {
         nal_length_size,
         vidx,
         tb,
-        stride,
-        idx: 0,
+        interval,
+        next_due: 0.0,
+        started: false,
         pkts: 0,
         path: path.to_path_buf(),
         done: false,

@@ -520,7 +520,7 @@ fn decode_beam(
         let denom = logsumexp(&values);
         values
             .get(no_speech_tok)
-            .map_or(0.0, |&v| (v - denom).exp())
+            .map_or(0.0, |&v| ffai_core::fastmath::exp(v - denom))
     };
     apply_logit_filters(&mut values, &[], &whisper.tokenizer, cfg, &non_speech);
     let seed_state = whisper.decoder.save();
@@ -771,7 +771,7 @@ fn decode_once(
             let denom = logsumexp(&values);
             values
                 .get(no_speech_tok)
-                .map_or(0.0, |&v| (v - denom).exp())
+                .map_or(0.0, |&v| ffai_core::fastmath::exp(v - denom))
         } else {
             0.0
         };
@@ -853,9 +853,14 @@ fn sample(logits: &[f32], temperature: f32, rng: &mut u64) -> u32 {
     if !max.is_finite() {
         return 0;
     }
+    // `fastmath::exp` over the whole vocabulary. This runs once per decode
+    // STEP over ~51 865 logits, so it was ~52 K scalar libm calls per token —
+    // the single densest transcendental site in the workspace, and the reason
+    // it leads `docs/plans/turbocharger.md`'s tier 2.
+    let inv_t = 1.0 / temperature;
     let weights: Vec<f32> = logits
         .iter()
-        .map(|&l| ((l - max) / temperature).exp())
+        .map(|&l| ffai_core::fastmath::exp((l - max) * inv_t))
         .collect();
     let total: f32 = weights.iter().sum();
     // xorshift64*: tiny, deterministic, and adequate for token sampling.
@@ -996,8 +1001,10 @@ fn logsumexp(xs: &[f32]) -> f32 {
     if !max.is_finite() {
         return f32::NEG_INFINITY;
     }
-    let sum: f32 = xs.iter().map(|&x| (x - max).exp()).sum();
-    max + sum.ln()
+    // `logsumexp` runs over the whole vocabulary, per beam, per step —
+    // the same shape of site as the sampler above it.
+    let sum: f32 = xs.iter().map(|&x| ffai_core::fastmath::exp(x - max)).sum();
+    max + ffai_core::fastmath::ln(sum)
 }
 
 fn argmax(values: &[f32]) -> u32 {

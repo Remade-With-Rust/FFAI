@@ -1,0 +1,40 @@
+VLMEvalKit is UNIMPORTABLE ON WINDOWS at the revision this campaign pinned.
+
+    vlmeval/dataset/utils/hipho_verifier.py
+
+        def timeout(timeout_seconds: int = 10):
+            if os.name == "posix":
+                ...
+                return decorator
+            # <-- no else branch: returns None on nt
+
+    ...and line 681 is `@timeout(timeout_seconds=30)`, so importing anything
+    from `vlmeval` raises:
+
+        TypeError: 'NoneType' object is not callable
+
+This is an upstream defect, not a configuration problem: `import vlmeval` fails
+on any non-posix platform. The fix is the missing else branch — a no-op
+decorator, which is what the posix path degrades to anyway whenever it is
+called off the main thread (the function already handles that case by executing
+without a signal).
+
+WHY THIS IS RECORDED RATHER THAN JUST APPLIED
+---------------------------------------------
+A patched reference is not the published reference, and Arm 1's whole job is to
+reproduce a published row. Any ledger line produced through a patched
+VLMEvalKit must be readable as such years later, so the patch lives in the repo
+next to the adapters and is named in the plan (§7).
+
+BLAST RADIUS, stated rather than assumed: the decorator guards
+`answer_tag_reward_fn_for_r1`, the math-answer verifier used by the HiPhO
+dataset. None of OCRBench / DocVQA / ChartQA / TextVQA / MMStar call it. On
+Windows the patched decorator makes the wrapped function run WITHOUT a 30s
+timeout — identical to what the posix path already does on a non-main thread —
+so a pathological input hangs instead of raising. That is a real behaviour
+change and it is why this note exists; it does not touch any code path the
+Argus corpora exercise.
+
+APPLY (the checkout is gitignored under .tools-bench/, so re-clone = re-apply):
+
+    python corpora/refs/patches/apply_vlmevalkit_patch.py

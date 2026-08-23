@@ -41,3 +41,4 @@ pub mod resample;
 pub mod runner;
 pub mod speed;
 pub mod tts;
+pub mod vlm;

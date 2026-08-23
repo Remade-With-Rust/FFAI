@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Carmenta — OCR in WebAssembly</title>
+<style>
+ body{font:14px system-ui;margin:2rem;max-width:60rem}
+ canvas{max-width:100%;border:1px solid #ccc}
+ #log{white-space:pre;font-family:ui-monospace,monospace;font-size:12px}
+ input{margin:.25rem 0}
+ .hint{color:#666}
+</style>
+<h1>Carmenta — OCR in WebAssembly</h1>
+<p>Pure Rust. No Tesseract.js, no ONNX Runtime Web — detection, recognition and
+reading order are all inside the wasm module.</p>
+<p><b>Weights are yours.</b> There is no filesystem in a browser, so the files
+below are handed to the module as bytes.</p>
+<p class="hint"><b>mobiledet-crnn</b> — the pair that measured fastest in a wasm
+runtime: <code>ppocrv5-mobile-det/det-fused.safetensors</code> (4.7 MB) and
+<code>crnn-english-g2/crnn.safetensors</code>, from your FFai model cache.</p>
+<p class="hint"><b>Leave "one line" ticked.</b> Detection is ~89 % of the work
+and wasm has no SIMD yet, so a full page read takes minutes; recognizing a crop
+you already selected takes about 200 ms. See the README.</p>
+<label>detector .safetensors <input type="file" id="det"></label><br>
+<label>recognizer .safetensors <input type="file" id="rec"></label><br>
+<label>image <input type="file" id="im" accept="image/*"></label>
+<label class="hint"><input type="checkbox" id="line" checked> the image IS one line (skips detection)</label><br>
+<canvas id="cv"></canvas>
+<div id="log">load the three files above</div>
+<script type="module">
+import init, { Reader, allocator } from './pkg/ffai_carmenta_wasm.js';
+const log = m => document.getElementById('log').textContent = m;
+let reader = null, detBuf = null, recBuf = null;
+await init();
+log(`wasm ready — allocator: ${allocator()}`);
+
+const tryBuild = () => {
+  if (!detBuf || !recBuf) return;
+  const t = performance.now();
+  try {
+    reader = Reader.mobiledetCrnn(new Uint8Array(detBuf), new Uint8Array(recBuf));
+    log(`model loaded in ${(performance.now()-t).toFixed(0)} ms — now pick an image`);
+  } catch (e) {
+    log(`model load failed: ${e}`);
+  }
+};
+document.getElementById('det').onchange = async e => { detBuf = await e.target.files[0].arrayBuffer(); tryBuild(); };
+document.getElementById('rec').onchange = async e => { recBuf = await e.target.files[0].arrayBuffer(); tryBuild(); };
+
+document.getElementById('im').onchange = async e => {
+  if (!reader) return log('load the two weight files first');
+  const bmp = await createImageBitmap(e.target.files[0]);
+  const cv = document.getElementById('cv');
+  cv.width = bmp.width; cv.height = bmp.height;
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(bmp, 0, 0);
+  // Exactly the layout `read` wants: RGBA, row-major, alpha ignored.
+  const { data } = ctx.getImageData(0, 0, cv.width, cv.height);
+  const single = document.getElementById('line').checked;
+  log('reading…');
+  const t = performance.now();
+  let lines;
+  try {
+    lines = single
+      ? reader.readLine(data, cv.width, cv.height)
+      : reader.read(data, cv.width, cv.height);
+  } catch (err) {
+    return log(`read failed: ${err}`);
+  }
+  const ms = performance.now() - t;
+  ctx.lineWidth = 2; ctx.strokeStyle = '#0a0';
+  for (const l of lines) ctx.strokeRect(l.x, l.y, l.width, l.height);
+  log(`${lines.length} lines in ${ms.toFixed(0)} ms (single-threaded wasm, no SIMD)\n` +
+      lines.map(l => `  ${l.text}`).join('\n'));
+};
+</script>

@@ -13,6 +13,23 @@ categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }
+# Manifest-driven checkpoint resolution, the same seam every other engine uses:
+# no engine hardcodes an HF cache path.
+ffai-models = { workspace = true }
+# The tokenizer is the ENGINE's business now, not just the step-4 test's: the
+# assembled prompt has to become ids and the generated ids have to become text.
+tokenizers = { workspace = true }
+# The tensor spine. All three MUST move in lockstep — mixing candle-core and
+# candle-transformers minor versions is a type mismatch, not a warning.
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+# The vision tower's elementwise kernels run across cores; candle's do not
+# (its CPU backend parallelises conv2d and nothing else), and that half of a
+# SigLIP layer is where the time was. See src/siglip.rs.
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # BACKEND PLAN (Phase 4): mistral.rs — the candle-based inference engine — as
 # an optional dependency powering Qwen-VL / LLaVA-class models:
@@ -20,6 +37,18 @@ ffai-core = { workspace = true }
 # Deliberately not added in Phase 0: it is a large git dependency every
 # contributor would fetch while the feature is still a stub. It lands together
 # with the first working describe_image().
+
+[dev-dependencies]
+# The step-3 oracle test reads the reference dump's summary.json.
+serde_json = { workspace = true }
+# Step 6's gate resolves the checkpoint the same way the engine does, so the
+# test cannot pass against a model the engine could not have found.
+ffai-models = { workspace = true }
+# The README's example is compiled (examples/quickstart.rs) so its code is
+# type-checked against the real API rather than against memory. Decoding an
+# image file is the CALLER's job — the engine takes an already-decoded
+# `ImageBuffer` — so this is a dev-dependency, not a dependency.
+ffai-media = { workspace = true }
 
 [features]
 # Will enable the mistral.rs backend once wired (Phase 4).
@@ -34,4 +63,24 @@ unsafe_code = "warn"
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
-# No allows needed: this crate is clean under both groups.
+# This crate WAS clean under both groups when it was a 66-line stub. It now
+# carries a resampling kernel, a tile geometry calculator and a decode loop,
+# and the allows below are the ones numeric code inherently needs — the same
+# set `ffai-bench` documents for the same reason.
+#
+# Each is scoped and read rather than waved through:
+#
+# * the casts are indices and image dimensions, bounded by an image this
+#   process just decoded — a 2048x2048 tile grid is nowhere near f32's 24-bit
+#   integer range, let alone usize's;
+# * `suboptimal_flops` fires on the resampler's accumulate loop, where the
+#   multiply-add order is chosen to match the reference's, not the FPU's
+#   preference. Fusing it would change the result and break the oracle gate
+#   that exists to catch exactly that.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+suboptimal_flops = "allow"
+# Documentation debt on the internal loaders; the public gates are documented.
+missing_errors_doc = "allow"

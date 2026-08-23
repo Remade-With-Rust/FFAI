@@ -1,5 +1,11 @@
-//! Task metrics. Phase 0: WER and CER (the ASR/OCR standards). Caption
-//! metrics (CIDEr-class) arrive with Argus in Phase 4.
+//! Task metrics: WER and CER (the ASR/OCR standards).
+//!
+//! **Caption metrics deliberately do not live here.** Argus is live, and it
+//! scores through the benchmark's OWN evaluator as an external process — see
+//! `crate::vlm` and the `[[scorer]]` contract. Answer extraction is part of a
+//! VLM metric, so a caption metric written here would be a scorer we grade
+//! ourselves against, which is exactly the self-favouring comparison the
+//! Carmenta campaign paid a year for.
 //!
 //! Both sides of every comparison pass through [`crate::normalize`] under the
 //! same [`Mode`], so formatting differences (`Mr.` vs `MISTER`, `23` vs

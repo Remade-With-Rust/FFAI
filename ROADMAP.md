@@ -69,9 +69,36 @@ corpora (Argus).
 
 ## Phase 4 — Argus VLM
 
-- `mistralrs` engine: Qwen-VL / LLaVA-class captioning + VQA, quantized.
-- Video understanding: rff keyframe sampling → windowed captions → timed
-  track (`ffai caption -i video.mp4` → chaptered description).
+**Image captioning / VQA is LIVE**: `SmolVLM-256M-Instruct` on candle —
+`SigLIP` tower, pixel-shuffle connector, Llama decoder — reproducing the
+reference implementation's caption byte-identically from a raw image
+(`docs/plans/argus-launch-plan.md` §16). `ffai caption -i image.png`.
+
+**Video understanding is LIVE**: `ffai caption -i clip.mp4 --fps 2 --window 8`
+streams frames, captions them in windows, and writes a timed track
+(`--output x.srt` / `.vtt` / `.json`). Splitting is off for video — one tile
+per frame at 64 tokens, so a window fits the tower's 8192 positions — and the
+unsplit tile is bit-identical to the still path's already-gated thumbnail.
+Memory is one window deep regardless of clip length.
+
+Remaining:
+
+- **A video quality claim.** None is made today, deliberately:
+  `SmolVLM-256M-Instruct` is an image model with no temporal training and no
+  published Video-MME/MVBench row, so a number here would be one we invented.
+  It needs a video-capable checkpoint first.
+- **Speed.** `ffai bench vlm` reads 2.4x slower than the PyTorch reference at
+  matched weights and config (quality is an exact tie; footprint is 0.71x).
+  Two obvious causes are measured and refuted — tile batching is worth 1.07x,
+  and candle's CPU GEMM is at parity with PyTorch's. The residual is candle's
+  elementwise/layout work, not Argus's call shapes.
+- `mistralrs` behind the reserved `mistralrs-backend` feature, for the serving
+  concerns it owns: quantized weights and grammar-constrained JSON decoding.
+  Blocked on a crates.io release that can load `SmolVLM` — the working version
+  is a git revision, and `cargo publish` refuses a git dependency.
+- Larger checkpoints (`SmolVLM-500M`, Qwen-VL) as user-selectable engines, each
+  registering under its own name so the bench's checkpoint-level comparison key
+  keeps working.
 
 ## Phase 5 — The graph and plugins
 

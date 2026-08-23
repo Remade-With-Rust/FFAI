@@ -1207,7 +1207,12 @@ impl Block {
 
         let mlp = super::profile::timed(&p.dec_mlp, || {
             self.mlp2
-                .forward(&self.mlp1.forward(&self.mlp_ln.forward(&x)?)?.gelu()?)
+                // `gelu_tanh`, NOT `gelu_erf` — candle's `.gelu()` is the tanh
+                // approximation and the two differ by ~1e-3, which is above
+                // what Whisper's oracle tolerates.
+                .forward(&ffai_core::fastops::gelu_tanh(
+                    &self.mlp1.forward(&self.mlp_ln.forward(&x)?)?,
+                )?)
         })?;
         x + mlp
     }

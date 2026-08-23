@@ -1,0 +1,44 @@
+# FIXTURE references for the Argus harness smoke test. NOT world standards.
+#
+# Kept OUT of corpora/references.toml deliberately: that file declares real
+# implementations whose rows are claims, and a fixture sitting in it would
+# eventually be quoted. Pass this file explicitly:
+#
+#   ffai bench vlm --corpus corpora/argus-smoke-v1.toml \
+#                  --refs corpora/references-argus-smoke.toml --baseline-only
+#
+# The real declarations — VLMEvalKit as Arm 1, a matched-weights CPU runtime
+# as Arm 2 — are step 0b and 0c of docs/plans/argus-launch-plan.md and belong
+# in corpora/references.toml when they exist.
+
+# ---------------------------------------------------------------------------
+# Arm-1 SHAPE, played by a fixture. Stands where VLMEvalKit will stand.
+# ---------------------------------------------------------------------------
+[[reference]]
+name = "fixture-arm1"
+task = "vlm"
+batch_command = ["python", "tools/argus_fixture_reference.py", "{filelist}"]
+version_command = ["python", "tools/argus_fixture_reference.py", "--version"]
+# The decode config is the comparison key `fill_gates` matches an engine
+# against — the mechanism that stops a 74M beam-search model deciding a 39M
+# greedy engine's quality gate. A VLM reference that omits it can never be a
+# MATCHED reference, only open-field context.
+config = "fixture/greedy"
+
+# ---------------------------------------------------------------------------
+# Arm-2 SHAPE: the same "checkpoint", a different runtime, the SAME decode
+# config string. That string is what makes it matched — see plan §1.3.
+# ---------------------------------------------------------------------------
+[[reference]]
+name = "fixture-arm2-matched"
+task = "vlm"
+batch_command = ["python", "tools/argus_fixture_reference.py", "{filelist}"]
+version_command = ["python", "tools/argus_fixture_reference.py", "--version"]
+config = "fixture/greedy"
+
+# The fixture scorer's argv — declared HERE, not in the corpus, for the same
+# reason as every other scorer: a corpus is data and must not carry commands.
+[[scorer]]
+name = "fixture-not-a-metric"
+command = ["python", "tools/argus_fixture_scorer.py", "{predictions}"]
+version_command = ["python", "tools/argus_fixture_scorer.py", "--version"]

@@ -1,7 +1,12 @@
 [package]
 name = "ffai-models"
 description = "FFai model weight management — manifests, cache, licensing surfaced"
-version.workspace = true
+# Decoupled from the workspace version deliberately. The SOURCE here is
+# unchanged, but the published 0.6.2 requires `ffai-core ^0.6.5`, which
+# excludes the 0.7.0 every other crate in this release now needs. Left at
+# 0.6.2 it would put TWO ffai-core versions in every downstream tree and the
+# shared `ffai_core` types would stop being the same types.
+version = "0.6.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

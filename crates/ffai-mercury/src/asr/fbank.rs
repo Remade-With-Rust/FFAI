@@ -168,7 +168,8 @@ impl Fbank {
             }
             for (m, filter) in self.filters.iter().enumerate() {
                 let energy: f32 = filter.iter().zip(power.iter()).map(|(w, p)| w * p).sum();
-                out[frame * self.n_mels + m] = DB_MULTIPLIER * energy.max(AMIN).log10();
+                out[frame * self.n_mels + m] =
+                    DB_MULTIPLIER * ffai_core::fastmath::log10(energy.max(AMIN));
             }
         }
 

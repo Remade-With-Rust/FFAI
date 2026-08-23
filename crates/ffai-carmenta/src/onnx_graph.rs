@@ -770,8 +770,8 @@ impl Graph {
                 vec![y]
             }
             // ---- elementwise / reduction ----------------------------------
-            "Tanh" => vec![x(0)?.tanh()?],
-            "Erf" => vec![x(0)?.erf()?],
+            "Tanh" => vec![ffai_core::fastops::tanh(&x(0)?)?],
+            "Erf" => vec![ffai_core::fastops::erf(&x(0)?)?],
             "Not" => vec![x(0)?.eq(0f64)?],
             // On the BOOL tensors the decoder's stopping logic uses — which
             // reach us as candle U8, since candle has no bool dtype — the

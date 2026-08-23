@@ -13,7 +13,10 @@
 //! crate shares one `Tensor`/`Device` and buffers flow between models without
 //! copies.
 
+pub mod cost;
 pub mod engine;
+pub mod fastmath;
+pub mod fastops;
 pub mod error;
 pub mod registry;
 pub mod types;

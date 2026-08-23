@@ -657,7 +657,7 @@ unsafe fn xattn_head(
         }
         let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
         for x in &mut s[j..keys] {
-            *x = (*x - mx).exp();
+            *x = ffai_core::fastmath::exp(*x - mx);
             sum += *x;
         }
         let inv = 1.0 / sum;
@@ -768,7 +768,7 @@ unsafe fn xattn_head_f16(
         }
         let mut sum = if keys >= 8 { hsum256(vsum) } else { 0.0 };
         for x in &mut s[j..keys] {
-            *x = (*x - mx).exp();
+            *x = ffai_core::fastmath::exp(*x - mx);
             sum += *x;
         }
         let inv = 1.0 / sum;
@@ -974,7 +974,7 @@ unsafe fn softmax_row(row: &mut [f32], cols: usize, run_max: f32) -> (f32, f32, 
 
         let new_max = run_max.max(block_max);
         let correction = if run_max.is_finite() {
-            (run_max - new_max).exp()
+            ffai_core::fastmath::exp(run_max - new_max)
         } else {
             0.0
         };
@@ -990,7 +990,7 @@ unsafe fn softmax_row(row: &mut [f32], cols: usize, run_max: f32) -> (f32, f32, 
         }
         let mut block_sum = if cols >= 8 { hsum256(vsum) } else { 0.0 };
         for s in &mut row[j..cols] {
-            *s = (*s - new_max).exp();
+            *s = ffai_core::fastmath::exp(*s - new_max);
             block_sum += *s;
         }
         (new_max, correction, block_sum)

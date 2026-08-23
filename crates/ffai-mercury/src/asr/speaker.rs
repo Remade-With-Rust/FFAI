@@ -324,7 +324,7 @@ impl AttentiveStatsPooling {
         let std_b = std.expand((x.dim(0)?, x.dim(1)?, t))?;
         let ctx = Tensor::cat(&[x, &mean_b, &std_b], 1)?;
 
-        let attn = self.conv.forward(&self.tdnn.forward(&ctx)?.tanh()?)?;
+        let attn = self.conv.forward(&ffai_core::fastops::tanh(&self.tdnn.forward(&ctx)?)?)?;
         // Softmax over TIME, not channels: the weights answer "which frames
         // matter", and normalising the wrong axis produces a plausible tensor
         // with no meaning.

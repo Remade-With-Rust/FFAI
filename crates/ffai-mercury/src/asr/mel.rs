@@ -214,7 +214,9 @@ impl MelSpectrogram {
         // GLOBAL peak, then scale into roughly [-1, 1].
         let mut peak = f32::MIN;
         for v in &mut mel {
-            *v = v.max(1e-10).log10();
+            // `fastmath::log10` — one libm call per mel bin per frame
+            // otherwise, and the loop cannot vectorise around a call.
+            *v = ffai_core::fastmath::log10(v.max(1e-10));
             peak = peak.max(*v);
         }
         let floor = peak - 8.0;

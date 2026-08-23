@@ -1,0 +1,39 @@
+VLMEvalKit's SmolVLM wrapper HARDCODES CUDA and therefore cannot run on
+FFai's target hardware.
+
+    vlmeval/vlm/smolvlm.py
+
+        line  22:  model_path, torch_dtype=torch.float32, device_map="cuda"
+        line  30:  torch.cuda.empty_cache()
+        line 377:  ).to("cuda")
+        line 385:  torch.cuda.empty_cache()
+
+    On a CPU-only box every one of these raises:
+
+        AssertionError: Torch not compiled with CUDA enabled
+
+WHY THIS MATTERS BEYOND "IT CRASHED"
+------------------------------------
+This is not a local inconvenience, it is a fact about the scoreboard, and it
+belongs in the plan rather than only in a patch file: **VLMEvalKit's model
+wrappers are GPU-first, and FFai is CPU-first.** Arm 1 — the arm whose whole
+job is to reproduce a leaderboard row — does not run out of the box on the
+class of machine Argus is being built for. Every future Arm-1 model wrapper
+should be assumed to need the same treatment until checked.
+
+WHAT THE PATCH CHANGES, AND WHAT IT DOES NOT
+---------------------------------------------
+Device selection only: `cuda` when it is actually available, `cpu` otherwise,
+overridable with `FFAI_VLMEVAL_DEVICE`. The cache-clearing calls become
+conditional on CUDA being present.
+
+It does NOT touch weights, dtype (already float32), preprocessing, the chat
+template, or the generation config. So the ROW Arm 1 produces is unchanged —
+same model, same inputs, same decoding — and only its SPEED differs. That
+distinction is what keeps the patched arm fit for its purpose: Arm 1 is quoted
+for its score, never for its throughput (that is Arm 2's job, and Arm 2 is
+unpatched plain Transformers).
+
+APPLY (the checkout is gitignored, so re-clone = re-apply):
+
+    python corpora/refs/patches/apply_vlmevalkit_patch.py

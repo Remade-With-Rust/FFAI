@@ -3,64 +3,54 @@
 //! Named for Argus Panoptes, the all-seeing hundred-eyed watchman: image
 //! captioning, visual Q&A, and video understanding.
 //!
-//! Backend plan (Phase 4): **mistral.rs** — the inference engine built on
-//! candle (`FFai`'s tensor spine, so buffers are shared without conversion) —
-//! running Qwen-VL / LLaVA-class models with quantization. Video
-//! understanding composes `ffai-media::sample_frames` (rff-backed keyframe
-//! sampling) with per-frame or windowed captioning into a timed track.
+//! # What runs
+//!
+//! **`SmolVLM`-256M-Instruct on candle** — a `SigLIP` tower, a pixel-shuffle
+//! connector and a Llama text decoder, each gated tensor-by-tensor against the
+//! reference implementation (`docs/plans/argus-launch-plan.md`, steps 3-6).
+//! Video understanding composes `ffai-media::stream_frames` (rff-backed
+//! sampling) with per-frame captioning into a timed track.
+//!
+//! **`mistral.rs` is not rejected** — it stays the documented path for the
+//! serving concerns it owns (quantized weights, grammar-constrained JSON), and
+//! the `mistralrs-backend` feature is reserved for it. It is not the path here
+//! because the version proven to serve `SmolVLM` is a git revision, and
+//! `cargo publish` refuses a git dependency — a constraint that has already
+//! made every downstream `FFai` crate unpublishable once.
+
+pub mod cost;
+pub mod decode;
+pub mod engine;
+pub mod preprocess;
+pub mod prompt;
+pub mod siglip;
+pub mod vision;
 
 use std::sync::Arc;
 
-use ffai_core::engine::{EngineInfo, EngineStatus, Task, VlmEngine, VlmOptions};
-use ffai_core::error::{Error, Result};
 use ffai_core::registry::EngineRegistry;
-use ffai_core::types::{ImageBuffer, TimedSegment, VideoFrame};
 
-/// mistral.rs-backed VLM engine (Qwen-VL / LLaVA-class, quantized).
-pub struct MistralRs;
-
-impl VlmEngine for MistralRs {
-    fn info(&self) -> EngineInfo {
-        EngineInfo {
-            name: "mistralrs".into(),
-            task: Task::Vlm,
-            status: EngineStatus::Stub,
-            description: "mistral.rs VLM engine — Qwen-VL/LLaVA on candle (Phase 4)".into(),
-        }
-    }
-
-    fn describe_image(&self, _image: &ImageBuffer, _opts: &VlmOptions) -> Result<String> {
-        Err(Error::NotImplemented {
-            task: Task::Vlm,
-            engine: "mistralrs".into(),
-        })
-    }
-
-    fn describe_video(
-        &self,
-        _frames: &[VideoFrame],
-        _opts: &VlmOptions,
-    ) -> Result<Vec<TimedSegment<String>>> {
-        Err(Error::NotImplemented {
-            task: Task::Vlm,
-            engine: "mistralrs".into(),
-        })
-    }
-}
+pub use engine::SmolVlm;
 
 /// Install every Argus engine into a registry.
 pub fn register(reg: &mut EngineRegistry) {
-    reg.register_vlm(Arc::new(MistralRs));
+    reg.register_vlm(Arc::new(SmolVlm::new()));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ffai_core::engine::EngineStatus;
 
     #[test]
     fn registers_vlm_engine() {
         let mut reg = EngineRegistry::new();
         register(&mut reg);
-        assert!(reg.vlm(None).is_ok());
+        let e = reg.vlm(None).expect("vlm engine");
+        assert_eq!(e.info().name, "smolvlm");
+        // The status is what `ffai engines` prints. `Stable` is defined as
+        // "oracle-gated against a reference implementation" — a claim steps
+        // 3-6 earned and that this assert stops anyone quietly re-stubbing.
+        assert_eq!(e.info().status, EngineStatus::Stable);
     }
 }

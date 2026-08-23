@@ -357,3 +357,135 @@ task = "tts-judge"
 config = "base.en/beam5/judge"
 batch_command = [".venv-bench/Scripts/python.exe", "corpora/refs/whisper_cpp_ref.py", "--batch", "{filelist}", "--bin", ".whispercpp/whisper-cli.exe", "--model", ".whispercpp/ggml-base.en.bin", "--threads", "24", "--beam-size", "5"]
 version_command = [".whispercpp/whisper-cli.exe", "--version"]
+
+# ============================================================================
+# VLM (Argus) — TWO ARMS, and they answer different questions.
+#
+# Plan: docs/plans/argus-launch-plan.md §1.3. Read that before adding a row.
+#
+#   Arm 1 — the SCOREBOARD. VLMEvalKit's own model wrapper: its preprocessing,
+#           its chat template, its generation defaults. Prices the MODEL and
+#           produces the row comparable to the OpenVLM leaderboard. It is what
+#           Gate 1.1 reproduces to prove the harness is not lying.
+#
+#   Arm 2 — the MATCHED reference. The SAME checkpoint on an independent CPU
+#           runtime under a PINNED decode config. Prices the IMPLEMENTATION,
+#           which is the question every other FFai headline answers.
+#
+# The mechanism that keeps them apart is the `config` string: `fill_gates`
+# only lets a reference decide the quality gate when its `config` equals the
+# engine's. Arm 2 carries the string our engine will report; Arm 1 deliberately
+# does not, so it stays open-field CONTEXT and can never be mistaken for a
+# matched comparison. That is the same guard that stopped a 74M beam-search
+# model deciding a 39M greedy engine's gate on the ASR side.
+#
+# Scoring for BOTH arms is VLMEvalKit's, declared per corpus in the
+# `[scorer]` block (corpora/argus-*.toml). We never score a VLM answer.
+#
+# Setup:
+#   python -m venv .venv-argus
+#   .venv-argus/Scripts/pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   .venv-argus/Scripts/pip install torchvision --index-url https://download.pytorch.org/whl/cpu
+#   .venv-argus/Scripts/pip install transformers accelerate pillow num2words
+#
+# torchvision is NOT optional and its absence is not obvious: transformers 5.x
+# resolves SmolVLM's image processor to a torchvision backend and raises
+# `Could not load any image processor class` at from_pretrained time, long
+# after you have paid for the model download.
+#   git clone --depth 1 https://github.com/open-compass/VLMEvalKit .tools-bench/VLMEvalKit
+#   .venv-argus/Scripts/pip install -e .tools-bench/VLMEvalKit
+# Corpus:
+#   .venv-argus/Scripts/python.exe tools/argus_build_corpus.py --dataset OCRBench --limit 200 \
+#       --out corpora/argus-ocrbench-v1.toml
+# ============================================================================
+
+# ---- ARM 1: VLMEvalKit's own pipeline. Context, never the matched gate. ----
+[[reference]]
+name = "smolvlm2-256m-vlmevalkit"
+task = "vlm"
+# NOT the engine's decode key, on purpose — see the note above. This string
+# says "whatever VLMEvalKit's wrapper does", which is exactly what makes the
+# row leaderboard-comparable and exactly what makes it unmatched to us.
+# `--dataset` is REQUIRED and is why this reference is declared PER DATASET:
+# VLMEvalKit models format the prompt per dataset (build_prompt_docvqa,
+# build_prompt_chartqa, ...), each with its own instruction preamble and chat
+# markers. Passing the wrong one — or none — yields plausible text that does
+# not correspond to any published row, which is precisely what Arm 1 exists to
+# rule out. Add a sibling [[reference]] per dataset rather than parameterising
+# it, so the dataset is visible in the ledger's command line.
+config = "SmolVLM2-256M/vlmevalkit-default"
+batch_command = [".venv-argus/Scripts/python.exe", "corpora/refs/vlmevalkit_ref.py", "--batch", "{filelist}", "--corpus", "{corpus}", "--model", "SmolVLM2-256M", "--dataset", "OCRBench"]
+version_command = [".venv-argus/Scripts/python.exe", "-c", "import importlib.metadata as m; print('vlmevalkit', m.version('vlmeval'), '| transformers', m.version('transformers'))"]
+
+# ---- ARM 2: the matched reference. THIS is what prices the port. ----
+#
+# Pinned: greedy (do_sample=False, passed explicitly — a model's
+# generation_config.json can ship do_sample=True and an unpinned reference
+# compares decoding strategies while pretending to compare implementations),
+# 64 new tokens, float32, seed 0. `--threads 1` is NOT set here: set it on
+# both sides when taking a speed number, or the two arms get different core
+# counts and the ratio measures the scheduler (codec-measurement §2).
+#
+# Whatever is pinned here must equal the string the engine reports, or the
+# quality gate SKIPS rather than passing — which is the intended failure mode.
+[[reference]]
+name = "smolvlm2-256m-transformers"
+task = "vlm"
+config = "SmolVLM2-256M/greedy-64"
+batch_command = [".venv-argus/Scripts/python.exe", "corpora/refs/smolvlm_hf_ref.py", "--batch", "{filelist}", "--corpus", "{corpus}", "--model", "HuggingFaceTB/SmolVLM2-256M-Video-Instruct", "--max-new-tokens", "64", "--dtype", "float32", "--seed", "0"]
+version_command = [".venv-argus/Scripts/python.exe", "-c", "import importlib.metadata as m; print('transformers', m.version('transformers'), '| torch', m.version('torch'))"]
+
+# ---------------------------------------------------------------------------
+# SmolVLM v1 256M — THE Gate-1.1 REFERENCE MODEL, and the reason is twofold.
+#
+# 1. IT IS THE ONE WITH A PUBLISHED ROW. Its model card carries an evaluation
+#    table — `256M | Mathvista 35.9 | MMMU 28.3 | OCRBench 52.6 | MMStar 34.6 |
+#    AI2D 47 | ChartQA 55.8 | ScienceQA 73.6 | TextVQA 49.9 | DocVQA 58.3` —
+#    and Gate 1.1 is "does a published row reproduce". SmolVLM2's card and blog
+#    publish no OCRBench figure at all; the launch plan attributed v1's numbers
+#    to SmolVLM2, which is precisely the kind of claim Gate 1.1 exists to
+#    re-pin.
+#
+# 2. IT IS THE ONE mistral.rs CAN LOAD. Its `architectures` is
+#    `Idefics3ForConditionalGeneration`, which mistral.rs's
+#    `MultimodalLoaderType::from_causal_lm_name` maps to `Idefics3` — a loader
+#    whose ArchMetadata explicitly lists the `SmolVLM` family. SmolVLM2 is
+#    `SmolVLMForConditionalGeneration`, unmapped, and forcing `--arch idefics3`
+#    also fails: its vision_config omits 5 of the 9 fields `Idefics3Config`
+#    requires. See Gate 1.2 in the plan.
+#
+# Both arms below run the SAME checkpoint, as §1.3 requires.
+# ---------------------------------------------------------------------------
+
+[[reference]]
+name = "smolvlm-256m-vlmevalkit"
+task = "vlm"
+config = "SmolVLM-256M/vlmevalkit-default"
+batch_command = [".venv-argus/Scripts/python.exe", "corpora/refs/vlmevalkit_ref.py", "--batch", "{filelist}", "--corpus", "{corpus}", "--model", "SmolVLM-256M", "--dataset", "OCRBench"]
+version_command = [".venv-argus/Scripts/python.exe", "-c", "import importlib.metadata as m; print('vlmevalkit', m.version('vlmeval'), '| transformers', m.version('transformers'))"]
+
+[[reference]]
+name = "smolvlm-256m-transformers"
+task = "vlm"
+config = "SmolVLM-256M/greedy-64"
+batch_command = [".venv-argus/Scripts/python.exe", "corpora/refs/smolvlm_hf_ref.py", "--batch", "{filelist}", "--corpus", "{corpus}", "--model", "HuggingFaceTB/SmolVLM-256M-Instruct", "--max-new-tokens", "64", "--dtype", "float32", "--seed", "0"]
+version_command = [".venv-argus/Scripts/python.exe", "-c", "import importlib.metadata as m; print('transformers', m.version('transformers'), '| torch', m.version('torch'))"]
+
+# ============================================================================
+# SCORERS — executable evaluators a VLM corpus may SELECT by name.
+#
+# These live here, and not in a corpus, on purpose. `references.toml` has
+# always been executable input and is reviewed as such; a `corpora/*.toml` is
+# data. A scorer argv briefly lived in the corpus, which meant a file shaped
+# like data could run code — and the danger was not that execution is possible
+# (this file always could) but that it became INVISIBLE, one line among a
+# thousand lines of hashes and prompts a reviewer will skim.
+#
+# A corpus now says `name = "..."`; this file says how to run it.
+# Data selects from a set; code defines the set.
+# ============================================================================
+
+[[scorer]]
+name = "vlmevalkit-ocrbench"
+command = [".venv-argus/Scripts/python.exe", "corpora/refs/vlmevalkit_score.py", "--dataset", "OCRBench", "--predictions", "{predictions}"]
+version_command = [".venv-argus/Scripts/python.exe", "-c", "import importlib.metadata as m; print('vlmevalkit', m.version('vlmeval'))"]

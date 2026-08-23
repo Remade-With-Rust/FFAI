@@ -10,7 +10,51 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+
+/// A stage clock that exists on native and is nothing on wasm.
+///
+/// `std::time::Instant::now()` **panics** on `wasm32-unknown-unknown` — the
+/// target has no clock backing it. The three calls in `crnn.rs` sit inside the
+/// CRNN forward, so they fire once per text line whether or not profiling is
+/// on: `FFAI_PROFILE` gates the *reporting*, never the clock. In a browser
+/// that is not a slow path, it is a crash on the first line of the first page.
+///
+/// A `cfg` rather than a feature: this is a property of the target, not a
+/// choice a consumer should be able to get wrong. Native behaviour is
+/// byte-identical — `Clock` is a newtype over `Instant` and inlines away.
+#[derive(Clone, Copy)]
+pub struct Clock {
+    #[cfg(not(target_arch = "wasm32"))]
+    t0: Instant,
+}
+
+impl Clock {
+    #[must_use]
+    #[inline]
+    pub fn start() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            t0: Instant::now(),
+        }
+    }
+
+    /// Nanoseconds since [`Self::start`] — always 0 on wasm, where the stage
+    /// table would read all-zero rather than lie about a number it cannot take.
+    #[must_use]
+    #[inline]
+    pub fn nanos(&self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.t0.elapsed().as_nanos() as u64
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            0
+        }
+    }
+}
 
 fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -93,9 +137,9 @@ pub fn timed<T>(stage: fn(&Profile) -> &Stage, f: impl FnOnce() -> T) -> T {
     if !enabled() {
         return f();
     }
-    let t0 = Instant::now();
+    let t0 = Clock::start();
     let out = f();
-    stage(&PROFILE).add(t0.elapsed().as_nanos() as u64);
+    stage(&PROFILE).add(t0.nanos());
     out
 }
 

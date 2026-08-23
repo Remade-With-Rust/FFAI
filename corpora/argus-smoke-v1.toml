@@ -1,0 +1,75 @@
+# Argus SMOKE corpus — proves the VLM harness plumbing, measures NOTHING.
+#
+# This is step 0a's self-test, not a benchmark. Three already-pinned images
+# borrowed from the Diana and Carmenta corpora, three questions, and a FIXTURE
+# scorer that computes a deterministic placeholder number.
+#
+# ┌─ READ THIS BEFORE QUOTING ANY NUMBER FROM A RUN OF THIS CORPUS ─────────┐
+# │ `tools/argus_fixture_scorer.py` IS NOT A METRIC. It exists only to      │
+# │ prove that predictions reach a scorer and a score comes back. It does   │
+# │ not read the ground truth, does not extract answers, and its output is  │
+# │ a function of prediction LENGTH. A ledger line from this corpus records │
+# │ that the harness works, and nothing else.                               │
+# │                                                                         │
+# │ The real corpora — argus-ocrbench-*, argus-docvqa-*, argus-mmstar-* —   │
+# │ declare VLMEvalKit as their scorer (plan §1.1a, step 0b) and are the    │
+# │ only ones whose scores are claims.                                      │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# Why a fixture scorer exists at all: the alternative to testing the plumbing
+# with a stub is testing it with the real evaluator, which needs Python, model
+# weights and a network. That would make "does the harness work?" un-runnable
+# in CI, and an un-runnable check is one nobody runs.
+
+name = "argus-smoke-v1"
+version = 1
+task = "vlm"
+
+[scorer]
+name = "fixture-not-a-metric"
+metric = "fixture"
+# The fixture reports 0..100 so the scale exercises the normalisation path
+# rather than passing through as 1.0 and proving nothing.
+scale = 100.0
+
+# ---- items -------------------------------------------------------------
+# Prompts are inline so they fall under the manifest hash: change a question
+# and the corpus fingerprint changes, because a different question is a
+# different benchmark.
+
+[[clips]]
+id = "smoke-photo-0"
+path = "clips/diana-coco/coco-000.png"
+prompt = "Describe this image in one sentence."
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "03f079de99150d8cc0e09c6b541d5f51b5bbafcddc557a52ffb1f88b5c438f27"
+
+[[clips]]
+id = "smoke-photo-1"
+path = "clips/diana-coco/coco-001.png"
+prompt = "How many people are visible? Answer with a number."
+class = "photo"
+split = "holdout"
+license = "CC-BY-4.0"
+sha256 = "eb71436f206a55aa0f5dcec177e6893ae589d936a580c95a18676cd107530bdd"
+
+[[clips]]
+id = "smoke-doc-0"
+path = "clips/carmenta-render/page-00.png"
+prompt = "What does the first line of this page say?"
+class = "document_scan"
+split = "holdout"
+license = "CC0-1.0"
+sha256 = "e07d956fc8258292fa5475196f679fa1c2d7da255d374633cda22a5bd1960944"
+
+# A train-split item, so the holdout filter is exercised rather than assumed.
+[[clips]]
+id = "smoke-train-0"
+path = "clips/diana-coco/coco-002.png"
+prompt = "What is the main object?"
+class = "photo"
+split = "train"
+license = "CC-BY-4.0"
+sha256 = "b889fd7abf8c92b177081dec6e4fce73f28a1d45effcb8956ff2a3d559c3fda3"

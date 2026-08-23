@@ -82,11 +82,46 @@ const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
 const LN_EPS_FINAL: f64 = 1e-6;
 const HEADS: usize = 8;
+/// `HEAD_DIM^-0.5`, precomputed — see `attention`.
+///
+/// # This constant was WRONG, and the guard on it could not fire
+///
+/// It was first written as `0.125`. `0.125` is `64^-0.5`; `HEAD_DIM` is 15,
+/// whose inverse square root is `0.2581988897…` — a **2.07x** error on every
+/// attention score in the model, i.e. a temperature change on every softmax.
+/// The paddle oracle caught it at `max abs 6.760e-2` against a `1e-4` bar,
+/// while argmax agreement stayed at **100 %**, which is exactly why argmax
+/// agreement is not evidence (see `examples/svtr_oracle.rs`).
+///
+/// The guard was a `debug_assert!` comparing it against
+/// `(HEAD_DIM as f64).powf(-0.5)`. That assertion is correct and it never
+/// ran: `debug_assert!` compiles out in release, and release is the only
+/// profile the oracle, the benches and production ever use. **A guard that
+/// cannot fire where the code runs is not a guard.** It is now a real test
+/// (`attn_scale_matches_head_dim`), which runs in both profiles.
+const ATTN_SCALE: f64 = 0.258_198_889_747_161_15;
+
 const HEAD_DIM: usize = 15;
 
 pub struct Svtr {
     vb: VarBuilder<'static>,
     n_class: usize,
+    /// Every tensor this graph fetches, materialised once.
+    ///
+    /// # Why a cache and not just a lookup
+    ///
+    /// `VarBuilder::get_unchecked` on a mmaped safetensors backend is not a
+    /// map lookup. It calls `MmapedSafetensors::load`, which calls candle's
+    /// `convert` — and that **allocates a fresh tensor and copies the weight
+    /// out of the mapping**, every call. This graph fetches through
+    /// `conv`/`bn`/`lab`/`ln`/`linear` at twelve sites, and `forward` runs the
+    /// encoder blocks in a loop, so the whole parameter set was being copied
+    /// once per forward, per crop, forever.
+    ///
+    /// A `RwLock` rather than a `RefCell` because the recognizer is shared
+    /// across rayon workers; after the first forward every access is a read
+    /// lock over a hit, and `Tensor::clone` is an `Arc` bump.
+    cache: RwLock<HashMap<String, Tensor>>,
 }
 
 fn hardswish(x: &Tensor) -> Result<Tensor> {
@@ -103,7 +138,32 @@ fn swish(x: &Tensor) -> Result<Tensor> {
 
 impl Svtr {
     pub fn new(vb: VarBuilder<'static>, n_class: usize) -> Result<Self> {
-        Ok(Self { vb, n_class })
+        Ok(Self { vb, n_class, cache: RwLock::new(HashMap::new()) })
+    }
+
+    /// Fetch a tensor by name, materialising it from the mapping at most once.
+    ///
+    /// See [`Svtr::cache`] for what this is avoiding.
+    fn fetch(&self, name: &str) -> Result<Tensor> {
+        // Poison-tolerant on purpose. The map is a pure memo: a panic in
+        // another thread cannot leave a broken invariant here, because the
+        // worst state reachable is a missing entry and the next miss re-fills
+        // it. `unwrap()` on the guard would convert one unrelated panic
+        // anywhere in the process into a permanently dead recognizer — a
+        // user-reachable panic, which this codebase does not ship.
+        if let Some(t) = self.cache.read().unwrap_or_else(PoisonError::into_inner).get(name) {
+            return Ok(t.clone());
+        }
+        let t = self.vb.get_unchecked(name)?;
+        // Counted so the win is a DETERMINISTIC number rather than a wall
+        // clock: `examples/svtr_weight_traffic.rs` reports elements copied on
+        // the first forward against every forward after it.
+        ffai_core::cost::copy(t.elem_count() as u64);
+        self.cache
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_string(), t.clone());
+        Ok(t)
     }
 
     fn w(&self, name: &str, shape: (usize, usize, usize, usize)) -> Result<Tensor> {
@@ -120,7 +180,7 @@ impl Svtr {
         groups: usize,
         bias: bool,
     ) -> Result<Tensor> {
-        let w = self.vb.get_unchecked(&format!("{name}.w_0"))?;
+        let w = self.fetch(&format!("{name}.w_0"))?;
         let (oc, icg, kh, kw) = w.dims4()?;
         let _ = (oc, icg, kh, kw);
         // candle's conv2d takes ONE stride and ONE padding; the recorded model
@@ -157,7 +217,7 @@ impl Svtr {
             y
         };
         if bias {
-            let b = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+            let b = self.fetch(&format!("{name}.b_0"))?;
             y.broadcast_add(&b.reshape((1, b.elem_count(), 1, 1))?)
         } else {
             Ok(y)
@@ -165,10 +225,10 @@ impl Svtr {
     }
 
     fn bn(&self, x: &Tensor, name: &str) -> Result<Tensor> {
-        let mean = self.vb.get_unchecked(&format!("{name}.w_1"))?;
-        let var = self.vb.get_unchecked(&format!("{name}.w_2"))?;
-        let gamma = self.vb.get_unchecked(&format!("{name}.w_0"))?;
-        let beta = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+        let mean = self.fetch(&format!("{name}.w_1"))?;
+        let var = self.fetch(&format!("{name}.w_2"))?;
+        let gamma = self.fetch(&format!("{name}.w_0"))?;
+        let beta = self.fetch(&format!("{name}.b_0"))?;
         let s = (gamma / (var + BN_EPS)?.sqrt()?)?;
         let shift = (beta - (mean * &s)?)?;
         let c = s.elem_count();
@@ -178,8 +238,8 @@ impl Svtr {
 
     /// Learnable affine block: per-channel scale then shift, consumed in order.
     fn lab(&self, x: &Tensor, i: &mut usize) -> Result<Tensor> {
-        let w = self.vb.get_unchecked(&format!("learnable_affine_block_{i}.w_0"))?;
-        let b = self.vb.get_unchecked(&format!("learnable_affine_block_{i}.w_1"))?;
+        let w = self.fetch(&format!("learnable_affine_block_{i}.w_0"))?;
+        let b = self.fetch(&format!("learnable_affine_block_{i}.w_1"))?;
         *i += 1;
         let c = w.elem_count();
         x.broadcast_mul(&w.reshape((1, c, 1, 1))?)?
@@ -187,8 +247,8 @@ impl Svtr {
     }
 
     fn ln(&self, x: &Tensor, name: &str, eps: f64) -> Result<Tensor> {
-        let w = self.vb.get_unchecked(&format!("{name}.w_0"))?;
-        let b = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+        let w = self.fetch(&format!("{name}.w_0"))?;
+        let b = self.fetch(&format!("{name}.b_0"))?;
         let mean = x.mean_keepdim(D::Minus1)?;
         let d = x.broadcast_sub(&mean)?;
         let var = d.sqr()?.mean_keepdim(D::Minus1)?;
@@ -198,8 +258,13 @@ impl Svtr {
     }
 
     fn linear(&self, x: &Tensor, name: &str) -> Result<Tensor> {
-        let w = self.vb.get_unchecked(&format!("{name}.w_0"))?;
-        let b = self.vb.get_unchecked(&format!("{name}.b_0"))?;
+        let w = self.fetch(&format!("{name}.w_0"))?;
+        let b = self.fetch(&format!("{name}.b_0"))?;
+        // Instrumented so the scale-fold question below can be answered with a
+        // deterministic count instead of a stopwatch.
+        if let (Ok((bs, m, k)), Ok((_, n))) = (x.dims3(), w.dims2()) {
+            ffai_core::cost::matmul(bs as u64, m as u64, k as u64, n as u64);
+        }
         x.broadcast_matmul(&w)?.broadcast_add(&b)
     }
 
@@ -210,7 +275,39 @@ impl Svtr {
             .reshape((b, n, 3, HEADS, HEAD_DIM))?
             .permute((2, 0, 3, 1, 4))?
             .contiguous()?;
-        let q = (t.i(0)? * (HEAD_DIM as f64).powf(-0.5))?;
+        // The `powf` this constant replaced was ONE scalar call per attention
+        // — not per element — sitting in front of a matmul over `b*n*c`
+        // values. Hoisting it was worth approximately nothing, and getting it
+        // wrong cost a 2.07x error on every score (see [`ATTN_SCALE`]). Kept
+        // only because it is now correct and tested; it is not a win.
+        //
+        // # The scale FOLD is refuted here, and the cache is not why
+        //
+        // Argus folds this constant into the q third of the qkv weights at
+        // load — `(q·kᵀ)s == (q·s)·kᵀ` — deleting the multiply below for ~15 %
+        // of a layer. That was blocked here until the weight cache existed,
+        // and it is still not worth doing, for a reason that has nothing to do
+        // with the cache: **the geometry is three orders of magnitude
+        // different.** Argus scales 1088 tokens x 768 dims per layer; this
+        // scales 8 heads x 40 timesteps x 15 dims — 4 800 elements, twice per
+        // forward — against 194.93 MFLOP of matmul. Counted by
+        // `examples/svtr_weight_traffic.rs` under the workspace cost model:
+        // **1.28 %** of the instrumented linear algebra, and that denominator
+        // excludes the whole convolutional backbone, so the share of an actual
+        // forward is lower still.
+        //
+        // And it would not be free: `ATTN_SCALE` is not a power of two, so
+        // folding it reassociates `(Σ x·w + b)·s` into `Σ x·(w·s) + b·s` and
+        // changes the rounding. The paddle oracle sits at 8.857e-5 against a
+        // 1e-4 bar — **12 % of headroom left**. Spending an unknown share of
+        // that to buy at most 1.28 % of the linear algebra is the wrong trade,
+        // so the fold is REFUTED here rather than deferred. If the geometry
+        // ever changes — a longer sequence, a wider embed — re-run the probe
+        // before re-proposing it, because this verdict is about the shape, not
+        // about the idea.
+        let qs = t.i(0)?;
+        ffai_core::cost::elementwise(qs.elem_count() as u64, 1, 1);
+        let q = (qs * ATTN_SCALE)?;
         let k = t.i(1)?;
         let v = t.i(2)?;
         let a = q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)?;
@@ -452,13 +549,61 @@ pub fn ctc_greedy_spans(
 pub fn load_charset(path: &std::path::Path) -> Result<Vec<String>> {
     let txt = std::fs::read_to_string(path)
         .map_err(|e| candle_core::Error::Msg(format!("charset {}: {e}", path.display())))?;
-    Ok(txt.lines().map(|s| s.to_string()).collect())
+    Ok(charset_from_str(&txt))
+}
+
+/// The same parse, from text already in hand.
+///
+/// Split out so the bytes constructor reaches the identical charset — one
+/// entry per line, in order, index = class. A charset that parsed differently
+/// from the file path's would shift every decoded character by the difference
+/// and look like a bad model rather than a bad loader (§8.168).
+#[must_use]
+pub fn charset_from_str(txt: &str) -> Vec<String> {
+    txt.lines().map(std::string::ToString::to_string).collect()
 }
 
 use candle_core::IndexOp;
+use std::collections::HashMap;
+use std::sync::{PoisonError, RwLock};
 
 /// Load from a safetensors file produced by `tools/carmenta_svtr_prepare.py`.
 pub fn load(path: &std::path::Path, device: &Device, n_class: usize) -> Result<Svtr> {
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, device)? };
     Svtr::new(vb, n_class)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ATTN_SCALE, HEAD_DIM, HEADS};
+
+    /// The check that `debug_assert!` could not perform.
+    ///
+    /// `ATTN_SCALE` shipped as `0.125` — `64^-0.5` against a `HEAD_DIM` of 15
+    /// — putting a 2.07x error on every attention score. A `debug_assert!`
+    /// guarded it and compiled out of every profile anyone runs. This is the
+    /// same assertion in a form that executes: `cargo test` builds the test
+    /// harness in both debug and release, so the constant is checked either
+    /// way, and it fails at build-verification time rather than in an oracle
+    /// run that needs a 300 MB weight file to be present.
+    #[test]
+    fn attn_scale_matches_head_dim() {
+        let want = (HEAD_DIM as f64).powf(-0.5);
+        assert!(
+            (ATTN_SCALE - want).abs() < 1e-15,
+            "ATTN_SCALE is {ATTN_SCALE} but HEAD_DIM = {HEAD_DIM} wants {want}"
+        );
+    }
+
+    /// A wrong `ATTN_SCALE` is only ever the visible half of a stale-geometry
+    /// bug. `0.125` is `64^-0.5`, and 64 is a plausible head dim for a
+    /// different model — so pin the geometry it was derived from too, and the
+    /// next person editing one of the three constants is told which others
+    /// move with it.
+    #[test]
+    fn head_geometry_is_the_one_the_weights_were_recorded_with() {
+        assert_eq!(HEADS, 8, "HEADS moved; ATTN_SCALE and the qkv reshape follow");
+        assert_eq!(HEAD_DIM, 15, "HEAD_DIM moved; ATTN_SCALE must be rederived");
+        assert_eq!(HEADS * HEAD_DIM, 120, "embed dim per qkv third");
+    }
 }

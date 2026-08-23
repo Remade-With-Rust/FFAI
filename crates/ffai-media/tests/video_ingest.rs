@@ -46,24 +46,75 @@ fn decodes_a_real_mp4() {
     assert!(hi as i32 - lo as i32 > 40, "frame looks blank: {lo}..{hi}");
 }
 
-/// `fps` decimates on a fixed stride: fewer frames, and reproducibly so.
+/// `fps` samples at the rate ASKED FOR — not merely "fewer frames".
+///
+/// # ⚠ The previous version of this test passed while the feature was broken
+///
+/// It asserted `some.len() < all.len()` and nothing else. That is satisfied by
+/// **any** amount of decimation, including the bug it was supposed to guard:
+/// `stream_frames` computed its source rate as `time_base.den / time_base.num`,
+/// but a time base is a CLOCK TICK RATE, not a frame rate. MP4 commonly uses
+/// 1/12800, so asking for 1 fps computed a stride of 12800 and returned
+/// **exactly one frame** from every clip in the corpus. One frame is fewer than
+/// 48, so the test was green for as long as the bug existed.
+///
+/// It is quiet in the worst way, too: one frame is a perfectly good frame, so a
+/// caller gets a plausible result rather than an error. It surfaced only when
+/// Argus asked for a *window* of frames and kept receiving one.
+///
+/// So this now checks the RATE. The spacing assertion is the sharp one — it
+/// needs no knowledge of the clip's duration and fails on any stride-shaped
+/// mistake by orders of magnitude.
 #[test]
-fn fps_decimates() {
+fn fps_samples_at_the_rate_requested() {
     let Some(p) = clip() else {
         eprintln!("SKIP: no video corpus");
         return;
     };
     let all = ffai_media::sample_frames(&p, 0.0).expect("all");
-    let some = ffai_media::sample_frames(&p, 5.0).expect("5 fps");
-    assert!(!some.is_empty(), "decimation returned nothing");
-    assert!(
-        some.len() < all.len(),
-        "5 fps kept {} of {} — no decimation happened",
-        some.len(),
-        all.len()
-    );
+    assert!(all.len() > 10, "need a few frames to decimate");
+    let span = all.last().unwrap().timestamp - all[0].timestamp;
+    assert!(span > 0.0, "frames carry no timestamps: cannot judge a rate");
+    eprintln!("clip: {} frames spanning {span:.3}s", all.len());
+
+    for fps in [5.0f64, 10.0, 20.0] {
+        let got = ffai_media::sample_frames(&p, fps).expect("decimate");
+        assert!(!got.is_empty(), "{fps} fps returned nothing");
+
+        // 1. SPACING: consecutive kept frames are at least one interval apart.
+        //    A 12800x stride cannot fake this — it would return one frame.
+        let interval = 1.0 / fps;
+        for w in got.windows(2) {
+            let d = w[1].timestamp - w[0].timestamp;
+            assert!(
+                d >= interval * 0.5,
+                "{fps} fps kept frames only {d:.4}s apart (interval {interval:.4}s)"
+            );
+        }
+
+        // 2. COUNT: roughly rate x duration. Generous bounds — the point is to
+        //    catch an order-of-magnitude error, not to pin a frame count that a
+        //    rounding change would break.
+        let expected = span * fps;
+        assert!(
+            (got.len() as f64) >= expected * 0.5 && (got.len() as f64) <= expected * 1.5 + 2.0,
+            "{fps} fps over {span:.3}s kept {} frames; expected about {expected:.1}",
+            got.len()
+        );
+
+        // 3. Never more than the source has.
+        assert!(got.len() <= all.len(), "{fps} fps invented frames");
+        eprintln!("  {fps:>4} fps -> {:>3} frames (expected ~{expected:.1})", got.len());
+    }
+
+    // A rate above the source's keeps everything, rather than erroring or
+    // duplicating.
+    let over = ffai_media::sample_frames(&p, 10_000.0).expect("oversample");
+    assert_eq!(over.len(), all.len(), "oversampling should keep every frame");
+
     let again = ffai_media::sample_frames(&p, 5.0).expect("5 fps twice");
-    assert_eq!(some.len(), again.len(), "decimation is not deterministic");
+    let once = ffai_media::sample_frames(&p, 5.0).expect("5 fps");
+    assert_eq!(once.len(), again.len(), "decimation is not deterministic");
 }
 
 /// A container we have not wired must say so, not fail obscurely.

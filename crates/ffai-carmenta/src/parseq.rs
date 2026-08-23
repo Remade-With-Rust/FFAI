@@ -104,7 +104,11 @@ impl VitBlock {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let n = self.norm1.forward(x)?;
         let x = (x + self.attn.forward(&n, &n, None)?)?;
-        let m = self.norm2.forward(&x)?.apply(&self.fc1)?.gelu_erf()?.apply(&self.fc2)?;
+        // `fastops::gelu_erf` rather than candle's: same function, but candle
+        // evaluates `erf` per element on one core. Measured 32x on the same
+        // shape of kernel in Argus.
+        let h = ffai_core::fastops::gelu_erf(&self.norm2.forward(&x)?.apply(&self.fc1)?)?;
+        let m = h.apply(&self.fc2)?;
         x + m
     }
 }
@@ -147,7 +151,8 @@ impl DecoderLayer {
         let cn = self.norm_c.forward(content)?;
         let t = (query + self.self_attn.forward(&qn, &cn, Some(query_mask))?)?;
         let t = (&t + self.cross_attn.forward(&self.norm1.forward(&t)?, memory, None)?)?;
-        let m = self.norm2.forward(&t)?.apply(&self.linear1)?.gelu_erf()?.apply(&self.linear2)?;
+        let h = ffai_core::fastops::gelu_erf(&self.norm2.forward(&t)?.apply(&self.linear1)?)?;
+        let m = h.apply(&self.linear2)?;
         t + m
     }
 }

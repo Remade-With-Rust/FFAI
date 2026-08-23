@@ -595,5 +595,6 @@ fn empty_summary(
         steady_bytes: None,
         map50: None,
         map5095: None,
+        vlm: None,
     }
 }

@@ -30,57 +30,57 @@ use crate::par::prelude::*;
 /// activation sees.
 #[inline(always)]
 fn exp_fast(x: f32) -> f32 {
-    // 2^t, t = x * log2(e). Clamp before the exponent-field write so a
-    // saturating input cannot produce a denormal or an invalid exponent.
+    // This function's body now lives in `ffai_core::fastmath::exp`.
+    //
+    // Diana got here first: the `+1.5*2^23` rounding trick, the derived
+    // `ln2^k/k!` coefficients and the measured table below were all worked out
+    // here, and then independently NOT found by `ffai-mercury` (which left a
+    // `floor` libm call) and `ffai-argus` (which left a `round` one). Moving
+    // the body to one place is what stops that happening a fourth time; the
+    // reasoning stays here because this is where it was earned.
+    //
+    // The env toggle below is preserved, so the pipeline-level A/B that
+    // justified the change remains runnable rather than being a claim in a
+    // commit message.
+    // THE TOGGLE USED TO BE READ HERE, AND THAT COST 1.92x — measured.
+    //
+    // `old_rounding()` is a relaxed atomic load, and LLVM does not hoist
+    // atomic loads out of loops. Reading it per element therefore put a load
+    // and a branch inside every SiLU loop in the crate, which is exactly the
+    // vectorization barrier this module was written to remove: the polynomial
+    // replaced a libm call, and the toggle guarding it put an equivalent
+    // barrier straight back.
+    //
+    // `examples/silu_avx2_worth.rs`, 4 M elements, best of 5:
+    //
+    //   with the toggle in the loop   14.30 ms
+    //   with it hoisted out            7.43 ms   1.92x, max_abs 0.000e0
+    //
+    // Bit-identical, because the toggle never changed the arithmetic on the
+    // default path — it only decided whether to look. The A/B it exists for
+    // is a PIPELINE-level question, so it is now read once per call in
+    // `silu()` rather than 4 M times inside it.
+    ffai_core::fastmath::exp(x)
+}
+
+/// The pre-fix `f32::round` path, kept so `FFAI_DIANA_SILU_ROUND=1` still
+/// means something and the A/B that justified the change stays runnable.
+///
+/// `round()` is ties-away-from-zero, which no x86 instruction implements, so
+/// this is the slow branch by construction. Selected once per call, never per
+/// element.
+#[inline(always)]
+fn exp_legacy_round(x: f32) -> f32 {
     let t = (x * std::f32::consts::LOG2_E).clamp(-125.0, 125.0);
-    // Round by float ADDITION, not `f32::round`.
-    //
-    // This module's doc claims it removed the libm call that was blocking
-    // vectorization. It removed `exp` and left `round` — and Rust's `round`
-    // is ties-AWAY-FROM-ZERO, which no x86 instruction implements
-    // (`vroundps` is ties-to-even), so it lowers to a call or a long
-    // branchy sequence sitting in the middle of the loop. Removing one libm
-    // call and leaving another is an easy thing to do and an invisible
-    // thing to have done.
-    //
-    // Adding 1.5*2^23 forces every value below 2^22 to be rounded into the
-    // mantissa's last bit; subtracting it back leaves `t` rounded to
-    // nearest-even. Measured over 16 M elements, best of 7, single thread
-    // (`examples/silu_ceiling.rs`):
-    //
-    //   memcpy (the roofline)  5.58 ms   24.04 GB/s
-    //   `round()`             60.84 ms    2.21 GB/s
-    //   `round_ties_even()`   38.85 ms    3.45 GB/s
-    //   this                  12.91 ms   10.40 GB/s   <- 4.71x, BIT-IDENTICAL
-    //
-    // 10.4 GB/s against a 24 GB/s copy is a transcendental within 2.3x of
-    // pure memory traffic, i.e. it now vectorises; `round()` did not.
-    //
-    // The bit-identical part is why this is a free win rather than a
-    // tolerance question: max relative disagreement against the old kernel
-    // over the activation range is exactly 0. In-context on the serial path
-    // the bench times, the pipeline gain is 1.079x (17/21, z = +2.84) —
-    // quote THAT for the engine, and these for the kernel.
-    const MAGIC: f32 = 12582912.0; // 1.5 * 2^23
-    // `FFAI_DIANA_SILU_ROUND=1` restores `f32::round`, so the pipeline-level
-    // A/B stays runnable instead of being a claim in a commit message. The
-    // branch is on a cached bool and predicts perfectly; it costs nothing
-    // measurable and it is what makes the 1.94x re-checkable on a box that
-    // is quiet, which this one has not been.
-    let n = if old_rounding() { t.round() } else { (t + MAGIC) - MAGIC };
-    let f = t - n; // in [-0.5, 0.5]
-    // 2^f = exp(f*ln2), so the coefficients are ln2^k / k!. DERIVED, not
-    // transcribed: hand-typed decimals here are a real hazard — trimming one
-    // digit to satisfy a lint silently selected a different f32 and broke
-    // the oracle. Let the compiler compute them.
+    let n = t.round();
+    let f = t - n;
     const L1: f32 = std::f32::consts::LN_2;
     const L2: f32 = L1 * L1 / 2.0;
     const L3: f32 = L1 * L1 * L1 / 6.0;
     const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
     const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
     let p = 1.0 + f * (L1 + f * (L2 + f * (L3 + f * (L4 + f * L5))));
-    let scale = f32::from_bits(((n as i32 + 127) as u32) << 23);
-    p * scale
+    p * f32::from_bits(((n as i32 + 127) as u32) << 23)
 }
 
 /// Whether to use the pre-fix `f32::round`. See [`exp_fast`].
@@ -133,11 +133,44 @@ pub fn silu_scalar_pub(x: f32) -> f32 {
 }
 
 /// `x * sigmoid(x)`, in one pass.
+///
+/// Call-free and branch-free, which is what lets the compiler widen any loop
+/// over it — including the seven per-element loops in `epilogue.rs` and
+/// `conv3x3.rs` and the AVX2 kernel's own scalar tail, none of which have a
+/// place to hoist a toggle to.
 #[inline(always)]
 fn silu_scalar(x: f32) -> f32 {
     // Prometheus Stage 1. Compiles to nothing without the feature.
     crate::telemetry::observe_silu_input(x);
     x / (1.0 + exp_fast(-x))
+}
+
+/// [`silu_scalar`] on the pre-fix rounding. Reached only through the
+/// once-per-call selection in [`silu`].
+#[inline(always)]
+fn silu_scalar_legacy_round(x: f32) -> f32 {
+    crate::telemetry::observe_silu_input(x);
+    x / (1.0 + exp_legacy_round(-x))
+}
+
+/// Fill `dst` with SiLU of `src`, reading the rounding toggle ONCE for the
+/// whole slice.
+///
+/// Each arm's inner loop is monomorphic and inlines, so neither pays for the
+/// other's existence. A `fn` pointer would be tidier and would reintroduce
+/// the barrier in a different spelling — an indirect call per element cannot
+/// be inlined or widened either.
+#[inline]
+fn silu_fill(src: &[f32], dst: &mut [f32]) {
+    if old_rounding() {
+        for (o, i) in dst.iter_mut().zip(src) {
+            *o = silu_scalar_legacy_round(*i);
+        }
+    } else {
+        for (o, i) in dst.iter_mut().zip(src) {
+            *o = silu_scalar(*i);
+        }
+    }
 }
 
 /// Chunk size for the parallel split. Large enough that the rayon fork-join
@@ -304,17 +337,23 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                     };
                 }
             } else if xs.len() >= COLLECT_ABOVE {
-                v = xs.par_iter().map(|&x| silu_scalar(x)).collect();
+                v = if old_rounding() {
+                    xs.par_iter().map(|&x| silu_scalar_legacy_round(x)).collect()
+                } else {
+                    xs.par_iter().map(|&x| silu_scalar(x)).collect()
+                };
             } else {
                 v.resize(xs.len(), 0.0);
-                v.par_chunks_mut(1 << 14).zip(xs.par_chunks(1 << 14)).for_each(|(o, i)| {
-                    for (o, i) in o.iter_mut().zip(i) {
-                        *o = silu_scalar(*i);
-                    }
-                });
+                v.par_chunks_mut(1 << 14)
+                    .zip(xs.par_chunks(1 << 14))
+                    .for_each(|(o, i)| silu_fill(i, o));
             }
         } else {
-            v.extend(xs.iter().map(|v| silu_scalar(*v)));
+            if old_rounding() {
+                v.extend(xs.iter().map(|v| silu_scalar_legacy_round(*v)));
+            } else {
+                v.extend(xs.iter().map(|v| silu_scalar(*v)));
+            }
         }
         Ok((v, l.shape().clone()))
     })
@@ -404,6 +443,45 @@ mod tests {
             let (a, b) = (exp_fast(t), t.exp());
             let rel = (a - b).abs() / b.abs().max(1e-30);
             worst = worst.max(rel);
+            t += 0.001;
+        }
+        assert!(worst < 1e-5, "worst relative error {worst:.3e}");
+    }
+
+    /// The claim that lets the oracle stay un-parameterised over the toggle.
+    ///
+    /// `old_rounding`'s doc says both roundings are BIT-IDENTICAL over the
+    /// activation range, so the toggle changes speed and nothing else. That
+    /// is now also what makes hoisting it out of the loop safe: if the two
+    /// ever diverged, moving the decision from per-element to per-call would
+    /// still be correct, but the 1.92x would have been bought with a quality
+    /// change nobody had gated. Pin it.
+    #[test]
+    fn both_roundings_are_bit_identical() {
+        let mut t = -30.0f32;
+        let mut checked = 0u32;
+        while t <= 30.0 {
+            assert_eq!(
+                exp_fast(t).to_bits(),
+                exp_legacy_round(t).to_bits(),
+                "roundings disagree at x = {t}"
+            );
+            checked += 1;
+            t += 0.001;
+        }
+        assert!(checked > 50_000, "only {checked} points swept");
+    }
+
+    /// The legacy arm is still a correct `exp`, not just a slow one — a dead
+    /// A/B arm that silently rotted would make the toggle a trap rather than
+    /// an instrument.
+    #[test]
+    fn legacy_rounding_tracks_libm() {
+        let mut worst = 0f32;
+        let mut t = -30.0f32;
+        while t <= 30.0 {
+            let (a, b) = (exp_legacy_round(t), t.exp());
+            worst = worst.max((a - b).abs() / b.abs().max(1e-30));
             t += 0.001;
         }
         assert!(worst < 1e-5, "worst relative error {worst:.3e}");

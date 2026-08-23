@@ -155,6 +155,24 @@ impl CraftCrnn {
         }
     }
 
+    /// Any det/rec pair, with manifests read from `dir`.
+    ///
+    /// `with_manifest_dir` fixes the pair to CRAFT+CRNN and `variant` fixes the
+    /// directory to `models/`; a caller wanting a non-default pair from a
+    /// non-default directory had neither. A test binary is exactly that case —
+    /// `cargo test` runs from the crate directory, so the relative `models/`
+    /// the other constructors assume does not resolve.
+    #[must_use]
+    pub fn variant_in(rec: RecStage, det: DetStage, dir: &Path) -> Self {
+        Self {
+            models: OnceLock::new(),
+            manifest_dir: dir.to_path_buf(),
+            rec,
+            det,
+            router: OnceLock::new(),
+        }
+    }
+
     fn router(&self) -> Result<&crate::route::Router> {
         match self.router.get_or_init(|| crate::route::Router::new().map_err(|e| e.to_string())) {
             Ok(r) => Ok(r),
@@ -178,6 +196,128 @@ impl Default for CraftCrnn {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Weights supplied by the caller, for targets with no filesystem.
+///
+/// Only the fields the chosen [`DetStage`]/[`RecStage`] pair needs must be
+/// populated; anything else is ignored. Every blob is the byte content of the
+/// same file the filesystem path resolves, so the two constructors load
+/// identical tensors and there is no lenient door here — a missing field is an
+/// error naming what it wanted, not a silent fallback.
+#[derive(Default)]
+pub struct WeightBytes {
+    /// `craft.safetensors` — [`DetStage::Craft`].
+    pub craft: Option<Vec<u8>>,
+    /// `det-fused.safetensors` — [`DetStage::MobileDet`].
+    pub mobiledet: Option<Vec<u8>>,
+    /// `crnn.safetensors` — [`RecStage::Crnn`]. The English charset is a
+    /// compile-time constant, so no second file is needed.
+    pub crnn: Option<Vec<u8>>,
+    /// `parseq-tiny.safetensors` — [`RecStage::Parseq`].
+    pub parseq: Option<Vec<u8>>,
+    /// `rec.safetensors` and the text of `charset.txt` — [`RecStage::Svtr`].
+    pub svtr: Option<(Vec<u8>, String)>,
+}
+
+impl CraftCrnn {
+    /// Build from weights the caller already holds — **no `std::fs` on this
+    /// path at all.**
+    ///
+    /// `CraftCrnn::new()` reaches `ffai_models::load_dir`, which is `std::fs`
+    /// against a filesystem a browser does not have, and then
+    /// `VarBuilder::from_mmaped_safetensors`, which wants an mmap a browser
+    /// does not have either. This is the constructor a wasm build uses, and
+    /// the one an embedded target that ships weights in flash wants for the
+    /// same reason.
+    ///
+    /// Eager, not lazy: the caller has already paid to get the bytes here, so
+    /// there is nothing left to defer, and a load error surfaces at
+    /// construction where it can be reported instead of on the first frame.
+    pub fn from_bytes(det: DetStage, rec: RecStage, w: WeightBytes) -> Result<Self> {
+        let models = build_models(det, rec, w)?;
+        Ok(Self {
+            models: {
+                let cell = OnceLock::new();
+                let _ = cell.set(Ok(models));
+                cell
+            },
+            rec,
+            det,
+            manifest_dir: std::path::PathBuf::new(),
+            // The routing stages are ONNX files read from disk, so a
+            // from-bytes caller cannot have them. Left uninitialised: routing
+            // is opt-in (`FFAI_ROUTE=1`) and a page that asks for it here gets
+            // the router's own error rather than a wrong answer.
+            router: OnceLock::new(),
+        })
+    }
+}
+
+/// The [`WeightBytes`] half of [`load_models`], sharing its construction so
+/// the two paths cannot drift in what they build from the same tensors.
+fn build_models(det: DetStage, rec: RecStage, w: WeightBytes) -> Result<Models> {
+    let device = Device::Cpu;
+    let vb = |bytes: Vec<u8>| {
+        VarBuilder::from_buffered_safetensors(bytes, DType::F32, &device).map_err(image::candle_err)
+    };
+    let need = |what: &str| Error::Model(format!("from_bytes: `{what}` weights were not supplied"));
+
+    let (craft, mobiledet) = match det {
+        DetStage::Craft => (
+            Some(Craft::new(vb(w.craft.ok_or_else(|| need("craft"))?)?).map_err(image::candle_err)?),
+            None,
+        ),
+        DetStage::MobileDet => (
+            None,
+            Some(
+                crate::mobiledet::MobileDet::new(vb(w.mobiledet.ok_or_else(|| need("mobiledet"))?)?)
+                    .map_err(image::candle_err)?,
+            ),
+        ),
+        DetStage::Composed => (
+            Some(Craft::new(vb(w.craft.ok_or_else(|| need("craft"))?)?).map_err(image::candle_err)?),
+            Some(
+                crate::mobiledet::MobileDet::new(vb(w.mobiledet.ok_or_else(|| need("mobiledet"))?)?)
+                    .map_err(image::candle_err)?,
+            ),
+        ),
+    };
+
+    let mut svtr = None;
+    let (crnn, parseq) = match rec {
+        RecStage::Crnn => (
+            Some(
+                Crnn::new_with_charset(
+                    vb(w.crnn.ok_or_else(|| need("crnn"))?)?,
+                    crate::crnn::charset_for(crate::crnn::RecLang::English, None)
+                        .map_err(image::candle_err)?,
+                )
+                .map_err(image::candle_err)?,
+            ),
+            None,
+        ),
+        RecStage::Parseq => (
+            None,
+            Some(
+                crate::parseq::Parseq::new(vb(w.parseq.ok_or_else(|| need("parseq"))?)?)
+                    .map_err(image::candle_err)?,
+            ),
+        ),
+        RecStage::Svtr => {
+            let (bytes, charset_txt) = w.svtr.ok_or_else(|| need("svtr"))?;
+            let charset = crate::svtr::charset_from_str(&charset_txt);
+            // Head classes = charset + 1 blank, asserted at load rather than
+            // trusted: an off-by-one shifts every decoded character (§8.168).
+            // The bytes path gets the SAME assertion as the file path — a
+            // constructor that skips the check is a lenient door.
+            let m = crate::svtr::Svtr::new(vb(bytes)?, charset.len() + 1)
+                .map_err(image::candle_err)?;
+            svtr = Some((m, charset));
+            (None, None)
+        }
+    };
+    Ok(Models { craft, mobiledet, crnn, parseq, svtr, device })
 }
 
 fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
@@ -540,7 +680,7 @@ impl OcrEngine for CraftCrnn {
         // (Send+Sync), so rayon fans lines out with zero locking; profile
         // stages accumulate atomically.
         // Map coords are at (input/2); input coords are original * scale.
-        use rayon::prelude::*;
+        use crate::par::prelude::*;
         let to_img = |v: usize| (v as f32 * 2.0 / scale).round();
         // Mobile-det gives one line box per region rather than per-word
         // components, so the photographic per-word path has nothing to iterate;
@@ -755,6 +895,10 @@ impl OcrEngine for CraftCrnn {
         // isolated from candle's INTERNAL tile parallelism (§8.100 D5). Both
         // are rayon; measuring them apart is the only way to tell which one is
         // actually delivering the speedup.
+        // `FFAI_REC_SERIAL` is an environment variable and a browser has no
+        // environment, so on wasm this reads `false` and the `>= 3` branch is
+        // taken on any page with three lines. That branch is safe there only
+        // because `crate::par` makes it serial — see the module docs.
         let serial = std::env::var("FFAI_REC_SERIAL").is_ok();
         let results: Vec<Option<OcrLine>> = if lines.len() >= 3 && !serial {
             // Three levels of rayon nest here — ours over lines, candle's over

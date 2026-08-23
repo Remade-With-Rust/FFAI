@@ -1,4 +1,10 @@
-# Small VLM — the Phase 4 bring-up target for Argus (via mistral.rs).
+# Small VLM — a FUTURE Argus engine, not the current one.
+#
+# Argus ships SmolVLM-256M-Instruct (models/smolvlm-256m-instruct.toml), chosen
+# in Gate 1.2 because it is the checkpoint with a published OCRBench row AND the
+# one mistral.rs can load. This manifest stays for the larger-model tier: when a
+# Qwen-VL engine lands it registers under its own name, so the bench's
+# checkpoint-level comparison key keeps working.
 name = "qwen2-vl-2b"
 task = "vlm"
 description = "Qwen2-VL 2B Instruct — small vision-language model for captioning/VQA"

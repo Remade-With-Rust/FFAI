@@ -55,7 +55,7 @@ ffai models         # list model manifests, licenses, cache status
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection, tracking, and the browser.** YOLO26 on candle from official Ultralytics `.pt` — all five tiers from one tier-agnostic graph, no ONNX. **Every detection identical to PyTorch at n, m, l and x**, at **1.6–5.6× less memory** and up to **10× faster load**. **3.71× less CPU per frame than Ultralytics**, and **1.92× faster under load** — Diana is a ~2.4-core workload against their ~7.9. **ByteTrack** with no appearance model and no second weight file: IDF1 35.93 / MOTA 24.91 against 36.92 / 27.38 on identical weights and frames, with **218 ID switches to their 800**. **Runs in a browser** — [`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles the whole graph to WebAssembly with no ONNX runtime, agreeing with native to display precision. One failing gate, stated: **2.89× slower than ONNX Runtime**, which Diana beats on accuracy (0.7014 vs 0.6865). ([Status](#status)) |
-| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | Pending Build |
+| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | **VLM live.** `SmolVLM-256M-Instruct` on candle — `SigLIP` tower, pixel-shuffle connector, Llama decoder, ported tensor by tensor. The gate is the strong form: from a **raw image file** through our resize, tiling, tower, prompt assembly and decode loop, the caption is **byte-identical** to the reference — **32/32 tokens**, six stages each gated in isolation. Scored **525/1000 on OCRBench** through VLMEvalKit against the checkpoint's **published 526**. Four gates vs PyTorch: correctness **PASS**, quality **PASS** (exact tie, 49/50 answers identical), footprint **PASS** (1309 vs 1852 MiB, **0.71×**), speed **FAIL** (**2.4×** slower). A vision campaign since took the tower **2.84×** and the caption **1.86×** (27 213 → 14 627 ms) with every gate unchanged — **the four-gate table predates it and has not been re-run**, so the current speed gap is smaller than stated but unmeasured. Video captions to `.srt`/`.vtt`/`.json` at constant memory per window; **no video quality claim is made** — the checkpoint is an image model with no published video row ([Status](#status)) |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
 tensor spine), `ffai-media` (ingest/egress, backed by
@@ -834,8 +834,55 @@ Full campaign history:
 [docs/diana-mission-plan.md](docs/diana-mission-plan.md) §8; every number
 traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
-VLM (Argus) remains an honest `stub` — visible as such in `ffai engines`.
-See [ROADMAP.md](ROADMAP.md) for the build-out order.
+### VLM (Argus)
+
+`SmolVLM-256M-Instruct` on candle — a `SigLIP` tower, a pixel-shuffle connector
+and a Llama decoder, written against the reference implementation tensor by
+tensor. `ffai engines` reports it `stable`, which in this tree means
+*oracle-gated against a reference*, and the gate is the strong form: from a raw
+image, through our preprocessing, tower, prompt assembly and decode loop, the
+engine reproduces the reference's caption **byte-identically**.
+
+Getting there took one finding worth repeating. A resampler that matched PIL to
+within a single quantisation level — visually indistinguishable, ~50 dB SNR —
+was enough to change a generated token, because the output is argmaxed 32 times
+and one level is sometimes the difference. The fix was to implement PIL's
+*fixed-point* path exactly, `u8` intermediate and all. "Close enough" is not a
+property an image resampler gets to have when a language model reads the result.
+
+```sh
+ffai caption -i street.jpg --prompt "What is written in this image?"
+ffai caption -i clip.mp4  --fps 2 --window 8 --output captions.srt
+```
+
+Video streams one window at a time, so peak memory is a function of `--window`,
+not of the length of the clip. **No video quality claim is made** — the
+checkpoint is an image model with no published video row, and inventing a
+number for it is the scorer trap the Carmenta campaign already paid for.
+
+**What it costs, and the gate we do not pass.** Against `transformers` on CPU
+running the identical checkpoint: correctness **PASS**, quality **PASS** (an
+exact tie — 49 of 50 answers byte-identical on OCRBench-lite), footprint
+**PASS** at 1309 MiB against 1852 (**0.71×**), and speed **FAIL** at 0.08
+against 0.20 it/s — **2.4× slower**. Both obvious explanations were measured
+and refuted: candle's GEMM runs 589–702 GF/s against PyTorch's 680–697, which
+is parity, and batching the seventeen tiles into one forward bought 1.07× for
++384 MiB.
+
+The real cause was that candle's CPU backend calls rayon for `conv2d` and
+nothing else, so half of every encoder layer — the elementwise and layout half —
+ran on one core of twenty-four. A vision campaign replaced the tower with our
+own `SigLIP` encoder, parallelised the tiles six ways and moved the activations
+onto zero-copy AVX2 kernels: **2.84× on the tower, 1.86× on a whole caption**
+(27 213 → 14 627 ms, min-of-4, ABBA-interleaved), with 32/32 tokens and a
+byte-identical caption throughout. **The four-gate verdict above predates that
+campaign and has not been re-run**, so the speed column is stale in our favour —
+which is a reason to re-measure it, not to quietly divide one number by the
+other.
+
+Full campaign history:
+[docs/plans/argus-launch-plan.md](docs/plans/argus-launch-plan.md);
+see [ROADMAP.md](ROADMAP.md) for what is next.
 
 ## Install
 

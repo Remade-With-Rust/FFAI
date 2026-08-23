@@ -38,7 +38,20 @@ pub mod engine;
 pub mod harvest;
 pub mod image;
 pub mod conv3x3;
+/// The LIVE frame reader — **native only.**
+///
+/// It is the one part of Carmenta that is architecturally threaded: a
+/// background sweep runs on a `std::thread::spawn` handle while the caller
+/// keeps feeding frames. That is not a rayon call a shim can serialise; the
+/// design is "answer now from cache, re-detect off-thread", and without a
+/// thread there is no off-thread. `wasm32-unknown-unknown` has no threads at
+/// all, so the module is excluded rather than half-ported.
+///
+/// One-shot `recognize` never touches it, and one-shot is the whole of what a
+/// browser needs.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod live;
+pub mod par;
 pub mod suppress;
 pub mod svtr;
 pub mod mobiledet;

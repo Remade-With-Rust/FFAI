@@ -50,6 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         skip_references: false,
         corpus: PathBuf::from("corpora/harvard-sentences-v1.toml"),
         references,
+        scorers: Vec::new(),
         runs: std::env::var("FFAI_RUNS")
             .ok()
             .and_then(|s| s.parse().ok())

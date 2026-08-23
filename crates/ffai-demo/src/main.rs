@@ -25,8 +25,11 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use ffai_argus::SmolVlm;
 use ffai_carmenta::engine::CraftCrnn;
-use ffai_core::engine::{AsrEngine, AsrOptions, OcrEngine, OcrOptions, TtsEngine, TtsOptions};
+use ffai_core::engine::{
+    AsrEngine, AsrOptions, Decoding, OcrEngine, OcrOptions, TtsEngine, TtsOptions, VlmOptions,
+};
 use ffai_mercury::asr::WhisperCandle;
 use ffai_mercury::tts::PiperCandle;
 use serde_json::json;
@@ -67,6 +70,127 @@ struct Reader {
     parseq: CraftCrnn,
 }
 
+/// Argus, and the reference it is measured against.
+///
+/// Behind its own lock for the same reason `Speaker` and `Reader` are, and
+/// more so: it is the heaviest pair here — ~1 GB of `f32` safetensors on our
+/// side, another copy inside the Python worker — so a `See` click must not be
+/// able to stall a live transcription and vice versa.
+struct Seer {
+    argus: SmolVlm,
+    /// PyTorch + `transformers` on the SAME checkpoint, held open.
+    ///
+    /// This is the demo's equivalent of `whisper-cli`, and it is the same arm
+    /// the ledger's quality gate uses — `corpora/refs/smolvlm_hf_ref.py`, the
+    /// file that pins greedy / 64 tokens / float32 / seed 0. Pointing the demo
+    /// at the reference the benchmark already uses is what stops the demo and
+    /// the bench quietly disagreeing about what "the reference" means.
+    ///
+    /// **Held open, not spawned per click.** Each spawn reloads a gigabyte of
+    /// weights; a per-click process would put ~15 s of model load inside every
+    /// reference reading and make PyTorch look absurdly slow for a reason that
+    /// has nothing to do with PyTorch. The demo already warms Mercury before
+    /// serving so the first click is not paying load — this extends the same
+    /// courtesy to the side being compared against, which is the only way the
+    /// two numbers mean the same thing.
+    reference: Option<RefWorker>,
+}
+
+/// A live `smolvlm_hf_ref.py --serve`: one request line in, one result line out.
+struct RefWorker {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    load_secs: f64,
+}
+
+impl RefWorker {
+    /// Start the worker and wait for its `{"load_secs":...}` handshake.
+    ///
+    /// Returning `None` rather than erroring: an absent Python stack is a
+    /// setup state, not a failure — the demo runs, and the reference pane says
+    /// what is missing, exactly as the whisper.cpp pane does.
+    fn start() -> Option<Self> {
+        let py = [".venv-argus/Scripts/python.exe", ".venv-argus/bin/python"]
+            .iter()
+            .map(PathBuf::from)
+            .find(|p| p.exists())?;
+        let script = PathBuf::from("corpora/refs/smolvlm_hf_ref.py");
+        if !script.exists() {
+            return None;
+        }
+        let mut child = Command::new(py)
+            .args([
+                script.to_str()?,
+                "--serve",
+                "--model",
+                "HuggingFaceTB/SmolVLM-256M-Instruct",
+                "--dtype",
+                "float32",
+                "--seed",
+                "0",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .ok()?;
+        let stdin = child.stdin.take()?;
+        let mut stdout = std::io::BufReader::new(child.stdout.take()?);
+        let mut line = String::new();
+        // The handshake doubles as the readiness signal: it does not arrive
+        // until the weights are resident, so a request sent after it is warm.
+        if std::io::BufRead::read_line(&mut stdout, &mut line).ok()? == 0 {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+        Some(Self {
+            child,
+            stdin,
+            stdout,
+            load_secs: v["load_secs"].as_f64().unwrap_or(0.0),
+        })
+    }
+
+    /// One caption. `Err` is a message for the pane, never a panic.
+    fn caption(&mut self, path: &Path, prompt: &str, max_new_tokens: usize) -> Result<(String, f64), String> {
+        let req = json!({
+            "path": path.to_string_lossy(),
+            "prompt": prompt,
+            "max_new_tokens": max_new_tokens,
+        });
+        writeln!(self.stdin, "{req}").map_err(|e| format!("reference worker gone: {e}"))?;
+        self.stdin
+            .flush()
+            .map_err(|e| format!("reference worker gone: {e}"))?;
+        let mut line = String::new();
+        match std::io::BufRead::read_line(&mut self.stdout, &mut line) {
+            Ok(0) => return Err("reference worker exited".into()),
+            Ok(_) => {}
+            Err(e) => return Err(format!("reference worker read failed: {e}")),
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(line.trim()).map_err(|e| format!("reference said: {e}"))?;
+        if let Some(e) = v["error"].as_str() {
+            return Err(e.to_string());
+        }
+        Ok((
+            v["text"].as_str().unwrap_or_default().to_string(),
+            v["secs"].as_f64().unwrap_or(0.0) * 1e3,
+        ))
+    }
+}
+
+impl Drop for RefWorker {
+    fn drop(&mut self) {
+        // Close stdin first: the worker's loop ends on EOF, so this is a clean
+        // shutdown. Kill only if it does not take the hint.
+        let _ = self.stdin.write_all(b"\n");
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 fn main() {
     let whisper_cli = [".whispercpp/whisper-cli.exe", ".whispercpp/whisper-cli"]
         .iter()
@@ -95,6 +219,58 @@ fn main() {
         crnn: CraftCrnn::new(),
         parseq: CraftCrnn::new_parseq(),
     }));
+    let seer = Arc::new(Mutex::new(Seer {
+        argus: SmolVlm::with_manifest_dir(PathBuf::from("models")),
+        reference: None,
+    }));
+
+    // Argus warms in the BACKGROUND, unlike the engines above.
+    //
+    // It is ~1 GB of weights, so warming it in line would hold the demo off
+    // the network for twenty seconds for the sake of a tab nobody may open.
+    // Warming it lazily instead would put that twenty seconds inside the first
+    // click — in a tab whose entire subject is latency, which would be the
+    // worst place in the program to hide it.
+    //
+    // So: serve immediately, load behind. A click that lands early still gets
+    // an honest number, because the response reports model load as its own
+    // line rather than folding it into the caption time.
+    {
+        let seer = seer.clone();
+        std::thread::spawn(move || {
+            eprintln!("loading Argus + the PyTorch reference (smolvlm-256m) in the background ...");
+            let t = Instant::now();
+            // Started OUTSIDE the lock: the reference takes ~15 s to load a
+            // gigabyte of weights, and holding the mutex through that would
+            // block the first See click on work it does not need yet.
+            let reference = RefWorker::start();
+            match &reference {
+                Some(r) => eprintln!(
+                    "  reference (PyTorch/transformers) ready, weights loaded in {:.1}s",
+                    r.load_secs
+                ),
+                None => eprintln!(
+                    "note: PyTorch reference unavailable (needs .venv-argus with torch, \
+                     transformers, pillow).\n      The See tab still runs Argus and says \
+                     the reference pane is absent."
+                ),
+            }
+            let msg = match seer.lock() {
+                Ok(mut g) => {
+                    g.reference = reference;
+                    match g.argus.warm() {
+                        Ok(()) => format!("Argus ready in {:.1}s", t.elapsed().as_secs_f64()),
+                        Err(e) => format!(
+                            "note: Argus unavailable - {e}\n      The See tab will show this; \
+                             the other tabs are unaffected."
+                        ),
+                    }
+                }
+                Err(_) => "note: Argus lock poisoned during warm-up".to_string(),
+            };
+            eprintln!("{msg}");
+        });
+    }
 
     // Warm Mercury before serving so the first click is not paying model load.
     // The same courtesy the bench harness extends to every implementation.
@@ -134,8 +310,9 @@ fn main() {
         let engines = engines.clone();
         let speaker = speaker.clone();
         let reader = reader.clone();
+        let seer = seer.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle(stream, &engines, &speaker, &reader) {
+            if let Err(e) = handle(stream, &engines, &speaker, &reader, &seer) {
                 eprintln!("connection error: {e}");
             }
         });
@@ -147,6 +324,7 @@ fn handle(
     engines: &Arc<Mutex<Engines>>,
     speaker: &Arc<Mutex<Speaker>>,
     reader: &Arc<Mutex<Reader>>,
+    seer: &Arc<Mutex<Seer>>,
 ) -> std::io::Result<()> {
     // Read headers first: everything up to the blank line.
     let mut buf = Vec::new();
@@ -182,6 +360,10 @@ fn handle(
     }
 
     match (method.as_str(), path.as_str()) {
+        ("POST", p) if p.starts_with("/describe") => {
+            let json = describe_image(&body, p, seer);
+            respond(&mut stream, 200, "application/json", json.as_bytes())
+        }
         ("POST", "/read") => {
             let json = read_image(&body, reader);
             respond(&mut stream, 200, "application/json", json.as_bytes())
@@ -266,7 +448,7 @@ fn transcribe_both(
 
     // ---- Mercury, in process ----
     let t0 = Instant::now();
-    let (mercury_text, mercury_err) = match ffai_media::load_audio(tmp) {
+    let (mercury_text, mercury_turns, mercury_err) = match ffai_media::load_audio(tmp) {
         // The full Mercury-X layer, live:
         //
         //   VAD          on by default — a sliding window over a microphone is
@@ -300,10 +482,17 @@ fn transcribe_both(
                 ..AsrOptions::default()
             },
         ) {
-            Ok(t) => (label_speakers(&t), None),
-            Err(e) => (String::new(), Some(e.to_string())),
+            Ok(t) => {
+                let us = utterances(&t, offset_secs);
+                (label_speakers(&us), turns_json(&us), None)
+            }
+            Err(e) => (String::new(), Vec::new(), Some(e.to_string())),
         },
-        Err(e) => (String::new(), Some(format!("decode failed: {e}"))),
+        Err(e) => (
+            String::new(),
+            Vec::new(),
+            Some(format!("decode failed: {e}")),
+        ),
     };
     let mercury_ms = t0.elapsed().as_secs_f64() * 1e3;
 
@@ -332,7 +521,15 @@ fn transcribe_both(
     // A timing whose configuration is not on screen beside it is how the
     // "2x slower" reading happened in the first place.
     serde_json::json!({
-        "mercury": { "text": mercury_text, "ms": mercury_ms, "error": mercury_err },
+        "mercury": {
+            "text": mercury_text,
+            "ms": mercury_ms,
+            "error": mercury_err,
+            // One entry per segment, in session time. The pane lays these out;
+            // `text` is the same content flattened, kept for a client that
+            // does not.
+            "turns": mercury_turns,
+        },
         "whispercpp": { "text": cpp_text, "ms": cpp_ms, "error": cpp_err },
         "diarize": diarize,
     })
@@ -572,37 +769,80 @@ fn run_whisper_cpp(bin: &Path, model: &Path, wav: &Path) -> (String, Option<Stri
     }
 }
 
-/// Prefix each line with whoever said it.
+/// One segment of transcript with whoever said it and where it sits in the
+/// session.
+struct Utterance {
+    /// `None` when diarization is off, or when no turn covers this segment.
+    speaker: Option<String>,
+    text: String,
+    /// Seconds from the START OF THE SESSION, not from this chunk.
+    start: f64,
+    end: f64,
+}
+
+/// Pair each segment with whoever said it, on the session clock.
 ///
 /// Speaker turns are a separate timeline from segments — one segment can span
 /// a speaker change and one turn can cover several segments — so this matches
 /// by the turn containing the segment's START rather than pretending the two
-/// align. Where a turn cannot be found the text is emitted unlabelled rather
-/// than guessed at.
-fn label_speakers(t: &ffai_core::types::Transcript) -> String {
-    let turns = match &t.speakers {
+/// align. Where a turn cannot be found the segment is emitted UNATTRIBUTED
+/// rather than guessed at.
+///
+/// `offset_secs` is where this chunk begins in the session. The browser posts
+/// a SLIDING trailing window, so a time measured from the buffer moves every
+/// tick and cannot be laid out; adding the offset here is what makes the
+/// numbers comparable between chunks.
+fn utterances(t: &ffai_core::types::Transcript, offset_secs: f64) -> Vec<Utterance> {
+    let turns: &[ffai_core::types::TimedSegment<String>] = match &t.speakers {
         Some(s) if !s.is_empty() => s,
-        // Diarization off, or nothing found: unchanged behaviour.
-        _ => return t.text().trim().to_string(),
+        // Diarization off, or nothing found: segments, unattributed.
+        _ => &[],
     };
-    let mut out = Vec::new();
-    for seg in &t.segments {
-        let text = seg.value.trim();
-        if text.is_empty() {
-            continue;
-        }
-        match turns
-            .iter()
-            .find(|w| seg.start >= w.start - 0.25 && seg.start < w.end + 0.25)
-        {
-            Some(w) => out.push(format!("{}: {text}", w.value)),
-            None => out.push(text.to_string()),
-        }
-    }
-    out.join(
-        "
-",
-    )
+    t.segments
+        .iter()
+        .filter(|seg| !seg.value.trim().is_empty())
+        .map(|seg| Utterance {
+            speaker: turns
+                .iter()
+                .find(|w| seg.start >= w.start - 0.25 && seg.start < w.end + 0.25)
+                .map(|w| w.value.clone()),
+            text: seg.value.trim().to_string(),
+            start: offset_secs + seg.start,
+            end: offset_secs + seg.end,
+        })
+        .collect()
+}
+
+/// The same utterances as JSON, for a UI that wants to LAY THEM OUT rather
+/// than print them.
+///
+/// The flat `text` field keeps its `SPEAKER_00: ...` prefixes for logs and for
+/// a client that only wants a string, but a prefix is a lossy encoding: it
+/// throws away the timing, and it is indistinguishable from someone actually
+/// saying "speaker zero zero". The structured field is what the panes render.
+fn turns_json(us: &[Utterance]) -> Vec<serde_json::Value> {
+    us.iter()
+        .map(|u| {
+            json!({
+                "speaker": u.speaker,
+                "text": u.text,
+                "start": u.start,
+                "end": u.end,
+            })
+        })
+        .collect()
+}
+
+/// Prefix each line with whoever said it — the string form, for logs and for
+/// the UI's fallback when a response carries no structured turns.
+fn label_speakers(us: &[Utterance]) -> String {
+    us.iter()
+        .map(|u| match &u.speaker {
+            Some(who) => format!("{who}: {}", u.text),
+            None => u.text.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Read one image with BOTH OCR lineages and report each one's text, wall
@@ -665,6 +905,219 @@ fn read_image(body: &[u8], reader: &Arc<Mutex<Reader>>) -> String {
         "flatness": flatness,
         "crnn": crnn,
         "parseq": parseq,
+    })
+    .to_string()
+}
+
+/// Percent-decode one query value.
+///
+/// Written out because the prompt arrives in the query string and prompts
+/// contain spaces, punctuation and `?`. `+` is a space here — the browser's
+/// `URLSearchParams` encodes it that way — and a malformed `%` escape is left
+/// literal rather than dropped, because a mangled prompt the user can SEE
+/// beats a silently shortened one.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < b.len() => {
+                let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(v) => {
+                        out.push(v);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query<'a>(path: &'a str, key: &str) -> Option<&'a str> {
+    let (_, q) = path.split_once('?')?;
+    q.split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v)
+}
+
+/// Argus: one image in, a caption out, and the stage-by-stage cost of getting
+/// there.
+///
+/// **It races the same reference the benchmark does.** Listen puts Mercury
+/// beside `whisper-cli`; this puts Argus beside PyTorch + `transformers`
+/// running the identical `SmolVLM-256M-Instruct` checkpoint, through
+/// `corpora/refs/smolvlm_hf_ref.py` — the file that pins the decode config the
+/// ledger's quality gate is measured under. Both sides get the SAME staged
+/// file, for the same reason both ASR engines do: it removes the question of
+/// whether they actually saw identical input.
+///
+/// What is NOT claimed here is a quality verdict. One image is an anecdote;
+/// the measured result is 49/50 answers byte-identical on a pinned corpus, and
+/// that number belongs to the ledger, not to whatever the user just pasted.
+fn describe_image(body: &[u8], path: &str, seer: &Arc<Mutex<Seer>>) -> String {
+    let prompt = query(path, "prompt")
+        .map(percent_decode)
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| "What is written in this image?".to_string());
+    let max_new_tokens = query(path, "max")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(64)
+        .clamp(1, 512);
+    let seed = query(path, "seed").and_then(|v| v.parse::<u64>().ok());
+    let temperature = query(path, "temp")
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.7);
+
+    // `load_image` reads a path, so the bytes land in a temp file that is
+    // removed on EVERY path below — the demo promises no storage.
+    let staged = std::env::temp_dir().join(format!(
+        "ffai-demo-see-{}.bin",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    if let Err(e) = std::fs::write(&staged, body) {
+        return json!({ "error": format!("could not stage the image: {e}") }).to_string();
+    }
+    let t_decode = Instant::now();
+    let img = match ffai_media::load_image(&staged) {
+        Ok(i) => i,
+        Err(e) => {
+            std::fs::remove_file(&staged).ok();
+            return json!({ "error": format!("could not decode the image: {e}") }).to_string();
+        }
+    };
+    let decode_ms = t_decode.elapsed().as_secs_f64() * 1e3;
+    // NOT removed yet: the reference reads the same staged file from its own
+    // process, which is the whole point — identical bytes, not the same bytes
+    // decoded twice. Removed on every path below.
+    struct Staged(PathBuf);
+    impl Drop for Staged {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.0).ok();
+        }
+    }
+    let staged = Staged(staged);
+    let staged = &staged.0;
+
+    let mut guard = match seer.lock() {
+        Ok(g) => g,
+        Err(_) => return json!({ "error": "seer lock poisoned" }).to_string(),
+    };
+
+    // Whether the weights were resident BEFORE this call decides whether the
+    // wall time below is a warm number or a cold one. Reported either way; a
+    // latency demo that quietly includes a one-off 20 s load in its first
+    // reading is telling the reader something false about every later one.
+    let was_loaded = guard.argus.is_loaded();
+    let t_load = Instant::now();
+    if !was_loaded && guard.argus.warm().is_err() {
+        // Fall through: the describe call below reports the real error.
+    }
+    let load_ms = if was_loaded {
+        0.0
+    } else {
+        t_load.elapsed().as_secs_f64() * 1e3
+    };
+
+    let opts = VlmOptions {
+        prompt: Some(prompt.clone()),
+        max_new_tokens: Some(max_new_tokens),
+        decoding: match seed {
+            Some(seed) => Decoding::Sampled {
+                temperature,
+                top_p: None,
+                top_k: None,
+                seed,
+            },
+            None => Decoding::Greedy,
+        },
+        ..VlmOptions::default()
+    };
+
+    let t_wall = Instant::now();
+    let (caption, tr) = match guard.argus.describe_image_traced(&img, &opts) {
+        Ok(v) => v,
+        Err(e) => return json!({ "error": e.to_string() }).to_string(),
+    };
+    let wall_ms = t_wall.elapsed().as_secs_f64() * 1e3;
+
+    // ---- the reference arm, on the same file ----
+    let reference = match guard.reference.as_mut() {
+        Some(w) => {
+            let load = w.load_secs * 1e3;
+            match w.caption(staged, &prompt, max_new_tokens) {
+                Ok((text, ms)) => json!({
+                    "text": text, "ms": ms, "load_ms": load,
+                    "engine": "PyTorch + transformers", "config": "greedy-64 / float32 / seed 0",
+                }),
+                Err(e) => json!({ "error": e, "load_ms": load }),
+            }
+        }
+        None => json!({
+            "absent": "PyTorch reference not running - needs .venv-argus with torch, \
+                       transformers and pillow, plus corpora/refs/smolvlm_hf_ref.py",
+        }),
+    };
+
+    // The stage list is ORDERED because the UI draws it as a timeline, and a
+    // timeline whose segments are not in execution order is a lie told with a
+    // chart.
+    let stages = json!([
+        { "name": "decode",      "ms": decode_ms,       "what": "PNG/JPEG -> RGB8, rusty_png / rusty_jpeg" },
+        { "name": "preprocess",  "ms": tr.preprocess_ms, "what": "two Lanczos resizes, tile cut, normalise" },
+        { "name": "vision",      "ms": tr.tower_ms,      "what": format!("SigLIP + connector, {}x", tr.tiles) },
+        { "name": "assemble",    "ms": tr.assemble_ms,   "what": "chat template, tokenize, embed, splice" },
+        { "name": "prefill",     "ms": tr.prefill_ms,    "what": format!("one pass over {} tokens", tr.prompt_tokens) },
+        { "name": "generate",    "ms": tr.decode_ms(),   "what": format!("{} tokens, one pass each", tr.step_ms.len()) },
+        { "name": "detokenize",  "ms": tr.detokenize_ms, "what": "ids -> text" },
+    ]);
+
+    json!({
+        "caption": caption,
+        "prompt": prompt,
+        "greedy": seed.is_none(),
+        "image": {
+            "width": img.width,
+            "height": img.height,
+            "resized": tr.resized_to.first().map_or_else(
+                || json!(null), |(w, h)| json!({ "w": w, "h": h })),
+        },
+        "grid": { "rows": tr.rows, "cols": tr.cols, "tiles": tr.tiles, "tile": tr.tile },
+        "tokens": {
+            "image": tr.image_tokens,
+            "text": tr.text_tokens,
+            "prompt": tr.prompt_tokens,
+            "generated": tr.step_ms.len(),
+            "per_tile": if tr.tiles > 0 { tr.image_tokens / tr.tiles } else { 0 },
+            "max_positions": tr.max_positions,
+        },
+        "stages": stages,
+        "tower_per_tile_ms": tr.tower_per_tile_ms,
+        "step_ms": tr.step_ms,
+        "tokens_per_sec": tr.tokens_per_sec(),
+        "engine_ms": tr.total_ms(),
+        "wall_ms": wall_ms,
+        "reference": reference,
+        "decode_ms": decode_ms,
+        "load_ms": load_ms,
+        "cold": !was_loaded,
     })
     .to_string()
 }
@@ -739,4 +1192,98 @@ fn respond(
     stream.write_all(head.as_bytes())?;
     stream.write_all(body)?;
     stream.flush()
+}
+#[cfg(test)]
+mod tests {
+    use super::{label_speakers, turns_json, utterances};
+    use ffai_core::types::{TimedSegment, Transcript};
+
+    fn seg(start: f64, end: f64, value: &str) -> TimedSegment<String> {
+        TimedSegment {
+            start,
+            end,
+            value: value.to_string(),
+            confidence: None,
+        }
+    }
+
+    fn transcript(
+        segments: Vec<TimedSegment<String>>,
+        speakers: Option<Vec<TimedSegment<String>>>,
+    ) -> Transcript {
+        Transcript {
+            language: None,
+            segments,
+            words: None,
+            speakers,
+        }
+    }
+
+    /// A turn covering a segment's START owns it, even where the segment runs
+    /// past the turn's end — the two timelines do not align, and the pane
+    /// draws whichever answer this gives.
+    #[test]
+    fn segment_takes_the_turn_that_covers_its_start() {
+        let t = transcript(
+            vec![seg(0.0, 2.5, "hello there"), seg(2.6, 4.0, "hi")],
+            Some(vec![seg(0.0, 2.0, "SPEAKER_00"), seg(2.5, 4.0, "SPEAKER_01")]),
+        );
+        let us = utterances(&t, 0.0);
+        assert_eq!(us[0].speaker.as_deref(), Some("SPEAKER_00"));
+        assert_eq!(us[1].speaker.as_deref(), Some("SPEAKER_01"));
+    }
+
+    /// The whole point of threading the offset through: the browser posts a
+    /// sliding window, so a time measured from the buffer moves under the
+    /// same audio every tick and cannot be laid out against anything.
+    #[test]
+    fn times_come_back_on_the_session_clock() {
+        let t = transcript(vec![seg(1.0, 2.0, "later")], None);
+        let us = utterances(&t, 30.0);
+        assert!((us[0].start - 31.0).abs() < 1e-9);
+        assert!((us[0].end - 32.0).abs() < 1e-9);
+    }
+
+    /// A segment no turn covers is emitted unattributed rather than given to
+    /// whoever spoke nearest.
+    #[test]
+    fn an_uncovered_segment_stays_unattributed() {
+        let t = transcript(
+            vec![seg(9.0, 9.5, "who said that")],
+            Some(vec![seg(0.0, 2.0, "SPEAKER_00")]),
+        );
+        let us = utterances(&t, 0.0);
+        assert_eq!(us[0].speaker, None);
+        assert_eq!(label_speakers(&us), "who said that");
+    }
+
+    /// Speakers off: segments, in order, exactly as before diarization
+    /// existed. Empty segments are dropped rather than rendered as blank rows.
+    #[test]
+    fn no_speakers_is_the_plain_transcript() {
+        let t = transcript(
+            vec![seg(0.0, 1.0, "one"), seg(1.0, 2.0, "  "), seg(2.0, 3.0, "two")],
+            None,
+        );
+        let us = utterances(&t, 0.0);
+        assert_eq!(us.len(), 2);
+        assert_eq!(label_speakers(&us), "one\ntwo");
+    }
+
+    /// What the pane actually parses. `speaker` is null, not absent, when
+    /// nobody owns the segment — an absent field and a null one read the same
+    /// in the UI, but only one of them is a promise.
+    #[test]
+    fn json_carries_speaker_text_and_both_times() {
+        let t = transcript(
+            vec![seg(0.0, 1.0, "mine"), seg(5.0, 6.0, "nobody's")],
+            Some(vec![seg(0.0, 1.0, "SPEAKER_03")]),
+        );
+        let j = turns_json(&utterances(&t, 10.0));
+        assert_eq!(j[0]["speaker"], "SPEAKER_03");
+        assert_eq!(j[0]["text"], "mine");
+        assert_eq!(j[0]["start"], 10.0);
+        assert_eq!(j[0]["end"], 11.0);
+        assert!(j[1]["speaker"].is_null());
+    }
 }

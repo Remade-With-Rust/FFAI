@@ -720,8 +720,10 @@ impl FlatDecoder {
         let t0 = clock();
         leaky_inplace(&mut x, 0.01);
         let (mut audio, _) = self.conv_post.conv(&x, len);
+        // Scalar `tanh` per sample was a libm call per element; the shared
+        // kernel is arithmetic, so the loop can vectorise.
         for a in &mut audio {
-            *a = a.tanh();
+            *a = ffai_core::fastmath::tanh(*a);
         }
         t_conv += t0.elapsed().as_secs_f64();
         if profile {
@@ -909,18 +911,21 @@ unsafe fn conv_quad_avx2(
 /// autovectorizes.
 #[inline(always)]
 fn fast_exp(x: f32) -> f32 {
-    // exp(x) = 2^(x·log2(e)); split into integer + fractional powers.
-    const LOG2E: f32 = std::f32::consts::LOG2_E;
-    let y = (x.max(-87.0).min(88.0)) * LOG2E;
-    let yi = y.floor();
-    let f = y - yi;
-    // 2^f on [0,1): degree-5 minimax (max rel err ~2e-7).
-    let p = 1.000_000_0
-        + f * (0.693_147_2
-            + f * (0.240_226_5 + f * (0.055_504_11 + f * (0.009_618_13 + f * 0.001_333_55))));
-    // 2^yi via the exponent field.
-    let bits = (((yi as i32) + 127) << 23) as u32;
-    f32::from_bits(bits) * p
+    // Delegates to `ffai_core::fastmath`, and the delegation is a FIX, not a
+    // tidy-up.
+    //
+    // The local version reduced the range with `y.floor()`. `f32::floor` has
+    // no SSE2 instruction — it needs SSE4.1's `roundps` — so on a portable
+    // x86-64 build it lowers to a **call to `floorf`**, one per element, in the
+    // middle of the loop this kernel exists to vectorise. Removing `exp` and
+    // leaving `floor` removes the headline libm call and keeps a libm call.
+    //
+    // `ffai-diana` found the same trap in its own copy (with `round`, which is
+    // ties-away-from-zero and worse still) and fixed it with the `+1.5*2^23`
+    // trick: pure float arithmetic, no call, no branch, no `target_feature`,
+    // measured **4.71x on the rounding step and bit-identical**. That fix now
+    // lives in one place instead of being rediscovered a third time.
+    ffai_core::fastmath::exp(x)
 }
 
 #[inline(always)]

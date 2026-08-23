@@ -112,7 +112,8 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ffai_core::engine::{
-    AsrOptions, DepthOptions, DetectEngine, DetectOptions, OcrOptions, Task, TtsOptions, VlmOptions,
+    AsrOptions, Decoding, DepthOptions, DetectEngine, DetectOptions, OcrOptions, Task, TtsOptions,
+    VlmOptions,
 };
 use ffai_core::registry::EngineRegistry;
 
@@ -350,10 +351,61 @@ enum Cmd {
         prompt: Option<String>,
         #[arg(long)]
         engine: Option<String>,
+        // NO --system-prompt. `VlmOptions` carries the field because the
+        // trait needs it, but `VlmEngine`'s contract is that an engine whose
+        // template has no system slot IGNORES it rather than concatenating it
+        // into the user turn — and SmolVLM, the only VLM engine today, is in
+        // that position. A flag the one available engine silently drops is
+        // worse than no flag. It goes in when an engine honours it.
+        /// Token budget (default: the engine's own)
+        #[arg(long)]
+        max_new_tokens: Option<usize>,
+        /// Sampling temperature. Requires --seed.
+        #[arg(long)]
+        temperature: Option<f32>,
+        /// Nucleus sampling cutoff. Requires --seed.
+        #[arg(long)]
+        top_p: Option<f32>,
+        /// Top-k sampling cutoff. Requires --seed.
+        #[arg(long)]
+        top_k: Option<usize>,
+        /// Seed for sampled decoding. WITHOUT it, decoding is greedy and needs
+        /// no seed; WITH it, the same seed reproduces the same caption.
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Repetition penalty. Applies to greedy decoding too — it is a logit
+        /// transform, not a sampling one, and small models loop under greedy
+        /// more than under sampling.
+        #[arg(long)]
+        repetition_penalty: Option<f32>,
+        /// Stop string; repeatable. Generation halts as soon as one is
+        /// produced and the string itself is not included.
+        #[arg(long = "stop")]
+        stop: Vec<String>,
+        /// VIDEO: frames sampled per second of source (default 1.0).
+        ///
+        /// This is the sampling policy, and it is a knob because the right
+        /// value is content-dependent: 1 fps is plenty for a lecture and
+        /// misses the ball in a rally.
+        #[arg(long, default_value_t = 1.0)]
+        fps: f64,
+        /// VIDEO: frames shown to the model per caption (default: engine's).
+        #[arg(long)]
+        window: Option<usize>,
+        /// VIDEO: stop after this many sampled frames.
+        ///
+        /// Captioning is seconds per window, so an hour of source at 1 fps is
+        /// hours of work. This is the brake, and it says so rather than
+        /// letting a stray path run overnight.
+        #[arg(long)]
+        max_frames: Option<usize>,
+        /// Output file; `.srt`/`.vtt`/`.json` select the format (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Benchmark an engine against world standards on a pinned corpus
     Bench {
-        /// Task to bench: asr or ocr (tts/vlm follow their engines)
+        /// Task to bench: asr, tts, ocr, detect or vlm.
         task: String,
         /// Corpus manifest (corpora/*.toml)
         #[arg(long)]
@@ -390,6 +442,102 @@ enum Cmd {
     },
 }
 
+/// Does this path name a container `ffai-media` can demux?
+///
+/// By EXTENSION, matching `stream_frames`'s own dispatch table. Sniffing magic
+/// bytes would be better and is what `load_image` does, but the demuxer is
+/// selected by extension anyway, so a mismatch between the two checks would be
+/// the worse failure: a file that passes here and is refused one call later.
+fn is_video_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some(
+            "mp4" | "mov" | "m4v" | "mkv" | "webm" | "mka" | "avi" | "ts" | "m2ts" | "mts"
+        )
+    )
+}
+
+/// Caption a video **one window at a time**, never holding the clip.
+///
+/// This is the whole point of `stream_frames` being an `Iterator`. Collecting
+/// the sampled frames first and captioning afterwards would be three lines
+/// shorter and would hold every frame at once — one minute of 1080p at 25 fps
+/// is 10.4 GiB, and even at 1 fps a ten-minute clip is ~3.6 GiB of `VideoFrame`
+/// for work that only ever looks at eight of them at a time.
+///
+/// So the buffer is exactly one window deep. Peak memory is a function of
+/// `--window`, not of the length of the video.
+fn caption_video(
+    vlm: &dyn ffai_core::engine::VlmEngine,
+    input: &std::path::Path,
+    fps: f64,
+    max_frames: Option<usize>,
+    window: Option<usize>,
+    opts: &VlmOptions,
+) -> Result<Vec<ffai_core::types::TimedSegment<String>>> {
+    let win = window.unwrap_or(8).max(1);
+    let mut buf: Vec<ffai_core::types::VideoFrame> = Vec::with_capacity(win);
+    let mut out: Vec<ffai_core::types::TimedSegment<String>> = Vec::new();
+    let mut seen = 0usize;
+    let mut last_ts = 0.0f64;
+
+    let flush = |buf: &mut Vec<ffai_core::types::VideoFrame>,
+                     out: &mut Vec<ffai_core::types::TimedSegment<String>>|
+     -> Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        // One window in, one caption out. `describe_video` chunks internally
+        // too, so handing it exactly one window keeps the two agreeing.
+        out.extend(vlm.describe_video(buf, opts)?);
+        buf.clear();
+        Ok(())
+    };
+
+    for frame in ffai_media::stream_frames(input, fps)? {
+        if max_frames.is_some_and(|m| seen >= m) {
+            break;
+        }
+        let frame = frame?;
+        last_ts = frame.timestamp;
+        buf.push(frame);
+        seen += 1;
+        if buf.len() == win {
+            flush(&mut buf, &mut out)?;
+            eprint!("\r  {seen} frames, {} captions", out.len());
+        }
+    }
+    flush(&mut buf, &mut out)?;
+    if seen > 0 {
+        eprintln!("\r  {seen} frames sampled at {fps} fps -> {} captions", out.len());
+    } else {
+        return Err(anyhow::anyhow!(
+            "no frames decoded from {} — the container may hold no H.264 video track",
+            input.display()
+        ));
+    }
+
+    // Stitch the track: each window runs until the next one starts. Windows
+    // were captioned independently, so each guessed its own end from the
+    // sampling step; only now is the true boundary known.
+    for i in 0..out.len().saturating_sub(1) {
+        out[i].end = out[i + 1].start;
+    }
+    // The final window has no successor to bound it. The engine fell back to
+    // the median spacing of the frames it was handed, which is right for a
+    // multi-frame window and degrades to a flat 1.0 s for a single-frame one.
+    // Here the true sampling interval is known, so say it.
+    if fps > 0.0 {
+        if let Some(last) = out.last_mut() {
+            last.end = last_ts + 1.0 / fps;
+        }
+    }
+    Ok(out)
+}
+
 /// Compose the default registry from every feature crate.
 fn build_registry() -> EngineRegistry {
     let mut reg = EngineRegistry::new();
@@ -398,6 +546,18 @@ fn build_registry() -> EngineRegistry {
     ffai_diana::register(&mut reg);
     ffai_argus::register(&mut reg);
     reg
+}
+
+/// True for the commands the thread cap below was actually measured on.
+///
+/// `Bench` is included by TASK, not wholesale: `ffai bench detect` runs Diana
+/// and wants the cap; `ffai bench vlm` runs Argus and does not.
+fn is_diana_shaped(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::Detect { .. } | Cmd::Depth { .. } => true,
+        Cmd::Bench { task, .. } => matches!(task.as_str(), "detect" | "depth"),
+        _ => false,
+    }
 }
 
 /// Match candle's thread pool to Diana's before anything allocates.
@@ -419,10 +579,34 @@ fn build_registry() -> EngineRegistry {
 /// 21 % less memory at identical speed, and markedly less variance — four of
 /// six runs land on 82 MiB where the default swings by 60.
 ///
-/// Set only when the operator has not chosen a value, and set before the
-/// first allocation so candle's lazy pool sees it.
-fn match_candle_threads() {
-    if std::env::var_os("RAYON_NUM_THREADS").is_some() {
+/// # ⚠ Why this is scoped to Diana rather than applied process-wide
+///
+/// It used to be unconditional, and that quietly taxed every other engine.
+/// The two numbers above are **a 36 ms detector's**: at that duration the pool
+/// barely spins up, so capping it costs nothing and the 22 MiB is worth
+/// having. Argus is a different animal — seventeen 512x512 `SigLIP` tiles and
+/// a 1142-token prefill, ~28 s of dense f32 matmul — and there the cap is not
+/// free. Measured on one caption, ABBA-interleaved on a quiet box, four runs
+/// per arm:
+///
+/// | threads | runs (ms) | min |
+/// |---|---|---|
+/// | 4 (the Diana cap) | 38696, 36110, 35639, 36596 | 35639 |
+/// | 24 (all cores) | 27497, 28118, 28017, 28550 | **27497** |
+///
+/// **1.29x — the cap cost Argus 23 % of its speed**, with no overlap between
+/// the two groups. And the memory it buys back is 22 MiB against a ~1400 MiB
+/// working set: 1.5 %, for a fifth of the throughput.
+///
+/// The lesson is the general one: a constant measured on one workload does not
+/// transfer to another with a different bottleneck. `Detect`/`Depth` are
+/// memory-bound and short; the transformer engines are compute-bound and long.
+/// So the cap now belongs to the commands it was measured on.
+///
+/// Set only when the operator has not chosen a value, and set before any
+/// thread is spawned so candle's lazy pool sees it.
+fn match_candle_threads(cmd: &Cmd) {
+    if std::env::var_os("RAYON_NUM_THREADS").is_some() || !is_diana_shaped(cmd) {
         return;
     }
     let cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
@@ -431,9 +615,9 @@ fn match_candle_threads() {
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or_else(|| (cores / 6).clamp(3, 6));
-    // SAFETY: called as the first statement of `main`, before any thread is
-    // spawned and before any pool is built, so no other thread can be reading
-    // the environment concurrently.
+    // SAFETY: called before `spawn_page_trimmer` and before any candle pool is
+    // built, so no other thread can be reading the environment concurrently.
+    // `Cli::parse` runs first but spawns nothing.
     #[allow(unsafe_code)]
     unsafe {
         std::env::set_var("RAYON_NUM_THREADS", n.to_string());
@@ -441,9 +625,12 @@ fn match_candle_threads() {
 }
 
 fn main() -> Result<()> {
-    match_candle_threads();
-    spawn_page_trimmer();
+    // Parse FIRST: the thread cap is per-command now, so it needs to know
+    // which command. Clap spawns no threads, so the `set_var` inside is still
+    // happening single-threaded and before any pool exists.
     let cli = Cli::parse();
+    match_candle_threads(&cli.cmd);
+    spawn_page_trimmer();
     let reg = build_registry();
 
     match cli.cmd {
@@ -980,14 +1167,102 @@ fn main() -> Result<()> {
             input,
             prompt,
             engine,
+            max_new_tokens,
+            temperature,
+            top_p,
+            top_k,
+            seed,
+            repetition_penalty,
+            stop,
+            fps,
+            window,
+            max_frames,
+            output,
         } => {
-            let image = ffai_media::load_image(&input)?;
+            // Greedy + no seed is the v1 default (plan §2 Gate 2): the same
+            // image and prompt must produce the same caption, the way
+            // `ffai tts --seed` already guarantees the same bytes.
+            //
+            // Sampling is opt-in and REQUIRES a seed. Accepting --temperature
+            // on its own would hand the user an irreproducible caption while
+            // looking like it worked, and "why is the output different every
+            // time" is a question the CLI can simply prevent.
+            let decoding = match seed {
+                Some(seed) => Decoding::Sampled {
+                    temperature: temperature.unwrap_or(1.0),
+                    top_p,
+                    top_k,
+                    seed,
+                },
+                None => {
+                    if temperature.is_some() || top_p.is_some() || top_k.is_some() {
+                        anyhow::bail!(
+                            "--temperature/--top-p/--top-k select SAMPLED decoding, which needs \
+                             --seed to be reproducible. Add --seed <n>, or drop these flags for \
+                             greedy decoding (the default, deterministic without a seed)."
+                        );
+                    }
+                    Decoding::Greedy
+                }
+            };
             let opts = VlmOptions {
                 prompt,
-                max_new_tokens: None,
+                system_prompt: None,
+                decoding,
+                max_new_tokens,
+                stop,
+                repetition_penalty,
+                frames_per_window: window,
             };
-            let caption = reg.vlm(engine.as_deref())?.describe_image(&image, &opts)?;
-            println!("{caption}");
+            let vlm = reg.vlm(engine.as_deref())?;
+
+            if is_video_path(&input) {
+                let segments = caption_video(&*vlm, &input, fps, max_frames, window, &opts)?;
+                let track = ffai_core::types::Transcript {
+                    language: None,
+                    segments,
+                    words: None,
+                    speakers: None,
+                };
+                let rendered = match output
+                    .as_ref()
+                    .and_then(|p| p.extension())
+                    .and_then(|e| e.to_str())
+                {
+                    Some("srt") => track.to_srt(),
+                    Some("vtt") => track.to_vtt(),
+                    // `Transcript`'s own renderer, not a hand-rolled one: a
+                    // second JSON shape for the same type is a second thing to
+                    // keep in step, and this one already distinguishes
+                    // not-requested from found-nothing.
+                    Some("json") => track.to_json(),
+                    // Default: timestamps beside the text, because a video
+                    // caption without its time is not a caption.
+                    _ => track
+                        .segments
+                        .iter()
+                        .map(|s| format!("[{:>8.2} - {:>8.2}] {}", s.start, s.end, s.value.trim()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                match output {
+                    Some(path) => {
+                        std::fs::write(&path, &rendered)?;
+                        println!("wrote {} ({} captions)", path.display(), track.segments.len());
+                    }
+                    None => println!("{rendered}"),
+                }
+            } else {
+                let image = ffai_media::load_image(&input)?;
+                let caption = vlm.describe_image(&image, &opts)?;
+                match output {
+                    Some(path) => {
+                        std::fs::write(&path, &caption)?;
+                        println!("wrote {}", path.display());
+                    }
+                    None => println!("{caption}"),
+                }
+            }
         }
         Cmd::Bench {
             task,
@@ -1001,15 +1276,23 @@ fn main() -> Result<()> {
             ledger,
         } => {
             let task = Task::from_str(&task).map_err(anyhow::Error::msg)?;
-            if !matches!(task, Task::Asr | Task::Ocr | Task::Tts | Task::Detect) {
+            if !matches!(
+                task,
+                Task::Asr | Task::Ocr | Task::Tts | Task::Detect | Task::Vlm
+            ) {
                 anyhow::bail!(
-                    "`ffai bench {task}` is not wired yet — asr, ocr, tts and detect are the \
-                     live bench verticals; vlm follows its engine (see ROADMAP.md)"
+                    "`ffai bench {task}` is not wired yet — asr, ocr, tts, detect and vlm are \
+                     the live bench verticals (see ROADMAP.md)"
                 );
             }
             let task_name = task.to_string();
+            let mut scorers = Vec::new();
             let references: Vec<_> = if refs.exists() {
                 let file = ffai_bench::reference::ReferenceFile::load(&refs)?;
+                // Scorer argvs live in the TRUSTED references file, never in a
+                // corpus — a corpus selects one by name. See
+                // `ffai_bench::reference::NamedScorer`.
+                scorers.clone_from(&file.scorers);
                 let mut selected: Vec<_> = file
                     .for_task(&task_name)
                     .filter(|r| only.is_empty() || only.contains(&r.name))
@@ -1039,6 +1322,7 @@ fn main() -> Result<()> {
                 skip_references: engine_only,
                 corpus,
                 references,
+                scorers,
                 runs,
                 ledger: ledger.clone(),
             };
@@ -1047,7 +1331,13 @@ fn main() -> Result<()> {
                 Task::Ocr => ffai_bench::runner::run_ocr(&reg, &cfg)?,
                 Task::Tts => ffai_bench::tts::run_tts(&reg, &cfg)?,
                 Task::Detect => ffai_bench::runner::run_detect(&reg, &cfg)?,
-                _ => unreachable!("guarded above"),
+                // Argus is live as of step 6 (launch plan §16), so this runs
+                // both arms. The harness was built BEFORE the engine on
+                // purpose — see Gate 1.1 — and `run_vlm` still refuses to
+                // append a run for a stub engine, which is what keeps a
+                // ledger line from looking like a measurement it is not.
+                Task::Vlm => ffai_bench::vlm::run_vlm(&reg, &cfg)?,
+                Task::Depth => unreachable!("guarded above"),
             };
             print!("{}", ffai_bench::runner::render(&record));
             println!("appended to {}", ledger.display());

@@ -4,7 +4,7 @@ description = "FFai's analyzer — one call to compare any engine against world 
 # the runner records a clip failure and continues instead of aborting the
 # whole corpus, and decode is wrapped so a panicking dependency costs one
 # page rather than the run.
-version = "0.7.0"
+version = "0.7.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -28,6 +28,12 @@ regex = { workspace = true }
 # neither a rasterizer nor a PNG encoder.
 fontdue = "0.9"
 png = "0.17"
+# TESTS ONLY, and only one test: `vlm::tests::a_stub_engine_refuses_...` needs
+# a registered stub VLM engine to prove the harness refuses it. Keeping this
+# out of [dependencies] matters — ffai-bench must not gain a dependency on a
+# component it benchmarks, or the analyzer starts shipping the thing it is
+# supposed to be measuring at arm's length.
+ffai-argus = { workspace = true }
 # `suppress_optimizer` only — the rule search reads harvested CSVs. The library
 # never parses a CSV and never takes an argument.
 clap = { workspace = true }

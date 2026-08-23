@@ -4,7 +4,7 @@ description = "FFai media ingest/egress — demux, decode, resample (rff-backed)
 # rusty_jpeg 0.1 -> 0.2 picks up the progressive-JPEG fix. A dependency
 # change with no API change, so a patch bump -- but a load-bearing one:
 # 0.6.1 cannot decode 35 of OmniDocBench's 236 pages.
-version = "0.6.3"
+version = "0.6.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

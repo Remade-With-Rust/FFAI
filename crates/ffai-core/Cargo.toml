@@ -6,7 +6,7 @@ description = "FFai shared types, engine traits, and the engine registry"
 # published, so the crates.io copy of 0.6.1 cannot build ffai-diana — a gap
 # invisible locally, where path dependencies mask it, and caught only by
 # `cargo publish --dry-run`.
-version = "0.6.5"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,6 +18,10 @@ categories = ["multimedia", "science", "api-bindings"]
 
 [dependencies]
 candle-core = { workspace = true }
+# The tensor activations in `fastops` fan out across cores; candle's own
+# elementwise kernels are single-threaded (its CPU backend uses rayon for
+# conv2d and nothing else).
+rayon = { workspace = true }
 thiserror = { workspace = true }
 
 [features]

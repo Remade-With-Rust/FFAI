@@ -169,7 +169,7 @@ impl ConvLayer {
             (_, Some(ln)) => ln.forward(&x.transpose(1, 2)?)?.transpose(1, 2)?,
             _ => x,
         };
-        x.gelu_erf()
+        ffai_core::fastops::gelu_erf(&x)
     }
 }
 
@@ -325,17 +325,18 @@ impl EncoderLayer {
         if self.stable {
             // Pre-norm (large): normalise going in, residual stays clean.
             let h = (x + self.attn.forward(&self.attn_norm.forward(x)?)?)?;
-            let ff = self.ff_out.forward(
-                &self
-                    .ff_in
-                    .forward(&self.final_norm.forward(&h)?)?
-                    .gelu_erf()?,
-            )?;
+            // GELU goes AFTER `ff_in`, not before it. The first version of this
+            // migration put it before — a valid-looking rearrangement that
+            // changes the network, and the pre-norm test caught it. Unwrapping a
+            // method chain into a nested call is exactly where that inverts.
+            let ff = self.ff_out.forward(&ffai_core::fastops::gelu_erf(
+                &self.ff_in.forward(&self.final_norm.forward(&h)?)?,
+            )?)?;
             &h + ff
         } else {
             // Post-norm (base): normalise after each residual.
             let h = self.attn_norm.forward(&(x + self.attn.forward(x)?)?)?;
-            let ff = self.ff_out.forward(&self.ff_in.forward(&h)?.gelu_erf()?)?;
+            let ff = self.ff_out.forward(&ffai_core::fastops::gelu_erf(&self.ff_in.forward(&h)?)?)?;
             self.final_norm.forward(&(&h + ff)?)
         }
     }
@@ -427,7 +428,7 @@ impl PosConv {
         } else {
             h
         };
-        h.gelu_erf()?.transpose(1, 2)?.contiguous()
+        ffai_core::fastops::gelu_erf(&h)?.transpose(1, 2)?.contiguous()
     }
 }
 

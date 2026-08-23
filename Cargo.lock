@@ -421,7 +421,7 @@ dependencies = [
  "byteorder",
  "candle-core",
  "candle-nn",
- "fancy-regex",
+ "fancy-regex 0.18.0",
  "num-traits",
  "rand 0.9.5",
  "rayon",
@@ -1117,6 +1117,17 @@ checksum = "d817e038c30374a4bcb22f94d0a8a0e216958d4c3dcde369b1439fec4bdda6e6"
 
 [[package]]
 name = "fancy-regex"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "fancy-regex"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
@@ -1145,7 +1156,16 @@ dependencies = [
 name = "ffai-argus"
 version = "0.6.2"
 dependencies = [
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
  "ffai-core",
+ "ffai-media",
+ "ffai-models",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tokenizers 0.23.1",
 ]
 
 [[package]]
@@ -1154,6 +1174,7 @@ version = "0.7.0"
 dependencies = [
  "clap",
  "csv",
+ "ffai-argus",
  "ffai-core",
  "ffai-media",
  "fontdue",
@@ -1167,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1176,6 +1197,7 @@ dependencies = [
  "ffai-core",
  "ffai-media",
  "ffai-models",
+ "getrandom 0.3.4",
  "mimalloc",
  "png",
  "rayon",
@@ -1183,6 +1205,20 @@ dependencies = [
  "serde",
  "serde_json",
  "tokenizers 0.23.1",
+]
+
+[[package]]
+name = "ffai-carmenta-wasm"
+version = "0.1.0"
+dependencies = [
+ "ffai-carmenta",
+ "ffai-core",
+ "getrandom 0.3.4",
+ "rusty_alloc-api",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1206,9 +1242,10 @@ dependencies = [
 
 [[package]]
 name = "ffai-core"
-version = "0.6.5"
+version = "0.7.0"
 dependencies = [
  "candle-core",
+ "rayon",
  "thiserror 2.0.19",
 ]
 
@@ -1216,6 +1253,7 @@ dependencies = [
 name = "ffai-demo"
 version = "0.6.2"
 dependencies = [
+ "ffai-argus",
  "ffai-bench",
  "ffai-carmenta",
  "ffai-core",
@@ -3985,6 +4023,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4497,6 +4546,7 @@ dependencies = [
  "dary_heap",
  "derive_builder",
  "esaxx-rs",
+ "fancy-regex 0.17.0",
  "getrandom 0.3.4",
  "itertools",
  "log",

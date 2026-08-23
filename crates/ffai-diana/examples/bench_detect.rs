@@ -70,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         skip_references: false,
         corpus,
         references,
+        scorers: Vec::new(),
         runs,
         ledger: PathBuf::from("bench/ledger.jsonl"),
     };

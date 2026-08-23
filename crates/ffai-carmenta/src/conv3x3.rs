@@ -191,6 +191,131 @@ pub(crate) unsafe fn conv3x3_avx2(
     }
 }}
 
+/// Which arm of this kernel to run.
+///
+/// `FFAI_CONV3X3=0` is handled in [`apply`] and takes candle's path instead;
+/// this picks between OUR two arms once that decision is made.
+///
+/// `scalar` exists for one reason: **wasm32 has no AVX2**, so the browser build
+/// runs `conv3x3_scalar`, and every scalar form of this kernel measured BELOW
+/// candle during bring-up (0.21x-0.67x, §8.101) while only the vectorised one
+/// passed it at 1.65x. Whether the shipped scalar arm is above or below candle
+/// is the single number that decides what a wasm build should default to, and
+/// without a switch it cannot be measured on hardware that has AVX2. Diana
+/// carries the same instrument as `FFAI_DIANA_NO_AVX2`.
+fn force_scalar() -> bool {
+    std::env::var("FFAI_CONV3X3").as_deref() == Ok("scalar")
+}
+
+/// The wasm SIMD128 twin — Step 2 of `docs/plans/carmenta-wasm-plan.md`.
+///
+/// **Why this exists when the AVX2 kernel could not simply be `cfg`-ed wider.**
+/// A browser build has no AVX2, so it fell to [`conv3x3_scalar`], and measured
+/// interleaved on a 620x200 capture that arm is 1.74x the shipped one and
+/// 1.91x candle's im2col. Scalar loses; the kernel only ever won *because it
+/// was vectorised*.
+///
+/// **Why it can be built at all.** `candle-core` 0.11 does not compile with
+/// `-C target-feature=+simd128` (`CurrentCpuF16` is not defined on the wasm
+/// path), so the global flag is unavailable and the Diana plan concluded
+/// kernel ports must wait for the upstream fix. They do not: a function-level
+/// `#[target_feature(enable = "simd128")]` emits real `f32x4` instructions with
+/// the flag off — verified by disassembly — so OUR kernels vectorise while
+/// candle stays scalar.
+///
+/// **The tile is not the AVX2 tile translated.** SIMD128 is 4 lanes, not 8, so
+/// 24 columns would need 6 vectors per output channel and 24 accumulators —
+/// well past the sixteen registers the underlying ISA has, and a spill per
+/// FMA. What carries across is the AVX2 kernel's REGISTER BUDGET, which is
+/// what its comment is really about: twelve accumulators, three input vectors,
+/// one broadcast, sixteen total. At 4 lanes that is `CO = 4` channels x 12
+/// columns instead of x 24.
+///
+/// **No FMA.** Base wasm SIMD has no fused multiply-add — that is the
+/// `relaxed-simd` proposal, which is not universally shipped. `mul` then `add`
+/// is two ops where AVX2 spends one, and it also means this twin reassociates
+/// differently from the AVX2 one. Both are checked against the same f64
+/// reference rather than against each other, for the reason the module header
+/// gives: "differs from candle" says nothing about which is right.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+pub(crate) unsafe fn conv3x3_simd128(
+    in_p: &[f32],
+    w: &[f32],
+    c_in: usize,
+    c_out: usize,
+    h: usize,
+    wd: usize,
+    out: &mut [f32],
+) { unsafe {
+    use core::arch::wasm32::*;
+    const CO: usize = 4;
+    /// Three `v128` of four lanes — the same twelve-accumulator budget the
+    /// AVX2 twin holds in ymm, at half the width.
+    const TILE: usize = 12;
+    let sw = wd + 2;
+    let n = h * sw;
+    let plane_p = (h + 3) * sw;
+    let n_vec = n / TILE * TILE;
+
+    for co0 in (0..c_out).step_by(CO) {
+        let co_n = CO.min(c_out - co0);
+        for tile in (0..n_vec).step_by(TILE) {
+            let mut a: [[v128; 3]; CO] = [[f32x4_splat(0.0); 3]; CO];
+            for ci in 0..c_in {
+                let base = ci * plane_p + tile;
+                for tap in 0..9usize {
+                    let ptr = in_p.as_ptr().add(base + (tap / 3) * sw + tap % 3);
+                    // Unaligned by construction: the tap offset is
+                    // `ky*sw + kx`, and `sw` is the padded width, so no
+                    // alignment can be assumed. `v128_load` is unaligned on
+                    // wasm, unlike its x86 counterpart's split.
+                    let v0 = v128_load(ptr.cast());
+                    let v1 = v128_load(ptr.add(4).cast());
+                    let v2 = v128_load(ptr.add(8).cast());
+                    for (i, ai) in a.iter_mut().enumerate().take(co_n) {
+                        let wb = f32x4_splat(*w.get_unchecked(((co0 + i) * c_in + ci) * 9 + tap));
+                        ai[0] = f32x4_add(ai[0], f32x4_mul(wb, v0));
+                        ai[1] = f32x4_add(ai[1], f32x4_mul(wb, v1));
+                        ai[2] = f32x4_add(ai[2], f32x4_mul(wb, v2));
+                    }
+                }
+            }
+            let mut tmp = [0f32; TILE];
+            for (i, ai) in a.iter().enumerate().take(co_n) {
+                v128_store(tmp.as_mut_ptr().cast(), ai[0]);
+                v128_store(tmp.as_mut_ptr().add(4).cast(), ai[1]);
+                v128_store(tmp.as_mut_ptr().add(8).cast(), ai[2]);
+                for (k, t) in tmp.iter().enumerate() {
+                    let pos = tile + k;
+                    let (y, x) = (pos / sw, pos % sw);
+                    // The two padded columns accumulate garbage by design; they
+                    // are simply not written back.
+                    if x < wd && y < h {
+                        *out.get_unchecked_mut((co0 + i) * h * wd + y * wd + x) = *t;
+                    }
+                }
+            }
+        }
+        for pos in n_vec..n {
+            let (y, x) = (pos / sw, pos % sw);
+            if x >= wd || y >= h {
+                continue;
+            }
+            for i in 0..co_n {
+                let mut acc = 0f32;
+                for ci in 0..c_in {
+                    for tap in 0..9usize {
+                        let off = ci * plane_p + pos + (tap / 3) * sw + tap % 3;
+                        acc += w[((co0 + i) * c_in + ci) * 9 + tap] * in_p[off];
+                    }
+                }
+                out[(co0 + i) * h * wd + y * wd + x] = acc;
+            }
+        }
+    }
+}}
+
 struct Conv3x3Op;
 
 impl CustomOp2 for Conv3x3Op {
@@ -222,7 +347,9 @@ impl CustomOp2 for Conv3x3Op {
         let mut out = vec![0f32; c_out * h * w];
 
         #[cfg(target_arch = "x86_64")]
-        if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+        if !force_scalar()
+            && std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
         {
             // SAFETY: `in_p` is `pad`'s output for exactly these dims, `wt` has
             // `c_out*c_in*9` elements (the dims4 above plus the caller's 3x3
@@ -230,8 +357,28 @@ impl CustomOp2 for Conv3x3Op {
             unsafe { conv3x3_avx2(&in_p, wt, c_in, c_out, h, w, &mut out) };
             return Ok((CpuStorage::F32(out), (1, c_out, h, w).into()));
         }
-        conv3x3_scalar(&in_p, wt, c_in, c_out, h, w, &mut out);
-        Ok((CpuStorage::F32(out), (1, c_out, h, w).into()))
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Unconditional, unlike the x86 arm's runtime check. wasm
+            // validates a whole module ahead of time, so a `v128` instruction
+            // anywhere makes the MODULE require SIMD — there is no
+            // `is_wasm_feature_detected!` and no per-call dispatch. SIMD128 is
+            // therefore a baseline requirement of a Carmenta wasm build, which
+            // every browser has shipped since Safari 16.4 (March 2023); a
+            // non-SIMD fallback would have to be a second module, not a second
+            // branch.
+            //
+            // SAFETY: identical contract to the AVX2 twin — `in_p` is `pad`'s
+            // output for exactly these dims, `wt` has `c_out*c_in*9` elements,
+            // and `out` has `c_out*h*wd`.
+            unsafe { conv3x3_simd128(&in_p, wt, c_in, c_out, h, w, &mut out) };
+            return Ok((CpuStorage::F32(out), (1, c_out, h, w).into()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            conv3x3_scalar(&in_p, wt, c_in, c_out, h, w, &mut out);
+            Ok((CpuStorage::F32(out), (1, c_out, h, w).into()))
+        }
     }
 }
 
@@ -254,7 +401,29 @@ pub fn apply(x: &Tensor, conv: &Conv2d) -> Result<Tensor> {
         && x.dims4().is_ok_and(|d| d.0 == 1)
         && x.dtype() == candle_core::DType::F32
         && x.device().is_cpu()
-        && std::env::var("FFAI_CONV3X3").as_deref() != Ok("0");
+        && std::env::var("FFAI_CONV3X3").as_deref() != Ok("0")
+        // Not on wasm32, and this is a MEASURED default rather than a
+        // concession (Step 0, docs/plans/carmenta-wasm-plan.md).
+        //
+        // The kernel only beats candle when it is VECTORISED: §8.101 measured
+        // every scalar form below candle and only the AVX2 one above it. wasm
+        // has no AVX2, so `cpu_fwd` falls to `conv3x3_scalar` — and a browser
+        // has no environment, so `FFAI_CONV3X3=0` cannot be used to escape it.
+        //
+        // Interleaved min-of-4 on a 620x200 capture, single-threaded:
+        //
+        //   ours-avx2 (shipped)   3040 ms   1.00x
+        //   ours-scalar (wasm)    5282 ms   1.74x   <- what wasm would take
+        //   candle im2col         2771 ms   0.91x
+        //
+        // The scalar arm is 1.91x candle's — so from Step 0 until the SIMD128
+        // twin existed, wasm was sent to candle here.
+        //
+        // `wasm-candle-conv` restores that, and is how the A/B is re-run:
+        // wasm cannot switch arms at RUN time (no environment, and a module
+        // validates its SIMD ahead of time), so the two arms are two builds.
+        // The default is the measured winner.
+        && !cfg!(all(target_arch = "wasm32", feature = "wasm-candle-conv"));
     if !ok {
         return conv.forward_no_bias_check(x);
     }

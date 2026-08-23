@@ -39,12 +39,39 @@ impl ConvBn {
     /// Conv + BN, NO `ReLU` — the caller decides, because slice boundaries tap
     /// pre-activation outputs.
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.bn.forward_t(&self.conv.forward(x)?, false)
+        self.bn.forward_t(&det_conv(x, &self.conv)?, false)
     }
 }
 
 fn relu(x: &Tensor) -> Result<Tensor> {
     x.relu()
+}
+
+/// Route a detector convolution through our kernel or candle's.
+///
+/// **Off by default, and the default is the measured answer.** CRAFT is
+/// VGG16-BN, so every 3x3 here matches `crate::conv3x3`'s preconditions
+/// exactly, and that kernel measured 1.65x candle on the CRNN (§8.101) — which
+/// makes wiring it into the detector look free, and is why it is worth writing
+/// down that it is not. Measured here, interleaved, min-of-rounds: the kernel
+/// is **slower** on CRAFT's shapes.
+///
+/// The kernel is SHAPE-SPECIALISED. Its register tile was swept on CRNN crops:
+/// h=64 collapsing to 3, widths 58..1357, channels 64..256 — tall-thin strips
+/// where holding 4 channels x 24 columns in sixteen ymm registers beats
+/// im2col's 9x memory expansion. CRAFT runs a 1280-long canvas at 64..512
+/// channels: large square maps, where im2col hands `gemm` a big well-blocked
+/// matmul and wins. Same arithmetic, different regime.
+///
+/// Kept as a switch rather than deleted because the regime boundary is the
+/// finding — a future tile sweep for detector shapes has its A/B already
+/// built, and `FFAI_CONV3X3_DET=1` is how the number above was obtained.
+fn det_conv(x: &Tensor, conv: &Conv2d) -> Result<Tensor> {
+    if std::env::var("FFAI_CONV3X3_DET").as_deref() == Ok("1") {
+        crate::conv3x3::apply(x, conv)
+    } else {
+        conv.forward(x)
+    }
 }
 
 fn max_pool2(x: &Tensor) -> Result<Tensor> {
@@ -71,8 +98,8 @@ impl DoubleConv {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = self.bn1.forward_t(&self.conv0.forward(x)?, false)?.relu()?;
-        self.bn4.forward_t(&self.conv3.forward(&x)?, false)?.relu()
+        let x = self.bn1.forward_t(&det_conv(x, &self.conv0)?, false)?.relu()?;
+        self.bn4.forward_t(&det_conv(&x, &self.conv3)?, false)?.relu()
     }
 }
 
@@ -176,11 +203,11 @@ impl Craft {
         let y = Tensor::cat(&[&y, &relu2_2], 1)?;
         let y = self.up4.forward(&y)?;
 
-        let y = relu(&self.cls[0].forward(&y)?)?;
-        let y = relu(&self.cls[1].forward(&y)?)?;
-        let y = relu(&self.cls[2].forward(&y)?)?;
-        let y = relu(&self.cls[3].forward(&y)?)?;
-        let y = self.cls[4].forward(&y)?;
+        let y = relu(&det_conv(&y, &self.cls[0])?)?;
+        let y = relu(&det_conv(&y, &self.cls[1])?)?;
+        let y = relu(&det_conv(&y, &self.cls[2])?)?;
+        let y = relu(&det_conv(&y, &self.cls[3])?)?;
+        let y = det_conv(&y, &self.cls[4])?;
         // (1, 2, h, w) -> (h, w, 2), matching the reference's permute.
         y.squeeze(0)?.permute((1, 2, 0))
     }

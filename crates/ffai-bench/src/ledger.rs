@@ -62,6 +62,13 @@ pub struct RunSummary {
     /// so neither can be quoted alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map5095: Option<f64>,
+    /// VLM benchmark score, **as computed by the benchmark's own evaluator**
+    /// and never by us. VLM-task runs only; serde-defaulted and omitted when
+    /// absent, so no existing ledger line changes shape.
+    ///
+    /// See [`VlmScore`] for why this is a struct rather than a bare `f64`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlm: Option<VlmScore>,
     /// **Warm** real-time factor: media seconds per second of processing-only
     /// time, model already loaded. The steady-state number implementations
     /// publish. Higher is faster.
@@ -99,6 +106,60 @@ pub struct RunSummary {
     /// Per-clip failures or notes, kept short.
     #[serde(default)]
     pub notes: Vec<String>,
+}
+
+/// One VLM benchmark score, recorded with everything needed to know what it
+/// means — because a bare number here would be the most misleading field in
+/// the ledger.
+///
+/// **The scores are not commensurable across benchmarks.** `OCRBench` runs
+/// 0–1000, `DocVQA` reports `ANLS` in 0–1, `MMStar` reports accuracy in 0–100. A
+/// column of `f64` with no metric name attached invites exactly the comparison
+/// that means nothing. So every score carries:
+///
+/// - `raw` — what the evaluator actually printed, untouched. This is the
+///   number that is comparable to a published leaderboard row.
+/// - `normalised` — `raw / scale`, in 0..=1, higher better. Exists ONLY so the
+///   gate machinery (which is written lower-is-better) has something uniform
+///   to verdict on; it is never the number to quote.
+/// - `metric` and `scorer` — which evaluator produced it, and under what
+///   metric name. Without these the row cannot be reproduced.
+///
+/// **Nothing in this crate computes any of these.** They are parsed from the
+/// scorer's JSON output. Answer extraction is part of a VLM metric, and a
+/// home-grown extractor is precisely the 2.8×-biased scorer that cost the
+/// Carmenta campaign a year — see `docs/plans/argus-launch-plan.md` §5.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VlmScore {
+    /// The evaluator's own number, exactly as printed.
+    pub raw: f64,
+    /// `raw / scale`, in 0..=1 and higher-better. Gate arithmetic only.
+    pub normalised: f64,
+    /// The divisor applied, recorded so `raw` can be recovered from the line.
+    pub scale: f64,
+    /// The metric's name as the evaluator reports it (`"OCRBench"`, `"ANLS"`, ...).
+    pub metric: String,
+    /// The scorer that produced it, and its version when it reports one.
+    pub scorer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scorer_version: Option<String>,
+    /// The exact argv the evaluator was invoked with.
+    ///
+    /// Recorded because the argv is resolved from `references.toml` rather
+    /// than from the corpus, so it is NOT covered by
+    /// `corpus_manifest_hash`. Without this field a scorer command could
+    /// change and two incomparable runs would share a fingerprint — the
+    /// defect that folding the scorer INTO the hash originally fixed. The
+    /// fingerprint covers the corpus's choice; this covers what that choice
+    /// resolved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Items the evaluator says it scored. Compared against the corpus holdout
+    /// count by the correctness gate: a scorer that silently scored a subset
+    /// has voided the comparison, and that is a work-count parity check, not a
+    /// pedantry (`codec-measurement` §4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scored_items: Option<usize>,
 }
 
 /// Reproduction context.
@@ -218,6 +279,7 @@ mod tests {
                 cer: None,
                 map50: None,
                 map5095: None,
+                vlm: None,
                 rtf_warm: Some(31.0),
                 rtf_e2e: Some(18.0),
                 load_secs: Some(1.9),

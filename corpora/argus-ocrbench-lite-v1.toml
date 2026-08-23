@@ -1,0 +1,485 @@
+# OCRBench, exported from VLMEvalKit by tools/argus_build_corpus.py.
+#
+# GENERATED — re-export rather than hand-edit. Every prompt below is
+# VLMEvalKit's own `build_prompt` output, verbatim: the question, its options
+# and its instruction suffix are part of the benchmark, and rewording any of
+# them would measure something else. They are inline so they fall inside
+# `Manifest::manifest_hash`.
+#
+# The clip id IS VLMEvalKit's `index` column. That is the key its evaluator
+# joins predictions on — renaming it makes the corpus unscoreable.
+#
+# Scoring is VLMEvalKit's, never ours (plan §5). See corpora/refs/vlmevalkit_score.py.
+#
+# !! SUBSET: 50 of 1000 items. A score from this corpus is NOT
+#    comparable to a published OCRBench row, which is computed over all
+#    1000 items. Use it to exercise the pipeline end to end; use the FULL
+#    export for Gate 1.1, which is the gate that asks whether a published row
+#    reproduces. A subset answers a different question and must not be quoted
+#    as if it answered that one.
+
+name = "argus-ocrbench-lite-v1"
+version = 1
+task = "vlm"
+
+[scorer]
+name = "vlmevalkit-ocrbench"
+metric = "OCRBench"
+# scale = 50 because OCRBench's evaluator returns a COUNT of
+# correct answers, not a percentage - so the normaliser is the number of
+# holdout items, and it CHANGES if the holdout changes. Re-export rather
+# than editing the split by hand.
+#
+# Verified by oracle probe: feeding this dataset's own ground-truth answers
+# back as predictions scores exactly the item count, i.e. 1.0 normalised.
+scale = 50.0
+
+[[clips]]
+id = "0"
+path = "clips/argus-ocrbench/0.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "b9c9d59c396f949fa2c96ca65508cea21f902e1b3fa75fd22ccbb363598c485f"
+
+[[clips]]
+id = "1"
+path = "clips/argus-ocrbench/1.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "40d0d449f88914306aa0a1f109cd00a3426424f24d3de6782bf23b2ef07b295a"
+
+[[clips]]
+id = "2"
+path = "clips/argus-ocrbench/2.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "6b7ade89860ba21a85c671c22d1633d383126b1bc2ab899bbd5c5555a3be500f"
+
+[[clips]]
+id = "3"
+path = "clips/argus-ocrbench/3.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "b01f235f33ae6e13d0c9328fda2b7b3394ac1e0671594770807577ceec749691"
+
+[[clips]]
+id = "4"
+path = "clips/argus-ocrbench/4.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "5a9b42ff33a5ff5ba1316d5de35b5fb0b3925c93cc251e1cf994142edab1ea37"
+
+[[clips]]
+id = "5"
+path = "clips/argus-ocrbench/5.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "821232c3844dee595d36765769dd92d1e8a6d6b393e51d021c552967f27027c2"
+
+[[clips]]
+id = "6"
+path = "clips/argus-ocrbench/6.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "3bb6509a58ea267ef80b5987936d181f98ed56a90a78126bfced4c48427d7247"
+
+[[clips]]
+id = "7"
+path = "clips/argus-ocrbench/7.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "0db985c970562aa92a8fa2f89a9fbb47448da38ecdc1c6949430745b669df0a7"
+
+[[clips]]
+id = "8"
+path = "clips/argus-ocrbench/8.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "eb0845ba6abecc64bb76953892b4209f7fab5d119ec1533abb97f9dd326a5950"
+
+[[clips]]
+id = "9"
+path = "clips/argus-ocrbench/9.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "9587333b35a318542f2757757abb9b82af879c69d433f2a0b7b555957ed3e4ed"
+
+[[clips]]
+id = "10"
+path = "clips/argus-ocrbench/10.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "2a2f8396cbb5fbdf367fb6dda975a960e3fa449a2e3d8ab25ccb0a0d72f7e88b"
+
+[[clips]]
+id = "11"
+path = "clips/argus-ocrbench/11.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "36e86c98f841af7782c82620f3e54654c0104fb33c3612727632dbf19d623e7d"
+
+[[clips]]
+id = "12"
+path = "clips/argus-ocrbench/12.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "f069a47f4e6c0c35eaf908f335d6eb17b7358eb9bb47c2aa08a8f9aa63105b76"
+
+[[clips]]
+id = "13"
+path = "clips/argus-ocrbench/13.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "887afcdc9f8b277af4371d22493d9b9db91886242bffe510753cc639a2fbf42e"
+
+[[clips]]
+id = "14"
+path = "clips/argus-ocrbench/14.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "8b829850b9cdc4fd19b3ac72e86fa9106b4e59339f1214d8ed8d920d6aed0807"
+
+[[clips]]
+id = "15"
+path = "clips/argus-ocrbench/15.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "357734caaffd26ad1e08247d308259272fdbe5aae34118a5a02ea74102f3a8c0"
+
+[[clips]]
+id = "16"
+path = "clips/argus-ocrbench/16.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "535e198cb506bcc4a2bf64179bd72cf43a31bcfd07b6d938a3571dcde94eba5e"
+
+[[clips]]
+id = "17"
+path = "clips/argus-ocrbench/17.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "c4bf3d026ba78e971f92b70eca292595464478f34fb8c5cac19989b4ac799fed"
+
+[[clips]]
+id = "18"
+path = "clips/argus-ocrbench/18.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "7ddedc4b78666f56eb7725684445e83e73201f2dae63af7a88c8c12244298dbb"
+
+[[clips]]
+id = "19"
+path = "clips/argus-ocrbench/19.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "7a80356aeae64b919573fc5a4415bdf5ac858350632cc26455fe263179aae3e4"
+
+[[clips]]
+id = "20"
+path = "clips/argus-ocrbench/20.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "69063f39ba9599c09722098150dd2568132145cbe4a8f4abed41ef39559ef82b"
+
+[[clips]]
+id = "21"
+path = "clips/argus-ocrbench/21.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "61cac1ca103d25cd4eee502dfb19a508b44e3c27fcfe844ce483f0c6168e86f9"
+
+[[clips]]
+id = "22"
+path = "clips/argus-ocrbench/22.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "1036ce9665e99924ec4e19bb1cf9916697b361aac788ad9a69ce8061fba6ee20"
+
+[[clips]]
+id = "23"
+path = "clips/argus-ocrbench/23.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "400ebf11e9a66a7b48f4c9d7203f476847427f9d3be24f00b92d7a6da0dcd6a7"
+
+[[clips]]
+id = "24"
+path = "clips/argus-ocrbench/24.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "a5ced97ca9a269b148b9dfe1c22edfdb529751d02ce6b77a8ef811ec25475987"
+
+[[clips]]
+id = "25"
+path = "clips/argus-ocrbench/25.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "98f1107ff7cd99194f4ae45f638f3068ef8f2018f19238a4f27e9b9e052fb667"
+
+[[clips]]
+id = "26"
+path = "clips/argus-ocrbench/26.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "2e8770cc939edf5410093cb04f7300c2c0d5efafc4c84a8bf2d391b6aca5cea7"
+
+[[clips]]
+id = "27"
+path = "clips/argus-ocrbench/27.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "8490147464a3a468024931ef7d4e2eaf9a54aaf42206c563d75099dda83d4db0"
+
+[[clips]]
+id = "28"
+path = "clips/argus-ocrbench/28.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "50b774d6ca989d40a32fa3ff304ac967557a602ac91f3becfd063e8ca2f6a884"
+
+[[clips]]
+id = "29"
+path = "clips/argus-ocrbench/29.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "3dee4235cec1733459a7b1d9dc664ecfed5c7303cfbee00f7d974b991c3b3139"
+
+[[clips]]
+id = "30"
+path = "clips/argus-ocrbench/30.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "a59654e2169d99e44684e07116ad6f4d9e0f78f9fc49f4568805001333ee56da"
+
+[[clips]]
+id = "31"
+path = "clips/argus-ocrbench/31.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "f8bbdef00e73e768b9e3c02b692b65117a2132d4ead0ce3d849103e85ec2e8cb"
+
+[[clips]]
+id = "32"
+path = "clips/argus-ocrbench/32.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "18ab25712e3c6d0c771dbee1fe53e5951de09b0eb4288f865bfb1b28530dd90e"
+
+[[clips]]
+id = "33"
+path = "clips/argus-ocrbench/33.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "9f3b49c340dc15b7f2743dacc88ccf9c233bedf7a74b6d4b116712f8bb03645a"
+
+[[clips]]
+id = "34"
+path = "clips/argus-ocrbench/34.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "f02b2e0a809020f0cc88c3c6dd349a58cff80cd6b9f8e51bcb6508acb4688c62"
+
+[[clips]]
+id = "35"
+path = "clips/argus-ocrbench/35.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "86a90744b79998702cf94b45fc7e42a21ddd760dd63a4f10f944b81c92d197b0"
+
+[[clips]]
+id = "36"
+path = "clips/argus-ocrbench/36.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "81026b06c85ce07408ceeb0ab79afbf2c490495b88f218cc18ce456f6c511a94"
+
+[[clips]]
+id = "37"
+path = "clips/argus-ocrbench/37.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "72f223ae146575790e5a8fd995a04bb5ca5cd07584a13649edc4a2846dc528d6"
+
+[[clips]]
+id = "38"
+path = "clips/argus-ocrbench/38.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "2422ca0d8961f1777ca5826259d5a208ac11620ec8713c86fd2355ac7a334fca"
+
+[[clips]]
+id = "39"
+path = "clips/argus-ocrbench/39.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "7459a0375cc43c3b9e5f68a9b189e512c74283915d4bca7f86cba107edc78106"
+
+[[clips]]
+id = "40"
+path = "clips/argus-ocrbench/40.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "076328bd97f57f654b7e4e3de7cff02fe6d0addc6508c232c9172abac343315e"
+
+[[clips]]
+id = "41"
+path = "clips/argus-ocrbench/41.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "145061eb300c2eba83e97a5962c8f2384b0caaee19c5460aebe949a3dc4ce396"
+
+[[clips]]
+id = "42"
+path = "clips/argus-ocrbench/42.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "7e472ec11b1f6d32a2bf87557cc5d0b38b1a1d22f1be9501ae9821c2b16b96cd"
+
+[[clips]]
+id = "43"
+path = "clips/argus-ocrbench/43.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "6082ad775550536acc520d2e017177cddd89989bec123a7d033239a4d7614e56"
+
+[[clips]]
+id = "44"
+path = "clips/argus-ocrbench/44.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "12bc0b91451f0965a37d360b624ce7d2d6b57a298b5b19a141219dfcfc10a81c"
+
+[[clips]]
+id = "45"
+path = "clips/argus-ocrbench/45.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "39ab666090db1780f4a4cc66d20d59dfd1d53285b74b2cb1d3489da6237c5dac"
+
+[[clips]]
+id = "46"
+path = "clips/argus-ocrbench/46.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "3f7bcd99900a0ccfccce603d7dbe90b63c2f68568a1168c62a85e527bca423e0"
+
+[[clips]]
+id = "47"
+path = "clips/argus-ocrbench/47.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "c6a787c9e2178799eeccf40e66e21770d9b2ba6d236d3d6fdf3c44c163a62394"
+
+[[clips]]
+id = "48"
+path = "clips/argus-ocrbench/48.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "243116fd90c0110f0ea780fa22e95402c61d4a62bb5753d9a8b2dde0b2797963"
+
+[[clips]]
+id = "49"
+path = "clips/argus-ocrbench/49.png"
+prompt = "what is written in the image?"
+class = "scene_text"
+split = "holdout"
+license = "OCRBench — see the dataset's own terms; images are NOT redistributed by this repo (corpora/clips/ is gitignored, the manifest is the committed artifact)"
+sha256 = "883b309379dd228422ed0d0a8019378b232fec2fdcf4c99c8f43240083d34675"

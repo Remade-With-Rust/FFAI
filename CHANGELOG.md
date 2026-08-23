@@ -26,7 +26,205 @@ mechanics are in `.github/workflows/release.yml`.
 
 ## [Unreleased]
 
-Nothing yet.
+### `ffai-carmenta` — one dependency dropped
+
+- **Removed** — `candle-transformers`. It was declared and **never imported**:
+  Carmenta's CRAFT detector and its CRNN/PARSeq recognizers are built directly
+  on `candle-core` and `candle-nn`, because none of them is an architecture
+  that library carries. Found while answering "which crates use candle
+  transformers"; verified by building and running the full suite without it
+  (44 tests, unchanged). No API change — it shrinks the dependency tree of a
+  published crate and nothing else.
+
+### `ffai-media` — `fps` sampling was broken, silently, for every clip
+
+- **Fixed** — `stream_frames(path, fps)` returned **exactly one frame** from
+  every video, at every rate. It computed its source frame rate as
+  `time_base.den / time_base.num`, but a time base is a clock TICK rate, not a
+  frame rate; MP4 commonly uses 1/12800, so asking for 1 fps computed a stride
+  of 12800. Decimation is now by **timestamp deadline**, which needs no frame
+  rate at all and stays correct on variable-frame-rate sources.
+
+  It failed quietly in the worst way — one frame is a perfectly good frame, so
+  callers got a plausible result rather than an error. **And the test guarding
+  it was green throughout**: it asserted only `some.len() < all.len()`, which
+  `1 < 48` satisfies. The test now asserts the RATE — spacing at least one
+  interval, count within ±50% of `duration x fps`, and oversampling keeping
+  every frame.
+
+### `ffai-argus` — video: windowed captions and a timed track
+
+- **Added** — `describe_video` groups sampled frames into windows and captions
+  each window as one multi-image prompt, returning a `TimedSegment` track.
+  Windows tile the timeline with no gaps or overlap; the remainder window is
+  never dropped.
+- **Added** — `preprocess_rgb8_opts(.., split)`. Video turns tile splitting
+  **off**: a still is 17 tiles / 1088 image tokens and the tower holds 8192, so
+  a split window caps at seven frames. Unsplit is one tile / 64 tokens and the
+  same budget holds a hundred. The unsplit tile is *bit-identical* to the split
+  path's global thumbnail, so video inherits that path's oracle gate.
+- **Added** — `tile_geometry`, a pixel-free tile-count predictor, so an
+  oversized window is refused in milliseconds instead of after running the
+  vision tower over two hundred frames. Gated against real preprocessing at
+  five sizes and both split modes.
+
+### `ffai-cli` — `ffai caption` takes video
+
+- **Added** — `ffai caption -i clip.mp4 --fps --window --max-frames --output`,
+  writing `.srt` / `.vtt` / `.json` through `Transcript`'s own renderers, or
+  timestamped text to stdout.
+- The CLI drives the engine **one window at a time**, so peak memory is a
+  function of `--window` rather than of the length of the clip.
+
+### `ffai-argus` — the engine, and the resampler that decided it
+
+Argus stops being a stub. `SmolVlm` — `SigLIP` tower, pixel-shuffle connector,
+Llama decoder on candle — reports `EngineStatus::Stable`, which in this tree
+means *oracle-gated against a reference implementation*.
+
+- **Added** — `SmolVlm`, a real `VlmEngine`. From a raw `ImageBuffer` it
+  reproduces the reference implementation's caption **byte-identically**
+  (`docs/plans/argus-launch-plan.md` §16). `ffai caption` and `ffai bench vlm`
+  both reach it; weights resolve through the `ffai-models` manifest seam
+  (`models/smolvlm-256m-instruct.toml`), never a hardcoded cache path.
+- **Added** — `preprocess`: the content path (Lanczos-3, `AnyRes` tiling,
+  rescale/normalize), implementing **PIL's fixed-point resampler** rather than
+  approximating it — `i32` coefficients at `1<<22`, integer accumulation, and
+  a `u8` intermediate between the two passes. Gated bit-identical to PIL in
+  both directions by `tests/resize_oracle.rs`.
+
+  This is the entry worth reading twice. The previous float implementation
+  matched PIL to **one quantisation level** — `7.843e-3`, exactly `1/255`,
+  visually indistinguishable, ~50 dB SNR — and produced **8 of 32** correct
+  tokens. The vision tower's own `2.06e-4` flips nothing across the same 32
+  argmaxes; preprocessing's `7.8e-3` flips one at step 5. **No tensor
+  tolerance could have told us which side of that line we were on** — only
+  token equality could.
+- **Added** — `decode`: greedy and sampled generation with a `KV` cache.
+  `TextDecoder` keeps a pristine cache and clones it back at the top of
+  `generate`, so a second caption cannot inherit the first's keys and values.
+  Without that, the failure presents as *"the captions are fine until you
+  batch a directory"*, which nobody attributes to a cache.
+- **Added** — `vision`, `prompt`: the tower/connector and the Idefics3 prompt
+  assembly, each gated in isolation (104.8 / 113.2 dB; 1142/1142 token ids).
+- **Changed** — `tokenizers` and `ffai-models` are now real dependencies, not
+  dev-dependencies: turning the assembled prompt into ids and the generated
+  ids back into text is the engine's job.
+
+### `ffai-cli` — caption gains the Gate 2 decoding surface
+
+- **Added** — `ffai caption --max-new-tokens --temperature --top-p --top-k
+  --seed --repetition-penalty --stop`. The `Decoding` surface existed since
+  `ffai-core` 0.7.0 and nothing could reach it.
+- **Added** — sampling **requires** `--seed`. Passing `--temperature` alone is
+  refused rather than quietly returning a caption that cannot be reproduced.
+- **Deliberately NOT added** — `--system-prompt`. `VlmOptions` carries the
+  field because the trait needs it, but the contract is that an engine with no
+  system slot ignores it, and SmolVLM is such an engine. A flag the only
+  available engine silently drops is worse than no flag.
+- **Fixed** — the candle thread cap is no longer process-wide. It was measured
+  on Diana (a 36 ms detector: 21% less peak RSS at identical speed) and then
+  applied to everything. On Argus — seventeen 512x512 tiles and a 1142-token
+  prefill — it cost **23% of throughput** (min-of-4, ABBA-interleaved: 35639 ms
+  at 4 threads vs 27497 ms at 24) to save 22 MiB of a ~1400 MiB working set.
+  It now applies only to `detect`/`depth`, the commands it was measured on.
+
+### `ffai-bench` — the VLM comparison key names a checkpoint
+
+- **Fixed** — the engine arm's config string was built from the *engine* name
+  (`smolvlm`), while every other task names a *checkpoint* (`tiny.en/greedy`,
+  `yolo26n/e2e-640sq`). `smolvlm` is equally true of the 500M weights, whose
+  numbers are not comparable to the 256M row. Now `SmolVLM-256M/greedy-64`, via
+  a `vlm_comparison_key` that mirrors the ASR precedent — including the part
+  that matters: an unrecognised engine SKIPS its quality gate rather than being
+  compared against a reference it may not match.
+
+### Security
+
+No security-relevant changes: no `unsafe` added or altered in `ffai-argus`
+(the crate keeps `unsafe_code = "warn"`, and its two `unsafe` blocks are
+`VarBuilder::from_mmaped_safetensors` calls carrying `SAFETY` notes), no
+change to what is trusted, and no change to what personal data is processed.
+The scorer-argv trust boundary settled in step 0c is unchanged: a corpus
+selects a scorer **by name**, and `corpora/references.toml` defines the argv.
+
+### `ffai-core` 0.6.5 → 0.7.0 — BREAKING, deliberately
+
+The Argus VLM trait surface, settled in one pass before an engine exists
+(`docs/plans/argus-launch-plan.md` §2 Gate 2, §10). Every field is cheap now
+and a semver break once Argus has users; the blast radius today was **two
+struct literals**, both in-repo.
+
+- **Added** — `Decoding` enum (`Greedy` | `Sampled { temperature, top_p, top_k,
+  seed }`). `seed` is **not** an `Option`: there is no way to express
+  stochastic decoding without a seed, so the determinism requirement is
+  enforced by the type rather than by a doc comment. `Greedy` is `#[default]`.
+- **Added** — `VlmPart` / `VlmPrompt`: ordered, interleaved multimodal prompts
+  (`text <img> text <img>`), borrowed rather than owned.
+- **Added** — `VlmOptions::{system_prompt, decoding, stop, repetition_penalty}`.
+- **Added** — `VlmOptions::frames_per_window`, the video knob. It decides what a
+  caption can be ABOUT: a split frame is 1088 image tokens and the tower holds
+  8192, so it trades detail within a frame against context across frames. A
+  caller's option rather than a constant, because the right value depends on
+  the question.
+- **Changed** — `VlmEngine::describe` is now the required method and
+  `describe_image` is a provided convenience that delegates to it. An engine
+  implementing only the single-image case would otherwise compile against a
+  multi-image prompt and silently answer with one of them.
+- **Not added, as decisions rather than oversights** — streaming, grounding,
+  structured/JSON output, logprobs, conversation history. Reasons are recorded
+  on `VlmOptions` itself.
+
+**Consequence for `ffai-mercury` 1.0.0, stated rather than discovered.** That
+release's entry warned: *"`ffai-core` remains 0.6.x: a breaking change there
+would reach this crate's surface without a major-version signal from cargo."*
+This is that change. In practice Mercury's surface is untouched — it is
+expressed in `AsrEngine`/`TtsEngine`/`AudioBuffer`/`Transcript`, none of which
+moved, and nothing in Mercury references the VLM types. The break is a cargo
+version signal, not an API one, and a Mercury release against `ffai-core` 0.7
+should say exactly that.
+
+### `ffai-bench` — the VLM vertical (Argus steps 0a–0c)
+
+- **Added** — `ffai bench vlm`, `Task::Vlm` un-guarded in the CLI, `run_vlm`,
+  and `VlmScore` in the ledger (raw + normalised + metric + scorer + item
+  count, because VLM scores are not commensurable across benchmarks).
+- **Added** — `ScorerSpec`: a VLM corpus declares the benchmark's **own**
+  evaluator. This crate contains no VLM answer-comparison code and must not
+  grow any — answer extraction is part of a VLM metric, and a home-grown
+  extractor is the 2.8×-biased scorer that cost the Carmenta campaign a year.
+- **Added** — `ClipEntry::prompt`, and both the prompt and the `[scorer]` block
+  are now inside `Manifest::manifest_hash`. Hashed **only when present**, so
+  every pre-VLM corpus keeps its existing fingerprint — verified by
+  `a_shipped_corpus_still_hashes_to_its_ledger_value`, which recomputes
+  `librispeech-test-clean-v2` and asserts it still equals the value already in
+  `bench/ledger.jsonl`.
+- **Fixed** — two runs of the same clips under different scorer scales produced
+  normalised scores **20× apart under an identical corpus hash**, because the
+  scorer sat outside the fingerprint. A ledger line has to be sufficient on its
+  own to reproduce a run.
+
+### Security
+
+Two changes are security-relevant, and one of them widens what an untrusted
+file can do.
+
+- **Changed — a corpus manifest can now name a command that `ffai-bench`
+  executes.** `[scorer]` in `corpora/*.toml` carries an argv that `run_vlm`
+  spawns. Previously only `corpora/references.toml` could cause execution;
+  a `corpora/*.toml` was pure data. **Anyone who can write a corpus file can
+  now run code as the bench user.**
+
+  Mitigating, and stated so the reader can judge rather than take it on trust:
+  corpora are repo-controlled and reviewed, this is the same trust level
+  `references.toml` has always had, and the clip *bytes* remain hash-pinned so
+  the data half is unchanged. But the scorer command is **not** hash-pinned,
+  and a corpus TOML should from now on be reviewed as executable input, not as
+  data. It is listed here rather than buried because the trust boundary moved.
+- **Unchanged** — no new `unsafe` in any crate; no dependency advisories
+  resolved or waived; no change to what personal data is processed. The new
+  `ffai-argus` dev-dependency in `ffai-bench` is test-only (one test needs a
+  registered stub VLM engine) and does not enter the library graph.
 
 ---
 

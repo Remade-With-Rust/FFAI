@@ -36,6 +36,14 @@ pub enum QualityMetric {
     Wer,
     Cer,
     Map50,
+    /// VLM benchmark score, gated as `1 − normalised` for the same reason
+    /// `Map50` is: the gate machinery is written lower-is-better, and folding
+    /// a higher-is-better score into a miss-style metric is cheaper and less
+    /// error-prone than growing a second comparison direction through every
+    /// gate. The raw score and its metric name ride in the ledger's
+    /// [`crate::ledger::VlmScore`], so the fold is arithmetic, not a loss of
+    /// information.
+    VlmScore,
 }
 
 /// Parity band for the quality gate: engine WER may exceed the best
@@ -64,6 +72,11 @@ pub struct BenchConfig {
     pub skip_references: bool,
     pub corpus: PathBuf,
     pub references: Vec<ReferenceSpec>,
+    /// Named scorers a VLM corpus may select. Empty for non-VLM tasks.
+    ///
+    /// The argv lives here — resolved from `corpora/references.toml` — and
+    /// never in a corpus: see `crate::reference::NamedScorer`.
+    pub scorers: Vec<crate::reference::NamedScorer>,
     /// Timed repetitions of the whole corpus run (best-of-N).
     pub runs: usize,
     /// Ledger file to append to.
@@ -139,6 +152,7 @@ pub fn run_asr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
                     steady_bytes: None,
                     map50: None,
                     map5095: None,
+                    vlm: None,
                 });
             }
         }
@@ -259,6 +273,7 @@ pub fn run_ocr(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
                     steady_bytes: None,
                     map50: None,
                     map5095: None,
+                    vlm: None,
                 });
             }
         }
@@ -362,6 +377,7 @@ pub fn run_detect(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord
                     cer: None,
                     map50: None,
                     map5095: None,
+                    vlm: None,
                     rtf_warm: None,
                     rtf_e2e: None,
                     load_secs: None,
@@ -437,6 +453,7 @@ fn run_detect_reference(
         cer: None,
         map50: None,
         map5095: None,
+        vlm: None,
         rtf_warm: None,
         rtf_e2e: None,
         load_secs: None,
@@ -538,7 +555,7 @@ fn run_detect_reference(
 /// Deliberately NOT applied around the engine itself: a panic in Carmenta is
 /// our defect and must abort loudly. This only shields the harness from its
 /// decode dependencies.
-fn load_image_resilient(path: &Path) -> std::result::Result<ffai_core::types::ImageBuffer, String> {
+pub(crate) fn load_image_resilient(path: &Path) -> std::result::Result<ffai_core::types::ImageBuffer, String> {
     let taken = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ffai_media::load_image(path)
     }));
@@ -605,6 +622,7 @@ fn run_detect_engine(
         cer: None,
         map50: None,
         map5095: None,
+        vlm: None,
         rtf_warm: None,
         rtf_e2e: None,
         load_secs: None,
@@ -876,6 +894,7 @@ fn run_ocr_engine(
         steady_bytes: None,
         map50: None,
         map5095: None,
+        vlm: None,
     };
 
     // Decode images ONCE, outside the timed region — same rationale as ASR:
@@ -1045,6 +1064,7 @@ fn run_reference(
         steady_bytes: None,
         map50: None,
         map5095: None,
+        vlm: None,
     };
 
     if !spec.supports_batch() {
@@ -1166,6 +1186,7 @@ fn run_engine(
         steady_bytes: None,
         map50: None,
         map5095: None,
+        vlm: None,
     };
 
     // Decode audio ONCE, outside the timed region: every implementation gets
@@ -1313,11 +1334,13 @@ pub(crate) fn fill_gates(
         QualityMetric::Wer => r.wer,
         QualityMetric::Cer => r.cer,
         QualityMetric::Map50 => r.map50.map(|m| 1.0 - m),
+        QualityMetric::VlmScore => r.vlm.as_ref().map(|v| 1.0 - v.normalised),
     };
     let metric_label = match quality {
         QualityMetric::Wer => "WER",
         QualityMetric::Cer => "CER",
         QualityMetric::Map50 => "1-mAP50",
+        QualityMetric::VlmScore => "1-score",
     };
     let Some(eng) = engine else {
         for kind in GateKind::ALL {
@@ -1532,8 +1555,31 @@ pub fn render(record: &BenchRecord) -> String {
     // the two quality columns carrying mAP instead of error rates (higher is
     // better — the column heads say which). Same ledger fields either way
     // (see `run_ocr` / `run_detect`).
+    // VLM media is items (image+question pairs) and the rate is items/second.
+    // Its quality column carries the benchmark's RAW score with the metric's
+    // own name in the header — never the normalised 0..1 the gate uses, and
+    // never a bare number, because OCRBench 612 and ANLS 0.61 in one unlabelled
+    // column is an invitation to compare two things that are not comparable.
     let ocr = record.task == "ocr";
     let detect = record.task == "detect";
+    let vlm = record.task == "vlm";
+    // The scorer reports a qualified name like `OCRBench:Final Score` — the
+    // benchmark plus the result key it read. The ledger keeps the whole thing,
+    // because that is what makes the row reproducible; the column head keeps
+    // only the benchmark, because a 20-character name in a 7-wide field
+    // shatters the table.
+    let vlm_metric = record
+        .engine
+        .as_ref()
+        .and_then(|e| e.vlm.as_ref())
+        .or_else(|| record.references.iter().find_map(|r| r.vlm.as_ref()))
+        .map_or_else(
+            || "SCORE".to_string(),
+            |v| {
+                let head = v.metric.split(':').next().unwrap_or(&v.metric);
+                head.chars().take(7).collect::<String>().to_uppercase()
+            },
+        );
     let media = record
         .engine
         .as_ref()
@@ -1550,6 +1596,8 @@ pub fn render(record: &BenchRecord) -> String {
             format!("{media:.0} pages")
         } else if detect {
             format!("{media:.0} images")
+        } else if vlm {
+            format!("{media:.0} items")
         } else {
             format!("{media:.1}s audio")
         },
@@ -1557,12 +1605,26 @@ pub fn render(record: &BenchRecord) -> String {
     out.push_str(&format!(
         "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
         "IMPLEMENTATION",
-        if detect { "mAP50" } else { "WER%" },
-        if detect { "mAP5095" } else { "CER%" },
+        if detect {
+            "mAP50"
+        } else if vlm {
+            vlm_metric.as_str()
+        } else {
+            "WER%"
+        },
+        if detect {
+            "mAP5095"
+        } else if vlm {
+            "SCORE01"
+        } else {
+            "CER%"
+        },
         if ocr {
             "PG/S_WARM"
         } else if detect {
             "IMG/S_WARM"
+        } else if vlm {
+            "IT/S_WARM"
         } else {
             "xRT_WARM"
         },
@@ -1570,6 +1632,8 @@ pub fn render(record: &BenchRecord) -> String {
             "PG/S_E2E"
         } else if detect {
             "IMG/S_E2E"
+        } else if vlm {
+            "IT/S_E2E"
         } else {
             "xRT_E2E"
         },
@@ -1578,7 +1642,7 @@ pub fn render(record: &BenchRecord) -> String {
         "CLIPS"
     ));
     let rate = |r: f64| {
-        if ocr || detect {
+        if ocr || detect || vlm {
             format!("{r:.2}")
         } else {
             format!("{r:.1}x")
@@ -1587,13 +1651,23 @@ pub fn render(record: &BenchRecord) -> String {
     let mut row = |s: &RunSummary, marker: &str| {
         let (q1, q2) = if detect {
             (s.map50, s.map5095)
+        } else if vlm {
+            // RAW score first (the figure comparable to a published row),
+            // normalised second. The raw number is NOT a percentage —
+            // OCRBench runs 0–1000 — so it must not be scaled by 100 the way
+            // an error rate is.
+            (
+                s.vlm.as_ref().map(|v| v.raw),
+                s.vlm.as_ref().map(|v| v.normalised),
+            )
         } else {
             (s.wer, s.cer)
         };
+        let q1_scale = if vlm { 1.0 } else { 100.0 };
         out.push_str(&format!(
             "{:<24} {:>7} {:>7} {:>10} {:>10} {:>8} {:>9} {:>7}\n",
             format!("{marker}{}", s.name),
-            q1.map_or_else(|| "-".into(), |w| format!("{:.2}", w * 100.0)),
+            q1.map_or_else(|| "-".into(), |w| format!("{:.2}", w * q1_scale)),
             q2.map_or_else(|| "-".into(), |c| format!("{:.2}", c * 100.0)),
             s.rtf_warm.map_or_else(|| "-".into(), &rate),
             s.rtf_e2e.map_or_else(|| "-".into(), &rate),
@@ -1746,7 +1820,7 @@ mod config_tests {
 pub const DECODE_KEY: &str = "decode";
 
 /// A reference's declared configuration, as a one-entry config map.
-fn decode_config(config: Option<&str>) -> std::collections::BTreeMap<String, String> {
+pub(crate) fn decode_config(config: Option<&str>) -> std::collections::BTreeMap<String, String> {
     let mut map = std::collections::BTreeMap::new();
     if let Some(c) = config {
         map.insert(DECODE_KEY.to_string(), c.to_string());
@@ -1805,6 +1879,7 @@ mod gate_split_tests {
             steady_bytes: None,
             map50: None,
             map5095: None,
+            vlm: None,
         }
     }
 

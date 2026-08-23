@@ -1,0 +1,63 @@
+mistral.rs PANICS generating from any Idefics3/SmolVLM model, because its
+per-image encoder cache assumes a model that does NOT tile.
+
+    mistralrs-core/src/vision_models/idefics3/mod.rs ~line 193
+
+        let n = pixel_values.dim(0)?;                        // TILES
+        let mut per_image: Vec<Option<Tensor>> = vec![None; n];
+        ...
+        for (i, &hash) in image_hashes.iter().enumerate() {  // IMAGES
+            ...                                              // fills [0..n_images)
+        }
+        ...
+        let slices: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
+                                                                   ^^^^^^^^ panics
+
+`per_image` is sized by the number of dim-0 slices in `pixel_values` and filled
+by the number of images. For a model with dynamic-resolution tiling one image
+becomes MANY slices — SmolVLM produces 17 (a 4x4 grid plus a global thumbnail)
+for a single 512px input — so every slot from `n_images` to `n` stays `None`
+and the `unwrap()` fires.
+
+Observed: `HuggingFaceTB/SmolVLM-256M-Instruct` loads cleanly in 8.3 s and then
+
+    thread '<unnamed>' panicked at idefics3/mod.rs:233:75:
+    called `Option::unwrap()` on a `None` value
+
+THE CRATE ALREADY KNOWS THIS INVARIANT
+--------------------------------------
+`mistralrs-core/src/paged_attention/encoder_cache.rs` has a shared helper,
+`cached_encode_images`, documented as:
+
+    Helper: cache-aware batch encoding for "Pattern A" models whose
+    pixel_values have shape (N, C, H, W) with one image per dim-0 slice.
+
+…and it sizes its `hits` vector by `image_hashes.len()` (correct) and carries
+
+    debug_assert_eq!(n_images, pixel_values.dim(0)?,
+                     "image_hashes length must match pixel_values dim-0");
+
+Idefics3 open-codes that logic instead of calling the helper, inverts the
+sizing, and drops the assertion. And because the assertion is a `debug_assert`,
+it is COMPILED OUT of a release build — which is why the failure surfaces as a
+bare `unwrap()` on `None` rather than as the message that names the cause.
+
+SmolVLM is simply not a Pattern-A model. Tiling is the whole reason it reads
+documents well, and it is what the FFai launch plan (§3.1.2) flags as
+"load-bearing for document scores".
+
+THE FIX
+-------
+Take the cache path only when the model actually IS one-image-per-slice, and
+otherwise fall through to the existing uncached branch — which is already
+correct, forwarding the whole tile batch in one call. Behaviour is unchanged
+for non-tiling Idefics3 models; tiling models stop panicking and lose only a
+cache they were never eligible for.
+
+    -            let image_hidden_states = if !image_hashes.is_empty() {
+    +            let image_hidden_states = if !image_hashes.is_empty()
+    +                && image_hashes.len() == pixel_values.dim(0)?
+    +            {
+
+APPLY:  python corpora/refs/patches/apply_vlmevalkit_patch.py
+        (the mistral.rs patch lives in the same script)

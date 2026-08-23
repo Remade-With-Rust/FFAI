@@ -121,11 +121,52 @@ impl BatchResult {
     }
 }
 
-/// The declaration file: a list of references.
+/// A named, executable scorer — declared HERE and not in a corpus.
+///
+/// # Why this lives in the references file
+///
+/// `references.toml` has always been executable input: every entry names an
+/// argv this crate spawns, and it is read and reviewed as such. A
+/// `corpora/*.toml` was pure data.
+///
+/// When VLM scoring landed, the corpus grew a `[scorer]` block carrying an
+/// argv, and that moved the trust boundary: a file shaped like data could
+/// suddenly run code. The risk was never that execution is *possible* — it is
+/// that execution became **invisible**, buried on line 20 of a thousand lines
+/// of hashes and prompts that a reviewer will skim.
+///
+/// So the argv moved back here, and the corpus now merely *selects* a scorer
+/// by name. **Data selects from a set; code defines the set.** The corpus
+/// keeps `metric` and `scale`, which are facts about the benchmark's numbers
+/// rather than instructions to execute anything.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NamedScorer {
+    /// The name a corpus refers to.
+    pub name: String,
+    /// Argv; `{predictions}` is replaced with the predictions JSONL path.
+    pub command: Vec<String>,
+    /// Optional argv printing a version string, recorded in the ledger.
+    #[serde(default)]
+    pub version_command: Option<Vec<String>>,
+}
+
+impl NamedScorer {
+    /// The argv as a single line, for the ledger and for printing before the
+    /// spawn — an executed command should be visible, not merely permitted.
+    #[must_use]
+    pub fn command_line(&self) -> String {
+        self.command.join(" ")
+    }
+}
+
+/// The declaration file: references, and the scorers they may be paired with.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ReferenceFile {
     #[serde(default, rename = "reference")]
     pub references: Vec<ReferenceSpec>,
+    /// Named scorers a VLM corpus may select. See [`NamedScorer`].
+    #[serde(default, rename = "scorer")]
+    pub scorers: Vec<NamedScorer>,
 }
 
 impl ReferenceFile {
@@ -137,6 +178,12 @@ impl ReferenceFile {
     pub fn for_task<'a>(&'a self, task: &str) -> impl Iterator<Item = &'a ReferenceSpec> {
         self.references.iter().filter(move |r| r.task == task)
     }
+
+    /// Look up a scorer a corpus asked for by name.
+    #[must_use]
+    pub fn scorer(&self, name: &str) -> Option<&NamedScorer> {
+        self.scorers.iter().find(|s| s.name == name)
+    }
 }
 
 impl ReferenceSpec {
@@ -147,6 +194,24 @@ impl ReferenceSpec {
 
     /// Run the whole corpus in one invocation (see module docs).
     pub fn run_batch(&self, inputs: &[PathBuf]) -> Result<BatchResult> {
+        self.run_batch_subst(inputs, &[])
+    }
+
+    /// `run_batch` with extra `{placeholder}` -> value substitutions.
+    ///
+    /// Exists for VLM references, which need the corpus manifest as well as
+    /// the file list: a VLM item is an (image, question) pair, and the
+    /// question lives in the manifest — pinned there so it falls inside the
+    /// corpus fingerprint. Without `{corpus}` every VLM reference would have
+    /// to be re-declared per dataset just to vary one argument.
+    ///
+    /// Substitution is literal and applied to each argv element, the same way
+    /// `{filelist}` already is.
+    pub fn run_batch_subst(
+        &self,
+        inputs: &[PathBuf],
+        extra: &[(&str, &str)],
+    ) -> Result<BatchResult> {
         let argv = self.batch_command.as_ref().ok_or_else(|| {
             Error::Other(format!("reference `{}` has no batch_command", self.name))
         })?;
@@ -161,7 +226,13 @@ impl ReferenceSpec {
 
         let argv: Vec<String> = argv
             .iter()
-            .map(|a| a.replace("{filelist}", &list_path.to_string_lossy()))
+            .map(|a| {
+                let mut s = a.replace("{filelist}", &list_path.to_string_lossy());
+                for (k, v) in extra {
+                    s = s.replace(k, v);
+                }
+                s
+            })
             .collect();
         let result = self.exec_measured(&argv);
         std::fs::remove_file(&list_path).ok();

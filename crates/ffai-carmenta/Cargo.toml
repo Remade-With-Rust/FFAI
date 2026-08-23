@@ -25,7 +25,7 @@ description = "Carmenta — pure-Rust OCR: documents, screens, and a change-gate
 # restores 0.8.x. Both change output order/content, which this crate versions
 # as a compatibility break. Inline-formula splicing is added but stays OFF:
 # it wins text and loses reading order, and order is a non-regression gate.
-version = "0.9.0"
+version = "0.9.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -37,15 +37,31 @@ categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }
-ffai-models = { workspace = true }
+ffai-models = { path = "../ffai-models", version = "0.6.2", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
-tokenizers = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rayon = { workspace = true }
 png = { workspace = true }
+
+# rayon is NOT a wasm dependency. `wasm32-unknown-unknown` has no threads to
+# spawn, so `crate::par` supplies the identical serial iterators there and a
+# call site that still reaches for a parallel one fails to COMPILE rather than
+# panicking in someone's browser.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+tokenizers = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# getrandom 0.3 needs its `wasm_js` FEATURE in addition to the
+# `--cfg getrandom_backend` that .cargo/config.toml supplies; it errors if
+# either half is missing. Arrives here through tokenizers -> ahash.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# `onig` is Oniguruma, a C regex engine: there is no `cc` for wasm32, and a C
+# dependency is not something this house ships anyway. `unstable_wasm` swaps it
+# for fancy-regex, which is pure Rust.
+tokenizers = { version = "0.23", default-features = false, features = ["unstable_wasm"] }
 
 [dev-dependencies]
 # Examples only, never the library. `ffai-cli` sets mimalloc as its global
@@ -58,6 +74,27 @@ mimalloc = { version = "0.1", default-features = false }
 rusty_alloc-api = "=0.3.2"
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
+
+# Weight downloading, ON by default so `CraftCrnn::new()` keeps fetching on
+# first use, exactly as the README documents.
+#
+# Turning it OFF is what a security-conscious embedder wants, and it is what
+# makes a wasm build possible at all: `fetch` pulls hf-hub, whose 1.0 release
+# calls `reqwest::blocking` — a module that does not exist on wasm32, for 24
+# compile errors before any of our code is reached. Mercury and Diana have had
+# this opt-out for a while; Carmenta was the last engine without it, and until
+# now shipped the HTTP/TLS stack with no way to remove it.
+[features]
+default = ["fetch"]
+fetch = ["ffai-models/fetch"]
+# Send wasm's 3x3 convolutions to candle instead of our SIMD128 kernel.
+#
+# wasm has no environment and validates its SIMD ahead of time, so the conv arm
+# cannot be switched at run time the way `FFAI_CONV3X3` switches it natively —
+# the two arms are two BUILDS, and this feature is the second one. It exists so
+# the A/B in docs/plans/carmenta-wasm-plan.md stays reproducible; the default
+# (off) is the arm that measured faster.
+wasm-candle-conv = []
 
 [lints.rust]
 # Mirrors [workspace.lints.rust]; restated because this crate needs its own

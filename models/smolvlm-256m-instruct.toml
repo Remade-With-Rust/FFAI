@@ -1,0 +1,19 @@
+# The Argus bring-up target, chosen in Gate 1.2 of docs/plans/argus-launch-plan.md.
+#
+# SmolVLM-256M-Instruct rather than SmolVLM2 for one decidable reason: only v1
+# has a PUBLISHED OCRBench row, which is what makes the reference arm an
+# external number instead of our own claim.
+name = "smolvlm-256m-instruct"
+task = "vlm"
+description = "SmolVLM-256M-Instruct — SigLIP tower + pixel-shuffle connector + Llama decoder"
+license = "Apache-2.0"
+hf_repo = "HuggingFaceTB/SmolVLM-256M-Instruct"
+
+[[files]]
+name = "model.safetensors"
+
+[[files]]
+name = "config.json"
+
+[[files]]
+name = "tokenizer.json"

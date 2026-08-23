@@ -275,11 +275,172 @@ impl Default for DetectOptions {
     }
 }
 
+/// How a VLM decoder picks each next token.
+///
+/// **This is an enum rather than a bag of `Option` fields on purpose, and the
+/// reason is the whole of Gate 2's determinism requirement: there is no way to
+/// spell "sampling without a seed".** A `temperature: Option<f32>` beside a
+/// `seed: Option<u64>` lets a caller set one and forget the other, and the
+/// result is output that cannot be reproduced — silently, and only noticed
+/// when someone tries to re-run a ledger line.
+///
+/// Byte-stability is the one property every other `FFai` component already
+/// holds. `Mercury` TTS ships it as a competitive claim its reference
+/// structurally cannot match ([`TtsOptions::seed`]); Carmenta gates on
+/// byte-identity; `Diana` matches `PyTorch` detection-for-detection. `Argus` does
+/// not get to be the exception, so the type makes the exception
+/// unrepresentable.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Decoding {
+    /// Always the argmax. Deterministic by construction, and **the default**.
+    ///
+    /// `#[default]` rather than a hand-written `impl Default`: the default
+    /// belongs to the type, and a separate impl is one more place for it to
+    /// drift away from what this doc comment promises.
+    #[default]
+    Greedy,
+    /// Stochastic — and always seeded, because `seed` is not optional here.
+    ///
+    /// Same input + same options + same seed = same bytes.
+    Sampled {
+        /// Logit temperature. `1.0` is the model's own distribution.
+        temperature: f32,
+        /// Nucleus cutoff, `None` = disabled.
+        top_p: Option<f32>,
+        /// Top-k cutoff, `None` = disabled.
+        top_k: Option<usize>,
+        /// Not optional. See the type-level note above.
+        seed: u64,
+    },
+}
+
+/// One piece of a multimodal prompt.
+///
+/// Borrowed rather than owned: an `ImageBuffer` is the decoded raster, and a
+/// tiling VLM will re-encode it into a dozen-plus tiles anyway. Cloning it to
+/// build a prompt would copy megabytes for nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VlmPart<'a> {
+    Text(&'a str),
+    Image(&'a ImageBuffer),
+}
+
+/// An ordered, interleaved multimodal prompt — `text <img> text <img> text`.
+///
+/// **Order is the payload.** "Compare the first image to the second" is not
+/// expressible as a set of images plus a question, and a model that receives
+/// the images in the wrong order answers the wrong question fluently. So the
+/// prompt is a sequence and the engine splices its image-token blocks at the
+/// positions the sequence gives it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VlmPrompt<'a> {
+    pub parts: Vec<VlmPart<'a>>,
+}
+
+impl<'a> VlmPrompt<'a> {
+    /// The single-image case: the image, then the instruction if there is one.
+    #[must_use]
+    pub fn single(image: &'a ImageBuffer, text: Option<&'a str>) -> Self {
+        let mut parts = vec![VlmPart::Image(image)];
+        if let Some(t) = text {
+            parts.push(VlmPart::Text(t));
+        }
+        Self { parts }
+    }
+
+    /// Number of images in the prompt — what an engine checks against the
+    /// image-token placeholders it is about to splice.
+    #[must_use]
+    pub fn image_count(&self) -> usize {
+        self.parts
+            .iter()
+            .filter(|p| matches!(p, VlmPart::Image(_)))
+            .count()
+    }
+}
+
+/// Options for a VLM call (Argus).
+///
+/// # Gate 2 — the v1 surface, and what is deliberately NOT here
+///
+/// Settled once, before implementation, because every field is cheap now and a
+/// breaking change later (`docs/plans/argus-launch-plan.md` §2 Gate 2).
+///
+/// **Excluded from v1, as decisions rather than oversights:**
+///
+/// - **Streaming.** Tokens as produced. It changes the return type of every
+///   method, so it is a trait redesign and not a field; it waits until there
+///   is a consumer that needs it.
+/// - **Grounding.** Region-in ("what is in this box") and grounded-out ("the
+///   dog `[x,y,w,h]`"). Diana already returns boxes; a second, weaker box
+///   source in the toolkit needs a reason beyond "the model can".
+/// - **Structured / JSON output.** Needs constrained decoding to be worth
+///   anything — an unconstrained "please reply in JSON" is a request, not a
+///   guarantee. High value for a tooling product, so it is v2 rather than
+///   never; mistral.rs already provides grammar-constrained decoding, which is
+///   what makes it cheap when it lands.
+/// - **Token-level confidence (logprobs).** Carmenta uses recognition
+///   confidence for its verifier and the analog is genuinely valuable, but it
+///   is only meaningful once an engine exists to produce it honestly.
+/// - **Conversation history / multi-turn.** [`VlmPrompt`] can already express
+///   an interleaved turn sequence; a typed history is a chat-session concern,
+///   and Argus is a media op.
+///
+/// **Not here because it belongs to the ENGINE, not the caller:** the chat
+/// template, the special vision tokens (`<image>`, `<|vision_start|>`), and
+/// the M-RoPE time axis for video. Those are properties of a specific
+/// checkpoint. Exposing them as options would invite a caller to set them
+/// wrong — and the launch plan measured what that costs: **43 of 50 answers
+/// changed** on identical weights purely from prompt formatting, with no error
+/// raised.
 #[derive(Debug, Clone, Default)]
 pub struct VlmOptions {
     /// Instruction for the model; `None` = plain captioning.
+    ///
+    /// Read by [`VlmEngine::describe_image`] only. [`VlmEngine::describe`]
+    /// takes its text from the prompt's own [`VlmPart::Text`] parts, because
+    /// position matters there and a separate field could not say where the
+    /// text goes.
     pub prompt: Option<String>,
+    /// Role/behaviour framing, when the checkpoint's template has a slot for
+    /// it. Engines without one must ignore it rather than concatenate it into
+    /// the user turn, which changes the prompt the model was tuned on.
+    pub system_prompt: Option<String>,
+    /// Token-selection strategy. Defaults to [`Decoding::Greedy`].
+    pub decoding: Decoding,
+    /// Token budget. `None` = the engine's own default.
     pub max_new_tokens: Option<usize>,
+    /// Stop strings. Generation halts as soon as one is produced; the string
+    /// itself is not included in the returned text.
+    ///
+    /// EOS is not here — that is the tokenizer's, and an engine that needed to
+    /// be told its own EOS would be misconfigured.
+    pub stop: Vec<String>,
+    /// Frames shown to the model per video caption. `None` = the engine's own
+    /// default.
+    ///
+    /// This is the video knob that decides what a caption can be ABOUT, and
+    /// the arithmetic is worth stating because it is not obvious. A still
+    /// image is split into tiles so fine print survives — for `SmolVLM` that
+    /// is 17 tiles at 64 tokens, **1088 tokens per image**. A text tower with
+    /// 8192 positions therefore holds seven such frames, which is not a window
+    /// so much as a slideshow.
+    ///
+    /// Video engines turn splitting off, making a frame **one** tile, and the
+    /// same 8192 positions then hold a hundred. So this number trades fine
+    /// detail within a frame against temporal context across frames, and the
+    /// right value depends on the question being asked — which is why it is a
+    /// caller's option and not a constant.
+    ///
+    /// `1` degenerates to per-frame captioning: correct, and blind to motion.
+    pub frames_per_window: Option<usize>,
+    /// Repetition penalty, `None` = disabled.
+    ///
+    /// Sits beside [`Self::decoding`] rather than inside
+    /// [`Decoding::Sampled`] because it is a *logit* transform, not a
+    /// sampling one: it applies to greedy decoding too, and small models loop
+    /// under greedy more than under sampling.
+    pub repetition_penalty: Option<f32>,
 }
 
 /// Speech → text (Mercury).
@@ -397,13 +558,163 @@ pub trait DetectEngine: Send + Sync {
 }
 
 /// Image/video → description (Argus).
+///
+/// See [`VlmOptions`] for the Gate-2 surface decision and the written-down v1
+/// exclusions.
 pub trait VlmEngine: Send + Sync {
     fn info(&self) -> EngineInfo;
-    fn describe_image(&self, image: &ImageBuffer, opts: &VlmOptions) -> Result<String>;
+
+    /// The general path: an ordered, interleaved multimodal prompt.
+    ///
+    /// **This is the required method, and `describe_image` is derived from
+    /// it, rather than the other way round.** An engine that implemented only
+    /// the single-image case would still compile against a multi-image
+    /// prompt — and would then silently answer using the first image, or the
+    /// last, or a concatenation. Making the general case the one an
+    /// implementor must write means multi-image support is a compile-time
+    /// obligation instead of a runtime surprise.
+    fn describe(&self, prompt: &VlmPrompt<'_>, opts: &VlmOptions) -> Result<String>;
+
+    /// One image, with [`VlmOptions::prompt`] as the instruction.
+    ///
+    /// Provided: builds a single-image [`VlmPrompt`] and calls
+    /// [`Self::describe`]. Zero-copy — the prompt borrows the image.
+    fn describe_image(&self, image: &ImageBuffer, opts: &VlmOptions) -> Result<String> {
+        self.describe(&VlmPrompt::single(image, opts.prompt.as_deref()), opts)
+    }
+
     /// Video understanding over sampled frames → a timed caption track.
+    ///
+    /// Frames arrive with their timestamps ([`VideoFrame::timestamp`]) so an
+    /// engine can encode *time* and not merely order — M-RoPE's third axis.
+    /// Whether it does is the engine's business; the trait's job is to make
+    /// sure the information reaches it.
     fn describe_video(
         &self,
         frames: &[VideoFrame],
         opts: &VlmOptions,
     ) -> Result<Vec<TimedSegment<String>>>;
+}
+
+#[cfg(test)]
+mod vlm_surface_tests {
+    use super::*;
+    use crate::types::PixelFormat;
+
+    fn img(byte: u8) -> ImageBuffer {
+        ImageBuffer {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgb8,
+            data: vec![byte, byte, byte],
+        }
+    }
+
+    /// An engine that implements ONLY the required method and records what it
+    /// was handed — which is how we check `describe_image` really routes
+    /// through `describe` rather than being a second, divergent path.
+    struct Recorder(std::sync::Mutex<Vec<String>>);
+
+    impl VlmEngine for Recorder {
+        fn info(&self) -> EngineInfo {
+            EngineInfo {
+                name: "recorder".into(),
+                task: Task::Vlm,
+                status: EngineStatus::Stub,
+                description: String::new(),
+            }
+        }
+        fn describe(&self, prompt: &VlmPrompt<'_>, _opts: &VlmOptions) -> Result<String> {
+            let shape: Vec<String> = prompt
+                .parts
+                .iter()
+                .map(|p| match p {
+                    VlmPart::Text(t) => format!("text:{t}"),
+                    VlmPart::Image(i) => format!("image:{}", i.data[0]),
+                })
+                .collect();
+            self.0.lock().unwrap().push(shape.join("|"));
+            Ok(shape.join("|"))
+        }
+        fn describe_video(
+            &self,
+            _frames: &[VideoFrame],
+            _opts: &VlmOptions,
+        ) -> Result<Vec<TimedSegment<String>>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Gate 2's determinism requirement, checked rather than asserted in prose:
+    /// a caller who sets nothing gets deterministic decoding.
+    #[test]
+    fn the_default_decoding_is_deterministic() {
+        assert_eq!(VlmOptions::default().decoding, Decoding::Greedy);
+        // ...and the default options carry no stochasticity anywhere else.
+        assert!(VlmOptions::default().stop.is_empty());
+        assert_eq!(VlmOptions::default().repetition_penalty, None);
+    }
+
+    /// There is no way to construct stochastic decoding without a seed. This
+    /// test cannot fail at runtime — the point is that the alternative does
+    /// not COMPILE, and this is where that intent is recorded.
+    #[test]
+    fn sampling_always_carries_a_seed() {
+        let d = Decoding::Sampled {
+            temperature: 0.7,
+            top_p: Some(0.9),
+            top_k: None,
+            seed: 42,
+        };
+        // Every Sampled value has a seed by construction; matching proves it.
+        let Decoding::Sampled { seed, .. } = d else {
+            panic!("expected Sampled")
+        };
+        assert_eq!(seed, 42);
+    }
+
+    #[test]
+    fn describe_image_routes_through_describe() {
+        let e = Recorder(std::sync::Mutex::new(Vec::new()));
+        let opts = VlmOptions {
+            prompt: Some("what is this?".into()),
+            ..VlmOptions::default()
+        };
+        let out = e.describe_image(&img(7), &opts).unwrap();
+        // Image FIRST, then the instruction — the order most VLM chat
+        // templates expect, and the order `VlmPrompt::single` documents.
+        assert_eq!(out, "image:7|text:what is this?");
+        assert_eq!(e.0.lock().unwrap().len(), 1, "describe must have been used");
+    }
+
+    #[test]
+    fn a_prompt_with_no_instruction_is_just_the_image() {
+        let e = Recorder(std::sync::Mutex::new(Vec::new()));
+        let out = e.describe_image(&img(3), &VlmOptions::default()).unwrap();
+        assert_eq!(out, "image:3");
+    }
+
+    /// Order is the payload: "compare the first to the second" is not
+    /// expressible as a set, so the sequence must survive intact.
+    #[test]
+    fn interleaved_order_is_preserved() {
+        let (a, b) = (img(1), img(2));
+        let e = Recorder(std::sync::Mutex::new(Vec::new()));
+        let prompt = VlmPrompt {
+            parts: vec![
+                VlmPart::Text("before"),
+                VlmPart::Image(&a),
+                VlmPart::Text("between"),
+                VlmPart::Image(&b),
+                VlmPart::Text("after"),
+            ],
+        };
+        assert_eq!(prompt.image_count(), 2);
+        let out = e.describe(&prompt, &VlmOptions::default()).unwrap();
+        assert_eq!(
+            out,
+            "text:before|image:1|text:between|image:2|text:after",
+            "the sequence an engine receives must be the sequence it was given"
+        );
+    }
 }
