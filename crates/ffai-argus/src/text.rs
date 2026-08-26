@@ -355,7 +355,7 @@ impl candle_core::InplaceOp1 for CausalSoftmaxInplace {
 /// already scratch. At `(1, 1142, 576)` that is 2.6 MB allocated, written and
 /// dropped, twice per layer, sixty times a prefill. The left operand here is
 /// always a freshly-produced projection output that nothing else references.
-struct AddInplace;
+pub(crate) struct AddInplace;
 
 impl candle_core::InplaceOp2 for AddInplace {
     fn name(&self) -> &'static str {
@@ -383,14 +383,30 @@ impl candle_core::InplaceOp2 for AddInplace {
         if ae - ao != be - bo {
             candle_core::bail!("ffai-add-inplace: length mismatch");
         }
-        lhs[ao..ae]
-            .par_chunks_mut(8192)
-            .zip(rhs.par_chunks(8192))
-            .for_each(|(a, b)| {
-                for (a, &b) in a.iter_mut().zip(b) {
-                    *a += b;
-                }
-            });
+        // Parallelise ONLY if we are not already inside a rayon worker.
+        //
+        // The vision tower runs six tiles concurrently and calls this twice a
+        // layer; spawning a nested parallel region 408 times per caption cost
+        // more than the add. `current_thread_index()` is `Some` exactly when
+        // this is running on a pool thread, which is the condition that
+        // matters — and it is right in both callers without a flag to thread
+        // through or to get wrong.
+        let add = |a: &mut [f32], b: &[f32]| {
+            for (a, &b) in a.iter_mut().zip(b) {
+                *a += b;
+            }
+        };
+        if rayon::current_thread_index().is_none() {
+            lhs[ao..ae]
+                .par_chunks_mut(8192)
+                .zip(rhs.par_chunks(8192))
+                .for_each(|(a, b)| add(a, b));
+        } else {
+            lhs[ao..ae]
+                .chunks_mut(8192)
+                .zip(rhs.chunks(8192))
+                .for_each(|(a, b)| add(a, b));
+        }
         crate::cost::elementwise((ae - ao) as u64, 1, 1);
         Ok(())
     }
@@ -563,6 +579,64 @@ pub fn causal_softmax_for_probe(att: &Tensor, offset: usize) -> CandleResult<Ten
 /// Propagates candle's tensor errors.
 pub fn swiglu_for_probe(gate: &Tensor, up: &Tensor) -> CandleResult<Tensor> {
     gate.apply_op2_no_bwd(up, &SwiGlu)
+}
+
+/// `silu(gate) * up` written **in place** into `gate`.
+///
+/// `gate` is the gate projection's own output — 7 MB at `(1,1142,1536)` —
+/// produced one line earlier and referenced by nothing else. Allocating a
+/// third tensor to hold the product costs an allocation, a 7 MB write and a
+/// drop, 30 times a prefill.
+struct SwiGluInplace;
+
+impl candle_core::InplaceOp2 for SwiGluInplace {
+    fn name(&self) -> &'static str {
+        "ffai-swiglu-inplace"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &mut candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+    ) -> CandleResult<()> {
+        let (Some((ao, ae)), Some((bo, be))) = (l1.contiguous_offsets(), l2.contiguous_offsets())
+        else {
+            candle_core::bail!("ffai-swiglu-inplace expects contiguous inputs")
+        };
+        let candle_core::CpuStorage::F32(up) = s2 else {
+            candle_core::bail!("ffai-swiglu-inplace expects f32")
+        };
+        let up = &up[bo..be];
+        let candle_core::CpuStorage::F32(gate) = s1 else {
+            candle_core::bail!("ffai-swiglu-inplace expects f32")
+        };
+        if ae - ao != be - bo {
+            candle_core::bail!("ffai-swiglu-inplace: length mismatch");
+        }
+        let n = ae - ao;
+        let apply = |g: &mut [f32], u: &[f32]| {
+            for (g, &u) in g.iter_mut().zip(u) {
+                *g = ffai_core::fastmath::silu(*g) * u;
+            }
+        };
+        // Serial when already on a pool thread — see `AddInplace`.
+        if rayon::current_thread_index().is_none() {
+            gate[ao..ae]
+                .par_chunks_mut(8192)
+                .zip(up.par_chunks(8192))
+                .for_each(|(g, u)| apply(g, u));
+        } else {
+            gate[ao..ae]
+                .chunks_mut(8192)
+                .zip(up.chunks(8192))
+                .for_each(|(g, u)| apply(g, u));
+        }
+        crate::cost::transcendental_vector(n as u64);
+        crate::cost::elementwise(n as u64, 1, 1);
+        Ok(())
+    }
 }
 
 /// The text tower: embeddings, blocks, final norm, `lm_head`.
@@ -803,7 +877,8 @@ impl TextTower {
         crate::cost::matmul(2, bu * sq, hd, c.inter as u64);
         // silu(gate) * up in ONE pass.
         let _t = std::time::Instant::now();
-        let h = g.apply_op2_no_bwd(&u, &SwiGlu)?;
+        g.inplace_op2(&u, &SwiGluInplace)?;
+        let h = g;
         prof::add("swiglu", _t);
         let _t = std::time::Instant::now();
         let down = linear(&h, &blk.down)?;

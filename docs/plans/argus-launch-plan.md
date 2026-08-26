@@ -3070,3 +3070,72 @@ cheap: an SDPA-equivalent fused kernel written against candle's storage
 directly (not blocked GEMM calls — that is refuted six times), or f16/bf16 for
 the score matrix, which halves its footprint but changes numerics and would
 have to be re-gated against token equality.
+
+
+---
+
+## 25. IN-PLACE, ROUND 2 — where the seam pays and where it does NOT (2026-08-26)
+
+§24's thesis — *stop allocating what we already own* — was worth pushing. Pushed
+properly, it splits cleanly along a line that was not obvious in advance.
+
+### It pays in the TEXT tower (single-threaded outer loop)
+
+| change | before | after | |
+|---|---:|---:|---:|
+| causal softmax -> `InplaceOp1` | 110.9 ms | **81.7 ms** | 1.36x |
+| residual adds -> `InplaceOp2` | 63.8 ms | **13.1 ms** | **4.9x** |
+| SwiGLU -> `InplaceOp2` | — | landed | 7 MB/layer not allocated |
+
+Cumulative, measured by the one instrument this box cannot corrupt — both arms
+interleaved in ONE process (`examples/text_ab`):
+
+| seq | candle | ours | |
+|---:|---:|---:|---|
+| 1 | 29.6 ms | 29.4 ms | 1.00x |
+| 64 | 124.7 ms | 102.0 ms | 1.22x |
+| 512 | 1179.3 ms | 486.6 ms | 2.42x |
+| **1142** | **4135.3 ms** | **1122.8 ms** | **3.68x** |
+
+argmax identical at every length; 3.49x -> **3.68x** across this round.
+
+### ★ It does NOT pay in the VISION tower — REFUTED, and reverted
+
+The same three changes (softmax, GELU, both residuals) applied to `siglip.rs`
+measured a **~10 % regression in situ**, despite the serial softmax winning
+**1.39x against candle's in isolation** (6.56 ms vs 9.11 ms) and despite
+removing **10.3 GB of allocation churn** per caption.
+
+That verdict took a null arm to establish, because the box drifted underneath
+the experiment: the SAME committed code read **8172 ms** earlier in the session
+and **9380 ms** an hour later. Against the 9380 baseline the in-place build read
+10327-10804 — a real regression, not drift.
+
+Two lessons, both already written down and both re-learned:
+
+1. **The serial column is the one that ships.** The tower runs six tiles
+   concurrently and tells its kernels to stand down. The first measurement of
+   the in-place softmax used the PARALLEL path and read 1.08x; §20 records
+   round 1 making exactly this mistake and shipping an 11x regression.
+2. **`par_chunks_mut` inside a rayon worker is nested parallelism.**
+   `AddInplace` was written for the text tower, where it is called from a plain
+   thread, then reused by the vision tower, where it is called from six pool
+   threads — 408 nested parallel regions per caption. Fixed by branching on
+   `rayon::current_thread_index().is_none()`, which is correct in both callers
+   with no flag to thread through. That recovered 12029 -> 10327 ms of the
+   regression, but not all of it.
+
+**The remaining ~10 % is unexplained and the change is reverted.** An
+allocation the tower makes 204 times, removed, measuring slower is not a result
+to ship on a hunch — and this box cannot presently resolve a 10 % effect
+without a null arm per measurement.
+
+### Why the same seam splits two ways
+
+The text tower runs one sequence on a single outer thread with parallel
+kernels, so an allocation removed is pure gain. The vision tower runs six tiles
+concurrently with kernels stood down, so its allocator traffic is spread across
+workers that are already saturating memory bandwidth — and there, the
+allocator's reuse of a hot 50 MB buffer appears to beat writing over a cold
+one. That is a hypothesis, not a finding; what is measured is only that the
+change loses.
