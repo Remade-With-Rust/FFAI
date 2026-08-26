@@ -51,7 +51,7 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 # where 0.3.0, 0.1.0-alpha.1 and 0.1.0-alpha.2 are 0 of 8. A caret requirement
 # ("0.3.0") silently resolved to 0.3.1 mid-session and shipped a crashing
 # binary, which is exactly the failure an exact pin exists to prevent.
-rusty_alloc-api = "=0.3.2"
+rusty_alloc-api = "=1.1.1"
 # The core, for `alloc::collect` — see `spawn_page_trimmer` in main.rs.
 # Without it rusty_alloc's RSS does not bound on a rayon pool.
 rusty_alloc = "=0.3.2"
