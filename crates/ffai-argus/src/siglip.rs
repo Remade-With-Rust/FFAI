@@ -89,7 +89,14 @@ fn kernels_parallel() -> bool {
 
 /// Patch + position embeddings.
 struct Embeddings {
-    patch: Conv2d,
+    /// The patch conv as a flat `(patch*patch*C, hidden)` matrix — see
+    /// [`Embeddings::new`]. The `Conv2d` it is derived from is NOT retained:
+    /// it was briefly kept as a "fallback", which the compiler correctly
+    /// reported as a never-read field. A fallback nothing can reach is not a
+    /// fallback — the equality this rests on is gated by a test instead.
+    w_flat: Tensor,
+    bias: Option<Tensor>,
+    channels: usize,
     position: Tensor,
     patch_size: usize,
 }
@@ -111,10 +118,27 @@ impl Embeddings {
             candle_nn::embedding(side * side, cfg.hidden_size, vb.pp("position_embedding"))?
                 .embeddings()
                 .clone();
+        // The patch conv, ALSO kept as a flat `(patch*patch*C, hidden)` matrix.
+        //
+        // Stride equals the kernel, so this convolution is non-overlapping and
+        // its im2col is a pure PERMUTATION — no element is duplicated, which is
+        // what makes the matmul form exact in work as well as in result.
+        // Measured (`examples/embed_probe`): candle's `conv2d` **10.925 ms**
+        // at 113 GF/s against **4.146 ms** at 291 GF/s for the matmul, and the
+        // matmul form also emits `(seq, hidden)` directly, deleting the
+        // `flatten+transpose` that followed. 18.1 ms -> ~5 ms per tile.
+        let w_flat = patch
+            .weight()
+            .reshape((cfg.hidden_size, cfg.num_channels * cfg.patch_size * cfg.patch_size))?
+            .t()?
+            .contiguous()?;
+        let bias = patch.bias().cloned();
         Ok(Self {
-            patch,
+            w_flat,
+            bias,
             position,
             patch_size: cfg.patch_size,
+            channels: cfg.num_channels,
         })
     }
 
@@ -126,17 +150,33 @@ impl Embeddings {
                 self.patch_size
             );
         }
-        // conv2d IS one of the two things candle parallelises, so it stays.
-        let xs = self.patch.forward(pixel_values)?;
-        // conv2d as a matmul: each output patch is a (patch*patch*channels)
-        // dot product. Counted so the embedding does not vanish from the
-        // budget just because candle spells it `conv2d`.
-        let (_b2, c_out, oh, ow) = xs.dims4()?;
-        let k = (self.patch_size * self.patch_size * 3) as u64;
-        crate::cost::matmul(1, (oh * ow) as u64, k, c_out as u64);
-        let xs = xs.flatten_from(2)?.transpose(1, 2)?;
-        let out = xs.broadcast_add(&self.position)?;
-        crate::cost::elementwise((c_out * oh * ow) as u64, 2, 1);
+        // The convolution AS a matmul — see [`Embeddings::new`] for why that is
+        // the same operation and what it is worth. im2col here is one
+        // permutation; the product then lands in `(seq, hidden)` directly, so
+        // the `flatten_from(2).transpose(1,2)` this used to need is gone too.
+        let (b, c, gh, gw) = (
+            pixel_values.dim(0)?,
+            self.channels,
+            h / self.patch_size,
+            w / self.patch_size,
+        );
+        let p = self.patch_size;
+        let seq = gh * gw;
+        let k = c * p * p;
+        let cols = pixel_values
+            .reshape((b, c, gh, p, gw, p))?
+            .permute((0, 2, 4, 1, 3, 5))?
+            .contiguous()?
+            .reshape((b * seq, k))?;
+        crate::cost::copy((b * seq * k) as u64);
+        let mut xs = cols.matmul(&self.w_flat)?;
+        let c_out = self.w_flat.dim(1)?;
+        crate::cost::matmul(1, (b * seq) as u64, k as u64, c_out as u64);
+        if let Some(bias) = self.bias.as_ref() {
+            xs = xs.broadcast_add(bias)?;
+        }
+        let out = xs.reshape((b, seq, c_out))?.broadcast_add(&self.position)?;
+        crate::cost::elementwise((c_out * seq) as u64, 2, 1);
         Ok(out)
     }
 }
@@ -227,14 +267,29 @@ impl Layer {
         // swings +-12 % and the ordering is trustworthy long before the
         // magnitude is: **one-copy won 20/20 interleaved rounds**
         // (`examples/kernel_ab`), and the result is bit-identical.
+        // qkv goes to the OUTERMOST axis, not the second.
+        //
+        // `permute((0, 2, 3, 1, 4))` gives `(b, 3, heads, seq, hd)`, and then
+        // `packed.i((.., 0))` is contiguous ONLY at `b == 1` — at any larger
+        // batch the three q/k/v groups interleave with the batch and the
+        // narrow is strided, which candle's matmul rejects outright
+        // (`MatMulUnexpectedStriding: non-contiguous lhs`). This module
+        // documents itself as batch-aware and the tower is called batch-aware
+        // by `tile_batching_ab`, but every caller so far passed one tile, so
+        // nothing exercised it.
+        //
+        // `permute((2, 0, 3, 1, 4))` gives `(3, b, heads, seq, hd)` instead, so
+        // `packed.i(0)` selects a whole contiguous block for any `b`. Same
+        // single copy, same volume, and identical at `b == 1` — which is what
+        // the existing oracle gates confirm.
         let packed = qkv
             .reshape((b, seq, 3, self.heads, self.head_dim))?
-            .permute((0, 2, 3, 1, 4))?
+            .permute((2, 0, 3, 1, 4))?
             .contiguous()?;
         crate::cost::copy(3 * bu * sq * hd);
-        let q = packed.i((.., 0))?;
-        let k = packed.i((.., 1))?;
-        let v = packed.i((.., 2))?;
+        let q = packed.i(0)?;
+        let k = packed.i(1)?;
+        let v = packed.i(2)?;
 
         // No `* scale` here: it is already in q's weights.
         //
@@ -508,19 +563,6 @@ const fn have_avx2_cached() -> bool {
     false
 }
 
-/// Dispatch to the widest GELU this CPU can run. The **only** safe entry point.
-#[inline]
-fn gelu_chunk(chunk: &mut [f32]) {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if have_avx2_cached() {
-            // SAFETY: the check above is the documented precondition.
-            unsafe { gelu_chunk_avx2(chunk) };
-            return;
-        }
-    }
-    gelu_chunk_scalar(chunk);
-}
 
 /// `gelu_pytorch_tanh` as a **zero-copy** candle op.
 ///
@@ -777,6 +819,64 @@ impl VisionTower {
 
 #[cfg(test)]
 mod tests {
+    /// A stride-N, kernel-N convolution IS a matmul over permuted patches.
+    ///
+    /// `Embeddings::forward` relies on that identity to replace candle's
+    /// `conv2d` (113 GF/s) with a product (291 GF/s). If it ever stops holding
+    /// — a padded or dilated config, a stride that is not the kernel — the
+    /// embedding would silently produce a plausible wrong picture, which is
+    /// the failure mode this crate has already paid for once at the resampler
+    /// (§16). The `Conv2d` that used to sit beside it as a "fallback" was
+    /// never reachable; this test is what replaces it.
+    #[test]
+    fn a_non_overlapping_conv_is_a_matmul_over_permuted_patches() {
+        use candle_core::{Device, Module, Tensor};
+        let d = Device::Cpu;
+        // Deliberately not square-and-round: 2 batch, 3 channels, 6x8 grid.
+        let (b, c, p, gh, gw, out) = (2usize, 3usize, 4usize, 6usize, 8usize, 5usize);
+        let px = Tensor::rand(-1.0f32, 1.0, (b, c, gh * p, gw * p), &d).expect("px");
+        let w = Tensor::rand(-1.0f32, 1.0, (out, c, p, p), &d).expect("w");
+        let bias = Tensor::rand(-1.0f32, 1.0, out, &d).expect("bias");
+
+        let conv = candle_nn::Conv2d::new(
+            w.clone(),
+            Some(bias.clone()),
+            candle_nn::Conv2dConfig { stride: p, ..Default::default() },
+        );
+        let want = conv
+            .forward(&px)
+            .expect("conv")
+            .flatten_from(2)
+            .expect("flat")
+            .transpose(1, 2)
+            .expect("t")
+            .contiguous()
+            .expect("c");
+
+        let w_flat = w
+            .reshape((out, c * p * p)).expect("wr")
+            .t().expect("wt")
+            .contiguous().expect("wc");
+        let got = px
+            .reshape((b, c, gh, p, gw, p)).expect("r")
+            .permute((0, 2, 4, 1, 3, 5)).expect("perm")
+            .contiguous().expect("c")
+            .reshape((b * gh * gw, c * p * p)).expect("r2")
+            .matmul(&w_flat).expect("mm")
+            .broadcast_add(&bias).expect("bias")
+            .reshape((b, gh * gw, out)).expect("r3");
+
+        assert_eq!(want.dims(), got.dims(), "shape");
+        let (a, e) = (
+            want.flatten_all().expect("f").to_vec1::<f32>().expect("v"),
+            got.flatten_all().expect("f").to_vec1::<f32>().expect("v"),
+        );
+        let worst = a.iter().zip(&e).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+        // Float reassociation only — a WRONG permutation differs by O(1), not
+        // by an ulp, so this tolerance still catches a transposed patch grid.
+        assert!(worst < 1e-4, "conv and matmul disagree by {worst:.3e}");
+    }
+
     use super::*;
     use candle_core::{DType, Device};
 

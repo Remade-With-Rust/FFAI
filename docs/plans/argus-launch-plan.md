@@ -2593,3 +2593,386 @@ cannot answer a whole-caption share question.** Counters told the truth about
 what they counted; the conclusion drawn past them did not follow. `stage_split`
 exists now so the share is measured rather than inferred, and it should be
 re-run before any claim about where the time is.
+
+
+---
+
+## 21. ROUND 3 — the text tower, which nobody had ever measured (2026-08-26)
+
+Rounds 1 and 2 both went at vision. Neither instrumented prefill or generate,
+which together are **37.7 %** of a caption. This round starts there, and the
+first three measurements each refuted the obvious next step, which is why they
+are recorded before any code changed.
+
+### Re-anchor first
+
+`stage_split`, min of 3, warm — and note it moved against the figure the
+README carries (14 561 ms / 58.0 %), by more than this box's +-12 %:
+
+```
+preprocess          61 ms    0.4%
+VISION (tower)   10599 ms   61.9%
+assemble             3 ms    0.0%
+prefill           4282 ms   25.0%
+generate          2173 ms   12.7%
+total            17117 ms
+```
+
+### The arithmetic that did not close
+
+Prefill is ~333 GFLOP (30 layers, hidden 576, 9 heads / 3 kv, inter 1536). At
+the 660 GF/s this box demonstrably reaches, that is **~0.5 s against 4282 ms —
+8.5x**. A ratio implying an implausible per-unit cost indicts the
+decomposition, so `examples/text_scaling` swept ONE variable:
+
+| seq | ms | GFLOP | GF/s | exponent |
+|---:|---:|---:|---:|---|
+| 128 | 334.5 | 28.3 | **84.6** | — |
+| 256 | 657.8 | 58.9 | **89.5** | n^0.98 |
+| 512 | 1566.4 | 126.8 | **81.0** | n^1.25 |
+| 1024 | 4432.1 | 289.9 | **65.4** | n^1.50 |
+| 1142 | 5425.8 | 332.6 | **61.3** | n^1.85 |
+
+A large LINEAR term at ~85 GF/s, with attention's quadratic term taking over by
+seq 1142.
+
+### REFUTED: "candle's GEMM must be slow at text shapes"
+
+`examples/gemm_shapes` prices both towers' shapes side by side. The text
+matmuls reach **516-591 GF/s**, alongside vision's 486-569. Summed per layer at
+seq 1142 they are ~31 ms, so **~930 ms of a ~5400 ms prefill**. The matmuls are
+not the gap — the same refutation §19 recorded for vision, now confirmed for
+text.
+
+### REFUTED: "lm_head recomputes logits for every position"
+
+candle already slices: `x.i((.., seq_len - 1, ..))` before `lm_head`. Checked
+before implementing.
+
+### ★ The 83 %, found by reading the code instead of pricing a guess
+
+`examples/text_ops_probe` priced the ops that a llama block was ASSUMED to
+have, and still left ~3.2 s unaccounted. Reading
+`candle-transformers/src/models/llama.rs` showed two ops that had not been
+priced because nobody had looked:
+
+| op, per layer, on the 46.9 MB score matrix | ms | x30 | rate |
+|---|---:|---:|---:|
+| **`masked_fill` `where_cond`** (line 346) | **114.13** | **3424 ms** | **0.8 GB/s** |
+| `att / sqrt(head_dim)` (line 341) | 19.39 | 582 ms | 4.8 GB/s |
+| *alternative: additive mask `broadcast_add`* | *23.00* | *690 ms* | *6.1 GB/s* |
+
+`masked_fill` builds `Tensor::new(-inf).broadcast_as(shape)` and runs
+`where_cond` against a mask itself broadcast from `(S,S)` to `(1,9,S,S)` — two
+strided operands, one core, 11.7 M elements. **It is 20 % of the entire
+caption, and all it does is write -inf into an upper triangle.**
+
+The decomposition now closes: 930 matmul + 3424 mask + 582 divide + ~660 other
+= ~5.6 s against ~5.4 s measured.
+
+### Why the fix is bit-identical, not an approximation
+
+Softmax takes the row max, and `max(finite, -inf)` never selects `-inf`; then
+`exp(-inf) = 0` contributes nothing to the sum. So **skipping** a masked
+position produces exactly the floats that materialising `-inf` and running
+softmax over it produces. Causality by construction is not an approximation of
+the mask — it is the same arithmetic with the no-ops removed.
+
+### The other rows worth having (30 layers, seq 1142)
+
+| op | x30 | rate | note |
+|---|---:|---:|---|
+| `silu` (S,1536) | 248 ms | **1.7 GB/s** | the single-threaded scalar signature GELU had |
+| `softmax_last_dim` | 178 ms | 23.7 GB/s | candle's is good; the win is doing HALF of it |
+| `gate * up` | 73 ms | 8.7 GB/s | fuseable into the silu pass |
+| `repeat_kv` 3->9 | 43 ms | 7.3 GB/s | GQA broadcast, materialised |
+| `rms_norm` | 41 ms | 3.9 GB/s | single-threaded |
+| `rope` on q,k | 36 ms | 8.8 GB/s | |
+| residual add x2 | 21 ms | 22.4 GB/s | already fine |
+
+### Generate is already at its floor — do not aim here
+
+Each generated token streams the whole tower: ~540 MB of weights plus a 113 MB
+`lm_head` (measured at **9.7 GF/s**, a pure GEMV). 32 tokens x ~650 MB =
+~20.8 GB, which at this box's ~10 GB/s is **~2.1 s against the 2173 ms
+measured**. Generate is weight-bandwidth bound in f32 and the only levers are
+quantisation (changes numerics, breaks the byte-identical gate) or batching
+(there is one sequence). **Recorded so it is not attacked.**
+
+
+### The ten wins — all in `crates/ffai-argus/src/text.rs`
+
+Our own text tower, the same play `siglip.rs` made for vision, gated on the
+byte-identical caption throughout.
+
+| # | win | what it deletes |
+|---|---|---|
+| 1 | **`masked_fill` deleted** — causality fused into the softmax kernel | 114.13 ms/layer at 0.8 GB/s; **3424 ms** |
+| 2 | **Attention scale folded into q's weights** at load | a divide over 11.7 M elements/layer; **582 ms** |
+| 3 | **Causal softmax** — only the lower triangle is exponentiated | ~half the transcendentals, and a whole second pass |
+| 4 | **`silu(gate) * up` fused** into one pass (`CustomOp2`) | 248 ms at **1.7 GB/s** + a 73 ms second pass |
+| 5 | **`rms_norm` parallelised** across rows | 41 ms at **3.9 GB/s**, single-threaded |
+| 6 | **`rms_norm` delivered zero-copy**, not through `to_vec1`/`from_vec` | the marshalling tax that made seq 1 lose 0.10x |
+| 7 | **2D `linear` instead of `broadcast_matmul`** | **33x** at seq 1 (2.986 ms -> 0.09 ms per projection) |
+| 8 | **GQA without materialising `repeat_kv`** — regroup q instead | 2 x 2.6 MB copies per layer per token; 16 ms/decode step |
+| 9 | **Dead `gelu_chunk` removed** from `siglip.rs` | an unreachable duplicate of `fill_gelu`'s dispatch |
+| 10 | **Final RMSNorm on ONE row**, not 1142 | 7.9 MB per forward x 33 forwards |
+
+Measured in ONE process, both arms interleaved (`examples/text_ab`), which is
+the only timing instrument that survives this box:
+
+| seq | candle | ours | |
+|---:|---:|---:|---|
+| 1 (a decode step) | 38.3 ms | 36.4 ms | 1.05x |
+| 64 | 143.2 ms | 125.1 ms | 1.14x |
+| 512 | 1322.7 ms | 696.0 ms | 1.90x |
+| **1142 (the prompt)** | **4381.5 ms** | **1453.5 ms** | **3.01x** |
+
+`max|dlogit|` 3.1e-5 and **argmax identical at every length**; the full Argus
+suite including `describe_image_reproduces_the_reference_caption` stays green.
+
+End to end (`stage_split`): prefill **4282 -> 2184 ms**, generate
+**2173 -> 1634 ms**.
+
+### Three refutations, recorded so they are not retried
+
+* **`lm_head` recomputing every position** — candle already slices. Checked
+  before writing anything.
+* **Pre-transposing weights at load** — `w.t()` per call is a free view.
+  Measured three ways at three shapes; no consistent ordering.
+  (`examples/transpose_probe`, deleted after recording.)
+* **Fusing q/k/v into one matmul** — what `siglip.rs` does for vision, and it
+  **loses** here: 1.46x->0.94x at seq 64, 3.04x->2.37x at 512, 3.62x->3.52x at
+  1142. GQA is why: q has 9 heads and k/v have 3, so the fused result cannot be
+  reshaped once; splitting needs `narrow` on the last axis, whose STRIDED views
+  are then copied by the reshape — reintroducing the very copies the fusion was
+  meant to remove. Reverted, with the reasoning left in `Block::q`'s docs.
+
+### ⚠ Two instrument failures in this round, both caught
+
+* **The A/B compared ours against ours.** After `TextDecoder` was wired to our
+  tower, `text_ab`'s "candle" arm silently became our tower too, and reported a
+  max logit delta of **exactly 0.000e0** — a perfect score that measured
+  nothing. Fixed with `TextDecoder::load_reference`, which forces candle's path
+  in the same process. *A beautifully clean number can measure nothing.*
+* **The wall clock is not usable on this box today.** `stage_split` read
+  VISION at 8452 ms (README), 10599 ms and 14264 ms across one day with the
+  vision code **unchanged** — a leftover `ffai-demo.exe`, five zombie
+  `cargo.exe` and stray Python were sharing the 24 cores. Every verdict above
+  is either a deterministic count or an interleaved in-process A/B for exactly
+  this reason.
+
+
+---
+
+## 22. WHERE WE LOSE TO PYTORCH — measured, stage by stage (2026-08-26)
+
+The demo reports our split and PyTorch's total. "1.19x slower" names no stage
+and cannot be acted on, so `corpora/refs/smolvlm_hf_profile.py` was written to
+give the reference the SAME split. It is deliberately NOT the oracle:
+`smolvlm_hf_ref.py` pins the decode config the ledger's quality gate is measured
+under and must not drift.
+
+Same image (`corpora/clips/argus-ocrbench/0.png`, 9 tiles, 612 prompt tokens,
+32 generated), same checkpoint, both warm, quiet box:
+
+| stage | ours | PyTorch | |
+|---|---:|---:|---|
+| preprocess | 45.2 ms | 133.8 ms | **we win 3.0x** |
+| **vision** | **7576.4 ms** | **5623.8 ms** | **we LOSE 1.35x** |
+| text side (prefill + 32 decode) | 2904.8 ms | 3909.1 ms | **we win 1.35x** |
+| **total** | **10549 ms** | **9533 ms** | we lose 1.11x |
+
+**The entire deficit is vision.** The gap there is 1952 ms — larger than the
+1016 ms total gap — because §21's text-tower work now claws the rest back. Both
+sides produce the same caption.
+
+Effective tower throughput: PyTorch ~1908 GFLOP in 5624 ms = **~339 GF/s**;
+ours, priced per tile by `tile_batching_ab`, **165 GF/s**. Against the ~660 GF/s
+this box reaches on a bare matmul, BOTH are far under — the residual is
+elementwise and layout work, not products. PyTorch is simply further along the
+same axis, and its structural advantage is that it runs **one batch-9 forward**
+where we run 9 passes, streaming SigLIP's ~372 MB of weights once instead of
+nine times.
+
+### ★ A latent bug the investigation surfaced: our tower is not batch-safe
+
+`tile_batching_ab` failed instantly at chunk >= 2:
+
+```
+MatMulUnexpectedStriding { lhs_l: [2, 12, 1024, 64] ... msg: "non-contiguous lhs" }
+```
+
+`siglip.rs` reshaped qkv to `(b, seq, 3, heads, hd)` and permuted to
+`(b, 3, heads, seq, hd)`, after which `packed.i((.., 0))` is contiguous **only
+at `b == 1`** — at any larger batch the three q/k/v groups interleave with the
+batch and the narrow is strided. The module documents itself as batch-aware and
+`describe` is written to allow any chunk from 1 to 17, but every caller so far
+passed one tile, so nothing exercised it.
+
+Fixed by permuting qkv to the OUTERMOST axis — `(3, b, heads, seq, hd)`, so
+`packed.i(0)` selects a whole contiguous block for any `b`. Same single copy,
+same volume, identical at `b == 1`.
+
+### ⚠ The batching re-measurement is INCONCLUSIVE, not a confirmation
+
+§19 refuted tile batching at 1.07x, reasoning "the kernel stays single-threaded
+however long the array is". That premise changed when `siglip.rs` got parallel
+kernels, so it was worth re-measuring — the same situation that flipped Diana's
+`silu_avx2` verdict. It did not flip, and it did not hold either:
+
+```
+ chunk    min (ms)      vs 1   runs (ms)
+     1       24956    1.000x   100388 37128 28465 88275 94155 24956
+     8       21715    1.149x    42456 33057 43329 26194 21715 24097
+    17       23072    1.082x    45768 34695 41794 28368 25704 23072
+```
+
+**Within-chunk spread is 4x; the between-chunk effect is 13%.** The headline
+"1.149x at chunk 8" is far below this box's noise floor and is not evidence in
+either direction. Recorded as inconclusive — a number this dirty must not be
+banked as a win OR as a refutation.
+
+### What the next campaign should attack
+
+Vision, and with a deterministic instrument rather than a stopwatch, because
+this box cannot presently support a wall-clock verdict on a 13% effect. The
+two candidates, in order:
+
+1. **Batching, re-measured on a quiet box** — the structural difference against
+   PyTorch, worth ~372 MB x 8 of weight traffic on a 9-tile image. It needs the
+   batch-safety fix above (now landed) to even run.
+2. **The elementwise/layout residual** — both towers run far under the box's
+   matmul ceiling, so this is where the remaining 2x lives for both of us.
+
+
+---
+
+## 23. VISION ROUND 3 — ten deterministic results (2026-08-26)
+
+§22 established the deficit against PyTorch is **entirely vision** (1.35x).
+This round attacks it. The wall clock is unusable on this box — 4x spread
+within one configuration — so every result below is either a shape-derived
+count, an equality, or a back-to-back ratio measured in one process.
+
+### ⚠ 0. The aiming instrument was measuring 2026-08-22
+
+`vision_ops_probe` prices `wide.gelu()` and `&scores * 0.125`. Both were
+deleted rounds ago — it prices candle's op mix, which is the BASELINE that
+motivated `siglip.rs`, not what `siglip.rs` runs. Read as a current profile it
+says GELU is **18.2 %** of a layer at 1.6 GB/s and that a `* scale` pass over
+12.6 M elements is still there.
+
+`examples/vision_ops_now` prices what `Layer::forward` actually performs. The
+picture is inverted from round 1's "50 % matmul, 50 % everything else":
+
+| op | MB/layer | ms/layer | share |
+|---|---:|---:|---:|
+| fc1 / fc2 / qkv / out_proj | 78.8 | 28.3 | **50.9 %** |
+| q.k^T + attn.v | 113.2 | 14.4 | **25.7 %** |
+| softmax (candle) | 100.7 | 5.48 | 9.8 % |
+| packed contiguous | 18.9 | 2.09 | 3.7 % |
+| ln1 + ln2 | 18.9 | 1.79 | 3.2 % |
+| **GELU (ours)** | 25.2 | 1.62 | **2.9 %** |
+| residual x2 + transpose back | 25.2 | 2.07 | 3.7 % |
+
+**GELU is 2.9 %, not 18.2 % — the rewrite bought 9.4x on that op and the
+elementwise phase is largely spent. Matmul is now 77 % of a layer.**
+
+### The two wins
+
+**1. The connector's projection was a `broadcast_matmul` — 14.1x.**
+`tile_batching_ab` had measured the connector at 78.9 ms, 5.8 % of a tile, for
+a pixel-shuffle and one product. `examples/connector_probe`, best of 10:
+
+| | ms |
+|---|---:|
+| `broadcast_matmul` (as written) | **64.449** |
+| flatten to 2D + `matmul` | **4.577** |
+
+`broadcast_matmul` stretches the `(12288, 576)` weight to the batch shape; the
+batch dim is always 1, so the stretch is pure cost. **Connector 65.8 -> 5.9 ms
+per tile, 11.1x — about 1.0 s of a 17-tile caption.** Identical arithmetic: a
+contiguous reshape is free and the summation order is unchanged. `text.rs`
+records the same trap at the other end of the model (33x at seq 1), so it is a
+property of candle's API, not of either call site.
+
+**2. The patch embedding is a matmul, not a convolution — 2.63x.**
+Stride equals kernel, so the conv is non-overlapping and its im2col is a pure
+PERMUTATION — no element duplicated. `examples/embed_probe`:
+
+| | ms | GF/s |
+|---|---:|---:|
+| `conv2d` stride 16 | 10.925 | 113 |
+| the same product as a matmul | **4.146** | **291** |
+
+The matmul form also emits `(seq, hidden)` directly, deleting the
+`flatten_from(2).transpose(1,2)` that followed. **Embedding stage 18.1 -> ~5 ms
+per tile.** Not bit-identical (4.196e-5, float reassociation), so it is gated:
+`a_non_overlapping_conv_is_a_matmul_over_permuted_patches` pins the identity,
+and a WRONG permutation differs by O(1) rather than an ulp, so the tolerance
+still catches a transposed patch grid.
+
+### Four refutations, each cheap and each recorded
+
+**3. Pre-transposing k for `q.k^T`: refuted.** 8.24 ms pre-transposed against
+**7.64 ms** for the strided `.t()` view. candle's GEMM handles the stride; the
+copy is pure loss.
+
+**4. Blocked attention: refuted, monotonically, for the FIFTH time — and this
+time with candle's own GEMM**, which removes the standing objection that the
+earlier attempts hand-rolled the kernel:
+
+| | ms |
+|---|---:|
+| unblocked | **23.88** |
+| q-chunk 512 | 32.85 (0.73x) |
+| q-chunk 256 | 36.21 (0.65x) |
+| q-chunk 128 | 51.94 (**0.46x**) |
+
+Smaller blocks are steadily worse because each block re-reads *all* of k and v,
+multiplying their traffic by the block count. The cache-residency win never
+materialises; the re-read cost arrives immediately.
+
+**5. The embedding's strided `broadcast_add`: refuted.** 4.044 ms strided
+against 3.994 ms after `contiguous()` — within noise.
+
+**6. candle's `Linear` has the broadcast trap too: refuted.** It already checks
+`is_contiguous()` and reshapes to 2D, with a comment saying broadcast matmul
+"is much slower". Our inputs are all contiguous, so the linears genuinely run
+at 493-607 GF/s. Checked before "fixing" it.
+
+### 7. A latent correctness bug, fixed
+
+`packed.i((.., 0))` was contiguous only at `b == 1`; qkv now permutes to the
+outermost axis so any batch works. The tower advertised batch-awareness it did
+not have (§22).
+
+### 8. A dead field the compiler found
+
+The `Conv2d` was kept beside `w_flat` as a "fallback" and was never read. A
+fallback nothing can reach is not a fallback; the identity test replaces it.
+
+### 9-10. The batching ceiling, measured narrowly
+
+`tile_batching_ab` runs whole towers and this box gives it a 4x spread, so its
+1.149x settles nothing (§22). `examples/batch_gemm_probe` asks only what
+batching actually turns on — does a GEMM with 8x the rows run at a better rate?
+
+| linear | 1 tile | 2 | **4** | 8 |
+|---|---:|---:|---:|---:|
+| qkv | 1.00x | 1.21x | **1.37x** | 1.30x |
+| fc1 | 1.00x | 1.00x | **1.17x** | 1.13x |
+| fc2 | 1.00x | 1.08x | **1.20x** | 1.19x |
+| out_proj | 1.00x | 1.65x | **1.70x** | 1.69x |
+
+**9.** Batching is worth **1.17-1.70x on the linears**, which are 50.9 % of a
+layer — bounding it at roughly **10 % of vision**.
+**10.** It **peaks at chunk 4, not 8 or 17**, and chunk 4 costs 192 MiB of
+attention tensor against 384 MiB at 8 and 855 MiB at 17. The footprint gate is
+one of the four, so the cheap chunk being the fast one matters.
+
+**Not landed.** Batching interacts with the 6-worker tile pool — 6 workers x 4
+tiles is 24 tiles in flight — so it is a worker/footprint redesign, and this
+box cannot validate the end-to-end result. The ceiling is now known, which is
+what makes the redesign decidable rather than speculative.

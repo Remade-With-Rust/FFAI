@@ -24,6 +24,7 @@ pub mod engine;
 pub mod preprocess;
 pub mod prompt;
 pub mod siglip;
+pub mod text;
 pub mod vision;
 
 use std::sync::Arc;

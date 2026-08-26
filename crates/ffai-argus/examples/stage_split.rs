@@ -12,10 +12,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|p| p.parent())
         .ok_or("root")?;
     let engine = ffai_argus::SmolVlm::with_manifest_dir(root.join("models"));
-    let img = ffai_media::load_image(&root.join("corpora/clips/carmenta-render/page-00.png"))?;
+    // Image and budget are arguments so this can be pointed at the SAME file
+    // and the SAME token budget as `corpora/refs/smolvlm_hf_profile.py`. A
+    // head-to-head where the two arms caption different images, or generate
+    // different numbers of tokens, is not a head-to-head.
+    let arg_img = std::env::args().nth(1);
+    let arg_max = std::env::args().nth(2).and_then(|v| v.parse::<usize>().ok());
+    let path = arg_img.map_or_else(
+        || root.join("corpora/clips/carmenta-render/page-00.png"),
+        std::path::PathBuf::from,
+    );
+    let img = ffai_media::load_image(&path)?;
+    println!("image: {}  ({}x{})", path.display(), img.width, img.height);
     let opts = ffai_core::engine::VlmOptions {
         prompt: Some("What is written in this image?".into()),
-        max_new_tokens: Some(24),
+        max_new_tokens: Some(arg_max.unwrap_or(24)),
         ..Default::default()
     };
     // Warm: the first call pays weight load, which is not part of a caption.

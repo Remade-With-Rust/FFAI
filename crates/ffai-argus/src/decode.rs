@@ -106,6 +106,33 @@ pub struct TextDecoder {
     pristine: llama::Cache,
     config: llama::Config,
     device: Device,
+    /// Our own tower — the one that actually runs, unless the toggle says
+    /// otherwise.
+    ///
+    /// candle's `llama` stays loaded beside it as the ORACLE: the A/B in
+    /// `examples/text_ab` and the `FFAI_ARGUS_CANDLE_TEXT=1` arm both need a
+    /// reference in the same process, and a reference you cannot run is not a
+    /// reference. The weights are mmapped, so holding both costs address
+    /// space rather than memory.
+    ours: Option<crate::text::TextTower>,
+}
+
+/// Force candle's text tower instead of ours.
+///
+/// Read ONCE and cached — a toggle inside a per-element loop is a
+/// vectorisation barrier, which is a mistake this workspace has already paid
+/// for once (`ffai-diana`'s `silu`, 1.92x).
+fn use_candle_text() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static C: AtomicU8 = AtomicU8::new(u8::MAX);
+    match C.load(Ordering::Relaxed) {
+        u8::MAX => {
+            let on = std::env::var("FFAI_ARGUS_CANDLE_TEXT").is_ok_and(|v| v == "1");
+            C.store(u8::from(on), Ordering::Relaxed);
+            on
+        }
+        v => v == 1,
+    }
 }
 
 impl TextDecoder {
@@ -138,13 +165,70 @@ impl TextDecoder {
         let cache = llama::Cache::new(true, DType::F32, &config, device)
             .map_err(|e| format!("kv cache: {e}"))?;
         let model = llama::Llama::load(vb, &config).map_err(|e| format!("text tower: {e}"))?;
+
+        // Our tower reads the checkpoint's own names, so it takes a builder
+        // WITHOUT the rename above.
+        // SAFETY: same mapped file, same ownership as the builder above.
+        let raw = unsafe {
+            VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&weights), DType::F32, device)
+        }
+        .map_err(|e| format!("load {}: {e}", weights.display()))?;
+        let v: serde_json::Value =
+            serde_json::from_str(config_json).map_err(|e| format!("config.json: {e}"))?;
+        let t = v.get("text_config").unwrap_or(&v);
+        let gu = |k: &str, d: u64| t.get(k).and_then(serde_json::Value::as_u64).unwrap_or(d);
+        let gfl = |k: &str, d: f64| t.get(k).and_then(serde_json::Value::as_f64).unwrap_or(d);
+        let heads = gu("num_attention_heads", 9) as usize;
+        let hidden = gu("hidden_size", 576) as usize;
+        let cfg = crate::text::Cfg {
+            layers: gu("num_hidden_layers", 30) as usize,
+            hidden,
+            heads,
+            kv_heads: gu("num_key_value_heads", 3) as usize,
+            head_dim: hidden / heads.max(1),
+            inter: gu("intermediate_size", 1536) as usize,
+            eps: gfl("rms_norm_eps", 1e-5),
+            rope_theta: gfl("rope_theta", 100_000.0) as f32,
+            max_pos: gu("max_position_embeddings", 8192) as usize,
+        };
+        // A tower that fails to load is a fallback to candle's, not an error:
+        // the engine's contract is a caption, and candle's path is gated too.
+        let ours = if use_candle_text() {
+            None
+        } else {
+            crate::text::TextTower::load(&raw, cfg, device).ok()
+        };
+
         Ok(Self {
             model,
             pristine: cache.clone(),
             cache,
             config,
             device: device.clone(),
+            ours,
         })
+    }
+
+    /// Load with candle's tower forced — the ORACLE arm.
+    ///
+    /// `examples/text_ab` needs both implementations live in ONE process to
+    /// compare them. The env toggle cannot do that: it is read once and cached
+    /// (deliberately — a toggle re-read per call is the barrier
+    /// `ffai-diana`'s `silu` paid 1.92x for). Without this constructor the A/B
+    /// silently compared our tower against itself and reported a max logit
+    /// delta of exactly 0.000e0, which is what a broken instrument looks like
+    /// when it looks like a pass.
+    ///
+    /// # Errors
+    /// Same as [`Self::load`].
+    pub fn load_reference(
+        weights: &std::path::Path,
+        config_json: &str,
+        device: &Device,
+    ) -> Result<Self, String> {
+        let mut me = Self::load(weights, config_json, device)?;
+        me.ours = None;
+        Ok(me)
     }
 
     /// Drop everything the previous generation left in the `KV` cache.
@@ -153,6 +237,9 @@ impl TextDecoder {
     /// cannot forget it.
     pub fn reset(&mut self) {
         self.cache = self.pristine.clone();
+        if let Some(t) = self.ours.as_mut() {
+            t.reset();
+        }
     }
 
     /// Logits for the LAST position, given a slice of the sequence.
@@ -162,6 +249,9 @@ impl TextDecoder {
     /// simply rotates by the wrong amount and the output degrades, which is the
     /// same silent class as a mis-assembled prompt.
     pub fn forward_embeds(&mut self, embeds: &Tensor, index_pos: usize) -> CandleResult<Tensor> {
+        if let Some(t) = self.ours.as_mut() {
+            return t.forward(embeds, index_pos);
+        }
         self.model
             .forward_input_embed(embeds, index_pos, &mut self.cache)
     }

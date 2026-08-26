@@ -55,7 +55,7 @@ ffai models         # list model manifests, licenses, cache status
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection, tracking, and the browser.** YOLO26 on candle from official Ultralytics `.pt` — all five tiers from one tier-agnostic graph, no ONNX. **Every detection identical to PyTorch at n, m, l and x**, at **1.6–5.6× less memory** and up to **10× faster load**. **3.71× less CPU per frame than Ultralytics**, and **1.92× faster under load** — Diana is a ~2.4-core workload against their ~7.9. **ByteTrack** with no appearance model and no second weight file: IDF1 35.93 / MOTA 24.91 against 36.92 / 27.38 on identical weights and frames, with **218 ID switches to their 800**. **Runs in a browser** — [`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles the whole graph to WebAssembly with no ONNX runtime, agreeing with native to display precision. One failing gate, stated: **2.89× slower than ONNX Runtime**, which Diana beats on accuracy (0.7014 vs 0.6865). ([Status](#status)) |
-| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | **VLM live.** `SmolVLM-256M-Instruct` on candle — `SigLIP` tower, pixel-shuffle connector, Llama decoder, ported tensor by tensor. The gate is the strong form: from a **raw image file** through our resize, tiling, tower, prompt assembly and decode loop, the caption is **byte-identical** to the reference — **32/32 tokens**, six stages each gated in isolation. Scored **525/1000 on OCRBench** through VLMEvalKit against the checkpoint's **published 526**. Four gates vs PyTorch: correctness **PASS**, quality **PASS** (exact tie, 49/50 answers identical), footprint **PASS** (1309 vs 1852 MiB, **0.71×**), speed **FAIL** (**2.4×** slower). A vision campaign since took the tower **2.84×** and the caption **1.86×** (27 213 → 14 627 ms) with every gate unchanged — **the four-gate table predates it and has not been re-run**, so the current speed gap is smaller than stated but unmeasured. Video captions to `.srt`/`.vtt`/`.json` at constant memory per window; **no video quality claim is made** — the checkpoint is an image model with no published video row ([Status](#status)) |
+| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | **VLM live.** `SmolVLM-256M-Instruct` on candle — `SigLIP` tower, pixel-shuffle connector, Llama decoder, ported tensor by tensor, plus **our own `SmolLM2` text tower** and our own `SigLIP` encoder. The gate is the strong form: from a **raw image file** through our resize, tiling, tower, prompt assembly and decode loop, the caption is **byte-identical** to the reference — **32/32 tokens**, six stages each gated in isolation. Scored **525/1000 on OCRBench** through VLMEvalKit against the checkpoint's **published 526**. **1.20x off PyTorch end to end** (10 918 vs 9 106 ms, same image, idle box, both arms repeated), with the deficit concentrated in the vision tower — down from **2.4x** across three optimization rounds: prefill **3.07x**, generate **2.05x**, the connector's `broadcast_matmul` **14.1x**, the patch embedding as a matmul **2.6x**. Footprint **0.71x** PyTorch's. Video captions to `.srt`/`.vtt`/`.json` at constant memory per window; **no video quality claim is made** — the checkpoint is an image model with no published video row ([Status](#status)) |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
 tensor spine), `ffai-media` (ingest/egress, backed by
@@ -475,6 +475,426 @@ number a ledger line:
 a machine with no GPU**, from 4.7 MB of detector weights against 6.4 GB —
 `correctness PASS · quality FAIL · speed PASS · footprint PASS`. Not parity.
 The same order of magnitude, in a deployment class neither reference can enter.
+
+Full campaign history:
+[docs/Carmenta-mission-plan.md](docs/Carmenta-mission-plan.md) §8; every
+number traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
+
+### Diana: YOLO26 detection, from the official `.pt`, in pure Rust
+
+**The real YOLO26 graph on candle** — C3k2, SPPF, C2PSA, the NMS-free
+end-to-end head — built from official Ultralytics checkpoints by an audited
+offline conversion. No Python at inference. **No weights in this repo:** they
+are AGPL-3.0 and stay yours to fetch, convert and license.
+
+Standalone landing page:
+[Remade-With-Rust/diana](https://github.com/Remade-With-Rust/diana).
+Tracking and the browser build have their own sections below.
+
+**Embedding it pulls detection only** — no dependency on Mercury, Carmenta or
+Argus:
+
+| build | transitive crates | compiles C? |
+|---|---:|---|
+| `ffai-diana`, default | **138** | yes — `onig_sys` |
+| `ffai-diana` + `ffai-models/fetch` | 308 | yes — `onig_sys`, `aws-lc-sys` |
+| **`wasm32-unknown-unknown`** | **95** | **no** |
+
+The 170-crate gap is the Hugging Face downloader, which Diana never calls —
+its whole use of `ffai-models` is `load_dir`, reading TOML off disk. Off by
+default.
+
+**The native tree does compile C, and it costs Diana nothing.** `candle-core`
+takes `tokenizers` with `features = ["onig"]`, so `onig_sys` compiles
+Oniguruma — but **Diana never references tokenizers**, and candle uses it in
+one file (`quantized/tokenizer.rs`) detection never enters. Link-time dead
+weight, not runtime cost. It is build-time only and vanishes on wasm32, where
+candle target-gates it out.
+
+Measured on a hash-pinned **450-image** COCO holdout, CPU only, every tier in
+both geometries, each graded against the reference declaring the same
+configuration (ledger `bench-detect-1785550365` onward):
+
+| Tier | Geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | Ultralytics MiB | leaner |
+|---|---|---:|---:|---:|---:|---:|---:|
+| n | rect | 61.36 | 61.36 | **−0.01** | **71** | 403 | 5.6× |
+| n | square | 61.01 | 61.01 | **−0.00** | **63** | 317 | 5.0× |
+| s | rect | 68.07 | 68.16 | −0.08 | **110** | 447 | 4.1× |
+| s | square | 68.88 | 68.84 | +0.04 | **120** | 382 | 3.2× |
+| m | rect | 73.14 | 73.07 | +0.06 | **178** | 544 | 3.1× |
+| m | square | 73.30 | 73.23 | +0.07 | **201** | 456 | 2.3× |
+| l | rect | 74.07 | 74.02 | +0.06 | **197** | 535 | 2.7× |
+| l | square | 74.13 | 74.16 | −0.03 | **220** | 490 | 2.2× |
+| x | rect | 77.31 | 77.38 | −0.07 | **346** | 678 | 2.0× |
+| x | square | 77.69 | 77.67 | +0.03 | **380** | 603 | 1.6× |
+
+**Worst deviation across all ten: 0.08 pp**, exact at n, and Diana reads
+*higher* in five of the ten. Memory is 1.6–5.6× leaner, narrowing as weights
+come to dominate. The stronger statement sits under it — the *detections
+themselves* are identical, same count, classes and order, at four tiers:
+**n 131/131 (0.084 px), m 204/204 (0.300 px), l 187/187 (0.170 px), x 202/202
+(0.213 px)**.
+
+**On speed, measure the CPU, not the wall.** At work parity (518 detections
+against 522), Diana spends **84.6 ms of CPU per frame against Ultralytics'
+314.2 — 3.71× less** — because Diana is a ~2.4-core workload and Ultralytics is
+a ~7.9-core one. What the wall clock says therefore depends entirely on who
+owns the machine:
+
+| conditions | Diana vs Ultralytics |
+|---|---|
+| separate processes, ABBA, CPU-timed | **1.147×** wall, **3.71×** less CPU |
+| each engine pinned to its own 12 cores | **1.30×** |
+| 16 competing CPU threads | **1.92×** |
+| unpinned, sharing a machine | 0.79× — the reading that misleads |
+
+Quiet-to-loaded degradation is **2.0× for Diana against 4.5×**. Earlier
+editions quoted a single wall ratio — that was this table's top row measured
+under its bottom row's conditions.
+
+Against **ONNX Runtime** the gate still fails: **2.89× at matched square
+geometry**, measured under the old harness and not re-measured, so it is an
+upper bound. ORT has no rect export, so the widely-quoted 1.25× compared our
+reduced-work rect against its full-work square — rect is 70-75 % of square's
+pixels. Diana beats it on accuracy (0.7014 vs 0.6865) and on memory (0.75×),
+but `verdict: claimable` needs all four gates and Diana does not get it. The
+losing row goes in the table.
+
+### The harness moves the answer more than the engines do
+
+The wall-clock number above depends on arrangement more than on either
+implementation, and this is the evidence for saying so. The solo ABBA reading
+was **1.069x on 1080p, Diana ahead in 25 of 32 paired runs at z = +3.18**, and
+it was tracked as N grew because a cross-implementation ratio still moving has
+not been measured yet: 1.035x at N=8, 1.045x at 16, 1.070x at 24, 1.069x at 32.
+
+Then five arrangements were run on **identical work**, changing only order and
+co-residency:
+
+| arrangement | ratio | vs solo |
+|---|---:|---:|
+| **solo, ABBA** | **1.077x** | 1.00x |
+| alternating per frame | 1.031x | 0.96x |
+| block-wise (all A then all B) | 1.417x | **1.31x** |
+| other engine resident but idle | 1.284x | 1.19x |
+| frames shuffled | 1.405x | **1.30x** |
+
+**A 31 % swing from arrangement alone, against a ~7 % effect.** Two arrangements
+flatter Diana badly, block-wise most of all — the shape `codec-measurement` §3
+forbids. Only solo reproduces across runs, so it is the only one quoted.
+
+The same lesson arrived again from the other direction later: alternating with
+Ultralytics costs Diana **+54 % on the median**, because it burns 314 ms of CPU
+per frame across every core while Diana uses ~2.4. That is why the headline is
+now the CPU ratio and a pinned wall ratio, not a shared-machine one — see the
+table in the Diana section above.
+
+### The whole decode path is ours now
+
+| format | crate | measured at 1080p |
+|---|---|---|
+| JPEG | `rusty_jpeg` 0.3.2 | **7.05 ms — 1.14x libjpeg-turbo's 6.18** |
+| PNG | `rusty_png` 0.3.2 | gated byte-identical against upstream `png` |
+| H.264 | `rusty_h264` 0.8.0 | **22.72 ms/frame** |
+
+No libjpeg, no libpng, no libavcodec, no OpenCV. A pure-Rust JPEG decoder within
+14 % of a C library with two decades of hand-written SIMD is the number worth
+pausing on.
+
+**H.264 went from unusable to working in one version bump.** The pinned 0.2.1
+could not decode x264's DEFAULT profile at all — 0 of 164 frames, silently,
+because CABAC was broken. On 0.8.0 it is 164/164 and 2.09x faster.
+
+**Video ingest is not deployable yet, and that is worth stating plainly.**
+`sample_frames` returns every frame in memory at once — one minute of 1080p is
+10.4 GiB — and no CLI verb drives it. The decoding half is done and measured;
+the streaming API and the plumbing are not.
+
+### Accuracy holds on a public benchmark, not just our corpus
+
+All seven MOT17 training sequences, **5,316 frames**, dataset ground truth,
+identical extracted frames to both engines:
+
+| seq | camera | frames | Diana AP50 | ultralytics | gap pp |
+|---|---|---:|---:|---:|---:|
+| 02 | static | 600 | 21.55 % | 21.54 % | +0.01 |
+| 04 | static | 1050 | 23.07 % | 23.06 % | +0.01 |
+| 05 | moving | 837 | 56.14 % | 56.04 % | +0.10 |
+| 09 | static | 525 | 62.35 % | 62.37 % | -0.02 |
+| 10 | moving | 654 | 35.92 % | 35.95 % | -0.03 |
+| 11 | moving | 900 | 56.96 % | 56.92 % | +0.03 |
+| 13 | moving | 750 | 25.62 % | 25.62 % | -0.00 |
+
+**Mean absolute gap 0.029 pp** across scenes spanning 21.55 % to 62.35 %, so
+the agreement is not an artefact of one easy sequence. Ahead on four, behind
+on three, every one inside 0.1 pp. Reproduce with
+`tools/diana_mot_bench.py --all`.
+
+The **LIVE change gate** was measured on the same 5,316 frames and the result
+is a qualifier, not a headline: it fires on **0.8 %** of them, at an accuracy
+cost of **-0.006 pp**. On a synthetic still scene it gates 46 of 48 frames;
+on real surveillance footage with pedestrians in it, almost nothing. It is for
+a static SCENE, not merely a fixed CAMERA. Forced to gate a scene that WAS
+changing, AP50 fell 45 points — the threshold is a correctness boundary, not a
+tuning knob.
+
+| tier | n→x order | x→n order | pinned floor |
+|---|---:|---:|---:|
+| n | 1.67× | 1.86× | 1.98× |
+| s | 1.79× | 1.90× | 2.20× |
+| m | 1.33× | 2.12× | 1.82× |
+| l | 1.65× | 1.70× | 1.83× |
+| x | 1.57× | 1.62× | 1.54× |
+
+### It runs in a browser — the whole graph, in WebAssembly
+
+```
+cargo build --release --target wasm32-unknown-unknown -p ffai-wasm
+```
+
+[`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles Diana to
+`wasm32-unknown-unknown`: backbone, neck, the NMS-free one2one head, letterbox
+and decode. **No ONNX Runtime Web, no TensorFlow.js, no JavaScript inference
+engine** — the same Rust that runs natively is the Rust that runs in the tab.
+
+Verified rather than merely built, on `coco-032.png`, yolo26n, rect, conf 0.25:
+
+| | native | wasm |
+|---|---:|---:|
+| detections | 13 | **13** |
+| class mismatches | — | **0** |
+| largest box/confidence difference | — | **0.000000** |
+| checksum over all boxes | 16094.598199 | 16094.598099 |
+
+The checksum differs in the ninth significant figure — **6.2 parts per
+billion** — because native uses AVX2 and wasm has no SIMD, so float addition
+reassociates. Every box and class is identical at display precision.
+
+**1.82 MB module · 18 ms model load · 257 ms detect**, single-threaded against
+~34 ms native with a pool. Most of that gap is threads: `wasm32-unknown-unknown`
+has none to spawn, so `rayon` is not a dependency of the wasm build **at all**
+and a serial shim supplies the same methods. Dropping rayon entirely is what
+proves the shim complete — a missed call site fails to compile instead of
+panicking in someone's browser, and two files had unguarded calls the
+hand-written serial path had missed.
+
+Serial is also the arm that was already winning on CPU: the intra-image fan-out
+measures **363 ms/image at one thread against 844 at twenty-four**.
+
+The cdylib is a binary, so it picks its own allocator, and wasm's Rust default
+is dlmalloc. Measured N=40, rotated, with a null arm: **`rusty_alloc` 1.007x at
+z = 1.90 against a null floor of 1.003x, z = -0.32 — parity.** An earlier pass
+without the null arm read the opposite; that is what a difference inside the
+noise looks like.
+
+Weights are never bundled — YOLO26 is AGPL-3.0, so the constructor takes
+safetensors bytes and manifest JSON, which is also all a browser can do.
+`crates/ffai-wasm/demo.html` is a working page.
+
+### Multi-object tracking, on the same benchmark
+
+Detection scores boxes. A tracker's job is the **identity** attached to them —
+swap every id in a sequence and AP50 does not move a point. So it is scored on
+the metrics that can see it, against Ultralytics' own ByteTrack, same weights,
+same frames, same confidence, same class filter, one scorer:
+
+| | IDF1 | MOTA | ID switches |
+|---|---:|---:|---:|
+| **Diana** (ByteTrack, pure Rust) | **35.93 %** | **24.91 %** | **218** |
+| Ultralytics ByteTrack | 36.92 % | 27.38 % | 800 |
+
+Behind by **0.98 pp of IDF1** overall, and ahead on three of seven sequences
+(09, 10, 11) plus four of seven on MOTA. **ID switches are 218 against 800** —
+a quarter of the reference's, which is the number a deployment feels, because
+every switch is an identity handed to the wrong object downstream.
+
+No appearance model, no ReID network, no second weight file: IoU, a Kalman
+filter and a rectangular Hungarian solve, so tracking adds no download and no
+licence.
+
+**Two corrections came out of measuring this, and both were ours.** The
+reference figure this page could have quoted (IDF1 34.88) came from an
+unverified earlier run that **understated Ultralytics**; it is regenerated and
+superseded. And Diana is an 80-class COCO detector while MOT17 ground truth is
+pedestrians only — every run before 2026-08-06 omitted `--classes 0`, so cars,
+buses and traffic lights were scored as predicted pedestrians. That was
+**13.8-47.3 % of detections** depending on the sequence, worth **1.54 pp IDF1
+and 5.38 pp MOTA**, and it had MOT17-13 reading a NEGATIVE MOTA for weeks — more
+errors than there are ground-truth boxes, which is not a hard sequence but a
+broken comparison. Pass `--classes 0`:
+
+```
+ffai detect --track --classes 0 -i corpora/clips/mot17-09/img1 -o out.txt --conf 0.1
+python tools/diana_mot_track_bench.py --seq mot17-09 --pred out.txt
+```
+
+### Watch it run against Ultralytics
+
+```
+python tools/diana_sbs_viewer.py --frames corpora/clips/mot17-09/img1     --weights yolo26n.pt        # your own AGPL checkpoint
+```
+
+Both engines on screen, fed the identical frames in the identical order, with
+per-frame latency, rolling frame rate, running medians, object counts and box
+agreement. `--live` puts the change gate in the loop and badges the frames it
+skips; `--video clip.mp4` extracts frames first; `--record out.mp4` saves the
+composed view.
+
+**Each engine gets its own half of the cores, and both run at High priority.**
+Without that the viewer measures the scheduler: Ultralytics burns **314 ms of
+CPU per frame against Diana's 84.6**, so alternating with it costs Diana
+**+54 % on the median** and the same clip reads 0.79x instead of 1.43x. Priority
+alone moves p99 from 384 ms to 100 ms with the median and the CPU time
+unchanged. `--no-pin` and `--no-priority` show what contention does to a
+benchmark, which is worth seeing once.
+
+**The engines alternate and never run concurrently** — Diana's reply is read
+to completion before Ultralytics is called, so each has the whole machine
+while the other is idle. Run at the same time, each latency would be measuring
+the other. Both decode inside their own timed region. It is still a demo, not
+the benchmark: no min-of-N, no warm-up discipline, display in the loop, and
+[`bench/ledger.jsonl`](bench/ledger.jsonl) is what the claims trace to.
+
+It has already shown something the 640 corpus does not — though not what was
+first published here. Two observations taken from it, *"larger frames erase the
+advantage"* and *"Diana's latency tail is heavier"*, were both chased down and
+**both are refuted**; the descent is
+[docs/whys/diana-1080p-and-tail.md](docs/whys/diana-1080p-and-tail.md).
+
+**Frame size does not erode the advantage.** In rect mode a 1920x1080 frame
+letterboxes to 640x384 = 246 kpx, while a near-square COCO image letterboxes to
+608x640 = 389 kpx — a 1080p frame is **37 % LESS model work**, not more.
+Measured ABBA on CPU time, both engines in child processes, model load
+excluded, the ratio is **3.26x at 1080p and 3.25x at 640**: identical to three
+significant figures across a resolution change that moves model work by 37 %.
+The "parity" readings were wall-clock, on a box whose null arm — Diana against
+Diana, identical code — read a **10.4 % floor with 47 % within-arm spread**.
+They were never distinguishable from each other.
+
+That CPU ratio carries its own caveat, and it is the honest one: **3.25x less
+CPU at a wall ratio near 1.0 means Ultralytics converts more cores into the
+same wall clock.** The claim is "Diana does the work for a third of the CPU",
+not "Diana is 3.25x faster" — different products, one for a shared server and
+one for an idle laptop.
+
+**Which is exactly why the machine decides the headline.** Re-measured
+2026-08-06 with work parity checked (518 detections against 522), Diana is a
+**~2.4-core** workload against Ultralytics' **~7.9**: 84.6 ms of CPU per frame
+against 314.2, a **3.71x** ratio. On a dedicated box that mostly cancels and we
+are modestly ahead; on anything shared it does not:
+
+| conditions | Diana vs Ultralytics |
+|---|---|
+| separate processes, ABBA, CPU-timed | **1.147x** wall, **3.71x** less CPU |
+| each engine pinned to its own 12 cores | **1.30x** |
+| the headful viewer, same pinning | **1.43x** |
+| 16 competing CPU threads | **1.92x** |
+| **unpinned, sharing a machine** | **0.79x** — the one that misleads |
+
+Quiet-to-loaded degradation is **2.0x for Diana against 4.5x** for the
+reference, and the tail ratio under load is **1.89 against 5.45**. A laptop, an
+edge box or a server already running something is where the pure-Rust
+arithmetic shows up.
+
+**And the tail is ours only in the good direction.** The original figures came
+from running all of Diana and then all of Ultralytics, which puts machine drift
+between the blocks. Interleaved per frame, so both see the same machine within
+each frame, Diana's mean/p50 is **1.14 and 1.21** across two runs against
+Ultralytics' **1.79 and 3.33**, with 5-7 outliers to their 16. Diana has the
+lighter tail.
+
+Underneath it sat one real mechanism: Diana's slow frames carry **4,200 page
+faults against a normal 31**. `MIMALLOC_PURGE_DELAY=-1` removed them completely
+(on the mimalloc build this predates; the allocator is now `rusty_alloc`)
+— faults go flat at 15 and halve overall — and it is **not shipped**, because
+it buys 0.3 % of latency for +9.6 MiB peak RSS against a footprint gate with
+1 MiB of headroom. Real mechanism, refuted lever, and the two are recorded
+separately.
+
+### The same structure that loses latency wins throughput
+
+Latency is one question. A server asks a different one: given N images and a
+whole machine, how many per second? There the answer inverts, at every tier —
+**Diana is 1.5–2.4× ahead:**
+
+| tier | run 1 | run 2 |
+|---|---:|---:|
+| n | 1.61× | 1.66× |
+| s | 1.72× | 2.09× |
+| m | 1.66× | 2.13× |
+| l | 1.62× | 2.35× |
+| x | 1.52× | 2.32× |
+
+Two independent runs, because one was not enough to know which part of the
+result was real. **The direction is: ahead at every tier in both runs.** The
+magnitude is not — it moves by up to 50% between runs on this box, so the
+honest claim is a range, not the 1.6× a single session would have supported.
+
+Full campaign history:
+[docs/diana-mission-plan.md](docs/diana-mission-plan.md) §8; every number
+traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
+
+### VLM (Argus)
+
+`SmolVLM-256M-Instruct` on candle — a `SigLIP` tower, a pixel-shuffle connector
+and a Llama decoder, written against the reference implementation tensor by
+tensor. `ffai engines` reports it `stable`, which in this tree means
+*oracle-gated against a reference*, and the gate is the strong form: from a raw
+image, through our preprocessing, tower, prompt assembly and decode loop, the
+engine reproduces the reference's caption **byte-identically**.
+
+Getting there took one finding worth repeating. A resampler that matched PIL to
+within a single quantisation level — visually indistinguishable, ~50 dB SNR —
+was enough to change a generated token, because the output is argmaxed 32 times
+and one level is sometimes the difference. The fix was to implement PIL's
+*fixed-point* path exactly, `u8` intermediate and all. "Close enough" is not a
+property an image resampler gets to have when a language model reads the result.
+
+```sh
+ffai caption -i street.jpg --prompt "What is written in this image?"
+ffai caption -i clip.mp4  --fps 2 --window 8 --output captions.srt
+```
+
+Video streams one window at a time, so peak memory is a function of `--window`,
+not of the length of the clip. **No video quality claim is made** — the
+checkpoint is an image model with no published video row, and inventing a
+number for it is the scorer trap the Carmenta campaign already paid for.
+
+**What it costs.** Measured stage by stage against `transformers` on the same
+image (17 tiles, 1142 prompt tokens, 32 generated), both warm, on a deliberately
+idle machine, each arm repeated with under 1 % movement:
+
+| stage | ffai-argus | `transformers` | |
+|---|---:|---:|---|
+| preprocess | **52 ms** | 134 ms | **we win 2.6x** |
+| vision tower | 8172 ms | **7277 ms** | we lose 1.12x |
+| text side (prefill + decode) | 2690 ms | **1695 ms** | we lose 1.59x |
+| **whole caption** | **10 918 ms** | **9 106 ms** | **1.20x slower** |
+
+That is down from **2.4x** across three optimization rounds, at matched
+settings: prefill **3.07x** (3870 -> 1261 ms), generate **2.05x**
+(2181 -> 1063 ms), whole caption **1.38x** (14 561 -> 10 562 ms) — every gate
+holding, caption still byte-identical.
+
+The text win came from writing our own `SmolLM2` tower: candle's `llama` spends
+**20 % of a whole caption** in `masked_fill` at 0.8 GB/s, writing `-inf` into an
+upper triangle via `where_cond` against two broadcast operands. Deleting it is
+bit-identical — `max(finite, -inf)` never selects `-inf` and `exp(-inf)` is
+exactly zero — so causality is fused into the softmax instead. On the vision
+side, two `broadcast_matmul` calls were stretching a weight to a batch of one:
+the connector projection (**14.1x**) and the patch embedding, which is a
+stride-16 non-overlapping conv and therefore a matmul (**2.6x**).
+
+Vision is now **75 %** of a caption and the whole of the remaining gap, and its
+layer is **77 % matmul** — the elementwise phase is spent. Blocked attention has
+been refuted five times, the last with candle's own GEMM.
+
+**The four-gate verdict still reads `speed FAIL` at 2.4x, and that row is
+stale.** Re-running it is blocked by a defect in the harness rather than the
+engine: `ffai bench vlm`'s engine arm segfaults on the second `describe_image`
+in one process. Argus captions three differently-shaped images in one process
+without trouble, and the crash reproduces with the optimizations reverted, so
+the gate stays FAIL until a harness run replaces it.
 
 Full campaign history:
 [docs/Carmenta-mission-plan.md](docs/Carmenta-mission-plan.md) §8; every

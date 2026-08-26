@@ -15,7 +15,11 @@ categories = ["computer-vision", "multimedia::images", "science"]
 ffai-core = { workspace = true }
 # Manifest-driven checkpoint resolution, the same seam every other engine uses:
 # no engine hardcodes an HF cache path.
-ffai-models = { workspace = true }
+# `default-features = false` drops hf-hub (and aws-lc-sys). OEM sidecars ship
+# their own weights; they must not inherit fetch just because Argus is linked.
+# Not `workspace = true`: cargo forbids overriding default-features on an
+# inherited dep.
+ffai-models = { path = "../ffai-models", version = "0.6.3", default-features = false }
 # The tokenizer is the ENGINE's business now, not just the step-4 test's: the
 # assembled prompt has to become ids and the generated ids have to become text.
 tokenizers = { workspace = true }
@@ -51,6 +55,9 @@ ffai-models = { workspace = true }
 ffai-media = { workspace = true }
 
 [features]
+# Weight download. Off by default so an OEM binary that enables Argus does
+# not pull hf-hub / aws-lc-sys. Enable `fetch` when you want hub download.
+fetch = ["ffai-models/fetch"]
 # Will enable the mistral.rs backend once wired (Phase 4).
 mistralrs-backend = []
 

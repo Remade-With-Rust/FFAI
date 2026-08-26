@@ -164,9 +164,30 @@ impl SmolVlmVision {
         let x = x.reshape((b, side / s, side / s, dim * s * s))?;
         let x = x.transpose(1, 2)?.contiguous()?;
         let x = x.reshape((b, (side / s) * (side / s), dim * s * s))?;
-        // One matmul, no bias.
+        // One matmul, no bias — through a FLAT 2D product, not `broadcast_matmul`.
+        //
+        // `broadcast_matmul` stretches the `(12288, 576)` weight to the batch
+        // shape. The batch dim here is always 1 and `x` is contiguous, so the
+        // stretch buys nothing and costs a great deal
+        // (`examples/connector_probe`, best of 10):
+        //
+        // | | ms |
+        // |---|---:|
+        // | `broadcast_matmul` | **64.449** |
+        // | flatten to 2D + `matmul` | **4.577** |
+        //
+        // **14.1x on the projection, 11.1x on the whole connector** — which
+        // `tile_batching_ab` had measured at 78.9 ms, 5.8 % of a tile. Across
+        // 17 tiles that is ~1.1 s of a caption spent stretching a weight.
+        //
+        // Identical arithmetic: a contiguous reshape is free, and the products
+        // and their summation order are unchanged. `text.rs::linear` records
+        // the same finding at the other end of the model (33x at seq 1), so
+        // this is a trap of candle's API rather than of either call site.
+        let (b, n, k) = x.dims3()?;
         let w = self.proj.to_dtype(x.dtype())?.t()?;
-        x.broadcast_matmul(&w)
+        let out = w.dim(1)?;
+        x.reshape((b * n, k))?.matmul(&w)?.reshape((b, n, out))
     }
 }
 

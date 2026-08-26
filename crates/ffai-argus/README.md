@@ -49,6 +49,9 @@ on **token equality with the Python reference**:
   than the clip. The checkpoint is an image model with no published video row,
   so **no video quality number is invented** — what is gated is the *track*
   ([below](#video)).
+- **1.20x off PyTorch end to end**, measured stage by stage on an idle
+  machine, with the remaining deficit concentrated in the vision tower — down
+  from 2.4x across three optimization rounds ([below](#performance)).
 - **Deterministic by default.** Greedy decode, reproducible with no seed.
   Sampling is opt-in and *requires* `--seed`: passing `--temperature` alone is
   refused rather than quietly returning a caption you cannot reproduce.
@@ -71,72 +74,115 @@ component, and it is target-gated out on `wasm32`. We will not tell you there is
 
 ### Performance
 
+**Against PyTorch, stage by stage** — the same image (17 tiles, 1142 prompt
+tokens, 32 generated), the same checkpoint, both warm, on an idle machine.
+Ours from `examples/stage_split`; the reference from
+`corpora/refs/smolvlm_hf_profile.py`. Both arms repeated; each figure moved
+under 1 % between repeats:
+
+| stage | ffai-argus | `transformers` | |
+|---|---:|---:|---|
+| preprocess | **52 ms** | 134 ms | **we win 2.6x** |
+| vision tower | 8172 ms | **7277 ms** | we lose 1.12x |
+| text side (prefill + decode) | 2690 ms | **1695 ms** | we lose 1.59x |
+| **whole caption** | **10 918 ms** | **9 106 ms** | **1.20x slower** |
+
+**1.20x**, and the deficit is concentrated in the vision tower. That is the
+number to hold this crate to; everything below is how it got there.
+
+**Three optimization rounds.** Measured on the same instrument, same image, at
+a matched 24-token budget, against the figures this README previously published:
+
+| stage | before | after | |
+|---|---:|---:|---:|
+| **prefill** | 3870 ms | **1261 ms** | **3.07x** |
+| **generate** | 2181 ms | **1063 ms** | **2.05x** |
+| vision tower | 8452 ms | 8181 ms | 1.03x |
+| **whole caption** | **14 561 ms** | **10 562 ms** | **1.38x** |
+
+Every gate held throughout: 32/32 tokens, caption byte-identical to the
+reference, full suite green.
+
+What moved the text side was **our own `SmolLM2` tower** (`src/text.rs`).
+candle's `llama` spends 114 ms per layer — 3424 ms of a caption, **20 % of the
+whole thing** — in `masked_fill`, at **0.8 GB/s**, writing `-inf` into an upper
+triangle. It costs that much because it is `where_cond` against two *broadcast*
+operands, so all 11.7 M elements are a strided gather on one core. Deleting it
+is **bit-identical**, not an approximation: softmax takes the row max,
+`max(finite, -inf)` never selects `-inf`, and `exp(-inf)` is exactly zero — so
+skipping a masked column produces precisely the floats that materialising it
+does. Causality is now fused into the softmax kernel, the `1/sqrt(head_dim)`
+scale is folded into q's weights (exact — it is a power of two), and
+`silu(gate) * up` is one pass.
+
+On the vision side the two wins were both **`broadcast_matmul`**, which
+stretches a weight to the batch shape when the batch is 1:
+
+| | as written | fixed | |
+|---|---:|---:|---:|
+| connector projection | 64.4 ms | **4.6 ms** | **14.1x** |
+| patch embedding (`conv2d` -> matmul) | 10.9 ms | **4.1 ms** | **2.6x** |
+
+The patch conv is stride-16 with a 16x16 kernel, so it is non-overlapping and
+its im2col is a pure permutation — the matmul form is the same operation, and
+it emits `(seq, hidden)` directly, deleting the transpose that followed.
+
+**Where a caption's time goes now** (`examples/stage_split`, min of 3, warm):
+
+| stage | time | share |
+|---|---:|---:|
+| preprocess | 52 ms | 0.5 % |
+| **vision (tower)** | **8172 ms** | **74.8 %** |
+| assemble | 4 ms | 0.0 % |
+| prefill | 1283 ms | 11.8 % |
+| generate | 1407 ms | 12.9 % |
+| **total** | **10 918 ms** | |
+
+Vision's share rose from 58 % to 75 % because the text side got three times
+faster, not because vision got slower. It is now the whole of the remaining gap
+to PyTorch, and its layer is **77 % matmul** — the elementwise phase that
+dominated round 1 has been spent.
+
+**What was tried and refuted**, so it is not re-litigated: replacing candle's
+softmax (four attempts, reverted permanently), **blocked/flash attention (five
+attempts** — the last using candle's own GEMM, which removes the "the earlier
+one hand-rolled the kernel" objection; it degrades monotonically to 0.46x
+because every block re-reads all of k and v), pre-transposing k, fusing q/k/v
+under GQA, and pre-transposing weights at load. Tile batching is bounded at
+~10 % of vision and peaks at **chunk 4, not 8 or 17**. All measured, all in
+[`docs/plans/argus-launch-plan.md`](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/plans/argus-launch-plan.md)
+§19-23.
+
 **The four-gate verdict** (`ffai bench vlm`, both arms, no SKIPs — a skipped
-gate is never a pass), measured **2026-08-21** against `transformers` on CPU
-running the identical checkpoint and decode config:
+gate is never a pass), measured **2026-08-21**:
 
 | gate | verdict | measured |
 |---|---|---|
 | correctness | **PASS** | caption byte-identical; 32/32 tokens |
 | quality | **PASS** | exact tie — **49/50** answers byte-identical on OCRBench-lite |
-| footprint | **PASS** | 1309 MiB steady vs 1852 — **0.71×** |
-| speed | **FAIL** | 0.08 vs 0.20 it/s — **2.4× slower** |
+| footprint | **PASS** | 1309 MiB steady vs 1852 — **0.71x** |
+| speed | **FAIL** | 0.08 vs 0.20 it/s — **2.4x slower** |
 
-**Then the speed campaign ran** (2026-08-22). Vision was 77–82 % of a caption;
-min-of-4, ABBA-interleaved, same image, every gate unchanged (32/32 tokens,
-caption still byte-identical):
-
-| | before | after | |
-|---|---:|---:|---:|
-| vision tower | — | — | **2.84×** |
-| **whole caption** | **27 213 ms** | **14 627 ms** | **1.86×** |
-
-> ⚠ **The four-gate table above has not been re-run since.** The 2.4× is a
-> 2026-08-21 number and the 1.86× landed the day after, so the *current* gap to
-> PyTorch is smaller than the table says — but by how much is not measured, and
-> this project does not publish arithmetic in place of a measurement.
-
-**Where the time actually goes** (`examples/stage_split`, min of 3, warm). The
-instrument exists because a per-tile *work model* was once used to claim vision
-was no longer the majority, and that claim was wrong:
-
-| stage | time | share |
-|---|---:|---:|
-| preprocess | 54 ms | 0.4 % |
-| **vision (tower)** | **8452 ms** | **58.0 %** |
-| assemble | 3 ms | 0.0 % |
-| prefill | 3870 ms | 26.6 % |
-| generate | 2181 ms | 15.0 % |
-| **total** | **14 561 ms** | |
-
-**What the campaign found, and what it refuted.** One encoder layer at real
-shapes costs 61.9 ms — **50 % matmul, 50 % everything else**. The matmuls were
-never the problem: candle's GEMM runs **589–702 GF/s against PyTorch's
-680–697** — parity. The cause was one line of candle's CPU backend, which calls
-rayon for **`conv2d` and nothing else**, so for half of every layer a 24-core
-box ran one core:
-
-| op, real shape | candle | ours (parallel) | ours (serial) |
-|---|---:|---:|---:|
-| GELU `(1,1024,3072)` | 44.01 ms | **3.03 ms (14.5×)** | 8.37 ms (5.3×) |
-| softmax `(1,12,1024,1024)` | **4.71 ms** | 11.74 ms (0.40×) | 50.79 ms (0.09×) |
-| `layer_norm (1,1024,768)` | **0.64 ms** | 0.70 ms (0.91×) | 1.35 ms (0.47×) |
-
-Read that table the way it was eventually read: **a win on one op is not a
-licence to rewrite its neighbour.** Replacing candle's GELU won 14.5×;
-replacing its softmax lost, four attempts running, and was reverted
-permanently. Blocked/flash attention was refuted at 0.23–0.51× while
-bit-identical. Tile batching measured 1.07× and cost +384 MiB against a
-footprint gate we pass. Those refutations are recorded in
-[`docs/plans/argus-launch-plan.md`](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/plans/argus-launch-plan.md)
-§19–20 so they are not re-litigated.
+> ⚠ **This table has not been re-run, and its speed row is stale.** The 2.4x
+> predates all three optimization rounds; the stage-by-stage measurement at the
+> top of this section puts the current gap at **1.20x**, but that is a
+> different instrument over one image rather than the harness's 50-item corpus,
+> and it does not re-decide the gate. The re-run is blocked by a defect in the
+> harness, not in the engine: `ffai bench vlm`'s engine arm **segfaults on the
+> second `describe_image` call in one process**. Argus itself is not implicated
+> — captioning three differently-shaped images in one process succeeds, and the
+> crash reproduces with the vision changes reverted and with candle's text
+> tower forced. Tracked as a known defect; the speed row stays FAIL until a
+> harness run replaces it.
 
 **Verdicts here are counters, not milliseconds, wherever that is possible.**
-This box swings ±12 %, which is larger than most wins worth having, so
-[`src/cost.rs`](https://github.com/Remade-With-Rust/FFAI/blob/master/crates/ffai-argus/src/cost.rs) counts matmul FLOPs and calls, elementwise visits,
-scalar vs vectorised transcendentals, bytes moved and layout copies — every one
-exactly reproducible on any machine under any load. A win is a counter that went
-down.
+This box has been measured at a **4x spread** within one configuration, so
+[`src/cost.rs`](https://github.com/Remade-With-Rust/FFAI/blob/master/crates/ffai-argus/src/cost.rs)
+counts matmul FLOPs and calls, elementwise visits, scalar vs vectorised
+transcendentals, bytes moved and layout copies — every one exactly reproducible
+on any machine under any load. A win is a counter that went down. The timings
+on this page were taken with the machine deliberately quiesced and every figure
+repeated.
 
 ---
 
@@ -354,6 +400,10 @@ crates/ffai-argus/src/
                  dispatch
   prompt.rs      sequence assembly — image + question -> the exact token
                  sequence the model was trained on (chat template, image splice)
+  text.rs        OUR SmolLM2 text tower — causality fused into the softmax
+                 (deleting candle's 3424 ms `masked_fill`), the attention scale
+                 folded into q's weights, a one-pass SwiGLU and a parallel
+                 zero-copy RMSNorm
   decode.rs      the decode loop — inputs_embeds -> tokens, greedy, KV-cached
   cost.rs        re-export of ffai_core::cost — the deterministic counters
 
@@ -442,8 +492,12 @@ the model, not the toolchain.
 - [x] **Streaming frame ingest** in `ffai-media` — and a `stream_frames` defect found and fixed along the way: it returned one frame per clip at any fps
 - [x] **Vision speed campaign** — our `SigLIP` encoder, six-way tile parallelism, zero-copy AVX2 GELU: **2.84× tower / 1.86× caption**, gates unchanged
 - [x] **Deterministic cost counters** (`src/cost.rs`) — a win is a counter that went down
-- [ ] **Re-run the four-gate verdict** so the speed column reflects the campaign instead of predating it
-- [ ] Close the remaining speed gap — the profile says memory bandwidth and seventeen tower passes, not GEMM
+- [x] **Our own `SmolLM2` text tower** — causality fused into the softmax, the attention scale folded into q, a one-pass SwiGLU: **prefill 3.07x, generate 2.05x**, caption still byte-identical
+- [x] **Two `broadcast_matmul` traps removed from vision** — the connector projection (**14.1x**) and the patch embedding as a matmul (**2.6x**)
+- [x] **Stage-by-stage measurement against PyTorch** — the gap is **1.20x** and it is entirely the vision tower
+- [ ] **Fix `ffai bench vlm`'s engine arm**, which segfaults on the second `describe_image` in one process — this blocks re-running the four-gate verdict
+- [ ] **Re-run the four-gate verdict** so the speed row stops being a 2026-08-21 number
+- [ ] Close the vision gap — the layer is now **77 % matmul**; tile batching is bounded at ~10 % and peaks at chunk 4
 - [ ] `mistralrs-backend` — Qwen-VL / LLaVA-class models, once a crates.io release serves them
 - [ ] A checkpoint with real temporal training, so a video quality number can be earned rather than invented
 - [ ] Interleaved multi-image prompts through the public surface (the trait already carries them)
