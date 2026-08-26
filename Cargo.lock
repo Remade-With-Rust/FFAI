@@ -1236,7 +1236,7 @@ dependencies = [
  "ffai-mercury",
  "ffai-models",
  "mimalloc",
- "rusty_alloc",
+ "rusty_alloc 1.1.1",
  "rusty_alloc-api",
 ]
 
@@ -1276,7 +1276,7 @@ dependencies = [
  "libmimalloc-sys",
  "mimalloc",
  "rayon",
- "rusty_alloc",
+ "rusty_alloc 1.1.1",
  "rusty_alloc-api",
  "serde",
  "serde_json",
@@ -3836,12 +3836,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty_alloc"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfd9a61f81b719b8b13850d39f993586787a7690cc676d6f9227a93317234a3b"
+dependencies = [
+ "libc",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "rusty_alloc-api"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c8c3ecd14424ba980d005147945a745836dea7798d447c419e08be1f79e88f"
 dependencies = [
- "rusty_alloc",
+ "rusty_alloc 0.3.2",
 ]
 
 [[package]]
