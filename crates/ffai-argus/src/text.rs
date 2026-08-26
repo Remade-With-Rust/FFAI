@@ -275,6 +275,127 @@ impl candle_core::CustomOp1 for CausalSoftmax {
     }
 }
 
+/// The same causal softmax, written **in place**.
+///
+/// # Why this exists beside [`CausalSoftmax`]
+///
+/// The score tensor is `(1, 9, 1142, 1142)` — **47 MB**. `apply_op1_no_bwd`
+/// allocates a second one and writes the result there, so every layer
+/// allocates 47 MB, writes 47 MB, and drops 47 MB. Over 30 layers that is
+/// **1.4 GB of allocation churn and an extra 1.4 GB of writes**, and it was
+/// the largest part of the 18 % of prefill that per-op timing could not
+/// account for (`examples/text_inline_prof`).
+///
+/// The scores come straight out of `q.matmul(k.t())` and nothing else holds a
+/// reference, so the buffer is ours to overwrite. Softmax is row-local — each
+/// row's max, sum and normalisation touch only that row — so writing over the
+/// input as we go is safe and produces identical values.
+pub struct CausalSoftmaxInplace {
+    /// Where this query block starts in the full sequence.
+    pub offset: usize,
+}
+
+impl candle_core::InplaceOp1 for CausalSoftmaxInplace {
+    fn name(&self) -> &'static str {
+        "ffai-causal-softmax-inplace"
+    }
+
+    fn cpu_fwd(
+        &self,
+        storage: &mut candle_core::CpuStorage,
+        layout: &candle_core::Layout,
+    ) -> CandleResult<()> {
+        let dims = layout.shape().dims();
+        let k_len = *dims.last().expect("rank >= 1");
+        let q_len = dims[dims.len() - 2];
+        let Some((start, end)) = layout.contiguous_offsets() else {
+            candle_core::bail!("ffai-causal-softmax-inplace expects a contiguous input")
+        };
+        let candle_core::CpuStorage::F32(buf) = storage else {
+            candle_core::bail!("ffai-causal-softmax-inplace expects f32")
+        };
+        let offset = self.offset;
+        let rows = (end - start) / k_len;
+        buf[start..end]
+            .par_chunks_mut(k_len)
+            .enumerate()
+            .for_each(|(r, row)| {
+                let qpos = r % q_len;
+                let lim = (qpos + offset + 1).min(k_len);
+                let mut m = f32::NEG_INFINITY;
+                for &x in &row[..lim] {
+                    if x > m {
+                        m = x;
+                    }
+                }
+                let mut sum = 0f32;
+                for x in &mut row[..lim] {
+                    let e = ffai_core::fastmath::exp(*x - m);
+                    *x = e;
+                    sum += e;
+                }
+                let inv = 1.0 / sum;
+                for x in &mut row[..lim] {
+                    *x *= inv;
+                }
+                // Masked tail is exactly zero — what softmax over `-inf` gives.
+                for x in &mut row[lim..] {
+                    *x = 0.0;
+                }
+            });
+        crate::cost::transcendental_vector((rows * (k_len + 1) / 2) as u64);
+        crate::cost::elementwise((rows * k_len) as u64, 1, 1);
+        Ok(())
+    }
+}
+
+/// `a += b`, in place.
+///
+/// A residual add allocates a third tensor to hold `a + b` when one operand is
+/// already scratch. At `(1, 1142, 576)` that is 2.6 MB allocated, written and
+/// dropped, twice per layer, sixty times a prefill. The left operand here is
+/// always a freshly-produced projection output that nothing else references.
+struct AddInplace;
+
+impl candle_core::InplaceOp2 for AddInplace {
+    fn name(&self) -> &'static str {
+        "ffai-add-inplace"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &mut candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+    ) -> CandleResult<()> {
+        let (Some((ao, ae)), Some((bo, be))) = (l1.contiguous_offsets(), l2.contiguous_offsets())
+        else {
+            candle_core::bail!("ffai-add-inplace expects contiguous inputs")
+        };
+        let candle_core::CpuStorage::F32(rhs) = s2 else {
+            candle_core::bail!("ffai-add-inplace expects f32")
+        };
+        let rhs = &rhs[bo..be];
+        let candle_core::CpuStorage::F32(lhs) = s1 else {
+            candle_core::bail!("ffai-add-inplace expects f32")
+        };
+        if ae - ao != be - bo {
+            candle_core::bail!("ffai-add-inplace: length mismatch");
+        }
+        lhs[ao..ae]
+            .par_chunks_mut(8192)
+            .zip(rhs.par_chunks(8192))
+            .for_each(|(a, b)| {
+                for (a, &b) in a.iter_mut().zip(b) {
+                    *a += b;
+                }
+            });
+        crate::cost::elementwise((ae - ao) as u64, 1, 1);
+        Ok(())
+    }
+}
+
 /// `silu(gate) * up`, fused into one pass.
 ///
 /// candle runs `silu` at **1.7 GB/s** on `(1142,1536)` — a scalar `exp` per
@@ -364,6 +485,84 @@ fn linear(x: &Tensor, w: &Tensor) -> CandleResult<Tensor> {
     x.reshape((b * s, i))?
         .matmul(&w.t()?)?
         .reshape((b, s, o))
+}
+
+/// Per-op wall-clock inside the REAL forward, behind `FFAI_TEXT_PROFILE=1`.
+///
+/// `examples/text_ops_now` prices ops in isolation and their sum came to
+/// ~940 ms against a measured 1283 ms prefill. An isolated op runs with a warm
+/// cache and no neighbours competing for it; the real forward does neither, so
+/// the sum of isolated parts is not the whole. This times the parts WHERE THEY
+/// RUN, which is the only way the two can be reconciled.
+pub mod prof {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    static ACC: Mutex<Vec<(&'static str, f64)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn on() -> bool {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static C: AtomicU8 = AtomicU8::new(u8::MAX);
+        match C.load(Ordering::Relaxed) {
+            u8::MAX => {
+                let v = std::env::var("FFAI_TEXT_PROFILE").is_ok_and(|x| x == "1");
+                C.store(u8::from(v), Ordering::Relaxed);
+                v
+            }
+            v => v == 1,
+        }
+    }
+
+    pub(crate) fn add(name: &'static str, t: Instant) {
+        if !on() {
+            return;
+        }
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        if let Ok(mut v) = ACC.lock() {
+            match v.iter_mut().find(|(n, _)| *n == name) {
+                Some(e) => e.1 += ms,
+                None => v.push((name, ms)),
+            }
+        }
+    }
+
+    /// Drain the accumulated per-op totals, largest first.
+    #[must_use]
+    pub fn take() -> Vec<(&'static str, f64)> {
+        let mut v = ACC.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        v
+    }
+}
+
+/// The in-place causal softmax, exposed for `examples/gqa_blocked_attn`.
+pub use self::CausalSoftmaxInplace as CausalSoftmaxProbe;
+
+/// Probe hooks — the three kernels this module owns, exposed so
+/// `examples/text_ops_now` can price exactly what `block` runs rather than an
+/// approximation of it. `vision_ops_probe` measuring candle's op mix instead of
+/// ours is what made a stale profile read as a current one for two rounds.
+///
+/// # Errors
+/// Propagates candle's tensor errors.
+pub fn rms_norm_for_probe(xs: &Tensor, w: &Tensor, eps: f64) -> CandleResult<Tensor> {
+    rms_norm(xs, w, eps)
+}
+
+/// See [`rms_norm_for_probe`].
+///
+/// # Errors
+/// Propagates candle's tensor errors.
+pub fn causal_softmax_for_probe(att: &Tensor, offset: usize) -> CandleResult<Tensor> {
+    att.apply_op1_no_bwd(&CausalSoftmax { offset })
+}
+
+/// See [`rms_norm_for_probe`].
+///
+/// # Errors
+/// Propagates candle's tensor errors.
+pub fn swiglu_for_probe(gate: &Tensor, up: &Tensor) -> CandleResult<Tensor> {
+    gate.apply_op2_no_bwd(up, &SwiGlu)
 }
 
 /// The text tower: embeddings, blocks, final norm, `lm_head`.
@@ -479,15 +678,20 @@ impl TextTower {
         let blk = &self.blocks[i];
 
         // ---- attention ----------------------------------------------------
+        let _t = std::time::Instant::now();
         let normed = rms_norm(xs, &blk.ln1, c.eps)?;
+        prof::add("rms_norm", _t);
         // Three matmuls, deliberately — see [`Block::q`] for the measured
         // refutation of fusing them.
+        let _t = std::time::Instant::now();
         let q = linear(&normed, &blk.q)?;
         let k = linear(&normed, &blk.k)?;
         let v = linear(&normed, &blk.v)?;
+        prof::add("qkv proj", _t);
         crate::cost::matmul(1, bu * sq, hd, (c.heads * c.head_dim) as u64);
         crate::cost::matmul(2, bu * sq, hd, (c.kv_heads * c.head_dim) as u64);
 
+        let _t = std::time::Instant::now();
         let q = q
             .reshape((b, seq, c.heads, c.head_dim))?
             .transpose(1, 2)?
@@ -501,11 +705,15 @@ impl TextTower {
             .transpose(1, 2)?
             .contiguous()?;
         crate::cost::copy(bu * sq * hd);
+        prof::add("qkv reshape+transpose", _t);
 
+        let _t = std::time::Instant::now();
         let q = self.rope(&q, index_pos)?;
         let k = self.rope(&k, index_pos)?;
+        prof::add("rope", _t);
 
         // KV cache: concatenate, then keep.
+        let _t = std::time::Instant::now();
         let (k, v) = match self.kv[i].take() {
             Some((pk, pv)) => (
                 Tensor::cat(&[&pk, &k], 2)?.contiguous()?,
@@ -514,6 +722,7 @@ impl TextTower {
             None => (k, v),
         };
         self.kv[i] = Some((k.clone(), v.clone()));
+        prof::add("kv cache", _t);
         let k_len = k.dim(2)?;
 
         // GQA WITHOUT materialising `repeat_kv`.
@@ -538,7 +747,9 @@ impl TextTower {
         let qg = q.reshape((b, c.kv_heads, reps * seq, c.head_dim))?;
 
         // No `/ sqrt(head_dim)` — it is already in q's weights.
+        let _t = std::time::Instant::now();
         let att = qg.matmul(&k.t()?)?;
+        prof::add("q.k^T", _t);
         crate::cost::matmul(
             bu * c.heads as u64,
             sq,
@@ -548,9 +759,13 @@ impl TextTower {
         // Back to per-head rows so the causal kernel sees `(.., q_len, k_len)`.
         let att = att.reshape((b, c.heads, seq, k_len))?;
         // No `masked_fill` — causality is in the kernel.
-        let att = att.apply_op1_no_bwd(&CausalSoftmax {
-            offset: index_pos,
-        })?;
+        let _t = std::time::Instant::now();
+        // In place: the scores buffer is freshly produced by the matmul above
+        // and nothing else references it, so there is no reason to allocate a
+        // second 47 MB tensor to hold the result.
+        att.inplace_op1(&CausalSoftmaxInplace { offset: index_pos })?;
+        prof::add("causal softmax", _t);
+        let _t = std::time::Instant::now();
         let y = att
             .reshape((b, c.kv_heads, reps * seq, k_len))?
             .matmul(&v)?
@@ -561,25 +776,43 @@ impl TextTower {
             k_len as u64,
             c.head_dim as u64,
         );
+        prof::add("attn.v", _t);
+        let _t = std::time::Instant::now();
         let y = y.transpose(1, 2)?.reshape((b, seq, c.hidden))?;
+        prof::add("transpose back", _t);
         crate::cost::copy(bu * sq * hd);
+        let _t = std::time::Instant::now();
         let y = linear(&y, &blk.o)?;
+        prof::add("o proj", _t);
         crate::cost::matmul(1, bu * sq, hd, hd);
-        let xs = (xs + y)?;
-        crate::cost::elementwise(bu * sq * hd, 2, 1);
+        let _t = std::time::Instant::now();
+        // `y` is the projection's own output and nothing else holds it, so the
+        // sum lands there instead of in a third 2.6 MB tensor.
+        y.inplace_op2(xs, &AddInplace)?;
+        let xs = y;
+        prof::add("residual", _t);
 
         // ---- mlp ----------------------------------------------------------
+        let _t = std::time::Instant::now();
         let normed = rms_norm(&xs, &blk.ln2, c.eps)?;
+        prof::add("rms_norm", _t);
+        let _t = std::time::Instant::now();
         let g = linear(&normed, &blk.gate)?;
         let u = linear(&normed, &blk.up)?;
+        prof::add("gate+up proj", _t);
         crate::cost::matmul(2, bu * sq, hd, c.inter as u64);
         // silu(gate) * up in ONE pass.
+        let _t = std::time::Instant::now();
         let h = g.apply_op2_no_bwd(&u, &SwiGlu)?;
+        prof::add("swiglu", _t);
+        let _t = std::time::Instant::now();
         let down = linear(&h, &blk.down)?;
+        prof::add("down proj", _t);
         crate::cost::matmul(1, bu * sq, c.inter as u64, hd);
-        let out = (xs + down)?;
-        crate::cost::elementwise(bu * sq * hd, 2, 1);
-        Ok(out)
+        let _t = std::time::Instant::now();
+        down.inplace_op2(&xs, &AddInplace)?;
+        prof::add("residual", _t);
+        Ok(down)
     }
 
     fn rope(&self, x: &Tensor, index_pos: usize) -> CandleResult<Tensor> {

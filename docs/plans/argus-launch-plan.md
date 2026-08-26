@@ -2976,3 +2976,97 @@ one of the four, so the cheap chunk being the fast one matters.
 tiles is 24 tiles in flight — so it is a worker/footprint redesign, and this
 box cannot validate the end-to-end result. The ceiling is now known, which is
 what makes the redesign decidable rather than speculative.
+
+
+---
+
+## 24. THE TEXT-SIDE GAP — diagnosed and partly closed (2026-08-26)
+
+### ⚠ First: the number that started this was wrong, and it was my instrument
+
+§23 published "text side 1.59x slower" from
+`smolvlm_hf_profile.py`, which computes PyTorch's text time as
+`min(total) - min(vision)`. **Two independently-taken minima do not
+subtract** — `min(a+b) >= min(a) + min(b)` — so that UNDERSTATES their text
+cost and flatters them. Measuring their text tower directly
+(`corpora/refs/smolvlm_hf_text.py`) gives 1868 ms, not 1695 ms, so the gap was
+**1.44x**, not 1.59x.
+
+### Where it actually is: prefill, not decode
+
+| phase | ours | PyTorch | |
+|---|---:|---:|---|
+| **prefill** (1142 tokens) | 1283 ms | **675 ms** | **1.90x** |
+| decode (32 tokens) | 1407 ms | 1193 ms | 1.18x |
+
+### The root cause, priced inside the real forward
+
+`examples/text_ops_now` summed ISOLATED ops to ~940 ms against a measured
+1283 ms, which does not close — an isolated op runs warm and uncontended.
+`examples/text_inline_prof` times each op **where it runs**:
+
+| | ms | share |
+|---|---:|---:|
+| matmuls (gate+up, q.k^T, down, attn.v, qkv, o) | **765** | 57 % |
+| non-matmul (softmax, residual, rms_norm, swiglu, reshapes, rope) | 332 | 25 % |
+| unaccounted (allocation churn) | 239 | 18 % |
+
+**Our matmuls ALONE (765 ms) cost more than PyTorch's entire prefill
+(675 ms).** In situ they run at **435 GF/s**; isolated, the same shapes reach
+**500-594**. The difference is cache pressure from the 47 MB score matrix,
+which PyTorch never materialises because `transformers` dispatches Llama
+attention through fused SDPA.
+
+**So the ceiling is structural: eliminating every non-matmul millisecond still
+leaves ~765 ms against their 675.** Parity needs attention fusion, and the
+next section is why we cannot have it on candle.
+
+### ★ Blocked attention, refuted a SIXTH time — and the old explanation was wrong
+
+Every previous refutation re-read k and v as **9 heads** (post-`repeat_kv`,
+2.6 MB each), so a 9-block sweep re-read ~47 MB and exactly cancelled the
+47 MB it was avoiding. That was the standing explanation. `text.rs` now
+regroups q for GQA instead of expanding k/v, so k and v stay at **3 heads,
+1.8 MB together** — the arithmetic is no longer self-cancelling and the
+verdict had to be re-taken rather than inherited.
+
+| | ms | |
+|---|---:|---:|
+| unblocked | **14.42** | |
+| q-chunk 512 | 19.83 | 0.73x |
+| q-chunk 256 | 25.70 | 0.56x |
+| q-chunk 128 | 31.81 | **0.45x** |
+
+Still monotonically worse. **The re-read hypothesis was wrong**: blocking loses
+on candle's per-GEMM overhead, not on k/v traffic. Six refutations, three
+distinct explanations tried; the question is closed.
+
+### What was fixed: stop allocating what we already own
+
+The 18 % "unaccounted" was allocation churn. The score tensor is 47 MB and was
+allocated TWICE per layer — once by `q.matmul(k.t())`, once by the softmax
+writing its result somewhere new — 2.8 GB of churn over 30 layers.
+
+| change | before | after | |
+|---|---:|---:|---:|
+| causal softmax -> `InplaceOp1` | 110.9 ms | **81.7 ms** | 1.36x |
+| residual adds -> `InplaceOp2` | 63.8 ms | **13.1 ms** | **4.9x** |
+| unaccounted churn | 239 ms | **187 ms** | |
+
+Both are safe because the left operand is scratch nobody else references: the
+scores come straight out of the matmul, and the residual's left operand is the
+projection's own output. Softmax is row-local, so overwriting the input as it
+goes produces identical values — the bit-identity test still passes.
+
+**Result: prefill 1283 -> 1130 ms, text side 2690 -> 2455 ms, and the gap to
+PyTorch closes from 1.44x to 1.31x.** 62 tests green, caption byte-identical.
+
+### What is left, honestly
+
+The remaining 1.31x is mostly the 765 ms of matmul running at 435 GF/s instead
+of ~550 because of score-matrix cache pressure. Without fused attention that
+is close to the floor for this design. Two things could still move it, neither
+cheap: an SDPA-equivalent fused kernel written against candle's storage
+directly (not blocked GEMM calls — that is refuted six times), or f16/bf16 for
+the score matrix, which halves its footprint but changes numerics and would
+have to be re-gated against token equality.
