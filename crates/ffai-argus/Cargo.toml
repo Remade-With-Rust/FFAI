@@ -43,6 +43,16 @@ serde_json = { workspace = true }
 # with the first working describe_image().
 
 [dev-dependencies]
+# The SAME allocator the `ffai` binary declares.
+#
+# Examples are binaries, and a binary with no `#[global_allocator]` uses the
+# system one — so every measurement taken from `examples/` was profiling a
+# different allocator than production runs. That matters here more than most
+# places: a SigLIP/Llama forward allocates a 47 MB score tensor per layer, and
+# 47 MB is above the threshold where most allocators stop pooling and go
+# straight to the OS. See `examples/alloc_ab.rs`.
+rusty_alloc-api = "=1.1.4"
+
 # The step-3 oracle test reads the reference dump's summary.json.
 serde_json = { workspace = true }
 # Step 6's gate resolves the checkpoint the same way the engine does, so the

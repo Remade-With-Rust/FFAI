@@ -401,7 +401,37 @@ fn run_tower(
 
     // The kernels stand down: this loop is the parallelism now. Restored
     // before returning so a later single-tile call gets them back.
-    let prev = crate::siglip::set_kernels_parallel(false);
+    //
+    // ...but only when the tile loop actually saturates the machine.
+    //
+    // This used to be an unconditional `false`, on the reasoning that "one tile
+    // parallelises inside; seventeen parallelise across". That is right at the
+    // default six workers and WRONG below it: six workers on a 24-core box is
+    // six-way outer parallelism, and the idle cores are why a smaller worker
+    // count looked so expensive — nothing took up the slack.
+    //
+    // Measured back-to-back on 17 tiles (kernels ON vs OFF at the same worker
+    // count, so the ratio is immune to this box's drift):
+    //
+    //   workers |  6      4
+    //   ON/OFF  | 1.01x  1.34x
+    //
+    // At six there is nothing to gain; at four there was **34 %** sitting
+    // unused. That matters because worker count is also the footprint knob —
+    // each concurrent tower holds its own 50 MiB attention matrix — so making
+    // the low end cheap is what lets memory be traded without paying for it
+    // twice.
+    //
+    // `workers * 6 <= cores` is the measured crossover: 4*6 = 24 fits a
+    // 24-core box, 6*6 = 36 does not. `FFAI_ARGUS_KERNELS_PARALLEL` forces
+    // either way for re-measurement.
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let kernels_on = match std::env::var("FFAI_ARGUS_KERNELS_PARALLEL").ok().as_deref() {
+        Some("1") => true,
+        Some("0") => false,
+        _ => workers.saturating_mul(6) <= cores,
+    };
+    let prev = crate::siglip::set_kernels_parallel(kernels_on);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let slots: Mutex<Vec<Option<(Tensor, f64)>>> = Mutex::new((0..pre.tiles).map(|_| None).collect());
     let failed: Mutex<Option<String>> = Mutex::new(None);

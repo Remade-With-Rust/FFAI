@@ -1440,10 +1440,29 @@ pub(crate) fn fill_gates(
     // Speed compares WARM throughput: steady-state inference, the fair
     // engineering comparison. End-to-end appears in the detail line so the
     // startup story is never hidden.
-    let best_ref_rtf = references
+    // COMPARE ONLY LIKE CONFIGURATIONS, for the same reason the quality gate
+    // above does. A reference generating 64 tokens against an engine generating
+    // 256 is not a speed comparison — it is a four-to-one work difference
+    // reported as throughput, and this gate read FAIL at 2.4x on exactly that.
+    // `run_detect_engine` pins its threshold to the references' to avoid the
+    // same defect; the quality gate filters for it; this one did neither.
+    //
+    // When nothing matches it still compares, rather than silently skipping —
+    // a mis-declared config should stay visible — but the detail line says so.
+    let matched_rtf: Vec<(&str, f64)> = references
         .iter()
+        .filter(|r| engine_key.is_some() && r.config.get(DECODE_KEY) == engine_key)
         .filter_map(|r| r.rtf_warm.map(|x| (r.name.as_str(), x)))
-        .max_by(|a, b| a.1.total_cmp(&b.1));
+        .collect();
+    let comparable = !matched_rtf.is_empty();
+    let best_ref_rtf = if comparable {
+        matched_rtf.into_iter().max_by(|a, b| a.1.total_cmp(&b.1))
+    } else {
+        references
+            .iter()
+            .filter_map(|r| r.rtf_warm.map(|x| (r.name.as_str(), x)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    };
     gates.set(match (eng.rtf_warm, best_ref_rtf) {
         (Some(er), Some((rname, rr))) => GateResult {
             kind: GateKind::Speed,
@@ -1454,8 +1473,13 @@ pub(crate) fn fill_gates(
             },
             metric: Some(er),
             detail: format!(
-                "engine {er:.1}x realtime (warm) vs fastest reference {rname} {rr:.1}x; \
+                "engine {er:.1}x realtime (warm) vs fastest reference {rname} {rr:.1}x{}; \
                  engine e2e {:.1}x",
+                if comparable {
+                    ""
+                } else {
+                    " [DECODE CONFIG DIFFERS - not a like-for-like comparison]"
+                },
                 eng.rtf_e2e.unwrap_or(f64::NAN)
             ),
         },

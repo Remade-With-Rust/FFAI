@@ -51,10 +51,23 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 # where 0.3.0, 0.1.0-alpha.1 and 0.1.0-alpha.2 are 0 of 8. A caret requirement
 # ("0.3.0") silently resolved to 0.3.1 mid-session and shipped a crashing
 # binary, which is exactly the failure an exact pin exists to prevent.
-rusty_alloc-api = "=0.3.2"
+#
+# MOVED 0.3.2 -> 1.1.4 (2026-08-26). **0.3.2 has a segfault of its own**, on a
+# different workload than the one that condemned 0.3.1 — which is why pinning
+# away from 0.3.1 did not escape the class. Argus's vision tower runs six tile
+# workers each churning a 50 MB score tensor, 12 layers x 17 tiles; under
+# 0.3.2 a caption segfaults 3/3, and under 1.1.4 it is 0/3 with the allocator
+# as the only variable.
+#
+# This is also the root cause of `ffai bench vlm` dying on its second
+# `describe_image` — the crash that blocked re-running the four-gate verdict.
+# It reproduced in the CLI (which declares this allocator) and never in an
+# example (which declared none and got the system one), and that difference is
+# what finally identified it.
+rusty_alloc-api = "=1.1.4"
 # The core, for `alloc::collect` — see `spawn_page_trimmer` in main.rs.
 # Without it rusty_alloc's RSS does not bound on a rayon pool.
-rusty_alloc = "=0.3.2"
+rusty_alloc = "=1.1.4"
 clap = { workspace = true }
 
 [features]

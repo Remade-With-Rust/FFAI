@@ -7,6 +7,17 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use std::time::Instant;
 
+/// The SAME allocator `ffai` declares — see `examples/alloc_ab.rs`.
+///
+/// An example is a binary, and a binary with no `#[global_allocator]` gets the
+/// system one. Every figure this crate published from an example was therefore
+/// taken under an allocator production does not use, and measured **1.15x
+/// pessimistic** on prefill (1180.9 ms system vs 1028.4 ms rusty_alloc, 3/3
+/// interleaved rounds). A caption allocates a 50 MB score tensor 204 times in
+/// the vision tower alone, so this is not a rounding difference.
+#[global_allocator]
+static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME"))?;
     let snap = std::fs::read_dir(

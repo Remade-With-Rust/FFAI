@@ -226,7 +226,7 @@ pub fn run_vlm(reg: &EngineRegistry, cfg: &BenchConfig) -> Result<BenchRecord> {
             scorer_version.as_deref(),
             &pred_dir,
             &id,
-            vlm_max_new_tokens(),
+            vlm_max_new_tokens().or_else(|| budget_from_references(&references)),
             &argv,
         )?)
     };
@@ -414,6 +414,45 @@ fn run_vlm_reference(
         argv,
     );
     Ok(summary)
+}
+
+/// The token budget the REFERENCES were run at, read out of their declared
+/// decode config.
+///
+/// # Why the engine must not use its own default here
+///
+/// `SmolVlm`'s `DEFAULT_MAX_NEW_TOKENS` is **256** — a sensible ceiling for a
+/// person asking for a caption. The reference adapters are pinned to **64**.
+/// Left alone, the speed gate compared our engine doing up to **four times the
+/// decode work** against a reference doing a quarter of it, and reported the
+/// difference as though it were implementation speed. That is exactly the
+/// defect `run_detect_engine` documents and pins against — *"scoring our engine
+/// at 0.25 against references at 0.001 would report a recall collapse that is
+/// purely a configuration difference"* — and the VLM arm never got the same
+/// treatment.
+///
+/// `FFAI_VLM_MAX_NEW_TOKENS` still wins when set, so a deliberate sweep is
+/// still possible; this only supplies the default the comparison needs.
+fn budget_from_references(references: &[RunSummary]) -> Option<usize> {
+    let mut found: Option<usize> = None;
+    for r in references {
+        let key = r.config.get(crate::runner::DECODE_KEY)?;
+        // "SmolVLM-256M/greedy-64" -> 64
+        let budget = key
+            .rsplit('/')
+            .next()
+            .and_then(|d| d.strip_prefix("greedy-").or_else(|| d.split('-').nth(1)))
+            .and_then(|n| n.parse::<usize>().ok())?;
+        match found {
+            // References disagreeing about the budget is not something to
+            // resolve silently by picking one: the run is not comparable and
+            // the engine should keep its own default so the mismatch stays
+            // visible in the config key.
+            Some(prev) if prev != budget => return None,
+            _ => found = Some(budget),
+        }
+    }
+    found
 }
 
 /// The engine's comparison key, in the same vocabulary references use.
@@ -662,12 +701,44 @@ fn run_vlm_engine(
     let mut best_wall = f64::INFINITY;
     let mut answer_secs = 0.0_f64;
 
+    // ONE UNTIMED WARM-UP, whose cost becomes `load_secs`.
+    //
+    // The engine loads its weights lazily on the first `describe_image`, so
+    // without this the model load sits inside the FIRST timed run. The
+    // reference does not carry that cost: its adapter reports `load_secs`
+    // separately and its per-item timings exclude it. Best-of-N hides the
+    // asymmetry when N > 1 and reports it as our throughput when N == 1 —
+    // which is how a `--runs 1` run read "engine 0.2x realtime".
+    //
+    // `run_detect_engine` already does exactly this, for exactly this reason.
+    // The VLM arm never did, and its `load_secs` was therefore always `None`
+    // while every reference row carried a real number.
+    if let Some(first) = holdout.first() {
+        let path = manifest.clip_path(first);
+        if let Ok(image) = crate::runner::load_image_resilient(&path) {
+            let opts = VlmOptions {
+                prompt: first.prompt.clone(),
+                max_new_tokens,
+                ..vlm_options()
+            };
+            let t = std::time::Instant::now();
+            let _ = vlm.describe_image(&image, &opts);
+            summary.load_secs = Some(t.elapsed().as_secs_f64());
+        }
+    }
+
     for _ in 0..runs.max(1) {
         texts.clear();
         per_item_secs.clear();
         let run_started = std::time::Instant::now();
         for clip in holdout {
             let path = manifest.clip_path(clip);
+            // The timer starts BEFORE the image is read, because the
+            // reference's per-item figure includes `Image.open` and its
+            // preprocessing. Excluding our decode while their timing carries
+            // theirs is a small bias, but it is a bias in OUR favour, and the
+            // whole value of this harness is that it is not.
+            let t = std::time::Instant::now();
             let image = match crate::runner::load_image_resilient(&path) {
                 Ok(i) => i,
                 Err(e) => {
@@ -683,7 +754,6 @@ fn run_vlm_engine(
                 max_new_tokens,
                 ..vlm_options()
             };
-            let t = std::time::Instant::now();
             match vlm.describe_image(&image, &opts) {
                 Ok(text) => {
                     per_item_secs.push(t.elapsed().as_secs_f64());

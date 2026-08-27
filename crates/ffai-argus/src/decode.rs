@@ -92,7 +92,21 @@ impl DecodeTrace {
 
 /// `SmolVLM`'s text tower plus its `KV` cache.
 pub struct TextDecoder {
-    model: llama::Llama,
+    /// candle's tower — loaded ONLY when it is the one that will run.
+    ///
+    /// # This used to be loaded unconditionally, and it cost 540 MB
+    ///
+    /// The comment here previously claimed that holding both towers "costs
+    /// address space rather than memory, because the weights are mmapped".
+    /// That is wrong: `VarBuilder::get_unchecked` calls candle's `convert`,
+    /// which **allocates a tensor and copies** out of the mapping — the same
+    /// fact that motivated `ffai-carmenta`'s SVTR weight cache. Two towers
+    /// therefore meant two full f32 copies of a 135M-parameter model.
+    ///
+    /// Measured: the footprint gate went from **PASS 0.71x** to **FAIL 1.20x**
+    /// when our tower landed, steady resident rising 1309 -> 2126 MiB. A second
+    /// copy of the text weights is 540 MB of that.
+    model: Option<llama::Llama>,
     cache: llama::Cache,
     /// A pristine copy of the cache, cloned back over `cache` before every
     /// generation.
@@ -164,7 +178,11 @@ impl TextDecoder {
 
         let cache = llama::Cache::new(true, DType::F32, &config, device)
             .map_err(|e| format!("kv cache: {e}"))?;
-        let model = llama::Llama::load(vb, &config).map_err(|e| format!("text tower: {e}"))?;
+        // Deferred: built below only if ours could not be, so the losing
+        // tower's weights are never materialised.
+        let load_candle = |vb: VarBuilder<'static>| {
+            llama::Llama::load(vb, &config).map_err(|e| format!("text tower: {e}"))
+        };
 
         // Our tower reads the checkpoint's own names, so it takes a builder
         // WITHOUT the rename above.
@@ -198,6 +216,10 @@ impl TextDecoder {
         } else {
             crate::text::TextTower::load(&raw, cfg, device).ok()
         };
+        // EXACTLY ONE tower is resident. `ours` is preferred; candle's is built
+        // only when ours is absent — because the toggle asked for it, or
+        // because ours failed to load and the engine must still caption.
+        let model = if ours.is_some() { None } else { Some(load_candle(vb)?) };
 
         Ok(Self {
             model,
@@ -226,9 +248,36 @@ impl TextDecoder {
         config_json: &str,
         device: &Device,
     ) -> Result<Self, String> {
-        let mut me = Self::load(weights, config_json, device)?;
-        me.ours = None;
-        Ok(me)
+        // Ask for candle's tower up front rather than loading ours and then
+        // discarding it — dropping a tower still pays for having built it.
+        // SAFETY: same mapped file, same ownership as `load`.
+        let raw = unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                std::slice::from_ref(&weights),
+                DType::F32,
+                device,
+            )
+        }
+        .map_err(|e| format!("load {}: {e}", weights.display()))?;
+        let config = text_config_from_json(config_json)?;
+        let vb = raw.rename_f(|name: &str| {
+            if let Some(rest) = name.strip_prefix("model.") {
+                format!("model.text_model.{rest}")
+            } else {
+                name.to_string()
+            }
+        });
+        let cache = llama::Cache::new(true, DType::F32, &config, device)
+            .map_err(|e| format!("kv cache: {e}"))?;
+        let model = llama::Llama::load(vb, &config).map_err(|e| format!("text tower: {e}"))?;
+        Ok(Self {
+            model: Some(model),
+            pristine: cache.clone(),
+            cache,
+            config,
+            device: device.clone(),
+            ours: None,
+        })
     }
 
     /// Drop everything the previous generation left in the `KV` cache.
@@ -252,13 +301,21 @@ impl TextDecoder {
         if let Some(t) = self.ours.as_mut() {
             return t.forward(embeds, index_pos);
         }
-        self.model
-            .forward_input_embed(embeds, index_pos, &mut self.cache)
+        let Some(m) = self.model.as_ref() else {
+            return Err(candle_core::Error::Msg("no text tower loaded".into()));
+        };
+        m.forward_input_embed(embeds, index_pos, &mut self.cache)
     }
 
     /// Embed token ids through the tower's own table.
     pub fn embed(&self, ids: &Tensor) -> CandleResult<Tensor> {
-        self.model.embed(ids)
+        if let Some(t) = self.ours.as_ref() {
+            return t.embed(ids);
+        }
+        let Some(m) = self.model.as_ref() else {
+            return Err(candle_core::Error::Msg("no text tower loaded".into()));
+        };
+        m.embed(ids)
     }
 
     /// Greedy generation from a prefilled embedding sequence.

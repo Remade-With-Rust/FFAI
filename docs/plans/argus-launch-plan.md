@@ -3139,3 +3139,90 @@ workers that are already saturating memory bandwidth — and there, the
 allocator's reuse of a hot 50 MB buffer appears to beat writing over a cold
 one. That is a hypothesis, not a finding; what is measured is only that the
 change loses.
+
+
+---
+
+## 26. VISION, ROUND 4 — the 15 % is not there, and here is the proof (2026-08-27)
+
+The target was 15 % off vision. **It was not found, and the arithmetic says it
+is not available on candle without changing numerics or the model.** What
+follows is the evidence, because a bound is worth more than another attempt.
+
+### The wall clock cannot adjudicate this on this box
+
+Across one session the vision stage read **8172, 9380, 10327, 12029, 13815,
+14382 ms** for the same code — a **1.76x spread**. Every verdict below is
+therefore a deterministic count, a bit-equality, or an interleaved in-process
+A/B with a sign test.
+
+### The deterministic baseline
+
+```
+matmul        3635 GFLOP        ~5.5 s @ 660 GF/s
+elementwise   3864 M visits     ~1.5 s
+vectorised transc 2567 M        ~1.0 s
+memory moved  88.3 GB           ~8.8 s @ 10 GB/s   <- binds
+layout copies 425 (5.24 GB)
+```
+
+### Why 15 % cannot come from the matmuls
+
+| vision matmul | GF/s | % of this box's 660 peak |
+|---|---:|---:|
+| qkv `1024x768@768x2304` | 543 | 82 % |
+| fc1 `1024x768@768x3072` | 486 | 74 % |
+| fc2 `1024x3072@3072x768` | 570 | 86 % |
+| **q.k^T x12 `1024x64@64x1024`** | **210** | **32 %** |
+
+Matmul is **77 % of a layer at ~85 % of peak**, so a *perfect* GEMM is worth
+`0.77 x 15 % = 12 %` of vision. Only `q.k^T` has real headroom, and its 32 %
+is the `k = 64` reduction depth — inherent to the head dimension, not to
+candle.
+
+### Five refutations, each with a fair instrument
+
+1. **In-place softmax — 0.92x, 6/16.** The two earlier attempts made our
+   kernel respect `kernels_parallel` (serial during the tile loop) and compared
+   it against `candle_nn::ops::softmax_last_dim`, whose CPU path is
+   `src.par_chunks(..).zip(dst.par_chunks_mut(..))` — **unconditionally
+   parallel, with no equivalent flag**. So those verdicts were about the
+   handicap. Re-run with both parallel, ours still loses: candle's is simply a
+   better kernel. Sixth refutation, first fair one. The arm was **removed**
+   rather than kept — an unreachable kernel is a defect, and
+   `softmax_last_dim_ours` already carries this refutation.
+2. **Tile batching — 0.87-0.88x, bit-identical.** Newly answerable at all (the
+   `packed.i((.., 0))` striding bug blocked every batch > 1). The isolated GEMM
+   ceiling of 1.17-1.70x on the linears is real and is *outweighed*: batch-4
+   attention holds 4x the score matrix and thrashes cache.
+3. **Head-split attention — 0.90x by kv-group, 0.63x per head, 0/12.** The
+   seventh attention refutation, and on a different axis from the six
+   query-chunked ones, so it also disproves the standing *explanation* (k/v
+   re-reads).
+4. **Rayon-scheduled tiles — 1.00x, 3/5.** `run_tower` spawns raw OS threads
+   outside rayon while candle's ops use the global pool, so up to
+   `workers + 24` threads share 24 cores with no common scheduler. Putting the
+   tiles on the pool changes nothing.
+5. **Pre-transposed weights — no effect**, re-confirmed at vision shapes.
+
+### What IS left, stated honestly
+
+The layer is 77 % matmul near peak, and the remaining 23 % is candle's softmax
+(better than ours), two matmul-I/O terms, and ~19 MB/layer of genuinely
+required layout movement. The levers that remain are not engineering ones:
+
+* **f16 scores** — halves the 50 MB score matrix and therefore the largest
+  memory term, but changes numerics and must be re-gated on token equality.
+* **A fused attention kernel** written against candle's storage directly
+  rather than composed from GEMM calls — the only thing that removes the score
+  matrix, and the reason PyTorch's SDPA wins this stage.
+* **A faster GEMM** — bounded at 12 % of vision, and only `q.k^T` has room.
+
+### ⚠ An rustc ICE, self-inflicted
+
+The gate failed once with `STATUS_STACK_BUFFER_OVERRUN` compiling an example.
+Not a code error: killing `rustc` processes to quiesce the box for measurement
+corrupts artifacts, which this workspace has recorded before.
+`cargo clean -p ffai-argus` fixed it. **Quiescing a box for measurement and
+keeping its build cache are in tension**; prefer waiting for `rustc` to exit
+over killing it.

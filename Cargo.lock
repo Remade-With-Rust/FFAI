@@ -1163,6 +1163,7 @@ dependencies = [
  "ffai-media",
  "ffai-models",
  "rayon",
+ "rusty_alloc-api",
  "serde",
  "serde_json",
  "tokenizers 0.23.1",
@@ -3827,9 +3828,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
-version = "0.3.2"
+version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5f05c71564028538eeba6e2e08c6a512267e85e6a1584beca45c6f26af8651b"
+checksum = "037acdf50c589a85578aab74b848346b353c94db19ddad4774bfa925afbd128a"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
@@ -3837,9 +3838,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc-api"
-version = "0.3.2"
+version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65c8c3ecd14424ba980d005147945a745836dea7798d447c419e08be1f79e88f"
+checksum = "02301ad2df6159237fe4087334310d48543aa626ae9b89410b38a9d5b77e04e0"
 dependencies = [
  "rusty_alloc",
 ]
