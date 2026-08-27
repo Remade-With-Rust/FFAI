@@ -9,11 +9,27 @@ everything swappable by name. No Python runtime, no gated weights.
 by default", and that is not true. `candle-core` takes `tokenizers` as a
 hard, non-optional dependency with `features = ["onig"]`, so `onig_sys`
 compiles Oniguruma — a C regex engine — into every FFai build that touches
-candle. It is build-time only, it produces an ordinary binary with no runtime
-dependency, and it disappears on `wasm32` where candle target-gates the
-dependency out. `tokenizers` marks `onig` optional and ships a pure-Rust
-alternative, so removing it is one feature line upstream in candle rather
-than a redesign here. Stated at the top because a supply-chain claim that is
+candle. It produces an ordinary self-contained binary with no external runtime
+dependency, and it disappears on `wasm32`, where candle target-gates it out
+(verified against the deliverables, not the manifest: `cargo tree -p ffai-wasm
+-p ffai-carmenta-wasm --target wasm32-unknown-unknown -i onig_sys` finds
+nothing).
+
+**A second correction, 2026-08-27:** this page previously added "it is
+build-time only, with no runtime component". That is wrong for every engine
+that tokenizes. `tokenizers` aliases `SysRegex` to onig whenever the feature is
+on, `pre_tokenizers/byte_level.rs` holds a `static RE: LazyLock<SysRegex>` with
+the GPT-2 splitting pattern, and our checkpoints select it — SmolVLM's
+`tokenizer.json` uses `Sequence[Digits, ByteLevel]` with `use_regex: true`. So
+Oniguruma's C **executes on every tokenization call** in Argus, Mercury and
+Carmenta. It remains genuinely dead weight for **Diana**, which never
+references tokenizers at all.
+
+`tokenizers` marks `onig` optional and ships a pure-Rust `fancy-regex`
+alternative — the one our own wasm build already uses — so removing it is one
+feature line upstream in candle rather than a redesign here. It cannot be done
+from this workspace: Cargo does not let a consumer strip a feature a transitive
+dependency selected. Stated at the top because a supply-chain claim that is
 wrong is worse than one that is qualified.
 
 **And one that went the other way.** The `ffai` binary's global allocator was
@@ -508,8 +524,10 @@ default.
 takes `tokenizers` with `features = ["onig"]`, so `onig_sys` compiles
 Oniguruma — but **Diana never references tokenizers**, and candle uses it in
 one file (`quantized/tokenizer.rs`) detection never enters. Link-time dead
-weight, not runtime cost. It is build-time only and vanishes on wasm32, where
-candle target-gates it out.
+weight, not runtime cost: it is linked into the binary but **never executed** on
+any detection path. (That is specific to Diana — the engines that tokenize DO
+call into it; see the correction at the top of this page.) It vanishes on
+wasm32, where candle target-gates it out.
 
 Measured on a hash-pinned **450-image** COCO holdout, CPU only, every tier in
 both geometries, each graded against the reference declaring the same
@@ -928,8 +946,10 @@ default.
 takes `tokenizers` with `features = ["onig"]`, so `onig_sys` compiles
 Oniguruma — but **Diana never references tokenizers**, and candle uses it in
 one file (`quantized/tokenizer.rs`) detection never enters. Link-time dead
-weight, not runtime cost. It is build-time only and vanishes on wasm32, where
-candle target-gates it out.
+weight, not runtime cost: it is linked into the binary but **never executed** on
+any detection path. (That is specific to Diana — the engines that tokenize DO
+call into it; see the correction at the top of this page.) It vanishes on
+wasm32, where candle target-gates it out.
 
 Measured on a hash-pinned **450-image** COCO holdout, CPU only, every tier in
 both geometries, each graded against the reference declaring the same

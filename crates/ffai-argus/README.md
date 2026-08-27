@@ -62,17 +62,33 @@ on **token equality with the Python reference**:
 |---|---|---|
 | Runtime to deploy | Python, PyTorch, ~GB of wheels | **one binary** |
 | Caption vs the reference | *is* the reference | **byte-identical** |
-| C/C++ in the tree | PyTorch, its BLAS, ONNX | candle's `onig_sys`, **build-time only**, gated off wasm |
+| C/C++ in the tree | PyTorch, its BLAS, ONNX | candle's `onig_sys` — **linked and called at runtime**, gated off wasm |
 | `unsafe` in this crate | — | `unsafe_code = "warn"`; the few sites are `#[target_feature]` kernels and `spare_capacity_mut` |
 | Steady-state footprint | 1852 MiB | **1309 MiB — 0.71×** |
 | Licence | mixed | **MIT OR Apache-2.0** |
 | Determinism | by convention | **unseeded sampling is unrepresentable in the type** |
 
-<sub>**On the C claim, precisely:** `candle-core` takes `tokenizers` with
-`features = ["onig"]` as a hard dependency, so `onig_sys` compiles a C regex
-engine into every *native* candle build. It is build-time only, with no runtime
-component, and it is target-gated out on `wasm32`. We will not tell you there is
-"no C in the tree" for a candle build — there is, and this is where it is.</sub>
+<sub>**On the C claim, precisely:** `candle-core` declares
+`tokenizers` with `features = ["onig"]` under
+`cfg(not(target_arch = "wasm32"))`, so `onig_sys` compiles Oniguruma — a C regex
+engine — into every *native* build. **This is a runtime component, not merely a
+build-time one**, and an earlier version of this note said otherwise. The chain
+is checkable: `tokenizers/src/utils/mod.rs` makes `SysRegex` an alias for onig
+whenever that feature is on; `pre_tokenizers/byte_level.rs` holds a
+`static RE: LazyLock<SysRegex>` carrying the GPT-2 splitting pattern; and this
+checkpoint's `tokenizer.json` uses `Sequence[Digits, ByteLevel]` with
+`use_regex: true`. So Oniguruma's C runs on **every tokenization call**.<br><br>
+It **cannot be removed from our side.** Cargo does not let a consumer strip a
+feature that a transitive dependency selected, so no combination of settings in
+this workspace drops it while `candle-core 0.11` is the tensor spine — the routes
+are a `[patch]`ed fork of candle-core or an upstream change making the regex
+backend selectable (`tokenizers` already ships a pure-Rust `fancy-regex`
+alternative, which is exactly what the wasm build uses). **On `wasm32` there is
+no onig**, verified against the actual deliverables rather than the manifest:
+`cargo tree -p ffai-wasm -p ffai-carmenta-wasm --target wasm32-unknown-unknown
+-i onig_sys` finds nothing.<br><br>
+We will not tell you there is "no C in the tree" for a native candle build —
+there is, it executes, and this is where it is.</sub>
 
 ### Performance
 
