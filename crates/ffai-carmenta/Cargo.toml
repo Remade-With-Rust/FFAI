@@ -58,10 +58,10 @@ tokenizers = { workspace = true }
 # `--cfg getrandom_backend` that .cargo/config.toml supplies; it errors if
 # either half is missing. Arrives here through tokenizers -> ahash.
 getrandom = { version = "0.3", features = ["wasm_js"] }
-# `onig` is Oniguruma, a C regex engine: there is no `cc` for wasm32, and a C
-# dependency is not something this house ships anyway. `unstable_wasm` swaps it
-# for fancy-regex, which is pure Rust.
-tokenizers = { version = "0.23", default-features = false, features = ["unstable_wasm"] }
+# The workspace uses `rusty-expressions` everywhere now -- Oniguruma remade in
+# pure Rust -- so wasm32 no longer needs a DIFFERENT engine from native, only
+# the getrandom plumbing that the `wasm` feature carries.
+tokenizers = { version = "0.23", default-features = false, features = ["rusty-expressions", "wasm"] }
 
 [dev-dependencies]
 # Examples only, never the library. `ffai-cli` sets mimalloc as its global
