@@ -165,6 +165,7 @@ performing a single permutation; composed into one pass it is bit-identical.
 | bias fusion (4 sites) | **1.133x** tower, **1.172x** on a whole caption in production config |
 | deferred normalisation | **1.058x**, reproduced exactly twice |
 | fused pixel shuffle | **1.92x** on the op, **bit-identical** |
+| patch embedding's two adds fused | 2 single-threaded passes -> 1 parallel, **bit-identical** |
 | **composed** | **1.199x — 16.6 % off the vision tower** |
 
 The arithmetic closes: after fusing, the four projections measure **fc1 563,

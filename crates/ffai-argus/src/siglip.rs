@@ -172,10 +172,13 @@ impl Embeddings {
         let mut xs = cols.matmul(&self.w_flat)?;
         let c_out = self.w_flat.dim(1)?;
         crate::cost::matmul(1, (b * seq) as u64, k as u64, c_out as u64);
-        if let Some(bias) = self.bias.as_ref() {
-            xs = xs.broadcast_add(bias)?;
-        }
-        let out = xs.reshape((b, seq, c_out))?.broadcast_add(&self.position)?;
+        // Both adds in ONE parallel pass — see [`EmbedAddOp`]. candle's two
+        // chained `broadcast_add`s are single-threaded and each traverses the
+        // whole activation; this is the same defect the projections had.
+        let out = match self.bias.as_ref() {
+            Some(bias) => xs.apply_op3_no_bwd(bias, &self.position, &EmbedAddOp)?,
+            None => xs.reshape((b, seq, c_out))?.broadcast_add(&self.position)?,
+        };
         crate::cost::elementwise((c_out * seq) as u64, 2, 1);
         Ok(out)
     }
@@ -1094,6 +1097,110 @@ static ATTN_BLOCK: std::sync::LazyLock<std::sync::atomic::AtomicUsize> =
 /// [`kernels_parallel`] for sibling modules with their own kernels.
 pub(crate) fn kernels_parallel_for_probe() -> bool {
     kernels_parallel()
+}
+
+/// `(x + bias) + position` — the patch embedding's two adds as ONE pass.
+///
+/// # The same trap, at the one site nobody looked at
+///
+/// The embedding finishes with two chained `broadcast_add`s:
+///
+/// ```text
+/// xs  = xs.broadcast_add(bias)          // (1024, 768), 3.1 MB
+/// out = xs.reshape(..).broadcast_add(position)   // again, 3.1 MB
+/// ```
+///
+/// Both are candle binary ops, so both are **single-threaded**, and each reads
+/// and writes the whole activation. That is the identical defect this round
+/// found in `candle_nn::Linear` — and it was hiding here too, in a stage the
+/// per-op profile reports as a flat "patch+pos embed" with no interior.
+///
+/// One pass instead of two: **3.1 MB of read+write deleted per tile, 53 MB per
+/// caption**, and the surviving pass is parallel where both originals were not.
+///
+/// # Bit-identical, deliberately
+///
+/// The additions happen in the same ORDER the two chained ops used —
+/// `(x + bias) + position`, never `x + (bias + position)`. Folding
+/// `bias + position` into one tensor at load time would be tempting (it is what
+/// the attention-scale fold does, and it would delete the bias entirely), but
+/// float addition is not associative, so that changes rounding. Here the order
+/// is preserved, so this kernel is **exactly** equal to the pair it replaces
+/// and its test asserts equality, not a tolerance.
+struct EmbedAddOp;
+
+impl candle_core::CustomOp3 for EmbedAddOp {
+    fn name(&self) -> &'static str {
+        "ffai-embed-add"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+        s3: &candle_core::CpuStorage,
+        l3: &candle_core::Layout,
+    ) -> CandleResult<(candle_core::CpuStorage, candle_core::Shape)> {
+        let (x, bias, pos) = match (s1, s2, s3) {
+            (
+                candle_core::CpuStorage::F32(x),
+                candle_core::CpuStorage::F32(b),
+                candle_core::CpuStorage::F32(p),
+            ) => (x, b, p),
+            _ => candle_core::bail!("ffai-embed-add expects f32"),
+        };
+        let (Some((xo, xe)), Some((bo, be)), Some((po, pe))) = (
+            l1.contiguous_offsets(),
+            l2.contiguous_offsets(),
+            l3.contiguous_offsets(),
+        ) else {
+            candle_core::bail!("ffai-embed-add expects contiguous inputs")
+        };
+        let (x, bias, pos) = (&x[xo..xe], &bias[bo..be], &pos[po..pe]);
+        let hidden = bias.len();
+        if hidden == 0 || x.len() % hidden != 0 || pos.len() % hidden != 0 {
+            candle_core::bail!("ffai-embed-add: {} elems, hidden {hidden}", x.len());
+        }
+        let seq = pos.len() / hidden;
+        let rows = x.len() / hidden;
+        if seq == 0 || rows % seq != 0 {
+            candle_core::bail!("ffai-embed-add: {rows} rows not a multiple of seq {seq}");
+        }
+        let b = rows / seq;
+        let n = x.len();
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        {
+            let spare = out.spare_capacity_mut();
+            // SAFETY: exactly `n` contiguous `MaybeUninit<f32>`; the row chunks
+            // partition `[0, n)` and each writes every element it owns before
+            // `set_len` publishes them. `f32` has no invalid bit patterns.
+            #[allow(unsafe_code)]
+            let dst: &mut [f32] =
+                unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+            crate::cost::elementwise(n as u64, 2, 1);
+            let row = |(i, (o, xr)): (usize, (&mut [f32], &[f32]))| {
+                // `pos` repeats every `seq` rows, once per batch element.
+                let pr = &pos[(i % seq) * hidden..(i % seq + 1) * hidden];
+                for (((o, &v), &bz), &pz) in o.iter_mut().zip(xr).zip(bias).zip(pr) {
+                    // Same association as the two chained broadcast_adds.
+                    *o = (v + bz) + pz;
+                }
+            };
+            if kernels_parallel() {
+                dst.par_chunks_mut(hidden).zip(x.par_chunks(hidden)).enumerate().for_each(row);
+            } else {
+                dst.chunks_mut(hidden).zip(x.chunks(hidden)).enumerate().for_each(row);
+            }
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((candle_core::CpuStorage::F32(out), (b, seq, hidden).into()))
+    }
 }
 
 /// A row-sum side channel for [`SoftmaxExpInplace`].
@@ -2084,6 +2191,38 @@ mod tests {
                 .expect("max")
                 .to_scalar::<f32>()
                 .expect("scalar")
+        }
+
+
+        /// The fused embedding add against the two chained `broadcast_add`s.
+        ///
+        /// `assert_eq!` on every element, not a tolerance. The kernel adds in
+        /// the SAME order the two ops did — `(x + bias) + position` — so there
+        /// is no reassociation to excuse a difference. Folding
+        /// `bias + position` at load time would have been faster still and is
+        /// exactly what this test would have caught: it changes the rounding.
+        #[test]
+        fn embed_add_matches_the_two_broadcast_adds() {
+            let d = Device::Cpu;
+            for (b, seq, hidden) in [(1usize, 16usize, 8usize), (2, 9, 5), (1, 4, 3)] {
+                let xs = Tensor::rand(-2.0f32, 2.0, (b * seq, hidden), &d).expect("rand");
+                let bias = Tensor::rand(-1.0f32, 1.0, hidden, &d).expect("rand");
+                let pos = Tensor::rand(-1.0f32, 1.0, (seq, hidden), &d).expect("rand");
+
+                let fused = xs.apply_op3_no_bwd(&bias, &pos, &EmbedAddOp).expect("fused");
+                let want = xs
+                    .broadcast_add(&bias)
+                    .expect("bias")
+                    .reshape((b, seq, hidden))
+                    .expect("reshape")
+                    .broadcast_add(&pos)
+                    .expect("pos");
+
+                assert_eq!(fused.dims(), want.dims(), "shape at b{b} seq{seq}");
+                let got = fused.flatten_all().expect("f").to_vec1::<f32>().expect("v");
+                let want = want.flatten_all().expect("f").to_vec1::<f32>().expect("v");
+                assert_eq!(got, want, "embed add at b{b} seq{seq} hidden{hidden}");
+            }
         }
 
         #[test]

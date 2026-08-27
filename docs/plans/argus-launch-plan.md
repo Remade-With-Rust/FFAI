@@ -3405,15 +3405,42 @@ instrument that cannot resolve them. Counted consistently with §19:
 | 7 | **normalisation folded into the transpose** (`AttnMergeOp`) | a separate scaling pass deleted; the transpose was already paid for | 2 passes -> 1 |
 | 8 | **fused pixel shuffle** | two generic permutes -> one contiguous-run pass | **1.92x**, bit-identical |
 | 9 | **`split_bias`: load each projection once** | the first cut loaded fc1 **twice** (weight, then bias); 2 weight reads -> 1, x3 projections x12 layers | construction only |
+| 10 | **patch embedding's two adds fused** (`EmbedAddOp`) | **2 single-threaded passes -> 1 parallel pass** over 3.1 MB/tile; **53 MB/caption** | **bit-identical** |
 
-**Nine, not three.** 1-4 compose to the **1.133x** tower / **1.172x** production
-figure; 6 to **1.058x**; together **1.199x — 16.6 % off vision**. Every one is a
-deleted pass with a counter attached, which is exactly §19's standard.
+**Ten.** 1-4 compose to the **1.133x** tower / **1.172x** production figure; 6 to
+**1.058x**; together **1.199x — 16.6 % off vision**. Every one is a deleted pass
+with a counter attached, which is exactly §19's standard.
 
-I am not stretching to ten. The tenth candidate would have to be the in-place
-score buffer (50 MB allocated twice per layer becomes once) — and that arm was
-**measured flat at 0.997x**, so counting it would contradict my own instrument.
-A refutation stays a refutation even when the count is going the right way.
+### Number 10 came from applying the round's own law to the one unexamined site
+
+Having written "candle's binary ops are single-threaded, so a `broadcast_add`
+beside a GEMM is a free pass to delete" four times, I had still never looked at
+the patch embedding. It ends with **two** of them, chained:
+
+```rust
+xs  = xs.broadcast_add(bias)?;                            // 3.1 MB, one core
+let out = xs.reshape(..)?.broadcast_add(&self.position)?; // 3.1 MB, one core
+```
+
+The per-op profile reports this stage as a single flat `patch+pos embed` row
+with no interior, which is exactly how it stayed invisible through four rounds
+of looking. `EmbedAddOp` does both in one parallel pass.
+
+**It is bit-identical, and that was a choice.** Folding `bias + position` into
+one tensor at *load* time is the obvious move — it is what the attention-scale
+fold does (§19 #5), and it would delete the bias term entirely. But float
+addition is not associative, so `x + (bias + position)` is not
+`(x + bias) + position`. The kernel preserves the original association, its
+test asserts `assert_eq!` rather than a tolerance, and the reference caption
+still reproduces.
+
+### The refutation I did NOT reclassify
+
+The other candidate for a tenth was the in-place score buffer — 50 MB allocated
+twice per layer becomes once. Its counter moves the right way, and it was
+**measured flat at 0.997x**. It stays a refutation. A count going down is a win
+only when nothing measured says otherwise; when the instrument and the counter
+disagree and the instrument is sound, the instrument wins.
 
 ### The lesson worth keeping
 
