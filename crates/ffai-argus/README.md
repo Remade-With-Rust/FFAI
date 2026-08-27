@@ -49,9 +49,11 @@ on **token equality with the Python reference**:
   than the clip. The checkpoint is an image model with no published video row,
   so **no video quality number is invented** — what is gated is the *track*
   ([below](#video)).
-- **1.20x off PyTorch end to end**, measured stage by stage on an idle
-  machine, with the remaining deficit concentrated in the vision tower — down
-  from 2.4x across three optimization rounds ([below](#performance)).
+- **1.20x off PyTorch end to end** — down from 2.4x — measured stage by stage
+  on an idle machine, with the deficit concentrated in the vision tower. That
+  tower has since taken a further **1.199x (16.6 %)**, verified by interleaved
+  in-process A/B against a null arm; the end-to-end figure has not been
+  re-measured since, and is not extrapolated here ([below](#performance)).
 - **Deterministic by default.** Greedy decode, reproducible with no seed.
   Sampling is opt-in and *requires* `--seed`: passing `--temperature` alone is
   refused rather than quietly returning a caption you cannot reproduce.
@@ -127,6 +129,57 @@ The patch conv is stride-16 with a 16x16 kernel, so it is non-overlapping and
 its im2col is a pure permutation — the matmul form is the same operation, and
 it emits `(seq, hidden)` directly, deleting the transpose that followed.
 
+**Round 4-5: the bias was the polluter.** The vision tower's four projections
+measured **288-347 GF/s in situ against 486-570 isolated**, and three rounds of
+looking for the cause blamed cache pollution and weight residency — both
+refuted. The actual cause was that an isolated benchmark calls `matmul`, while
+the tower calls `candle_nn::Linear::forward`, which is `matmul` **plus
+`broadcast_add(bias)`** — and candle's binary ops are single-threaded. That
+second pass re-reads and re-writes the whole activation between every GEMM,
+evicting its working set.
+
+Each bias was folded into an op that already touches every element, so the add
+is free against traffic already being paid:
+
+| bias | folded into | |
+|---|---|---|
+| qkv `768->2304` | the packed q/k/v permute-copy | `PackedQkvOp` |
+| fc1 `768->3072` | GELU | `GeluBiasOp` |
+| fc2 / out_proj | the residual add | `AddBiasOp` |
+
+Two more passes went the same way. Softmax's normalising divide **commutes with
+the matmul that follows it** —
+
+```text
+out[i,:] = SUM_j (p[i,j] / S_i) * v[j,:]  ==  (SUM_j p[i,j] * v[j,:]) / S_i
+```
+
+— so it moved past `attn.v` to divide the `(1024, 64)` output instead of the
+`(1024, 1024)` scores: **786 K divides instead of 12.6 M**, and one 100 MB round
+trip per layer deleted. And the connector's pixel shuffle, written as
+reshape/transpose/reshape/transpose, was **two** generic strided permutes
+performing a single permutation; composed into one pass it is bit-identical.
+
+| win | measured |
+|---|---:|
+| bias fusion (4 sites) | **1.133x** tower, **1.172x** on a whole caption in production config |
+| deferred normalisation | **1.058x**, reproduced exactly twice |
+| fused pixel shuffle | **1.92x** on the op, **bit-identical** |
+| **composed** | **1.199x — 16.6 % off the vision tower** |
+
+The arithmetic closes: after fusing, the four projections measure **fc1 563,
+fc2 537, qkv 535, out_proj 500 GF/s** — the isolated rate, recovered.
+
+**Every verdict here is an interleaved in-process A/B**, both arms in one
+binary, alternated ABBA, against a null arm that computes the identical tensor.
+This box has read the same code at 8172 and 14382 ms in one session — a **1.76x
+spread** — so a before/after across two builds measures the afternoon, not the
+change. The tower A/Bs were then re-run through the real engine
+(`examples/caption_arm_ab`), because on 24 cores `tile_workers` yields 6 and the
+engine sets `kernels_parallel = workers*6 <= cores` = **false**: production runs
+six concurrent towers with these kernels *serial*, which is not the regime a
+single-tower benchmark measures.
+
 **Where a caption's time goes now** (`examples/stage_split`, min of 3, warm):
 
 | stage | time | share |
@@ -143,37 +196,66 @@ faster, not because vision got slower. It is now the whole of the remaining gap
 to PyTorch, and its layer is **77 % matmul** — the elementwise phase that
 dominated round 1 has been spent.
 
-**What was tried and refuted**, so it is not re-litigated: replacing candle's
-softmax (four attempts, reverted permanently), **blocked/flash attention (five
-attempts** — the last using candle's own GEMM, which removes the "the earlier
-one hand-rolled the kernel" objection; it degrades monotonically to 0.46x
-because every block re-reads all of k and v), pre-transposing k, fusing q/k/v
-under GQA, and pre-transposing weights at load. Tile batching is bounded at
-~10 % of vision and peaks at **chunk 4, not 8 or 17**. All measured, all in
+**What was tried and refuted**, so it is not re-litigated. The vision tower has
+now rejected the same idea eight ways, and the pattern is worth more than any
+individual result: **candle's GEMM rewards large batched calls, and every
+attempt to trade call size for cache locality has lost.**
+
+| attempt | verdict |
+|---|---:|
+| attention one head at a time (4.2 MB of scores, not 50.3) | **0.888x** |
+| blocked attention, query-block 128 / 256 / 512 | **0.732 / 0.824 / 0.926x** |
+| dropping a vestigial batch-of-1 to rank 3 | **0.74x** |
+| batching all 17 tiles into one pass | **1.09x** — needs to beat the **2.50x** tile concurrency it would replace |
+| a hand-written blocked `q.k^T` kernel | **0.11x** — 9x slower than candle |
+| pre-transposing k so the GEMM gets a contiguous operand | 1.02x, under the noise floor |
+| `kernels_parallel = 1` in production | **0.932x** — the shipped `workers*6 <= cores` heuristic is right |
+| tile workers 4 / 8 against the shipped 6 | **0.932 / 0.999x** |
+
+Also refuted: replacing candle's softmax (four attempts), fusing q/k/v under
+GQA, pre-transposing weights at load, and a fused LayerNorm — which moves a
+third of candle's bytes and is still not faster, because the 3.1 MB activation
+fits L3, so candle's extra passes are cache hits rather than trips to DRAM. It
+read **1.09x on one run and 0.89x on the next**; a verdict that changes sign
+between runs is the instrument, not the code.
+
+The wins all have the opposite shape: none restructures a GEMM, each deletes a
+**separate pass** beside one. All measured, all in
 [`docs/plans/argus-launch-plan.md`](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/plans/argus-launch-plan.md)
-§19-23.
+§19-27.
 
 **The four-gate verdict** (`ffai bench vlm`, both arms, no SKIPs — a skipped
-gate is never a pass), measured **2026-08-21**:
+gate is never a pass), measured **2026-08-21** — see the note below, which
+qualifies every row of it:
 
 | gate | verdict | measured |
 |---|---|---|
 | correctness | **PASS** | caption byte-identical; 32/32 tokens |
 | quality | **PASS** | exact tie — **49/50** answers byte-identical on OCRBench-lite |
 | footprint | **PASS** | 1309 MiB steady vs 1852 — **0.71x** |
-| speed | **FAIL** | 0.08 vs 0.20 it/s — **2.4x slower** |
+| speed | **PENDING RE-RUN** | last corrected run **0.969x**; the stale 2.4x below is not current |
 
-> ⚠ **This table has not been re-run, and its speed row is stale.** The 2.4x
-> predates all three optimization rounds; the stage-by-stage measurement at the
-> top of this section puts the current gap at **1.20x**, but that is a
-> different instrument over one image rather than the harness's 50-item corpus,
-> and it does not re-decide the gate. The re-run is blocked by a defect in the
-> harness, not in the engine: `ffai bench vlm`'s engine arm **segfaults on the
-> second `describe_image` call in one process**. Argus itself is not implicated
-> — captioning three differently-shaped images in one process succeeds, and the
-> crash reproduces with the vision changes reverted and with candle's text
-> tower forced. Tracked as a known defect; the speed row stays FAIL until a
-> harness run replaces it.
+> ⚠ **The speed row is stale and is not the current number.** The 2.4x predates
+> every optimization round on this page.
+>
+> **The harness defect that used to block the re-run is fixed.** It was reported
+> here as "`ffai bench vlm`'s engine arm segfaults on the second
+> `describe_image` call in one process". The cause was never in Argus: it was
+> `rusty_alloc` **0.3.2**, whose use-after-free reproduces on every target. On
+> the pinned **1.1.4** the engine arm now completes a **50-item corpus in one
+> process** without crashing. Six further harness defects were fixed alongside
+> it — an unpinned token budget that had the engine generating 256 tokens
+> against the reference's 64, a speed gate that compared across *different
+> decode configs*, no warm-up (so model load landed inside run 1), and a
+> per-item timer that excluded image decode in our favour.
+>
+> A corrected 50-item run put the speed gate at **0.969x** and end-to-end at
+> **1.013x** with quality an exact tie — but that run predates the round 4-5
+> vision work above, and re-running it on a quiet box is pending. **Neither
+> 2.4x nor 0.969x is this build's number**, and rather than print an
+> extrapolation, this row stays marked pending until the harness has actually
+> been re-run. The vision figures above are separately measured and stand on
+> their own instruments.
 
 **Verdicts here are counters, not milliseconds, wherever that is possible.**
 This box has been measured at a **4x spread** within one configuration, so

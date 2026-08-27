@@ -53,7 +53,7 @@
 //! identical to the reference's.
 
 use candle_core::{IndexOp, Module, Result as CandleResult, Tensor, D};
-use candle_nn::{Conv2d, Conv2dConfig, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Conv2dConfig, LayerNorm, Linear, VarBuilder};
 use candle_transformers::models::siglip::VisionConfig;
 use rayon::prelude::*;
 
@@ -181,6 +181,54 @@ impl Embeddings {
     }
 }
 
+/// Per-op wall clock inside the REAL tower, behind `FFAI_VIS_PROFILE=1`.
+///
+/// Every vision figure this crate has is from `vision_ops_now`, which prices
+/// ops in ISOLATION. That is not the same measurement: for the text tower the
+/// isolated sum came to 940 ms against a real 1283 ms forward, and the missing
+/// 18 % was allocation churn nobody had priced. The vision tower has never had
+/// the equivalent check, so its 77 %-matmul decomposition is an assumption.
+pub mod prof {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    static ACC: Mutex<Vec<(&'static str, f64)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn on() -> bool {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static C: AtomicU8 = AtomicU8::new(u8::MAX);
+        match C.load(Ordering::Relaxed) {
+            u8::MAX => {
+                let v = std::env::var("FFAI_VIS_PROFILE").is_ok_and(|x| x == "1");
+                C.store(u8::from(v), Ordering::Relaxed);
+                v
+            }
+            v => v == 1,
+        }
+    }
+
+    pub(crate) fn add(name: &'static str, t: Instant) {
+        if !on() {
+            return;
+        }
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        if let Ok(mut v) = ACC.lock() {
+            match v.iter_mut().find(|(n, _)| *n == name) {
+                Some(e) => e.1 += ms,
+                None => v.push((name, ms)),
+            }
+        }
+    }
+
+    /// Drain accumulated per-op totals, largest first.
+    #[must_use]
+    pub fn take() -> Vec<(&'static str, f64)> {
+        let mut v = ACC.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        v
+    }
+}
+
 /// One encoder layer, with the attention projections fused.
 struct Layer {
     ln1: LayerNorm,
@@ -189,11 +237,23 @@ struct Layer {
     /// Same arithmetic, a third of the calls, and one pass over `xs` instead of
     /// three. The q third additionally carries the attention scale (see
     /// [`Layer::load`]), so the `(1,12,1024,1024)` scaling pass disappears.
+    /// **Bias-free.** Its bias lives in `qkv_bias`, folded into the packed
+    /// permute-copy that follows — see [`PackedQkvOp`].
     qkv: Linear,
+    qkv_bias: Option<Tensor>,
+    /// **Bias-free.** Its bias lives in `out_bias`, folded into the residual
+    /// add that follows — see [`AddBiasOp`].
     out_proj: Linear,
+    out_bias: Option<Tensor>,
     ln2: LayerNorm,
+    /// **Bias-free.** Its bias lives in `fc1_bias` and is folded into the
+    /// GELU that follows — see [`GeluBiasOp`].
     fc1: Linear,
+    fc1_bias: Option<Tensor>,
+    /// **Bias-free.** Its bias lives in `fc2_bias`, folded into the residual
+    /// add that follows — see [`AddBiasOp`].
     fc2: Linear,
+    fc2_bias: Option<Tensor>,
     heads: usize,
     head_dim: usize,
 }
@@ -228,13 +288,24 @@ impl Layer {
             Some(Tensor::cat(&[&bq, &bk, &bv], 0)?.contiguous()?),
         );
 
+        // Load each projection ONCE, then split the bias off to the kernel
+        // downstream that already reads and writes every element.
+        let (qkv, qkv_bias) = split_bias(qkv);
+        let out = split_bias(candle_nn::linear(hidden, hidden, attn.pp("out_proj"))?);
+        let fc1 = split_bias(candle_nn::linear(hidden, cfg.intermediate_size, vb.pp("mlp.fc1"))?);
+        let fc2 = split_bias(candle_nn::linear(cfg.intermediate_size, hidden, vb.pp("mlp.fc2"))?);
+
         Ok(Self {
             ln1: candle_nn::layer_norm(hidden, cfg.layer_norm_eps, vb.pp("layer_norm1"))?,
             qkv,
-            out_proj: candle_nn::linear(hidden, hidden, attn.pp("out_proj"))?,
+            qkv_bias,
+            out_proj: out.0,
+            out_bias: out.1,
             ln2: candle_nn::layer_norm(hidden, cfg.layer_norm_eps, vb.pp("layer_norm2"))?,
-            fc1: candle_nn::linear(hidden, cfg.intermediate_size, vb.pp("mlp.fc1"))?,
-            fc2: candle_nn::linear(cfg.intermediate_size, hidden, vb.pp("mlp.fc2"))?,
+            fc1: fc1.0,
+            fc1_bias: fc1.1,
+            fc2: fc2.0,
+            fc2_bias: fc2.1,
             heads,
             head_dim,
         })
@@ -248,10 +319,14 @@ impl Layer {
         let hdim = self.head_dim as u64;
 
         // ---- attention -----------------------------------------------------
-        let normed = self.ln1.forward(xs)?;
+        let _t = std::time::Instant::now();
+        let normed = layer_norm(&self.ln1, xs)?;
+        prof::add("ln1+ln2", _t);
         // layer_norm: one pass, plus the mean/var reduction over the same data.
         crate::cost::elementwise(bu * sq * hd, 2, 1);
+        let _t = std::time::Instant::now();
         let qkv = self.qkv.forward(&normed)?;
+        prof::add("qkv linear", _t);
         crate::cost::matmul(1, bu * sq, hd, 3 * hd);
         // ONE copy, not three.
         //
@@ -282,11 +357,26 @@ impl Layer {
         // `packed.i(0)` selects a whole contiguous block for any `b`. Same
         // single copy, same volume, and identical at `b == 1` — which is what
         // the existing oracle gates confirm.
-        let packed = qkv
-            .reshape((b, seq, 3, self.heads, self.head_dim))?
-            .permute((2, 0, 3, 1, 4))?
-            .contiguous()?;
+        let _t = std::time::Instant::now();
+        // One pass: the permute-copy the layout forces anyway, with `qkv`'s
+        // bias added on the way through instead of in a pass of its own.
+        let packed = match (self.qkv_bias.as_ref(), fuse_bias()) {
+            (Some(bias), true) => qkv.apply_op2_no_bwd(
+                bias,
+                &PackedQkvOp { heads: self.heads, head_dim: self.head_dim },
+            )?,
+            (bias, _) => {
+                let qkv = match bias {
+                    Some(bias) => qkv.broadcast_add(bias)?,
+                    None => qkv,
+                };
+                qkv.reshape((b, seq, 3, self.heads, self.head_dim))?
+                    .permute((2, 0, 3, 1, 4))?
+                    .contiguous()?
+            }
+        };
         crate::cost::copy(3 * bu * sq * hd);
+        prof::add("packed permute+copy", _t);
         let q = packed.i(0)?;
         let k = packed.i(1)?;
         let v = packed.i(2)?;
@@ -297,10 +387,124 @@ impl Layer {
         // `b*heads*seq*seq` elements, reading and writing the 50 MB score
         // matrix — per layer, per tile. That is the deterministic statement of
         // the win; no stopwatch involved.
+        if head_attn() {
+            // One head at a time: 4.2 MB of scores instead of 50.3 MB, so
+            // softmax and attn.v read what q.k^T just wrote, still in cache.
+            let mut per_head = Vec::with_capacity(self.heads);
+            for h in 0..self.heads {
+                let _t = std::time::Instant::now();
+                let qh = q.i((.., h))?;
+                let kh = k.i((.., h))?;
+                let scores = qh.matmul(&kh.t()?)?;
+                prof::add("q.k^T", _t);
+                crate::cost::matmul(bu, sq, hdim, sq);
+                let _t = std::time::Instant::now();
+                let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+                prof::add("softmax", _t);
+                crate::cost::elementwise(bu * sq * sq, 2, 1);
+                crate::cost::transcendental_vector(bu * sq * sq);
+                let _t = std::time::Instant::now();
+                per_head.push(probs.matmul(&v.i((.., h))?)?);
+                crate::cost::matmul(bu, sq, sq, hdim);
+                prof::add("attn.v", _t);
+            }
+            let _t = std::time::Instant::now();
+            let attn = Tensor::stack(&per_head, 1)?
+                .transpose(1, 2)?
+                .reshape((b, seq, hidden))?;
+            crate::cost::copy(bu * sq * hd);
+            prof::add("attn transpose", _t);
+            return self.finish_attention(residual, &attn, bu, sq, hd);
+        }
+
+        // ---- blocked attention ---------------------------------------------
+        let blk = attn_block();
+        if late_normalize() && blk > 0 && blk < seq {
+            let kt = k.t()?;
+            let mut outs: Vec<Tensor> = Vec::with_capacity(seq.div_ceil(blk));
+            let mut sums_parts: Vec<Tensor> = Vec::with_capacity(outs.capacity());
+            let mut start = 0usize;
+            while start < seq {
+                let len = blk.min(seq - start);
+                // `narrow` on the seq axis leaves each head's slice strided
+                // relative to the whole tensor, and candle's matmul wants a
+                // contiguous lhs. The copy is `heads * len * head_dim` — 786 KB
+                // at BLOCK 256 — against the 12.6 MB of scores it makes
+                // cache-resident.
+                let _t = std::time::Instant::now();
+                let q_blk = q.narrow(2, start, len)?.contiguous()?;
+                let scores = q_blk.matmul(&kt)?;
+                crate::cost::matmul(bu * heads, len as u64, hdim, sq);
+                prof::add("q.k^T", _t);
+
+                let _t = std::time::Instant::now();
+                let rows = (bu * heads) as usize * len;
+                let mut sums = vec![0f32; rows];
+                scores.inplace_op1(&SoftmaxExpInplace {
+                    sums: RowSums(sums.as_mut_ptr()),
+                    rows,
+                })?;
+                crate::cost::transcendental_vector(bu * heads * len as u64 * sq);
+                prof::add("softmax", _t);
+                sums_parts.push(Tensor::from_vec(sums, (b, self.heads, len), scores.device())?);
+
+                let _t = std::time::Instant::now();
+                outs.push(scores.matmul(&v)?);
+                crate::cost::matmul(bu * heads, len as u64, sq, hdim);
+                prof::add("attn.v", _t);
+                start += len;
+            }
+            let _t = std::time::Instant::now();
+            let attn = Tensor::cat(&outs, 2)?;
+            let sums = Tensor::cat(&sums_parts, 2)?;
+            let attn = attn.apply_op2_no_bwd(
+                &sums,
+                &AttnMergeOp { heads: self.heads, head_dim: self.head_dim },
+            )?;
+            crate::cost::copy(bu * sq * hd);
+            prof::add("attn transpose", _t);
+            return self.finish_attention(residual, &attn, bu, sq, hd);
+        }
+
+        let _t = std::time::Instant::now();
         let scores = q.matmul(&k.t()?)?;
+        prof::add("q.k^T", _t);
         crate::cost::matmul(bu * heads, sq, hdim, sq);
         // candle's, measured 11x faster than ours here — see the note above.
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+        let _t = std::time::Instant::now();
+        // Deferred normalisation: exp in place, keep the row totals, and let
+        // `AttnMergeOp` divide the (seq, head_dim) OUTPUT instead of the
+        // (seq, seq) scores. One 100 MB round trip per layer deleted.
+        if late_normalize() {
+            let rows = (bu * heads * sq) as usize;
+            let mut sums = vec![0f32; rows];
+            scores.inplace_op1(&SoftmaxExpInplace {
+                sums: RowSums(sums.as_mut_ptr()),
+                rows,
+            })?;
+            prof::add("softmax", _t);
+            let sums = Tensor::from_vec(sums, (b, self.heads, seq), scores.device())?;
+            let _t = std::time::Instant::now();
+            let attn = scores.matmul(&v)?;
+            crate::cost::matmul(bu * heads, sq, sq, hdim);
+            prof::add("attn.v", _t);
+            let _t = std::time::Instant::now();
+            let attn = attn.apply_op2_no_bwd(
+                &sums,
+                &AttnMergeOp { heads: self.heads, head_dim: self.head_dim },
+            )?;
+            crate::cost::copy(bu * sq * hd);
+            prof::add("attn transpose", _t);
+            return self.finish_attention(residual, &attn, bu, sq, hd);
+        }
+
+        let probs = if inplace_softmax() {
+            scores.inplace_op1(&SoftmaxInplace)?;
+            scores
+        } else {
+            candle_nn::ops::softmax_last_dim(&scores)?
+        };
+        prof::add("softmax", _t);
         // softmax: read the row for the max, read again for exp+sum, write.
         crate::cost::elementwise(bu * heads * sq * sq, 2, 1);
         // candle's softmax uses a vectorized exp (~2.7 G/s measured), NOT the
@@ -308,28 +512,79 @@ impl Layer {
         // weight predicted 32 s of transcendentals against a ~16 s tower —
         // the arithmetic failing to close is what exposed the conflation.
         crate::cost::transcendental_vector(bu * heads * sq * sq);
-        let attn = probs
-            .matmul(&v)?
-            .transpose(1, 2)?
-            .reshape((b, seq, hidden))?;
+        let _t = std::time::Instant::now();
+        let attn = probs.matmul(&v)?;
         crate::cost::matmul(bu * heads, sq, sq, hdim);
+        prof::add("attn.v", _t);
+        let _t = std::time::Instant::now();
+        let attn = attn.transpose(1, 2)?.reshape((b, seq, hidden))?;
         crate::cost::copy(bu * sq * hd);
-        let out = self.out_proj.forward(&attn)?;
+        prof::add("attn transpose", _t);
+        self.finish_attention(residual, &attn, bu, sq, hd)
+    }
+
+    /// Everything after attention: out_proj, the residual, and the whole MLP.
+    ///
+    /// Shared verbatim by both attention arms ([`head_attn`]) so the toggle can
+    /// only change HOW the scores are computed, never what happens to them
+    /// afterwards. An A/B whose two arms have separately-maintained tails is
+    /// measuring the tails too.
+    fn finish_attention(
+        &self,
+        residual: &Tensor,
+        attn: &Tensor,
+        bu: u64,
+        sq: u64,
+        hd: u64,
+    ) -> CandleResult<Tensor> {
+        let (b, seq, hidden) = attn.dims3()?;
+        let _ = (b, seq, hidden);
+        let _t = std::time::Instant::now();
+        let out = self.out_proj.forward(attn)?;
+        prof::add("out_proj", _t);
         crate::cost::matmul(1, bu * sq, hd, hd);
-        let xs = (residual + out)?;
+        let _t = std::time::Instant::now();
+        // `out_proj`'s bias rides along here rather than costing its own pass.
+        let xs = match (self.out_bias.as_ref(), fuse_bias()) {
+            (Some(bias), true) => residual.apply_op3_no_bwd(&out, bias, &AddBiasOp)?,
+            (Some(bias), false) => (residual + out.broadcast_add(bias)?)?,
+            (None, _) => (residual + out)?,
+        };
+        prof::add("residual+bias", _t);
         crate::cost::elementwise(bu * sq * hd, 2, 1);
 
         // ---- mlp -----------------------------------------------------------
         let residual = &xs;
-        let normed = self.ln2.forward(&xs)?;
+        let _t = std::time::Instant::now();
+        let normed = layer_norm(&self.ln2, &xs)?;
+        prof::add("ln1+ln2", _t);
         crate::cost::elementwise(bu * sq * hd, 2, 1);
         let inter = self.fc1.weight().dims()[0] as u64;
+        let _t = std::time::Instant::now();
         let h = self.fc1.forward(&normed)?;
+        prof::add("fc1", _t);
         crate::cost::matmul(1, bu * sq, hd, inter);
-        let h = gelu_tanh_par(&h)?;
+        let _t = std::time::Instant::now();
+        // The bias `fc1` no longer applies is folded in here, where the data
+        // is already being read and written.
+        let h = match (self.fc1_bias.as_ref(), fuse_bias()) {
+            (Some(b), true) => h.apply_op2_no_bwd(b, &GeluBiasOp)?,
+            (Some(b), false) => gelu_tanh_par(&h.broadcast_add(b)?)?,
+            (None, _) => gelu_tanh_par(&h)?,
+        };
+        prof::add("gelu+bias", _t);
+        let _t = std::time::Instant::now();
         let down = self.fc2.forward(&h)?;
+        prof::add("fc2", _t);
         crate::cost::matmul(1, bu * sq, inter, hd);
-        let out = (residual + down)?;
+        let _t = std::time::Instant::now();
+        // Likewise `fc2`'s.
+        let out = match (self.fc2_bias.as_ref(), fuse_bias()) {
+            (Some(bias), true) => residual.apply_op3_no_bwd(&down, bias, &AddBiasOp)?,
+            (Some(bias), false) => (residual + down.broadcast_add(bias)?)?,
+            (None, _) => (residual + down)?,
+        };
+        prof::add("residual+bias", _t);
         crate::cost::elementwise(bu * sq * hd, 2, 1);
         Ok(out)
     }
@@ -563,6 +818,921 @@ const fn have_avx2_cached() -> bool {
     false
 }
 
+
+/// LayerNorm as ONE fused parallel pass. **REFUTED — off by default.**
+///
+/// # What candle actually runs
+///
+/// `candle_nn::LayerNorm::forward` is built from whole-tensor ops:
+///
+/// ```text
+/// mean = x.sum_keepdim(-1) / n
+/// x    = x.broadcast_sub(mean)
+/// var  = x.sqr().sum_keepdim(-1) / n
+/// x    = x.broadcast_div((var + eps).sqrt())
+/// out  = x.broadcast_mul(weight).broadcast_add(bias)
+/// ```
+///
+/// Every line there is a **separate full traversal** of the activation, and
+/// every `broadcast_*` is one of candle's **single-threaded** binary ops. For
+/// `(1, 1024, 768)` that is six passes over 3.1 MB, twice per layer, twenty-four
+/// times per tile — around **450 MB of traffic per tile** to apply two numbers
+/// per column.
+///
+/// # What this does instead
+///
+/// Two traversals of each row, in one parallel kernel: one to accumulate the
+/// sum and sum-of-squares together, one to write
+/// `(x - mean) * inv_std * weight + bias`. The row is 768 floats — 3 KB — so
+/// the second traversal reads it straight back out of L1.
+///
+/// # Numerics
+///
+/// Variance comes from `E[x^2] - E[x]^2` rather than candle's two-pass
+/// `E[(x - mean)^2]`. That is the standard fused formulation and is what makes
+/// the single accumulation possible; it is float-close, not bit-identical, so
+/// it is gated on the reference caption. `eps` is added before the square root
+/// exactly as candle does, and the variance is clamped at zero so cancellation
+/// in the subtraction can never reach `sqrt` with a negative argument.
+///
+/// # The refutation
+///
+/// It moves a THIRD of candle's bytes and is still not faster. Measured at the
+/// op level (`examples/kernel_micro_ab`, best-of-30 ABBA) it read **1.09x on one
+/// run and 0.89x on the next** — a verdict that changes sign between runs is the
+/// instrument talking, not the code, and the honest reading is parity.
+///
+/// The premise was wrong: the activation is 3.1 MB and fits L3, so candle's
+/// "six passes" are cache hits, not six trips to DRAM. Pass-counting only
+/// predicts cost when the data does not fit — which is exactly why the same
+/// reasoning DID pay on the 12.6 MB bias adds and the 50 MB score matrix.
+///
+/// Off by default: it is a wash on speed and it changes the variance
+/// formulation, so it is risk without return. Kept as a measurable arm.
+struct LayerNormOp {
+    eps: f64,
+}
+
+impl candle_core::CustomOp3 for LayerNormOp {
+    fn name(&self) -> &'static str {
+        "ffai-layer-norm"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+        s3: &candle_core::CpuStorage,
+        l3: &candle_core::Layout,
+    ) -> CandleResult<(candle_core::CpuStorage, candle_core::Shape)> {
+        let (x, w, b) = match (s1, s2, s3) {
+            (
+                candle_core::CpuStorage::F32(x),
+                candle_core::CpuStorage::F32(w),
+                candle_core::CpuStorage::F32(b),
+            ) => (x, w, b),
+            _ => candle_core::bail!("ffai-layer-norm expects f32"),
+        };
+        let (Some((xo, xe)), Some((wo, we)), Some((bo, be))) = (
+            l1.contiguous_offsets(),
+            l2.contiguous_offsets(),
+            l3.contiguous_offsets(),
+        ) else {
+            candle_core::bail!("ffai-layer-norm expects contiguous inputs")
+        };
+        let (x, w, b) = (&x[xo..xe], &w[wo..we], &b[bo..be]);
+        let width = w.len();
+        if width == 0 || b.len() != width || x.len() % width != 0 {
+            candle_core::bail!("ffai-layer-norm: {} not divisible by {width}", x.len());
+        }
+        let n = x.len();
+        let inv_n = 1.0f64 / width as f64;
+        let eps = self.eps;
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        {
+            let spare = out.spare_capacity_mut();
+            // SAFETY: exactly `n` contiguous `MaybeUninit<f32>`; the row chunks
+            // partition `[0, n)` and each writes every element it owns before
+            // `set_len` publishes them. `f32` has no invalid bit patterns.
+            #[allow(unsafe_code)]
+            let dst: &mut [f32] =
+                unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+            // One reduction pass and one write pass over each row.
+            crate::cost::elementwise(n as u64, 2, 1);
+            let row = |(o, r): (&mut [f32], &[f32])| {
+                // EIGHT independent accumulator pairs, not one.
+                //
+                // f32 addition is not associative, so a single running total is
+                // a serial dependency chain LLVM may not reorder into lanes —
+                // it emitted scalar code and the kernel ran at ~6 GB/s despite
+                // moving a third of candle's bytes. Eight partial sums break
+                // the chain into eight independent ones, which vectorise, and
+                // they are also MORE accurate than the serial fold: error grows
+                // with the depth of the chain, and this cuts it eightfold.
+                const L: usize = 8;
+                let (mut sum, mut sq) = ([0.0f32; L], [0.0f32; L]);
+                let mut it = r.chunks_exact(L);
+                for c in &mut it {
+                    for i in 0..L {
+                        sum[i] += c[i];
+                        sq[i] += c[i] * c[i];
+                    }
+                }
+                for &v in it.remainder() {
+                    sum[0] += v;
+                    sq[0] += v * v;
+                }
+                let (sum, sq) = (
+                    f64::from(sum.iter().sum::<f32>()),
+                    f64::from(sq.iter().sum::<f32>()),
+                );
+                let mean = sum * inv_n;
+                // Clamped: catastrophic cancellation in E[x^2] - E[x]^2 can
+                // produce a tiny negative, and sqrt of that is NaN.
+                let var = (sq * inv_n - mean * mean).max(0.0);
+                let inv_std = 1.0 / (var + eps).sqrt();
+                let (mean, inv_std) = (mean as f32, inv_std as f32);
+                for (((o, &v), &w), &b) in o.iter_mut().zip(r).zip(w).zip(b) {
+                    *o = (v - mean) * inv_std * w + b;
+                }
+            };
+            if kernels_parallel() {
+                dst.par_chunks_mut(width).zip(x.par_chunks(width)).for_each(row);
+            } else {
+                dst.chunks_mut(width).zip(x.chunks(width)).for_each(row);
+            }
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((candle_core::CpuStorage::F32(out), l1.shape().clone()))
+    }
+}
+
+/// Use the fused LayerNorm? `FFAI_ARGUS_FUSED_LN=0` uses candle's chain.
+fn fused_ln() -> bool {
+    FUSED_LN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Toggle the fused LayerNorm, returning the previous setting.
+pub fn set_fused_ln(on: bool) -> bool {
+    FUSED_LN.swap(on, std::sync::atomic::Ordering::Relaxed)
+}
+
+static FUSED_LN: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(arm_flag("FFAI_ARGUS_FUSED_LN", false))
+    });
+
+/// Apply `ln` to `x`, through [`LayerNormOp`] when it is enabled.
+fn layer_norm(ln: &LayerNorm, x: &Tensor) -> CandleResult<Tensor> {
+    match (fused_ln(), ln.bias()) {
+        (true, Some(bias)) => x.apply_op3_no_bwd(ln.weight(), bias, &LayerNormOp { eps: ln.eps() }),
+        _ => ln.forward(x),
+    }
+}
+
+/// [`layer_norm`], exposed so `examples/kernel_micro_ab` can price it against
+/// candle's at the op level — where the effect is 100 % of what the clock sees.
+pub fn layer_norm_for_probe(ln: &LayerNorm, x: &Tensor) -> CandleResult<Tensor> {
+    layer_norm(ln, x)
+}
+
+/// Read a `0`/`1` override for one of the vision arms, defaulting to `default`.
+///
+/// The arm statics were originally plain `AtomicBool`s with hardcoded defaults,
+/// while their doc comments advertised environment overrides. That is a
+/// documentation bug of the worst kind — an operator reading the docs would set
+/// the variable, see no change, and conclude the arm does not matter. Seeding
+/// from the environment on first touch makes the documented control real, and
+/// `LazyLock` keeps the setters working for interleaved A/Bs.
+fn arm_flag(key: &str, default: bool) -> bool {
+    match std::env::var(key).ok().as_deref() {
+        Some("1") => true,
+        Some("0") => false,
+        _ => default,
+    }
+}
+
+/// Query-row block size for attention. **REFUTED — 0 (unblocked) by default.**
+///
+/// # The 50 MB that fits nowhere
+///
+/// Batched over 12 heads the score matrix is `(1, 12, 1024, 1024)` = **50.3 MB**,
+/// against roughly 32 MB of L3. It does not fit, so `q.k^T` writes it to DRAM,
+/// softmax reads and rewrites it from DRAM, and `attn.v` reads it from DRAM
+/// again: **200 MB of round trip per layer, 2.4 GB per tile**. Softmax measures
+/// ~16 GB/s across that traffic, which is main memory, so most of the attention
+/// block's cost is the distance rather than the arithmetic.
+///
+/// Blocking the QUERY rows shrinks the live scores to `(1, 12, BLOCK, 1024)` —
+/// 12.6 MB at `BLOCK = 256`, comfortably L3-resident. Softmax and `attn.v` then
+/// read what `q.k^T` just wrote, while it is still in cache.
+///
+/// # Why this is not the per-head attempt again
+///
+/// Looping the HEADS was refuted at 0.888x: candle's batched matmul
+/// parallelises across the batch dimension, and the heads *are* that dimension,
+/// so looping them starved the gemm of threads. This splits the query rows and
+/// keeps all 12 heads batched in every gemm — a `(1, 12, 256, 64)` lhs still
+/// offers 12 independent gemms to divide. It buys the locality the per-head
+/// version wanted without paying what the per-head version paid.
+///
+/// The FLOP count is identical either way; only the distance the bytes travel
+/// changes. `FFAI_ARGUS_ATTN_BLOCK` tunes it; 0 restores the unblocked path.
+///
+/// # The refutation, and the law it completes
+///
+/// Swept against the unblocked path on an interleaved A/B whose two arms are
+/// **bit-identical** (`max |on - off| = 0`):
+///
+/// | BLOCK | speedup |
+/// |---:|---:|
+/// | 128 | **0.732x** |
+/// | 256 | **0.824x** |
+/// | 512 | **0.926x** |
+/// | 0 (unblocked) | 1.000x — the winner |
+///
+/// Monotonic: the closer the block gets to "no blocking", the better it does.
+/// The locality is real — 12.6 MB is L3-resident where 50.3 MB is not — but
+/// candle re-packs the k panel once per block, and the gemm's efficiency falls
+/// with `M`. Both costs exceed what the cache buys.
+///
+/// This is the THIRD independent refutation of the same idea, and together they
+/// are a law worth stating: **candle's gemm rewards large batched calls, and
+/// restructuring attention to improve locality has lost every time.** Looping
+/// heads lost 0.888x, blocking query rows loses here, and even dropping a
+/// vestigial leading batch-of-1 to rank 3 lost 0.74x. The 200 MB per layer is
+/// real traffic, and it is still cheaper than any arrangement that avoids it.
+fn attn_block() -> usize {
+    ATTN_BLOCK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set the attention query-block size, returning the previous value.
+///
+/// An atomic rather than a one-shot read because the A/B has to flip it
+/// BETWEEN forwards inside a single process — two processes measured minutes
+/// apart on this box differ by more than the effect being tested.
+pub fn set_attn_block(n: usize) -> usize {
+    ATTN_BLOCK.swap(n, std::sync::atomic::Ordering::Relaxed)
+}
+
+static ATTN_BLOCK: std::sync::LazyLock<std::sync::atomic::AtomicUsize> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicUsize::new(
+            std::env::var("FFAI_ARGUS_ATTN_BLOCK")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0),
+        )
+    });
+
+/// [`kernels_parallel`] for sibling modules with their own kernels.
+pub(crate) fn kernels_parallel_for_probe() -> bool {
+    kernels_parallel()
+}
+
+/// A row-sum side channel for [`SoftmaxExpInplace`].
+///
+/// # Safety
+///
+/// The pointer addresses `rows` initialised `f32`s owned by the caller for the
+/// whole call. Row `r` of the score matrix is written by exactly one
+/// `par_chunks_mut` chunk — the chunks partition the buffer, so no two threads
+/// ever address the same `r`, and each `r` is written exactly once. That is the
+/// entire aliasing argument; nothing reads the buffer until `inplace_op1`
+/// returns and the rayon join has completed.
+struct RowSums(*mut f32);
+
+// SAFETY: writes are partitioned one row per chunk, as argued on `RowSums`.
+#[allow(unsafe_code)]
+unsafe impl Sync for RowSums {}
+// SAFETY: as above.
+#[allow(unsafe_code)]
+unsafe impl Send for RowSums {}
+
+/// `exp(x - rowmax)` in place, WITHOUT the normalising divide, handing the row
+/// sums back through `sums`.
+///
+/// # The pass this deletes
+///
+/// A softmax is three passes over its input: find the row max, write
+/// `exp(x - max)` and total it, then divide every element by that total. On
+/// vision attention the input is **50.3 MB**, so that third pass reads and
+/// writes 100 MB per layer to perform 12.6 M divides.
+///
+/// But softmax feeds straight into `attn.v`, and the divide commutes with it:
+///
+/// ```text
+/// out[i,:] = SUM_j (p[i,j] / S_i) * v[j,:]  ==  (SUM_j p[i,j] * v[j,:]) / S_i
+/// ```
+///
+/// So the normalisation can be applied to the OUTPUT instead — `(1024, 64)` per
+/// head rather than `(1024, 1024)`. That is **786 K divides instead of 12.6 M**,
+/// and one whole 100 MB round trip per layer deleted: **20 GB per caption**.
+/// [`AttnMergeOp`] performs it inside the transpose the layer already pays for,
+/// so it costs nothing at all.
+///
+/// # Numerics
+///
+/// `exp(x - max) <= 1` and the row sum is at least 1 (the max element
+/// contributes `exp(0) = 1`), so no term can overflow and the divisor can never
+/// be zero or subnormal. Deferring the divide changes the rounding — it is the
+/// same rescaling flash-attention performs — so this is float-close, not
+/// bit-identical, and is gated on the reference caption.
+struct SoftmaxExpInplace {
+    sums: RowSums,
+    rows: usize,
+}
+
+impl candle_core::InplaceOp1 for SoftmaxExpInplace {
+    fn name(&self) -> &'static str {
+        "ffai-softmax-exp-inplace"
+    }
+
+    fn cpu_fwd(
+        &self,
+        storage: &mut candle_core::CpuStorage,
+        layout: &candle_core::Layout,
+    ) -> CandleResult<()> {
+        let candle_core::CpuStorage::F32(x) = storage else {
+            candle_core::bail!("ffai-softmax-exp-inplace expects f32")
+        };
+        let Some((o, e)) = layout.contiguous_offsets() else {
+            candle_core::bail!("ffai-softmax-exp-inplace expects a contiguous input")
+        };
+        let width = *layout.shape().dims().last().expect("rank >= 1");
+        if width == 0 || (e - o) != self.rows * width {
+            candle_core::bail!("ffai-softmax-exp-inplace: {} vs {}x{width}", e - o, self.rows);
+        }
+        crate::cost::elementwise((e - o) as u64, 1, 1);
+        crate::cost::transcendental_vector((e - o) as u64);
+        let sums = &self.sums;
+        x[o..e].par_chunks_mut(width).enumerate().for_each(|(r, row)| {
+            let mut max = f32::NEG_INFINITY;
+            for &v in row.iter() {
+                max = max.max(v);
+            }
+            let mut sum = 0.0f32;
+            for v in row.iter_mut() {
+                let ex = (*v - max).exp();
+                *v = ex;
+                sum += ex;
+            }
+            // SAFETY: `r < self.rows` because the chunks partition a buffer of
+            // exactly `rows * width`, and this chunk is the only writer of `r`.
+            #[allow(unsafe_code)]
+            unsafe {
+                *sums.0.add(r) = sum;
+            }
+        });
+        Ok(())
+    }
+}
+
+/// `(b, heads, seq, hd) -> (b, seq, heads*hd)`, dividing each row by its
+/// softmax total on the way through.
+///
+/// The layer already pays for this transpose — it is the copy that turns the
+/// per-head attention output back into a hidden vector. Folding
+/// [`SoftmaxExpInplace`]'s deferred normalisation into it makes the divide
+/// free: the reciprocal is computed once per `(b, h, s)` and applied to that
+/// row's `head_dim` contiguous outputs.
+struct AttnMergeOp {
+    heads: usize,
+    head_dim: usize,
+}
+
+impl candle_core::CustomOp2 for AttnMergeOp {
+    fn name(&self) -> &'static str {
+        "ffai-attn-merge"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+    ) -> CandleResult<(candle_core::CpuStorage, candle_core::Shape)> {
+        let (a, sums) = match (s1, s2) {
+            (candle_core::CpuStorage::F32(a), candle_core::CpuStorage::F32(b)) => (a, b),
+            _ => candle_core::bail!("ffai-attn-merge expects f32"),
+        };
+        let (Some((ao, ae)), Some((so, se))) = (l1.contiguous_offsets(), l2.contiguous_offsets())
+        else {
+            candle_core::bail!("ffai-attn-merge expects contiguous inputs")
+        };
+        let (a, sums) = (&a[ao..ae], &sums[so..se]);
+        let (heads, hd) = (self.heads, self.head_dim);
+        let hidden = heads * hd;
+        let n = ae - ao;
+        if hidden == 0 || n % hidden != 0 || sums.len() * hd != n {
+            candle_core::bail!("ffai-attn-merge: {n} elems, {} sums", sums.len());
+        }
+        let dims = l1.shape().dims4()?;
+        let (b, seq) = (dims.0, dims.2);
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        {
+            let spare = out.spare_capacity_mut();
+            // SAFETY: exactly `n` contiguous `MaybeUninit<f32>`. The loop writes
+            // one output row of `hidden` elements per `(b, seq)` pair and those
+            // tile `[0, n)` exactly, so all are initialised before `set_len`.
+            #[allow(unsafe_code)]
+            let dst: &mut [f32] =
+                unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+            crate::cost::elementwise(n as u64, 1, 1);
+            let row = |(i, o): (usize, &mut [f32])| {
+                let (bb, s) = (i / seq, i % seq);
+                for h in 0..heads {
+                    let inv = 1.0 / sums[(bb * heads + h) * seq + s];
+                    let src = (bb * heads + h) * seq * hd + s * hd;
+                    for (o, &v) in o[h * hd..(h + 1) * hd].iter_mut().zip(&a[src..src + hd]) {
+                        *o = v * inv;
+                    }
+                }
+            };
+            if kernels_parallel() {
+                dst.par_chunks_mut(hidden).enumerate().for_each(row);
+            } else {
+                dst.chunks_mut(hidden).enumerate().for_each(row);
+            }
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((candle_core::CpuStorage::F32(out), (b, seq, hidden).into()))
+    }
+}
+
+/// Defer softmax's divide past `attn.v`? `FFAI_ARGUS_LATE_NORM=0` divides early.
+fn late_normalize() -> bool {
+    LATE_NORM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Toggle deferred normalisation, returning the previous setting.
+pub fn set_late_normalize(on: bool) -> bool {
+    LATE_NORM.swap(on, std::sync::atomic::Ordering::Relaxed)
+}
+
+static LATE_NORM: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(arm_flag("FFAI_ARGUS_LATE_NORM", true))
+    });
+
+/// Softmax over the last axis, written back into the SAME buffer.
+///
+/// # What this deletes
+///
+/// `candle_nn::ops::softmax_last_dim` allocates its output. For vision
+/// attention that output is `(1, 12, 1024, 1024)` — **50.3 MB** — so each layer
+/// asks the allocator for 50 MB, touches 12 800 fresh pages, and frees the
+/// 50 MB it just read. Across 12 layers and 17 tiles that is **10.3 GB** of
+/// allocate-fault-free doing no arithmetic.
+///
+/// In place, softmax reads and writes the buffer `q.k^T` has just written,
+/// which is still as warm as it will ever be.
+///
+/// # Why the earlier attempt lost, and what changed
+///
+/// A previous in-place softmax measured 0.92x and was removed. It was not a
+/// fair fight: that kernel respected [`kernels_parallel`] and ran SERIAL, while
+/// candle's `softmax_last_dim` is unconditionally parallel
+/// (`par_chunks`/`par_chunks_mut`). This one is parallel over rows on the same
+/// terms.
+///
+/// # Numerics
+///
+/// Identical to candle's, op for op and in the same order: row max, then
+/// `exp(x - max)` into the destination, then a sum of those, then a divide. The
+/// only difference is that the destination and the source are the same memory.
+struct SoftmaxInplace;
+
+impl candle_core::InplaceOp1 for SoftmaxInplace {
+    fn name(&self) -> &'static str {
+        "ffai-softmax-inplace"
+    }
+
+    fn cpu_fwd(
+        &self,
+        storage: &mut candle_core::CpuStorage,
+        layout: &candle_core::Layout,
+    ) -> CandleResult<()> {
+        let candle_core::CpuStorage::F32(x) = storage else {
+            candle_core::bail!("ffai-softmax-inplace expects f32")
+        };
+        let Some((o, e)) = layout.contiguous_offsets() else {
+            candle_core::bail!("ffai-softmax-inplace expects a contiguous input")
+        };
+        let width = *layout.shape().dims().last().expect("rank >= 1");
+        if width == 0 {
+            return Ok(());
+        }
+        let rows = &mut x[o..e];
+        crate::cost::elementwise((e - o) as u64, 2, 1);
+        crate::cost::transcendental_vector((e - o) as u64);
+        let row = |r: &mut [f32]| {
+            let mut max = f32::NEG_INFINITY;
+            for &v in r.iter() {
+                max = max.max(v);
+            }
+            let mut sum = 0.0f32;
+            for v in r.iter_mut() {
+                let e = (*v - max).exp();
+                *v = e;
+                sum += e;
+            }
+            let inv = 1.0 / sum;
+            for v in r.iter_mut() {
+                *v *= inv;
+            }
+        };
+        // Unconditionally parallel — candle's is, and an arm that is serial
+        // where its reference is parallel measures the threading, not the idea.
+        rows.par_chunks_mut(width).for_each(row);
+        Ok(())
+    }
+}
+
+/// Is the in-place softmax on? `FFAI_ARGUS_INPLACE_SOFTMAX=0` uses candle's.
+fn inplace_softmax() -> bool {
+    INPLACE_SOFTMAX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Toggle the in-place softmax, returning the previous setting.
+pub fn set_inplace_softmax(on: bool) -> bool {
+    INPLACE_SOFTMAX.swap(on, std::sync::atomic::Ordering::Relaxed)
+}
+
+static INPLACE_SOFTMAX: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(arm_flag("FFAI_ARGUS_INPLACE_SOFTMAX", true))
+    });
+
+/// Run attention ONE HEAD AT A TIME? **REFUTED — off by default.**
+///
+/// # The 50 MB that never needed to exist
+///
+/// Batched over all heads, `q.k^T` produces `(1, 12, 1024, 1024)` — **50.3 MB**
+/// — and softmax allocates a second one. Nothing in cache survives that: the
+/// scores are written to DRAM, read back by softmax, written again, and read a
+/// third time by `attn.v`. It shows up in the profile as the only two matmuls
+/// below peak (`q.k^T` 210 GF/s, `attn.v` 329 GF/s, against 500-563 for the
+/// four projections).
+///
+/// One head's scores are `(1024, 1024)` — **4.2 MB**, which fits L3 comfortably.
+/// Looping the heads keeps the same FLOPs and the same output, but softmax and
+/// `attn.v` then read what `q.k^T` just wrote, while it is still hot.
+///
+/// The FLOP count is IDENTICAL either way — this moves no arithmetic, only the
+/// distance the bytes travel.
+///
+/// # The refutation
+///
+/// It measured **0.888x min / 0.925x median** — decisively SLOWER — on an
+/// interleaved 12-sample ABBA A/B whose two arms agreed to 1e-6
+/// (`examples/vision_arm_ab head_attn`).
+///
+/// The premise was right and the conclusion inverted. candle's batched matmul
+/// **parallelises across the batch dimension**, and for `(1, 12, 1024, 1024)`
+/// that dimension *is* the 12 heads. Looping them hands the gemm a single
+/// `(1024, 64) @ (64, 1024)` at a time, whose `k = 64` reduction gives the
+/// threads far less to divide. The cache locality is real; the parallelism it
+/// costs is worth more.
+///
+/// Kept as a toggle rather than deleted so the refutation stays measurable —
+/// and because it is the null arm for anything else that touches this path.
+fn head_attn() -> bool {
+    HEAD_ATTN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Toggle per-head attention, returning the previous setting. See [`head_attn`].
+pub fn set_head_attn(on: bool) -> bool {
+    HEAD_ATTN.swap(on, std::sync::atomic::Ordering::Relaxed)
+}
+
+static HEAD_ATTN: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(arm_flag("FFAI_ARGUS_HEAD_ATTN", false))
+    });
+
+/// Is bias fusion on? `FFAI_ARGUS_FUSE_BIAS=0` takes the unfused path.
+///
+/// This exists so the win can be MEASURED. This box has shown a 1.76x spread
+/// for identical code, so a before/after stopwatch across two builds decides
+/// nothing. With both arms in one binary the A/B can be interleaved in a single
+/// process, where drift hits both arms equally.
+///
+/// The `false` arm is not a stub: it applies every bias the ordinary way
+/// (`broadcast_add`), so the two arms compute the same thing and the only
+/// difference is how many passes over memory it takes.
+fn fuse_bias() -> bool {
+    FUSE_BIAS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Toggle bias fusion, returning the previous setting.
+///
+/// An atomic rather than a `OnceLock` for one reason: an A/B that runs the two
+/// arms in SEPARATE PROCESSES measures the box's drift as much as the change.
+/// Flipping this between calls puts both arms in one process, interleaved, so
+/// a thermal or contention swing lands on both.
+pub fn set_fuse_bias(on: bool) -> bool {
+    FUSE_BIAS.swap(on, std::sync::atomic::Ordering::Relaxed)
+}
+
+static FUSE_BIAS: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(arm_flag("FFAI_ARGUS_FUSE_BIAS", true))
+    });
+
+/// The packed q/k/v copy, with `qkv`'s bias folded in.
+///
+/// `(b, seq, 3*hidden) -> (3, b, heads, seq, head_dim)`, adding the bias on the
+/// way through.
+///
+/// # Why this is free
+///
+/// The permute already forces a full copy — candle's `.contiguous()` reads and
+/// writes every one of `3*b*seq*hidden` elements (9.4 MB per layer). The bias
+/// add was a SECOND pass over the same 9.4 MB, and at the tower's shapes it is
+/// the most expensive of the four: **1.81 ms per layer, 369 ms per caption**.
+/// Doing the add inside the copy costs nothing — for any fixed `(g, b, h)` the
+/// bias slice is 64 contiguous floats reused for all 1024 rows, so it is read
+/// from L1 every time.
+///
+/// # Layout
+///
+/// The output is written strictly in order, so the destination stream is
+/// sequential. The source is read in `head_dim`-wide runs strided by
+/// `3*hidden` — the same access pattern the permute performed anyway.
+struct PackedQkvOp {
+    heads: usize,
+    head_dim: usize,
+}
+
+impl candle_core::CustomOp2 for PackedQkvOp {
+    fn name(&self) -> &'static str {
+        "ffai-packed-qkv"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+    ) -> CandleResult<(candle_core::CpuStorage, candle_core::Shape)> {
+        let (x, bias) = match (s1, s2) {
+            (candle_core::CpuStorage::F32(a), candle_core::CpuStorage::F32(b)) => (a, b),
+            _ => candle_core::bail!("ffai-packed-qkv expects f32"),
+        };
+        let (Some((xo, xe)), Some((bo, be))) = (l1.contiguous_offsets(), l2.contiguous_offsets())
+        else {
+            candle_core::bail!("ffai-packed-qkv expects contiguous inputs")
+        };
+        let (x, bias) = (&x[xo..xe], &bias[bo..be]);
+        let (b, seq, wide) = l1.shape().dims3()?;
+        let (heads, hd) = (self.heads, self.head_dim);
+        let hidden = heads * hd;
+        if wide != 3 * hidden || bias.len() != wide {
+            candle_core::bail!("ffai-packed-qkv: {wide} != 3*{hidden}, bias {}", bias.len());
+        }
+        let n = 3 * b * hidden * seq;
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        {
+            let spare = out.spare_capacity_mut();
+            // SAFETY: exactly `n` contiguous `MaybeUninit<f32>`. The loop below
+            // writes each of the `3*b*heads` chunks of `seq*hd` exactly once and
+            // together they tile `[0, n)`, so every element is initialized
+            // before `set_len`. `f32` has no invalid bit patterns, no drop glue.
+            #[allow(unsafe_code)]
+            let dst: &mut [f32] =
+                unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+            crate::cost::elementwise(n as u64, 1, 1);
+            // One chunk per (group, batch, head): its bias slice is 64 floats,
+            // read once into L1 and reused for all `seq` rows.
+            let chunk = |(c, o): (usize, &mut [f32])| {
+                let (g, rem) = (c / (b * heads), c % (b * heads));
+                let (bb, h) = (rem / heads, rem % heads);
+                let col = g * hidden + h * hd;
+                let bias = &bias[col..col + hd];
+                let row0 = bb * seq * wide + col;
+                for (s, o) in o.chunks_mut(hd).enumerate() {
+                    let src = &x[row0 + s * wide..row0 + s * wide + hd];
+                    for ((o, &v), &c) in o.iter_mut().zip(src).zip(bias) {
+                        *o = v + c;
+                    }
+                }
+            };
+            if kernels_parallel() {
+                dst.par_chunks_mut(seq * hd).enumerate().for_each(chunk);
+            } else {
+                dst.chunks_mut(seq * hd).enumerate().for_each(chunk);
+            }
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((candle_core::CpuStorage::F32(out), (3, b, heads, seq, hd).into()))
+    }
+}
+
+/// Split a loaded `Linear` into a bias-free one and its bias.
+///
+/// The bias is not dropped — it is handed to whichever kernel already touches
+/// every element downstream ([`GeluBiasOp`], [`AddBiasOp`], [`PackedQkvOp`]),
+/// which absorbs it for free. Loading the projection once and splitting is what
+/// keeps this from doubling the weight read at construction.
+fn split_bias(l: Linear) -> (Linear, Option<Tensor>) {
+    let bias = l.bias().cloned();
+    (Linear::new(l.weight().clone(), None), bias)
+}
+
+/// `residual + projection + bias` — three tensors, ONE pass.
+///
+/// # Why this is free
+///
+/// `out_proj` and `fc2` are each followed immediately by a residual add. Left
+/// as `Linear::forward` + `+`, that is **two** full passes over the activation:
+/// one to broadcast the bias in, one to add the residual. Both read and write
+/// every element of a 3.1 MB tensor, and candle's binary ops are single-thread.
+///
+/// Folding the bias into the residual makes it one pass. The bias vector is 768
+/// floats — it stays in L1 for the whole kernel, so the extra add is free
+/// against the memory traffic already being paid.
+///
+/// Measured at the tower's shapes, the two biases this deletes cost
+/// `1.13 + 0.23 = 1.36 ms` per layer, or **277 ms per caption** across 12
+/// layers and 17 tiles.
+///
+/// Arithmetically it is `(r + p) + b` reassociated to `r + (p + b)`. Float
+/// addition is not associative, so this is float-close, not bit-identical —
+/// gated on the reference caption, not on a byte compare.
+struct AddBiasOp;
+
+impl candle_core::CustomOp3 for AddBiasOp {
+    fn name(&self) -> &'static str {
+        "ffai-add-bias"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+        s3: &candle_core::CpuStorage,
+        l3: &candle_core::Layout,
+    ) -> CandleResult<(candle_core::CpuStorage, candle_core::Shape)> {
+        let (a, b, bias) = match (s1, s2, s3) {
+            (
+                candle_core::CpuStorage::F32(a),
+                candle_core::CpuStorage::F32(b),
+                candle_core::CpuStorage::F32(c),
+            ) => (a, b, c),
+            _ => candle_core::bail!("ffai-add-bias expects f32"),
+        };
+        let (Some((ao, ae)), Some((bo, be)), Some((co, ce))) = (
+            l1.contiguous_offsets(),
+            l2.contiguous_offsets(),
+            l3.contiguous_offsets(),
+        ) else {
+            candle_core::bail!("ffai-add-bias expects contiguous inputs")
+        };
+        let (a, b, bias) = (&a[ao..ae], &b[bo..be], &bias[co..ce]);
+        let width = bias.len();
+        if width == 0 || a.len() != b.len() || a.len() % width != 0 {
+            candle_core::bail!("ffai-add-bias: {} vs {} width {width}", a.len(), b.len());
+        }
+        let n = a.len();
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        {
+            let spare = out.spare_capacity_mut();
+            // SAFETY: exactly `n` contiguous `MaybeUninit<f32>`; every element is
+            // written below before `set_len` publishes them, and `f32` has no
+            // invalid bit patterns and no drop glue.
+            #[allow(unsafe_code)]
+            let dst: &mut [f32] =
+                unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+            crate::cost::elementwise(n as u64, 2, 1);
+            let row = |((o, x), y): ((&mut [f32], &[f32]), &[f32])| {
+                for (((o, &x), &y), &c) in o.iter_mut().zip(x).zip(y).zip(bias) {
+                    *o = x + (y + c);
+                }
+            };
+            if kernels_parallel() {
+                dst.par_chunks_mut(width)
+                    .zip(a.par_chunks(width))
+                    .zip(b.par_chunks(width))
+                    .for_each(row);
+            } else {
+                dst.chunks_mut(width).zip(a.chunks(width)).zip(b.chunks(width)).for_each(row);
+            }
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((candle_core::CpuStorage::F32(out), l1.shape().clone()))
+    }
+}
+
+/// `gelu(x + bias)` — the bias folded into the activation, for free.
+///
+/// # Why this is free
+///
+/// `candle_nn::Linear::forward` is a matmul followed by
+/// `broadcast_add(bias)`, and candle's binary ops are not parallel. Measured
+/// at the tower's own shapes, that add costs:
+///
+/// | projection | bias add | x12 layers x17 tiles |
+/// |---|---:|---:|
+/// | qkv `768->2304` | 1.81 ms | 369 ms |
+/// | **fc1 `768->3072`** | **1.75 ms** | **356 ms** |
+/// | fc2 `3072->768` | 1.13 ms | 230 ms |
+/// | out `768->768` | 0.23 ms | 47 ms |
+///
+/// — about **1.0 s of an ~18.3 s tower, 5.5 %**, spent on a pass that reads and
+/// writes 12.6 MB to add one number per column. GELU *already* reads and writes
+/// every one of those elements, so doing the add inside it costs nothing: the
+/// bias vector is 3072 floats and stays in L1 for the whole kernel.
+///
+/// It is also exactly as accurate: `gelu(x + b)` is what the two-op form
+/// computes, in the same order, with the same rounding.
+struct GeluBiasOp;
+
+impl candle_core::CustomOp2 for GeluBiasOp {
+    fn name(&self) -> &'static str {
+        "ffai-gelu-bias"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &candle_core::CpuStorage,
+        l1: &candle_core::Layout,
+        s2: &candle_core::CpuStorage,
+        l2: &candle_core::Layout,
+    ) -> CandleResult<(candle_core::CpuStorage, candle_core::Shape)> {
+        let (x, bias) = match (s1, s2) {
+            (candle_core::CpuStorage::F32(a), candle_core::CpuStorage::F32(b)) => (a, b),
+            _ => candle_core::bail!("ffai-gelu-bias expects f32"),
+        };
+        let (Some((xo, xe)), Some((bo, be))) = (l1.contiguous_offsets(), l2.contiguous_offsets())
+        else {
+            candle_core::bail!("ffai-gelu-bias expects contiguous inputs")
+        };
+        let (x, bias) = (&x[xo..xe], &bias[bo..be]);
+        let width = bias.len();
+        if width == 0 || x.len() % width != 0 {
+            candle_core::bail!("ffai-gelu-bias: {} not divisible by {width}", x.len());
+        }
+        let n = x.len();
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        {
+            let spare = out.spare_capacity_mut();
+            // SAFETY: exactly `n` contiguous `MaybeUninit<f32>`; every element
+            // is written by the loop below before `set_len` publishes them, and
+            // `f32` has no invalid bit patterns and no drop glue.
+            #[allow(unsafe_code)]
+            let dst: &mut [f32] =
+                unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+            crate::cost::elementwise(n as u64, 1, 1);
+            let row = |(o, i): (&mut [f32], &[f32])| {
+                for ((o, &v), &b) in o.iter_mut().zip(i).zip(bias) {
+                    *o = v + b;
+                }
+                #[cfg(target_arch = "x86_64")]
+                if have_avx2_cached() {
+                    // SAFETY: `have_avx2_cached()` verified avx2+fma, which is
+                    // `gelu_chunk_avx2`'s documented precondition.
+                    unsafe { gelu_chunk_avx2(o) };
+                    return;
+                }
+                gelu_chunk_scalar(o);
+            };
+            if kernels_parallel() {
+                dst.par_chunks_mut(width).zip(x.par_chunks(width)).for_each(row);
+            } else {
+                dst.chunks_mut(width).zip(x.chunks(width)).for_each(row);
+            }
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((candle_core::CpuStorage::F32(out), l1.shape().clone()))
+    }
+}
 
 /// `gelu_pytorch_tanh` as a **zero-copy** candle op.
 ///
@@ -809,11 +1979,23 @@ impl VisionTower {
     /// # Errors
     /// Propagates candle's errors.
     pub fn forward(&self, pixel_values: &Tensor) -> CandleResult<Tensor> {
+        let _t = std::time::Instant::now();
         let mut xs = self.embeddings.forward(pixel_values)?;
+        prof::add("patch+pos embed", _t);
         for layer in &self.layers {
-            xs = layer.forward(&xs)?;
+            let _t = std::time::Instant::now();
+            let next = layer.forward(&xs)?;
+            // Timed OUTSIDE the layer's own probes, so the difference between
+            // this and their sum is the layer's untimed remainder — chiefly the
+            // drop of ~165 MB of intermediates per layer. That remainder was
+            // 12 % of the tower and invisible until it was given a name.
+            prof::add("LAYER TOTAL", _t);
+            xs = next;
         }
-        self.post_ln.forward(&xs)
+        let _t = std::time::Instant::now();
+        let out = layer_norm(&self.post_ln, &xs);
+        prof::add("post_ln", _t);
+        out
     }
 }
 
@@ -878,6 +2060,141 @@ mod tests {
     }
 
     use super::*;
+
+    /// The four fused-bias kernels against the two-op form they replace.
+    ///
+    /// Each fusion is only legitimate if `f(x + bias)` computed inside the
+    /// kernel equals `f(broadcast_add(x, bias))` computed the ordinary way. The
+    /// tolerance is float-close rather than exact because folding reassociates
+    /// the additions — that is the whole point of the change — but the two must
+    /// agree far more tightly than any tolerance the caption gate cares about.
+    mod fused_bias {
+        use super::*;
+
+        fn rnd(shape: (usize, usize, usize)) -> Tensor {
+            Tensor::rand(-2.0f32, 2.0, shape, &Device::Cpu).expect("rand")
+        }
+
+        fn max_abs_diff(a: &Tensor, b: &Tensor) -> f32 {
+            (a - b)
+                .expect("sub")
+                .abs()
+                .expect("abs")
+                .max_all()
+                .expect("max")
+                .to_scalar::<f32>()
+                .expect("scalar")
+        }
+
+        #[test]
+        fn gelu_bias_matches_gelu_of_broadcast_add() {
+            let (x, bias) = (rnd((1, 64, 128)), rnd((1, 1, 128)).flatten_all().expect("flat"));
+            let fused = x.apply_op2_no_bwd(&bias, &GeluBiasOp).expect("fused");
+            let plain =
+                gelu_tanh_par(&x.broadcast_add(&bias).expect("add")).expect("gelu");
+            let d = max_abs_diff(&fused, &plain);
+            assert!(d < 1e-6, "gelu(x+b) fused vs two-op differ by {d:e}");
+        }
+
+        #[test]
+        fn add_bias_matches_residual_plus_broadcast_add() {
+            let (r, y) = (rnd((1, 64, 128)), rnd((1, 64, 128)));
+            let bias = rnd((1, 1, 128)).flatten_all().expect("flat");
+            let fused = r.apply_op3_no_bwd(&y, &bias, &AddBiasOp).expect("fused");
+            let plain = (&r + y.broadcast_add(&bias).expect("add")).expect("sum");
+            let d = max_abs_diff(&fused, &plain);
+            assert!(d < 1e-5, "r+(y+b) fused vs two-op differ by {d:e}");
+        }
+
+        /// The packed copy must reproduce candle's permute EXACTLY — it is a
+        /// pure data movement, so unlike the arithmetic fusions there is no
+        /// reassociation to excuse a difference. Anything but zero here is a
+        /// layout bug, and a layout bug in this kernel silently scrambles which
+        /// head reads which weights.
+        #[test]
+        fn packed_qkv_matches_the_permute_it_replaces() {
+            let (heads, hd, seq, b) = (4usize, 8usize, 16usize, 2usize);
+            let hidden = heads * hd;
+            let x = Tensor::rand(-2.0f32, 2.0, (b, seq, 3 * hidden), &Device::Cpu).expect("rand");
+            let bias = Tensor::rand(-1.0f32, 1.0, 3 * hidden, &Device::Cpu).expect("rand");
+
+            let fused = x
+                .apply_op2_no_bwd(&bias, &PackedQkvOp { heads, head_dim: hd })
+                .expect("fused");
+            let plain = x
+                .broadcast_add(&bias)
+                .expect("add")
+                .reshape((b, seq, 3, heads, hd))
+                .expect("reshape")
+                .permute((2, 0, 3, 1, 4))
+                .expect("permute")
+                .contiguous()
+                .expect("contig");
+
+            assert_eq!(fused.dims(), plain.dims(), "packed shape");
+            let d = max_abs_diff(&fused, &plain);
+            assert_eq!(d, 0.0, "packed copy is pure movement; differs by {d:e}");
+        }
+
+        /// Deferring softmax's divide past `attn.v` must land in the same place
+        /// as dividing first. This is the algebra the optimisation rests on:
+        /// `SUM_j (p_ij / S_i) v_j  ==  (SUM_j p_ij v_j) / S_i`.
+        #[test]
+        fn deferred_normalisation_matches_softmax_then_matmul() {
+            let (heads, hd, seq, b) = (3usize, 8usize, 32usize, 2usize);
+            let d = Device::Cpu;
+            let scores = Tensor::rand(-4.0f32, 4.0, (b, heads, seq, seq), &d).expect("rand");
+            let v = Tensor::rand(-1.0f32, 1.0, (b, heads, seq, hd), &d).expect("rand");
+
+            // The ordinary way: normalise, matmul, transpose.
+            let want = candle_nn::ops::softmax_last_dim(&scores)
+                .expect("softmax")
+                .matmul(&v)
+                .expect("av")
+                .transpose(1, 2)
+                .expect("t")
+                .reshape((b, seq, heads * hd))
+                .expect("reshape");
+
+            // Ours: exp in place, matmul, then normalise inside the transpose.
+            let exps = scores.copy().expect("copy");
+            let rows = b * heads * seq;
+            let mut sums = vec![0f32; rows];
+            exps.inplace_op1(&SoftmaxExpInplace { sums: RowSums(sums.as_mut_ptr()), rows })
+                .expect("exp");
+            let sums = Tensor::from_vec(sums, (b, heads, seq), &d).expect("sums");
+            let got = exps
+                .matmul(&v)
+                .expect("av")
+                .apply_op2_no_bwd(&sums, &AttnMergeOp { heads, head_dim: hd })
+                .expect("merge");
+
+            assert_eq!(got.dims(), want.dims(), "merged shape");
+            let e = max_abs_diff(&got, &want);
+            assert!(e < 1e-6, "deferred normalisation differs by {e:e}");
+        }
+
+        /// Every row total must be at least 1: the row max contributes
+        /// `exp(0) = 1`. That is what guarantees `AttnMergeOp` can never divide
+        /// by zero or by a subnormal, which is the safety argument the deferred
+        /// normalisation rests on.
+        #[test]
+        fn row_sums_are_never_below_one() {
+            let d = Device::Cpu;
+            // Deliberately extreme: a row of large negatives would underflow to
+            // zero if the max were not subtracted first.
+            let scores = Tensor::rand(-90.0f32, -80.0, (1, 2, 8, 8), &d).expect("rand");
+            let rows = 1 * 2 * 8;
+            let mut sums = vec![0f32; rows];
+            scores
+                .inplace_op1(&SoftmaxExpInplace { sums: RowSums(sums.as_mut_ptr()), rows })
+                .expect("exp");
+            for (i, &s) in sums.iter().enumerate() {
+                assert!(s >= 1.0, "row {i} total {s} < 1 — max was not subtracted");
+                assert!(s.is_finite(), "row {i} total {s} is not finite");
+            }
+        }
+    }
     use candle_core::{DType, Device};
 
     fn dev() -> Device {

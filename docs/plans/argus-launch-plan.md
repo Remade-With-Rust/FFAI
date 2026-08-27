@@ -3226,3 +3226,156 @@ corrupts artifacts, which this workspace has recorded before.
 `cargo clean -p ffai-argus` fixed it. **Quiescing a box for measurement and
 keeping its build cache are in tension**; prefer waiting for `rustc` to exit
 over killing it.
+
+## 27. VISION, ROUND 5 — the bias was the polluter (2026-08-27)
+
+§26 concluded "the 15 % is not there." That conclusion was drawn from an
+**isolated** matmul benchmark, and it was wrong for a reason worth writing down:
+the benchmark called a bare `matmul`, and the tower calls
+`candle_nn::Linear::forward`, which is `matmul` **+ `broadcast_add(bias)`**.
+candle's binary ops are single-threaded, so every projection was followed by an
+unparallelised pass that re-read and re-wrote the whole activation and evicted
+the matmul's working set.
+
+That is why the in-situ gemm rate was 288–347 GF/s against 486–570 isolated. It
+was never the matmuls.
+
+### The fix — four fusions, each into an op that already touches every element
+
+| bias | folded into | kernel |
+|---|---|---|
+| qkv `768→2304` | the packed q/k/v permute-copy | `PackedQkvOp` (`CustomOp2`) |
+| fc1 `768→3072` | GELU | `GeluBiasOp` (`CustomOp2`) |
+| fc2 `3072→768` | the residual add | `AddBiasOp` (`CustomOp3`) |
+| out_proj `768→768` | the residual add | `AddBiasOp` |
+
+Every bias vector is ≤ 3072 floats and stays in L1 for the whole kernel, so the
+add is free against traffic already being paid.
+
+**The arithmetic closes.** After fusing, the four projections measure
+`fc1 563`, `fc2 537`, `qkv 535`, `out_proj 500` GF/s — the isolated rate,
+recovered. A bonus fell out of the same work: a hand-written strided copy beat
+candle's generic `.permute().contiguous()` roughly 5x (20.4 ms → 4.0 ms/tile).
+
+### The second win — deferring softmax's divide past `attn.v`
+
+Softmax is three passes over its input, and on vision attention that input is
+**50.3 MB**. The third pass exists only to divide by the row total, and the
+divide commutes with the matmul that follows:
+
+```text
+out[i,:] = SUM_j (p[i,j] / S_i) * v[j,:]  ==  (SUM_j p[i,j] * v[j,:]) / S_i
+```
+
+So `SoftmaxExpInplace` writes `exp(x - max)` in place and hands back the row
+sums, and `AttnMergeOp` applies the normalisation inside the transpose the layer
+already pays for. **786 K divides instead of 12.6 M**, one 100 MB round trip per
+layer deleted.
+
+The second 50 MB score buffer is also gone, and I claimed here that this was
+"a footprint reduction of 50 MB per concurrent tile worker" **before measuring
+it**. Measured (`examples/caption_footprint`, peak working set, two processes
+per arm because a high-water mark cannot be A/B'd in one):
+
+| arm | peak RSS |
+|---|---|
+| deferred normalisation ON | 1765, 1741 MiB |
+| OFF (candle's softmax) | 1722, 1726 MiB |
+
+**Refuted, and slightly inverted.** The predicted ~300 MB never appears: peak
+working set is dominated by pages the allocator retains, and a transient buffer
+that is freed immediately never reached the high-water mark in the first place.
+The 40 MB spread is the same size as the within-arm spread. Footprint is
+unchanged at ~1.73 GiB.
+
+*A prediction written into a document before it is measured hardens into a
+claim.* This one survived two paragraphs before being caught.
+
+### Measured
+
+| result | verdict | instrument |
+|---|---|---|
+| bias fusion | **1.133x** min / 1.119x median | tower ABBA, 16 samples/arm |
+| bias fusion, PRODUCTION config | **1.172x** min, captions identical | whole caption, real engine |
+| deferred normalisation | **1.058x** min, reproduced EXACTLY twice | tower ABBA, 12 samples/arm |
+| fused pixel shuffle | **1.92x** on the op, bit-identical | op-level ABBA, best of 30 |
+| composed (vision tower) | **1.199x — 16.6 % off vision** | product of the two tower wins |
+
+### Refuted — six of them, each measured
+
+| hypothesis | verdict | why it failed |
+|---|---|---|
+| per-head attention (4.2 MB not 50 MB) | **0.888x** | candle's batched matmul parallelises across the head dimension; looping it costs more parallelism than the cache locality is worth |
+| in-place softmax alone | **0.997x** — flat | the 50 MB allocation is not a cost; this also refutes allocation churn as the explanation for the untimed 7 % |
+| fused LayerNorm (1 pass vs candle's 6) | **1.09x then 0.89x** | a verdict that changes sign between runs is the instrument. The activation is 3.1 MB and fits L3, so candle's extra passes are cache hits. Pass-counting predicts cost only when the data does NOT fit |
+| `attn transpose` as a custom op | 4.0 ms — not a lever | split the timer before building anything; the 64 ms was the matmul |
+| `q.k^T` against a pre-transposed k | 1.02x, bit-identical | free to do, but below this box's noise floor; not claimed |
+| `kernels_parallel = 1` in production | **0.932x** | the shipped `workers * 6 <= cores` heuristic is still right with the new kernel mix |
+| rank-3 batched matmul (drop the leading 1) | **0.74x** | inverted — candle's rank-4 path is the FAST one, so the tower already calls it the best way |
+| deferred normalisation as a FOOTPRINT win | 1765 vs 1722 MiB | see above; a freed transient never reaches the high-water mark |
+
+### The reachability check that nearly invalidated everything
+
+Every tower A/B above ran ONE tower with `kernels_parallel` at its default
+`true`. Production does neither: on a 24-core box `tile_workers` returns 6, and
+the engine then computes `6 * 6 <= 24` = **false**, so a real caption runs **six
+concurrent towers with the custom kernels SERIAL**.
+
+That is a different regime, and a kernel can win in one and lose in the other.
+`examples/caption_arm_ab` was written to close the gap — real engine, real tile
+count, real worker count, whole captions, ABBA-interleaved — and it confirmed
+both the win (1.172x) and, more importantly, that **the captions are identical**.
+
+**Law: a tower-level A/B is not a production verdict. Check that the shipping
+path reaches the code you measured, in the state you measured it.**
+
+### Round 5b — a third win, and eight more refutations
+
+Pushed again after the first pass stopped at the whole-tower noise floor.
+
+**Win 3 — the connector's pixel shuffle, fused.** The shuffle is written as
+reshape/transpose/reshape/transpose, and each transpose forces one of candle's
+generic strided permutes: **two** full copies to perform a single permutation.
+Composing the four index maps gives, for `r = r'*s + i` and `c = c'*s + j`:
+
+```text
+out[b][r'][c'][(i*s + j)*dim + d]  =  hidden[b][(r'*s+i)*side + (c'*s+j)][d]
+```
+
+`d` rides along, so it is a copy of `dim` contiguous floats to a contiguous
+destination. `PixelShuffleOp` does it in one pass: **1.92x, bit-identical**
+(its test asserts exact equality across three geometries, not a tolerance).
+Worth 16 ms a caption — real, small, and it had never been measured because the
+connector sits inside `tower_ms` but outside the per-op vision profile.
+
+**Refuted, with the arithmetic that killed each:**
+
+| hypothesis | verdict | why |
+|---|---|---|
+| blocked attention, BLOCK 128 / 256 / 512 | **0.732x / 0.824x / 0.926x** | bit-identical arms; monotonic toward "don't block". candle re-packs the k panel per block and gemm efficiency falls with `M` — both exceed what L3 residency buys |
+| tile workers 4 / 8 (vs the shipped 6) | **0.932x / 0.999x** | the shipped heuristic is right |
+| tile batching, all 17 tiles in one pass | **1.09x** | needs to beat the **2.50x** tile concurrency it would replace. Priced before building — the restructure was never written |
+| a hand-written `q.k^T` kernel | **0.11x** | a well-blocked scalar outer-product kernel over a pre-transposed k is **9x slower** than candle. The 160 GF/s is not candle underperforming |
+
+### The law these share
+
+Three attention restructurings, a tile-batching plan and a hand gemm all lost,
+and they lost the same way: **candle's gemm rewards large batched calls, and
+every attempt to trade call size for locality has been refuted here.** Looping
+heads lost 0.888x, blocking query rows lost across a whole sweep, dropping a
+vestigial batch-of-1 to rank 3 lost 0.74x, batching tiles cannot reach its bar,
+and hand-rolling loses by 9x. The 200 MB of attention traffic per layer is real
+and it is still cheaper than any arrangement that avoids it.
+
+The wins that DID land share the opposite shape: they never restructured a
+gemm, they deleted a **separate pass** next to one — a bias add, a normalising
+divide, a redundant permute.
+
+### What is left, and its size
+
+`q.k^T` is now the largest single op at 18.3 % of the tile, running at
+**160 GF/s** — but it measures the same 160 GF/s ISOLATED, so that is the
+`K = 64` gemm shape, not our usage of it. Blocking attention would cut its
+memory traffic without changing that shape, so the expected return is small.
+The four projections are at peak. **The cheap structural wins in this tower are
+spent.**

@@ -37,6 +37,7 @@
 use candle_core::{DType, Device, Module, Result as CandleResult, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::siglip;
+use rayon::prelude::{IndexedParallelIterator, ParallelIterator, ParallelSliceMut};
 
 /// The connector's tensor name in the checkpoint. One tensor, no bias.
 const PROJ_WEIGHT: &str = "modality_projection.proj.weight";
@@ -158,12 +159,20 @@ impl SmolVlmVision {
         }
         // (b, side, side, dim) -> group each s x s block of patches into one
         // token whose feature vector is their features concatenated.
-        let x = hidden.reshape((b, side, side, dim))?;
-        let x = x.reshape((b, side, side / s, dim * s))?;
-        let x = x.transpose(1, 2)?.contiguous()?;
-        let x = x.reshape((b, side / s, side / s, dim * s * s))?;
-        let x = x.transpose(1, 2)?.contiguous()?;
-        let x = x.reshape((b, (side / s) * (side / s), dim * s * s))?;
+        //
+        // One fused pass when enabled; otherwise the reshape/transpose chain,
+        // which is kept as the null arm and the oracle. The two are
+        // bit-identical — see [`PixelShuffleOp`].
+        let x = if fused_shuffle() {
+            hidden.apply_op1_no_bwd(&PixelShuffleOp { side, s })?
+        } else {
+            let x = hidden.reshape((b, side, side, dim))?;
+            let x = x.reshape((b, side, side / s, dim * s))?;
+            let x = x.transpose(1, 2)?.contiguous()?;
+            let x = x.reshape((b, side / s, side / s, dim * s * s))?;
+            let x = x.transpose(1, 2)?.contiguous()?;
+            x.reshape((b, (side / s) * (side / s), dim * s * s))?
+        };
         // One matmul, no bias — through a FLAT 2D product, not `broadcast_matmul`.
         //
         // `broadcast_matmul` stretches the `(12288, 576)` weight to the batch
@@ -189,6 +198,147 @@ impl SmolVlmVision {
         let out = w.dim(1)?;
         x.reshape((b * n, k))?.matmul(&w)?.reshape((b, n, out))
     }
+}
+
+/// The pixel shuffle as ONE pass, replacing candle's two transpose-copies.
+///
+/// # What the chain costs
+///
+/// The shuffle is expressed as reshape / transpose / reshape / transpose, and
+/// each `transpose` needs a `.contiguous()` — candle's generic strided permute,
+/// walking element by element. That is **two** full copies of the activation
+/// (3.1 MB each at this checkpoint) to perform what is, in total, a single
+/// permutation.
+///
+/// # Why one pass suffices
+///
+/// Composing the chain's four index maps gives, for `r = r'*s + i` and
+/// `c = c'*s + j`:
+///
+/// ```text
+/// out[b][r'][c'][(i*s + j)*dim + d]  =  hidden[b][(r'*s+i)*side + (c'*s+j)][d]
+/// ```
+///
+/// `d` does not participate — it rides along. So for each fixed
+/// `(b, r', c', i, j)` this is a straight copy of `dim` **contiguous** floats
+/// to a `dim`-aligned **contiguous** destination. One pass, and both streams
+/// are sequential runs rather than the strided element walk the generic
+/// permute performs.
+///
+/// The same lesson as `siglip::PackedQkvOp`, which cut its copy 20.4 ms -> 4.0 ms
+/// per tile by refusing candle's generic permute for a hand-written one.
+///
+/// # Numerics
+///
+/// None. This moves floats without reading them as numbers, so it is
+/// **bit-identical** to the chain — its test asserts exact equality, not a
+/// tolerance.
+struct PixelShuffleOp {
+    /// Patch-grid edge, `sqrt(seq)`.
+    side: usize,
+    /// Shuffle factor; `s*s` patches become one token.
+    s: usize,
+}
+
+impl candle_core::CustomOp1 for PixelShuffleOp {
+    fn name(&self) -> &'static str {
+        "ffai-pixel-shuffle"
+    }
+
+    fn cpu_fwd(
+        &self,
+        storage: &candle_core::CpuStorage,
+        layout: &candle_core::Layout,
+    ) -> CandleResult<(candle_core::CpuStorage, candle_core::Shape)> {
+        let candle_core::CpuStorage::F32(x) = storage else {
+            candle_core::bail!("ffai-pixel-shuffle expects f32")
+        };
+        let Some((o, e)) = layout.contiguous_offsets() else {
+            candle_core::bail!("ffai-pixel-shuffle expects a contiguous input")
+        };
+        let x = &x[o..e];
+        let (b, seq, dim) = layout.shape().dims3()?;
+        let (side, s) = (self.side, self.s);
+        if side * side != seq || !side.is_multiple_of(s) || s == 0 {
+            candle_core::bail!("ffai-pixel-shuffle: {seq} patches, side {side}, s {s}");
+        }
+        let out_side = side / s;
+        let tokens = out_side * out_side;
+        let feat = dim * s * s;
+        let n = b * tokens * feat;
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        {
+            let spare = out.spare_capacity_mut();
+            // SAFETY: exactly `n` contiguous `MaybeUninit<f32>`. The chunks
+            // below tile `[0, n)` one token at a time, and each token's loop
+            // writes all `s*s` groups of `dim` floats that make up its `feat`
+            // features. Every element is therefore initialised before `set_len`.
+            #[allow(unsafe_code)]
+            let dst: &mut [f32] =
+                unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+            crate::cost::copy(n as u64);
+            let token = |(t, o): (usize, &mut [f32])| {
+                let (bb, rest) = (t / tokens, t % tokens);
+                let (rp, cp) = (rest / out_side, rest % out_side);
+                for i in 0..s {
+                    for j in 0..s {
+                        let row = (rp * s + i) * side + (cp * s + j);
+                        let src = (bb * seq + row) * dim;
+                        let at = (i * s + j) * dim;
+                        o[at..at + dim].copy_from_slice(&x[src..src + dim]);
+                    }
+                }
+            };
+            if crate::siglip::kernels_parallel_for_probe() {
+                dst.par_chunks_mut(feat).enumerate().for_each(token);
+            } else {
+                dst.chunks_mut(feat).enumerate().for_each(token);
+            }
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((candle_core::CpuStorage::F32(out), (b, tokens, feat).into()))
+    }
+}
+
+/// Use the fused pixel shuffle? `FFAI_ARGUS_FUSED_SHUFFLE=0` uses the chain.
+fn fused_shuffle() -> bool {
+    FUSED_SHUFFLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Toggle the fused pixel shuffle, returning the previous setting.
+pub fn set_fused_shuffle(on: bool) -> bool {
+    FUSED_SHUFFLE.swap(on, std::sync::atomic::Ordering::Relaxed)
+}
+
+static FUSED_SHUFFLE: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(
+            std::env::var("FFAI_ARGUS_FUSED_SHUFFLE").ok().as_deref() != Some("0"),
+        )
+    });
+
+/// The pixel shuffle, exposed so `examples/kernel_micro_ab` can price the fused
+/// kernel against the chain at the op level — the connector is inside
+/// `tower_ms` but outside `siglip`'s per-op profile, so it had never been
+/// measured on its own.
+///
+/// # Errors
+/// If the patch grid is not square or not divisible by `s`.
+pub fn pixel_shuffle_for_probe(hidden: &Tensor, side: usize, s: usize) -> CandleResult<Tensor> {
+    if fused_shuffle() {
+        return hidden.apply_op1_no_bwd(&PixelShuffleOp { side, s });
+    }
+    let (b, _seq, dim) = hidden.dims3()?;
+    let x = hidden.reshape((b, side, side, dim))?;
+    let x = x.reshape((b, side, side / s, dim * s))?;
+    let x = x.transpose(1, 2)?.contiguous()?;
+    let x = x.reshape((b, side / s, side / s, dim * s * s))?;
+    let x = x.transpose(1, 2)?.contiguous()?;
+    x.reshape((b, (side / s) * (side / s), dim * s * s))
 }
 
 /// Read `vision_config` and `scale_factor` out of a checkpoint's `config.json`.
@@ -231,4 +381,49 @@ pub fn load(
     .map_err(|e| format!("load {}: {e}", weights.display()))?;
     SmolVlmVision::new(&cfg, scale_factor, "model.vision_model", "model.connector", vb)
         .map_err(|e| format!("build vision tower: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PixelShuffleOp, Tensor};
+    use candle_core::Device;
+
+    /// The fused pixel shuffle against the reshape/transpose chain it replaces.
+    ///
+    /// `assert_eq!` on every element, not a tolerance: this kernel moves floats
+    /// without reading them as numbers, so there is no reassociation that could
+    /// excuse a difference. Anything non-zero is an index bug — and an index bug
+    /// here would silently feed the projection the wrong patch, surfacing as a
+    /// subtly wrong caption rather than as a crash.
+    ///
+    /// `arange` rather than random data on purpose: every element is its own
+    /// index, so a mis-permutation is visible in the failure message instead of
+    /// being one unrecognisable float against another.
+    #[test]
+    fn fused_pixel_shuffle_matches_the_transpose_chain() {
+        let d = Device::Cpu;
+        for (side, s, dim) in [(8usize, 4usize, 6usize), (32, 4, 8), (6, 2, 3)] {
+            let seq = side * side;
+            let hidden = Tensor::arange(0f32, (seq * dim) as f32, &d)
+                .expect("arange")
+                .reshape((1, seq, dim))
+                .expect("reshape");
+
+            let fused =
+                hidden.apply_op1_no_bwd(&PixelShuffleOp { side, s }).expect("fused");
+
+            let x = hidden.reshape((1, side, side, dim)).expect("r1");
+            let x = x.reshape((1, side, side / s, dim * s)).expect("r2");
+            let x = x.transpose(1, 2).expect("t1").contiguous().expect("c1");
+            let x = x.reshape((1, side / s, side / s, dim * s * s)).expect("r3");
+            let x = x.transpose(1, 2).expect("t2").contiguous().expect("c2");
+            let want =
+                x.reshape((1, (side / s) * (side / s), dim * s * s)).expect("r4");
+
+            assert_eq!(fused.dims(), want.dims(), "shape at side {side} s {s}");
+            let got = fused.flatten_all().expect("f").to_vec1::<f32>().expect("v");
+            let want = want.flatten_all().expect("f").to_vec1::<f32>().expect("v");
+            assert_eq!(got, want, "pixel shuffle at side {side} s {s} dim {dim}");
+        }
+    }
 }
