@@ -35,7 +35,14 @@ candle-nn = "0.11"
 candle-transformers = "0.11"
 
 # ---- model loading ----
-tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+# `rusty-expressions` instead of `onig`. `onig` reaches libonig through
+# `onig_sys`, i.e. C compiled by `cc`: a C toolchain in every build of this
+# workspace and, because Cargo features are additive across the graph, in every
+# downstream consumer too -- including ones that had explicitly opted out.
+# `rusty_expressions` is Oniguruma remade in pure Rust with the same semantics
+# (pre-tokenizer output verified byte-identical against libonig).
+# Pending upstream: huggingface/tokenizers#2368.
+tokenizers = { version = "0.23", default-features = false, features = ["rusty-expressions"] }
 rustfft = "6"
 hf-hub = { version = "1", default-features = false, features = ["blocking", "rustls-tls"] }
 
@@ -98,3 +105,14 @@ lto = "thin"
 # cache, downloads without hash verification - this decision expires WITH them
 # and overflow-checks goes back on.
 codegen-units = 1
+
+# Two independent sources of libonig had to be replaced, not one:
+#   * this workspace's own `tokenizers 0.23`, and
+#   * `candle-core 0.11`, which pins `tokenizers 0.22` with `features =
+#     ["onig"]` as a non-optional dependency on every non-wasm target.
+# A single [patch] entry cannot cover two semver-incompatible versions, so both
+# are patched. Drop the 0.23 entry once huggingface/tokenizers#2368 lands, and
+# the 0.22 entry once candle stops hardcoding the onig backend.
+[patch.crates-io]
+tokenizers = { git = "https://github.com/Remade-With-Rust/tokenizers.git", branch = "rusty-expressions-deploy" }
+tokenizers_022 = { package = "tokenizers", git = "https://github.com/Remade-With-Rust/tokenizers.git", branch = "v0.22-rusty-expressions" }
