@@ -20,6 +20,21 @@
 # that fails. 1.2 MB total, and the exception is scoped to this one directory
 # so a stray checkpoint still cannot ride in.
 !/corpora/refs/fixtures/*.bin
+# The same reasoning for the one fixture the `.bin` exception did not reach:
+# `mobiledet_oracle_prob.safetensors` (0.3 MB) backs
+# `mobiledet_probability_map_matches_paddle`. It was COMMITTED anyway, which
+# left it tracked-and-ignored — and that is a state release-plz refuses to
+# compute versions in ("the working directory of this project has uncommitted
+# changes"), so every release run since the workflow landed failed before it
+# could open a release PR. Nothing reached crates.io as a result.
+#
+# ONE FILE, not `*.safetensors`, and that distinction is load-bearing: this
+# directory also holds the routing stage's real weights — formulanet at
+# **564 MB**, slanet_plus at 7.3 MB, doclayout_s at 4.6 MB — which the blanket
+# rule above exists to keep out. A glob exception here would leave 576 MB of
+# checkpoints one `git add -A` away from the history. The `.bin` exception can
+# be a glob because no weights in this directory carry that extension.
+!/corpora/refs/fixtures/mobiledet_oracle_prob.safetensors
 /.whispercpp/
 /.tools-bench/
 /corpora/fonts/
