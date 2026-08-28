@@ -47,7 +47,7 @@ rff-format-mkv = "0.1"
 rff-format-avi = "0.1"
 rff-format-ts = "0.1"
 rff-codec = "0.1"
-rusty_h264 = "0.8"
+rusty_h264 = "0.12.0"
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.
