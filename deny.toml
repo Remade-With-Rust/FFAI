@@ -72,6 +72,16 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# remade_ffmpeg_rs is ours and is not yet published; it is the one git source we accept.
-# Tracked as H-13: these must move to pinned revs, or to crates.io when rff publishes.
-allow-git = ["https://github.com/Remade-With-Rust/remade_ffmpeg_rs"]
+# Ours, and not yet published; these are the git sources we accept.
+# Tracked as H-13: these must move to pinned revs, or to crates.io when they publish.
+#
+# `tokenizers` is the fork behind the root `[patch.crates-io]` that takes candle's
+# tokenizer off Oniguruma and onto `rusty_expressions` — a C dependency removed
+# from OUR builds, which is the whole point of the patch. It arrived in 440a100
+# without this entry, which is what has failed this gate on every run since; the
+# patch was a deliberate decision, and this records it rather than making a new one.
+# Both `[patch]` entries (`tokenizers`, `tokenizers-v022`) resolve to this one URL.
+allow-git = [
+    "https://github.com/Remade-With-Rust/remade_ffmpeg_rs",
+    "https://github.com/Remade-With-Rust/tokenizers",
+]

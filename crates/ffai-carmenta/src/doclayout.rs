@@ -118,11 +118,12 @@ impl DocLayout {
         let bpp = img.format.bytes_per_pixel();
         let mut chw = vec![0f32; 3 * SIDE * SIDE];
         for c in 0..3 {
-            // channel plane at source resolution, then the house resampler
+            // the house resampler, sampling the source channel directly —
+            // the plane it used to build first held nothing but a `u8 -> f32`
+            // cast, at `w * h * 4` bytes apiece. Identical output; see
+            // `image::resize_bilinear_u8`.
             let src_c = if bpp == 1 { 0 } else { c };
-            let plane: Vec<f32> =
-                (0..w * h).map(|i| img.data[i * bpp + src_c] as f32).collect();
-            let resized = crate::image::resize_bilinear(&plane, w, h, SIDE, SIDE);
+            let resized = crate::image::resize_bilinear_u8(&img.data, bpp, src_c, w, h, SIDE, SIDE);
             let dst = &mut chw[c * SIDE * SIDE..(c + 1) * SIDE * SIDE];
             for (d, &s) in dst.iter_mut().zip(&resized) {
                 *d = (s / 255.0 - MEAN[c]) / STD[c];

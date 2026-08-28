@@ -2,6 +2,8 @@
 //! resize, CRAFT normalization, CRNN crop preparation. All pure CPU-side
 //! math on `f32` buffers; tensors are built at the boundary.
 
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 use candle_core::{Device, Result as CandleResult, Tensor};
 use ffai_core::error::{Error, Result};
 use ffai_core::types::{ImageBuffer, PixelFormat};
@@ -49,6 +51,51 @@ pub fn resize_bilinear(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) 
             let wx = fx - fx.floor();
             let top = src[y0 * sw + x0] * (1.0 - wx) + src[y0 * sw + x1] * wx;
             let bot = src[y1 * sw + x0] * (1.0 - wx) + src[y1 * sw + x1] * wx;
+            out[oy * dw + ox] = top * (1.0 - wy) + bot * wy;
+        }
+    }
+    out
+}
+
+/// Bilinear resize that samples ONE CHANNEL of an interleaved `u8` image
+/// directly, without materialising an `f32` plane of the source first.
+///
+/// Arithmetically identical to `resize_bilinear(&plane, ..)` where
+/// `plane[i] = f32::from(src[i * bpp + c])`: `u8 -> f32` is exact, and the same
+/// four taps are combined by the same operations in the same order — the
+/// `mobiledet_matches_plane_path` test asserts that bit for bit rather than
+/// trusting the argument.
+///
+/// What it saves is the plane. `mobiledet_input` built one per channel, three
+/// times per page, at SOURCE resolution — `w * h * 4` bytes that existed only
+/// to hold a cast. On a 1240x1754 page that is 8.7 MB of peak apiece, and peak
+/// is the whole budget on wasm32, where linear memory only ever grows.
+#[must_use]
+pub fn resize_bilinear_u8(
+    src: &[u8],
+    bpp: usize,
+    c: usize,
+    sw: usize,
+    sh: usize,
+    dw: usize,
+    dh: usize,
+) -> Vec<f32> {
+    let sx = sw as f32 / dw as f32;
+    let sy = sh as f32 / dh as f32;
+    let at = |y: usize, x: usize| f32::from(src[(y * sw + x) * bpp + c]);
+    let mut out = vec![0f32; dw * dh];
+    for oy in 0..dh {
+        let fy = ((oy as f32 + 0.5) * sy - 0.5).max(0.0);
+        let y0 = (fy.floor() as usize).min(sh - 1);
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = fy - fy.floor();
+        for ox in 0..dw {
+            let fx = ((ox as f32 + 0.5) * sx - 0.5).max(0.0);
+            let x0 = (fx.floor() as usize).min(sw - 1);
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = fx - fx.floor();
+            let top = at(y0, x0) * (1.0 - wx) + at(y0, x1) * wx;
+            let bot = at(y1, x0) * (1.0 - wx) + at(y1, x1) * wx;
             out[oy * dw + ox] = top * (1.0 - wy) + bot * wy;
         }
     }
@@ -451,8 +498,9 @@ pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, 
     const STD: [f32; 3] = [0.229, 0.224, 0.225];
     let mut chw = vec![0f32; 3 * cw * ch];
     for c in 0..3 {
-        let plane: Vec<f32> = (0..w * h).map(|i| f32::from(img.data[i * bpp + c])).collect();
-        let resized = resize_bilinear(&plane, w, h, rw, rh);
+        // Same fused sampling as `mobiledet_input`, and identical for the same
+        // reason: the source plane existed only to hold a `u8 -> f32` cast.
+        let resized = resize_bilinear_u8(&img.data, bpp, c, w, h, rw, rh);
         let (mean, std) = (MEAN[c], STD[c]);
         let dst = &mut chw[c * cw * ch..(c + 1) * cw * ch];
         dst.fill((0.0 - mean) / std);
@@ -473,6 +521,23 @@ pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, 
 /// independently — paddle resizes straight to the /32-rounded size rather than
 /// resizing proportionally and padding, so `sx != sy` in general.
 ///
+/// ## The policy had a floor and no ceiling
+///
+/// `min_side` brings a SMALL image up. Nothing brought a LARGE one down except
+/// `max_side`, and `max_side` only watches the LONG side — so a 3000x4000 phone
+/// photo sits exactly at the 4000 cap and reaches the detector at 12 MP, every
+/// pixel of it above the ~736 short side the network works at. `max_short`
+/// (`FFAI_DET_MAX_SHORT`, or [`set_det_max_short`] where there is no
+/// environment) is the missing ceiling, and floor and ceiling now bound the
+/// SAME quantity: the short side lands in `[min_side, max_short]`.
+///
+/// **It defaults to 1280, and the section below is why it is not 736.** The
+/// aggressive form of this idea — cap the LONG side, as `PaddleOCR`'s own
+/// `limit_type='max', limit_side_len=960` does — is the arm that destroyed a
+/// receipt here, and a 736 short-side ceiling reproduces that failure at
+/// smaller magnitude on both gated corpora. [`DET_MAX_SHORT_DEFAULT`] carries
+/// the table that chose 1280 instead.
+///
 /// ## The policy is a MINIMUM side, not a maximum, and that is the whole ball game
 ///
 /// The obvious reading of `inference.yml` — "`resize_long`: 960", so scale the
@@ -492,6 +557,84 @@ pub fn craft_input_color(img: &ImageBuffer, device: &Device) -> Result<(Tensor, 
 /// and then normalizes with `ImageNet`'s *RGB* statistics, so mean 0.485 lands on
 /// the blue channel. It looks like a bug and is not one — it is what these
 /// weights were trained against.
+/// Programmatic override for [`det_max_short`], for targets with no environment.
+///
+/// `std::env::var` returns `Err` on `wasm32-unknown-unknown` — every `FFAI_*`
+/// switch in this crate is therefore unreachable in a browser, defaulted ON or
+/// OFF by the ABSENCE of an environment rather than by a choice. A browser is
+/// also the caller that most needs this particular knob, so it gets a setter.
+/// Zero means "unset — read the environment".
+static DET_MAX_SHORT: AtomicUsize = AtomicUsize::new(0);
+
+/// Set the detector's short-side ceiling in pixels; 0 restores the default.
+///
+/// Process-global, like the environment variable it stands in for. Takes
+/// precedence over `FFAI_DET_MAX_SHORT` when non-zero.
+pub fn set_det_max_short(px: usize) {
+    DET_MAX_SHORT.store(px, Ordering::Relaxed);
+}
+
+/// Ceiling on the LONG side (`FFAI_DET_MAX_SIDE`, default 4000) — the
+/// reference's `max_side_limit`.
+fn det_max_side() -> usize {
+    std::env::var("FFAI_DET_MAX_SIDE").ok().and_then(|v| v.parse().ok()).unwrap_or(4000)
+}
+
+/// Ceiling on the SHORT side (`FFAI_DET_MAX_SHORT`), the mirror of
+/// `min_side`'s floor. `usize::MAX` disables it.
+///
+/// The caller clamps this up to the `min_side` actually in force, so the floor
+/// and the ceiling can never cross: a ceiling below the floor yields the floor,
+/// not an image scaled twice in opposite directions.
+fn det_max_short() -> usize {
+    match DET_MAX_SHORT.load(Ordering::Relaxed) {
+        0 => std::env::var("FFAI_DET_MAX_SHORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DET_MAX_SHORT_DEFAULT),
+        v => v,
+    }
+}
+
+/// The default short-side ceiling: **1280**, set by the corpus and not by a page.
+///
+/// One document page measured word-for-word identical at 736 and ~16 % faster,
+/// which is what opened this question. `examples/det_scale_sweep.rs` then ran
+/// the two corpora where the ceiling actually fires — receipts (`carmenta-cord`,
+/// short side 960-2376) and document scans (`carmenta-doc`, all 1700) — against
+/// `mobiledet-crnn`, and the page did not generalise. HOLDOUT mean CER delta,
+/// against the uncapped arm, with the worst single-clip regression beside it:
+///
+/// | cap | cord ΔCER | worst clip | doc ΔCER | worst clip |
+/// |---|---:|---:|---:|---:|
+/// | 736 | **+0.0033** | +0.1928 | **+0.0395** | +0.2920 |
+/// | 960 | -0.0157 | +0.0377 | -0.0011 | **+0.2628** |
+/// | **1280** | **-0.0065** | **+0.0189** | **-0.0195** | **+0.0869** |
+///
+/// **736 is the old failure, reproduced smaller.** It loses on BOTH corpora and
+/// takes one clip with it: `cord-039` is 2304x4096 and lands at 736x1308, close
+/// to the 544x960 that once merged a whole receipt into a single 1903x1781 blob.
+/// `cord-016` is 2376x4224 — literally the receipt the section below is written
+/// about. 960 wins the receipt mean but still carries a +0.26 page on documents.
+///
+/// **1280 is the only arm that improves both corpora with no badly-regressing
+/// clip**, which is this crate's gate rather than a preference — a corpus mean
+/// absorbs one destroyed page, and one destroyed page is what this knob has
+/// produced before.
+///
+/// What it is worth: 1.5x on receipts and 1.3x on documents, and on wasm32,
+/// where linear memory only grows, it is a memory bound rather than a speed
+/// knob — a 3000x4000 phone photo reaches the detector at 1280x1706 instead of
+/// 3000x4000, 5.5x less area. An A4 page at 150 dpi (short side 1240) is BELOW
+/// this ceiling and is deliberately untouched; a browser that needs the
+/// headroom more than the accuracy sets [`set_det_max_short`] lower and can
+/// read the cost of doing so off the table above.
+///
+/// `carmenta-capture` is unaffected by construction: all 108 clips are 620x200,
+/// short side 200, so the FLOOR fires and the ceiling never can. The LIVE record
+/// is untouched.
+pub const DET_MAX_SHORT_DEFAULT: usize = 1280;
+
 pub fn mobiledet_input(
     img: &ImageBuffer,
     min_side: usize,
@@ -501,10 +644,7 @@ pub fn mobiledet_input(
     const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
     let (w, h) = (img.width as usize, img.height as usize);
-    let max_side: usize = std::env::var("FFAI_DET_MAX_SIDE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(4000);
+    let max_side = det_max_side();
 
     // A shape-aware floor was tried here — a smaller `min_side` for band STRIPS
     // (aspect > 4) than for pages — on the theory that LIVE's 1280x45 bands were
@@ -513,7 +653,17 @@ pub fn mobiledet_input(
     // in the full-frame calibration call, not in the strips. Reverted rather
     // than kept as a plausible-looking knob that buys nothing. See §8.20.
     let short = w.min(h) as f32;
-    let ratio = if (short as usize) < min_side { min_side as f32 / short } else { 1.0 };
+    let max_short = det_max_short().max(min_side);
+    let ratio = if (short as usize) < min_side {
+        min_side as f32 / short
+    } else if (short as usize) > max_short {
+        // The CEILING, and the one this policy was missing — see the section
+        // below. Exclusive with the floor: `max_short` is clamped up to
+        // `min_side` above, so at most one of these arms can fire.
+        max_short as f32 / short
+    } else {
+        1.0
+    };
     let (mut rw, mut rh) = ((w as f32 * ratio).trunc(), (h as f32 * ratio).trunc());
     if rw.max(rh) > max_side as f32 {
         let cap = max_side as f32 / rw.max(rh);
@@ -528,8 +678,7 @@ pub fn mobiledet_input(
     for c in 0..3 {
         // Tensor channel 0 is blue; a grey source replicates its single plane.
         let src_c = if bpp == 1 { 0 } else { 2 - c };
-        let plane: Vec<f32> = (0..w * h).map(|i| f32::from(img.data[i * bpp + src_c])).collect();
-        let resized = resize_bilinear(&plane, w, h, cw, ch);
+        let resized = resize_bilinear_u8(&img.data, bpp, src_c, w, h, cw, ch);
         let (mean, std) = (MEAN[c], STD[c]);
         let dst = &mut chw[c * cw * ch..(c + 1) * cw * ch];
         for (d, &s) in dst.iter_mut().zip(&resized) {
@@ -553,6 +702,68 @@ pub fn ok<T>(r: CandleResult<T>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `resize_bilinear_u8` must be BIT-identical to materialising the plane
+    /// and calling `resize_bilinear` — the claim its doc comment makes, and the
+    /// only reason it is allowed to replace that path silently.
+    ///
+    /// Exercised over up, down and identity scaling, and over all three source
+    /// formats, because the plane path differed per format only in the stride.
+    #[test]
+    fn resize_u8_matches_plane_path() {
+        let (sw, sh) = (37usize, 23usize);
+        for bpp in [1usize, 3, 4] {
+            let src: Vec<u8> =
+                (0..sw * sh * bpp).map(|i| ((i * 37 + i / 11) % 251) as u8).collect();
+            for c in 0..bpp {
+                let plane: Vec<f32> =
+                    (0..sw * sh).map(|i| f32::from(src[i * bpp + c])).collect();
+                for (dw, dh) in [(64usize, 96usize), (16, 8), (sw, sh)] {
+                    let want = resize_bilinear(&plane, sw, sh, dw, dh);
+                    let got = resize_bilinear_u8(&src, bpp, c, sw, sh, dw, dh);
+                    assert_eq!(want, got, "bpp {bpp} channel {c} -> {dw}x{dh}");
+                }
+            }
+        }
+    }
+
+    /// The ceiling scales a large image DOWN, the floor scales a small one UP,
+    /// and they never both fire — the property the `else if` depends on.
+    #[test]
+    fn short_side_ceiling_bounds_the_short_side() {
+        let dev = Device::Cpu;
+        let make = |w: u32, h: u32| ImageBuffer {
+            data: vec![128u8; (w * h * 3) as usize],
+            width: w,
+            height: h,
+            format: PixelFormat::Rgb8,
+        };
+        // The default ceiling (1280) fires on a phone photo: 12 MP of detector
+        // input becomes 2.2 MP, aspect preserved.
+        let (t, _, _) = mobiledet_input(&make(3000, 4000), 736, &dev).unwrap();
+        assert_eq!(t.dims4().unwrap(), (1, 3, 1696, 1280));
+        // An A4 page at 150 dpi sits BELOW the ceiling and is untouched.
+        let (t, _, _) = mobiledet_input(&make(1240, 1754), 736, &dev).unwrap();
+        assert_eq!(t.dims4().unwrap(), (1, 3, 1760, 1248));
+        // Disabling it restores the uncapped policy.
+        set_det_max_short(usize::MAX);
+        let (t, _, _) = mobiledet_input(&make(3000, 4000), 736, &dev).unwrap();
+        assert_eq!(t.dims4().unwrap(), (1, 3, 4000, 3008));
+
+        set_det_max_short(736);
+        // Ceiling fires: short side 3000 -> 736, aspect preserved.
+        let (t, _, _) = mobiledet_input(&make(3000, 4000), 736, &dev).unwrap();
+        let (_, _, ch, cw) = t.dims4().unwrap();
+        assert_eq!((cw, ch), (736, 992), "short side capped, aspect kept");
+        // Floor still fires for a small image, unchanged by the ceiling.
+        let (t, _, _) = mobiledet_input(&make(300, 400), 736, &dev).unwrap();
+        assert_eq!(t.dims4().unwrap(), (1, 3, 992, 736));
+        // A ceiling BELOW the floor is clamped to the floor, not applied twice.
+        set_det_max_short(64);
+        let (t, _, _) = mobiledet_input(&make(300, 400), 736, &dev).unwrap();
+        assert_eq!(t.dims4().unwrap(), (1, 3, 992, 736));
+        set_det_max_short(0);
+    }
 
     /// The BORDER is the background, not the pixel majority — the distinction
     /// that cost +0.397 pp on control pages before it was found (§8.149).

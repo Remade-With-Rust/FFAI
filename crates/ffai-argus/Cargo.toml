@@ -51,7 +51,7 @@ serde_json = { workspace = true }
 # places: a SigLIP/Llama forward allocates a 47 MB score tensor per layer, and
 # 47 MB is above the threshold where most allocators stop pooling and go
 # straight to the OS. See `examples/alloc_ab.rs`.
-rusty_alloc-api = "=1.1.4"
+rusty_alloc-api = "=1.1.6"
 
 # The step-3 oracle test reads the reference dump's summary.json.
 serde_json = { workspace = true }

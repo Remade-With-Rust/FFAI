@@ -336,7 +336,9 @@ impl EncoderLayer {
         } else {
             // Post-norm (base): normalise after each residual.
             let h = self.attn_norm.forward(&(x + self.attn.forward(x)?)?)?;
-            let ff = self.ff_out.forward(&ffai_core::fastops::gelu_erf(&self.ff_in.forward(&h)?)?)?;
+            let ff = self
+                .ff_out
+                .forward(&ffai_core::fastops::gelu_erf(&self.ff_in.forward(&h)?)?)?;
             self.final_norm.forward(&(&h + ff)?)
         }
     }
@@ -428,7 +430,9 @@ impl PosConv {
         } else {
             h
         };
-        ffai_core::fastops::gelu_erf(&h)?.transpose(1, 2)?.contiguous()
+        ffai_core::fastops::gelu_erf(&h)?
+            .transpose(1, 2)?
+            .contiguous()
     }
 }
 

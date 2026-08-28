@@ -458,3 +458,223 @@ Two more results from the same session:
 * **The kernel's shape envelope is unmapped.** §7.3 found the CRNN tile loses
   badly on CRAFT's shapes; nobody has swept a tile FOR detector shapes, and
   `FFAI_CONV3X3_DET=1` is the A/B already built for whoever does.
+
+---
+
+## 8. The 4 GB wall, and what was actually behind it (2026-08-28)
+
+Three findings from one investigation. Only the first is the wall; the other
+two are the headroom, and they are worth having anyway.
+
+Everything below is Node on this machine, `mobiledet-crnn`, single-threaded.
+Absolute times here run ~3x a browser's (`readLine` 400x48 measures 1033 ms
+here against the 311 ms reported in a browser), so read the RATIOS, not the
+seconds. Memory numbers are `memory_size` — a high-water mark, not a sample —
+and are exact.
+
+### 8.1 The wall is `rusty_alloc`, not Carmenta
+
+Reading one A4 page repeatedly on a single `Reader`:
+
+| read | rusty_alloc (was the default) | dlmalloc |
+|---|---:|---:|
+| baseline | 128 MB | 54 MB |
+| 1 | 977 MB | 188 MB |
+| 3 | 2,481 MB | 188 MB |
+| 6 | **trap** | 188 MB |
+
+Identical text, identical speed, **~750 MB added per page, linear, no
+plateau**. `RuntimeError: unreachable` is Rust's allocation-failure abort — the
+`__rust_alloc_error_handler` path, which is why no panic message accompanies
+it. dlmalloc flat at 188 MB is the proof that Carmenta's own recycling was
+never the problem.
+
+**Mechanism**, read out of `rusty_alloc-1.1.4` and then confirmed in isolation:
+
+1. `src/prim/wasm.rs` — `free()` is a no-op. Correct: linear memory cannot
+   shrink. Its doc says the range "is returned to *our* segment/arena caches".
+2. **There is no segment cache.** The only trace of one is an option named
+   `deprecated_segment_cache` — upstream mimalloc v2 deleted it *because
+   arenas replaced it*, and this crate faithfully copied that.
+3. `src/arena.rs:154` — `DEFAULT_ARENA_PAYS` is `false` on wasm32, so
+   `ensure_default_arena()` returns immediately and no arena is ever created.
+
+So `segment_free` and `huge_free` both try `arena::chunk_free*`, get `false`,
+and fall through to `os::free` -> `prim::free` -> `Ok(())`. The 32 MiB
+reservation stays *mapped* and becomes permanently unreachable. Both recycling
+layers were removed, one upstream and one by the `cfg`.
+
+**Isolated repro** — 54 KB of wasm, no Carmenta, no candle; 20 identical
+alloc/free cycles of one `Vec`:
+
+| block | stock | after `arena::reserve_os_memory_ex(256 MiB)` |
+|---|---:|---:|
+| 20 MiB x 20 cycles | **+640.0 MiB** | **+0.0 MiB** |
+| 4 MiB x 20 cycles | +0.0 MiB | +0.0 MiB |
+
+640 MiB is exactly 20 x `SEGMENT_SIZE`: one whole segment leaked per cycle. The
+threshold is the tell — `LARGE_OBJ_SIZE_MAX = SEGMENT_SIZE/2 = 16 MiB`, above
+which `heap.rs` routes to `huge_alloc`, a dedicated reservation that leaks
+whole. Carmenta's A4 detector input is `3*1760*1248*4 = 26.4 MB`, and the
+early-backbone activations at detector resolution are the same order.
+
+**An arena is NOT a general workaround, and the number that says so is worth
+keeping.** The repro above is fixed by a 256 MiB arena because a 20 MiB block
+fits in one. Carmenta does not: with `reserveArena(256)` the A4 page went 352
+MiB after load to **2162 MiB after one read** — the arena is consumed, and once
+`chunk_alloc*` misses, `huge_alloc`/`segment_alloc` fall straight back to
+`os::alloc_aligned` and leak exactly as before. An arena only bounds growth if
+it is sized ABOVE the peak working set, and on wasm that reservation is real
+committed memory paid up front. That is the trap: the workaround looks like it
+works, and silently stops working at the size where you needed it.
+
+**Ours**: dlmalloc was shipped as the immediate answer and then withdrawn —
+see §8.5, where the defect is fixed upstream and `rusty_alloc` returns as the
+default. `--no-default-features` still builds the dlmalloc arm, which is what
+kept every comparison below re-runnable.
+
+**Upstream**: the fix is NOT re-enabling the 1 GiB default arena — on wasm a
+reservation is a real commit, which is what produced the 1056 MiB their own
+`bench/wasm-selftest.mjs` measured. It is to make the arena *incremental and
+always-on* where `has_partial_free == false`, and to add a **steady-state** arm
+to that bench: N identical cycles asserting zero growth after the first. The
+measurement that justified the `cfg` ran a short workload, so it captured the
+eager-reserve startup cost and never reached the regime where the leak lives.
+Note `ensure_default_arena` is one-shot behind a `TRIED: AtomicBool`, so even
+natively an exhausted arena silently stops recycling for the rest of the
+process.
+
+`ffai-wasm` (Diana) still defaults to `rusty_alloc` and has the same latent
+defect. Its A/B measured PEAK parity, not a growth curve. Deliberately not
+changed here: swapping a shipped allocator without its own measurement is
+exactly the mistake this section is about.
+
+### 8.2 The wasm boundary copied every image twice
+
+`read`/`readLine`/`text` took `rgba: &[u8]`. wasm-bindgen has *already* copied
+the caller's bytes into linear memory to form that argument, so borrowing them
+forced `ImageBuffer` to copy again — two 8.7 MB buffers for one A4 page.
+`Vec<u8>` hands the first copy straight through. The JS signature is unchanged
+(`Uint8Array`).
+
+The same shape sat one layer down: `mobiledet_input` and `craft_input_color`
+each built a **source-resolution `f32` plane per channel**, three times per
+page, holding nothing but a `u8 -> f32` cast — `w*h*4` bytes apiece.
+`image::resize_bilinear_u8` samples the interleaved source directly.
+`resize_u8_matches_plane_path` asserts bit-identity across all three pixel
+formats and up/down/identity scaling, so this is a test rather than an
+argument. The same fusion is applied in `doclayout.rs` and `table.rs`.
+
+### 8.3 The detector had a floor and no ceiling
+
+`mobiledet_input` floors the short side at `min_side` (736) and caps only the
+LONG side, at `max_side` (4000). Nothing brought a large image DOWN, so a
+3000x4000 phone photo reached the detector at **12 MP** — every pixel above the
+resolution the network works at. `max_short` (`FFAI_DET_MAX_SHORT`, or
+`image::set_det_max_short` / `setDetMaxShort` where there is no environment) is
+the missing ceiling; the short side is now bounded on both ends.
+
+**It is safe for a reason worth stating.** `mobiledet.rs:605` divides boxes by
+`sx`/`sy` back into ORIGINAL image pixels, and crops are cut from the
+full-resolution gray plane. The ceiling changes only the resolution at which
+BOX GEOMETRY is computed — the pixels the recognizer reads are untouched. That
+is why a page can read identically at a much smaller detector input, and it is
+not true of downscaling the image itself.
+
+**The default is 1280, and it is not 736.** A single document page measured
+word-for-word identical at 736 and ~16 % faster, which is what opened the
+question. `examples/det_scale_sweep.rs` then gated the two corpora where the
+ceiling actually fires. HOLDOUT mean CER delta against the uncapped arm, with
+the worst single-clip regression beside it:
+
+| cap | cord dCER | worst clip | doc dCER | worst clip |
+|---|---:|---:|---:|---:|
+| 736 | **+0.0033** | +0.1928 | **+0.0395** | +0.2920 |
+| 960 | -0.0157 | +0.0377 | -0.0011 | **+0.2628** |
+| **1280** | **-0.0065** | **+0.0189** | **-0.0195** | **+0.0869** |
+
+736 loses on both holdouts and takes a clip with it. `cord-039` is 2304x4096
+and lands at 736x1308 — close to the 544x960 that once merged a whole receipt
+into a single 1903x1781 blob; `cord-016` is 2376x4224, literally the receipt
+`mobiledet_input`'s own doc comment is written about. 960 wins the receipt mean
+but still carries a +0.26 page on documents. **1280 is the only arm that
+improves both corpora with no badly-regressing clip**, which is the gate rather
+than a preference: a corpus mean absorbs one destroyed page, and one destroyed
+page is what this knob has produced before.
+
+`carmenta-capture` is unaffected by construction — all 108 clips are 620x200,
+so the FLOOR fires and the ceiling cannot. The LIVE record is untouched.
+
+### 8.4 What the two levers are worth, end to end
+
+Shipping arm (dlmalloc), one `read`:
+
+| input | detector input | peak linear memory | time | chars |
+|---|---|---:|---:|---:|
+| 3000x4000 photo, ceiling off | 3008x4000 (12.0 MP) | **2487 MiB** | 75.8 s | 1300 |
+| 3000x4000 photo, **default 1280** | 1280x1696 (2.2 MP) | **593 MiB** | 31.7 s | 1287 |
+| A4 1240x1754, uncapped | 1248x1760 (2.2 MP) | 507 MiB | 99.9 s | 3436 |
+| A4 1240x1754, `setDetMaxShort(736)` | 736x1056 (0.8 MP) | 205 MiB | 107.8 s | 3434 |
+
+**4.2x less peak memory on the phone photo, and 2.4x faster.** 2487 MiB is
+already past halfway to the 4 GB wall on a SINGLE image, which is the reported
+failure — it does not need an allocator leak to die, only a second photo.
+
+An A4 page at 150 dpi has a short side of 1240 and sits BELOW the ceiling, so
+the default deliberately leaves it alone. A browser that needs headroom more
+than accuracy sets `setDetMaxShort(736)` and buys 2.5x for the cost in the
+§8.3 table. Note the time did NOT improve on those A4 rows: that page carries
+3436 characters and is recognition-bound, not detection-bound. The 16 % this
+question started from came from a detection-bound page, and the ceiling only
+pays where detection is the cost.
+
+### 8.5 Fixed upstream, in two releases (2026-08-28)
+
+`rusty_alloc` 1.1.5 and 1.1.6 landed the same day the report went over, and
+between them close both halves of §8.1. Re-measured on both instruments.
+
+**1.1.5 — the leak.** `adopt_os_block` registers each OS block as arena chunks
+at the moment it is FREED, so the recyclable pool grows to the workload's peak
+and no further: no up-front commit, which is what made a 1 GiB reservation cost
+a real 1 GiB of linear memory and got the arena disabled on wasm in the first
+place. The one-shot `TRIED` latch is gone too, so an exhausted arena no longer
+stops recycling for the rest of the process. The isolated repro went from
+**+640 MiB to +0 MiB** over 20 cycles.
+
+That left a bounded but expensive plateau — 1280 MiB against dlmalloc's 507 —
+and a measured cause. Holding blocks live and differencing two counts
+(`hold(n,9) - hold(n,1)`, fresh module instance per row) showed the cost of a
+huge block was `SEGMENT_SIZE * ceil((size + 64 KiB) / SEGMENT_SIZE)`: the 64 KiB
+segment header was charged against the same 32 MiB span the payload had to fit
+inside, so a request of EXACTLY one segment took two. Waste spiked to 100 % at
+precisely the power-of-two sizes tensor buffers land on.
+
+**1.1.6 — the rounding.** A huge block now costs `size + 64 KiB`, with no
+segment-multiple rounding at all, and `LARGE_OBJ_SIZE_MAX` was raised from
+`SEGMENT_SIZE / 2` to a segment's whole usable span:
+
+| request | 1.1.5 | 1.1.6 |
+|---|---:|---:|
+| 32 MiB (`== SEGMENT_SIZE`) | 64.0 MiB, 100 % waste | **32.1 MiB, 0 %** |
+| 48 MiB (a 12 MP RGBA frame) | 64.0 MiB, 33 % | **48.1 MiB, 0 %** |
+| 64 MiB | 96.0 MiB, 50 % | **64.1 MiB, 0 %** |
+
+**Where that leaves us.** Peak linear memory, byte-identical OCR output in
+every cell:
+
+| | dlmalloc | 1.1.4 | 1.1.5 | 1.1.6 |
+|---|---:|---:|---:|---:|
+| model load | 54 MiB | 128 MB | 128 MiB | **98 MiB** |
+| A4 page, steady state | 507 MiB | **trap on read 6** | 1280 MiB | **733 MiB** |
+| 12 MP photo, one read | 593 MiB | — | 1280 MiB | **701 MiB** |
+
+The A4 curve on 1.1.6 is 98 -> 665 -> 733 -> 733 -> 733 -> 733: it settles on
+the third read and does not move. `rusty_alloc` is the default again.
+
+**One residual, and it is a trade rather than a regression.** Raising
+`LARGE_OBJ_SIZE_MAX` to a segment's usable span means two blocks in the
+16-31.9 MiB band can never share a segment, so each takes a whole 32 MiB — a
+16 MiB block still measures 100 % waste and Carmenta's 25.1 MiB detector input
+27 %. The alternative (lowering the constant instead) would have pushed that
+whole band onto the huge path, so this was a defensible call. Reported, not
+blocking; the band is narrow and the plateau is bounded well inside the budget.
