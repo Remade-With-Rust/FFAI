@@ -69,12 +69,12 @@ rusty_alloc-api = "=1.1.6"
 serde_json = { workspace = true }
 # Step 6's gate resolves the checkpoint the same way the engine does, so the
 # test cannot pass against a model the engine could not have found.
-ffai-models = { workspace = true }
+ffai-models = { path = "../ffai-models" }
 # The README's example is compiled (examples/quickstart.rs) so its code is
 # type-checked against the real API rather than against memory. Decoding an
 # image file is the CALLER's job — the engine takes an already-decoded
 # `ImageBuffer` — so this is a dev-dependency, not a dependency.
-ffai-media = { workspace = true }
+ffai-media = { path = "../ffai-media" }
 
 [features]
 # Weight download. Off by default so an OEM binary that enables Argus does

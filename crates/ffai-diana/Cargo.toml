@@ -70,8 +70,8 @@ rusty_alloc-api = "=1.1.6"
 # The core, for `alloc::collect` — the reclaim `examples/scaling.rs` drives.
 # `rusty_alloc-api` deliberately exposes collect only per-`Heap`.
 rusty_alloc = "=1.1.6"
-ffai-media = { workspace = true }
-ffai-bench = { workspace = true }
+ffai-media = { path = "../ffai-media" }
+ffai-bench = { path = "../ffai-bench" }
 
 [lints.rust]
 # Mirrors [workspace.lints.rust]; restated because this crate needs its own

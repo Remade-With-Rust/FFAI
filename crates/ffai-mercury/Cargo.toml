@@ -42,7 +42,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 [dev-dependencies]
 # Gate H-28: property tests for the advertised invariants (tests/properties.rs).
 proptest = "1"
-ffai-models = { workspace = true }
+ffai-models = { path = "../ffai-models" }
 
 [features]
 # Weight downloading, ON by default because the README documents it: `cargo add
@@ -147,8 +147,14 @@ needless_range_loop = "allow"
 # Two arms that look identical today document two distinct cases.
 if_same_then_else = "allow"
 
+# Path-only, deliberately: a dev-dependency that carries a VERSION must be
+# resolvable from crates.io when this crate is packaged, which makes it a
+# publish-ordering edge. release-plz does not treat dev-dependencies as edges
+# in its topological sort, so a bumped-but-not-yet-published sibling deadlocks
+# the release. Cargo drops a version-less dev-dependency from the published
+# manifest, so this costs consumers nothing and removes the edge.
 [dev-dependencies.ffai-bench]
-workspace = true
+path = "../ffai-bench"
 
 [dev-dependencies.ffai-media]
-workspace = true
+path = "../ffai-media"

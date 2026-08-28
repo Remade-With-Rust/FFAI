@@ -33,7 +33,7 @@ png = "0.17"
 # out of [dependencies] matters — ffai-bench must not gain a dependency on a
 # component it benchmarks, or the analyzer starts shipping the thing it is
 # supposed to be measuring at arm's length.
-ffai-argus = { workspace = true }
+ffai-argus = { path = "../ffai-argus" }
 # `suppress_optimizer` only — the rule search reads harvested CSVs. The library
 # never parses a CSV and never takes an argument.
 clap = { workspace = true }
