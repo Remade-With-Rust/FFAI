@@ -99,6 +99,86 @@ struct Block {
     down: Tensor,
 }
 
+/// Write `seq` new positions into a preallocated KV cache, in place.
+///
+/// # The quadratic this deletes
+///
+/// The cache used to be `Tensor::cat(&[&prev, &new], 2)` every decode step.
+/// `cat` allocates a fresh tensor of the FULL length and copies the whole
+/// history into it, so appending one position at index 1142 copies 1143 — per
+/// layer, for k and for v:
+///
+/// ```text
+/// 2 (k,v) x 3 kv-heads x 1143 x 64 x 4 B x 30 layers  =  52.7 MB PER TOKEN
+/// ```
+///
+/// Measured at **14.0 ms/token, 26 % of the whole decode step** — the largest
+/// single line in the profile, and 3.8 GB/s, the single-threaded-copy
+/// signature this codebase keeps finding. Worse, the cost GROWS with position,
+/// so a long generation pays it quadratically.
+///
+/// Writing into a preallocated buffer makes an append cost the size of the
+/// append — `3 x 64 x 4 B = 768 B` per tensor per layer instead of 878 KB.
+///
+/// # Why `narrow` afterwards is free
+///
+/// The buffer is `(1, kv_heads, cap, head_dim)` and attention wants
+/// `(1, kv_heads, used, head_dim)`. Narrowing axis 2 leaves each head's slice
+/// **contiguous** — element `(h, i, j)` sits at `h*cap*hd + i*hd + j`, so for
+/// one `h` the used prefix is one unbroken run. candle's batched matmul walks
+/// batch items by stride and needs each item's matrix to have standard strides,
+/// which this satisfies. No copy is reintroduced.
+///
+/// # Safety of the write
+///
+/// `pos + seq <= cap` is checked here before anything is written, and the
+/// destination rows for distinct heads are disjoint by construction.
+struct KvAppend {
+    /// First position to write.
+    pos: usize,
+}
+
+impl candle_core::InplaceOp2 for KvAppend {
+    fn name(&self) -> &'static str {
+        "ffai-kv-append"
+    }
+
+    fn cpu_fwd(
+        &self,
+        dst: &mut candle_core::CpuStorage,
+        dl: &candle_core::Layout,
+        src: &candle_core::CpuStorage,
+        sl: &candle_core::Layout,
+    ) -> CandleResult<()> {
+        let candle_core::CpuStorage::F32(dst) = dst else {
+            candle_core::bail!("ffai-kv-append expects f32")
+        };
+        let candle_core::CpuStorage::F32(src) = src else {
+            candle_core::bail!("ffai-kv-append expects f32")
+        };
+        let (Some((dof, _)), Some((sof, sen))) = (dl.contiguous_offsets(), sl.contiguous_offsets())
+        else {
+            candle_core::bail!("ffai-kv-append expects contiguous buffers")
+        };
+        let (_b, heads, cap, hd) = dl.shape().dims4()?;
+        let (_sb, sheads, seq, shd) = sl.shape().dims4()?;
+        if sheads != heads || shd != hd {
+            candle_core::bail!("ffai-kv-append: src {sheads}x{shd} vs dst {heads}x{hd}");
+        }
+        if self.pos + seq > cap {
+            candle_core::bail!("ffai-kv-append: pos {} + seq {seq} exceeds cap {cap}", self.pos);
+        }
+        let src = &src[sof..sen];
+        for h in 0..heads {
+            let d0 = dof + h * cap * hd + self.pos * hd;
+            let s0 = h * seq * hd;
+            dst[d0..d0 + seq * hd].copy_from_slice(&src[s0..s0 + seq * hd]);
+        }
+        crate::cost::copy((heads * seq * hd) as u64);
+        Ok(())
+    }
+}
+
 /// `x / sqrt(mean(x^2) + eps) * w`, one row at a time, across cores.
 ///
 /// candle's `rms_norm` measured **3.9 GB/s** at `(1142, 576)` — the
@@ -649,7 +729,14 @@ pub struct TextTower {
     sin: Tensor,
     cfg: Cfg,
     /// `KV` cache, one slot per layer.
+    /// Preallocated `(1, kv_heads, cap, head_dim)` buffers plus how much of
+    /// each is live. Appending writes in place — see [`KvAppend`] for the
+    /// quadratic `Tensor::cat` this replaced.
     kv: Vec<Option<(Tensor, Tensor)>>,
+    /// Positions currently live in every cache buffer.
+    kv_len: usize,
+    /// Allocated capacity along the position axis.
+    kv_cap: usize,
 }
 
 impl TextTower {
@@ -690,6 +777,8 @@ impl TextTower {
             sin,
             cfg,
             kv: (0..cfg.layers).map(|_| None).collect(),
+            kv_len: 0,
+            kv_cap: 0,
         })
     }
 
@@ -698,6 +787,8 @@ impl TextTower {
         for slot in &mut self.kv {
             *slot = None;
         }
+        self.kv_len = 0;
+        self.kv_cap = 0;
     }
 
     /// Logits for the LAST position.
@@ -786,16 +877,57 @@ impl TextTower {
         let k = self.rope(&k, index_pos)?;
         prof::add("rope", _t);
 
-        // KV cache: concatenate, then keep.
+        // KV cache: write the new positions INTO a preallocated buffer.
+        //
+        // This was `Tensor::cat(&[&prev, &new], 2)`, which reallocates the full
+        // length and recopies the entire history every step — 52.7 MB per
+        // token at position 1142, measured at 14.0 ms and 26 % of a decode
+        // step, growing quadratically with the generation. See [`KvAppend`].
         let _t = std::time::Instant::now();
-        let (k, v) = match self.kv[i].take() {
-            Some((pk, pv)) => (
-                Tensor::cat(&[&pk, &k], 2)?.contiguous()?,
-                Tensor::cat(&[&pv, &v], 2)?.contiguous()?,
-            ),
-            None => (k, v),
+        let (k, v) = {
+            // Grow by doubling so the copy is amortised, and only ever on the
+            // rare step that outgrows the buffer.
+            if self.kv_cap < index_pos + seq {
+                // Headroom, not doubling: `next_power_of_two` would take a
+                // 1142-token prompt to 2048 slots and cost ~41 MB of cache we
+                // never touch, against a footprint gate that is already tight.
+                // 256 spare positions covers a whole generation (our budget is
+                // 32-64 tokens) with no regrowth, and if one is ever needed it
+                // copies the live prefix ONCE, amortised over 256 tokens.
+                let want = index_pos + seq + 256;
+                let shape = (b, c.kv_heads, want, c.head_dim);
+                for slot in &mut self.kv {
+                    *slot = match slot.take() {
+                        // Carry the live prefix across; `kv_len` positions, once.
+                        Some((pk, pv)) => {
+                            let (nk, nv) = (
+                                Tensor::zeros(shape, pk.dtype(), pk.device())?,
+                                Tensor::zeros(shape, pv.dtype(), pv.device())?,
+                            );
+                            nk.inplace_op2(&pk.narrow(2, 0, self.kv_len)?, &KvAppend { pos: 0 })?;
+                            nv.inplace_op2(&pv.narrow(2, 0, self.kv_len)?, &KvAppend { pos: 0 })?;
+                            Some((nk, nv))
+                        }
+                        None => Some((
+                            Tensor::zeros(shape, k.dtype(), k.device())?,
+                            Tensor::zeros(shape, v.dtype(), v.device())?,
+                        )),
+                    };
+                }
+                self.kv_cap = want;
+            }
+            let (bk, bv) = self.kv[i].as_ref().expect("cache allocated above");
+            bk.inplace_op2(&k, &KvAppend { pos: index_pos })?;
+            bv.inplace_op2(&v, &KvAppend { pos: index_pos })?;
+            let used = index_pos + seq;
+            // Narrowing axis 2 keeps each head's slice contiguous, so candle's
+            // batched matmul takes it without reintroducing a copy.
+            (bk.narrow(2, 0, used)?, bv.narrow(2, 0, used)?)
         };
-        self.kv[i] = Some((k.clone(), v.clone()));
+        // The tower advances the shared length once per layer-0 visit; every
+        // layer sees the same positions, so tracking it on the last layer
+        // written keeps it correct for both prefill and decode.
+        self.kv_len = index_pos + seq;
         prof::add("kv cache", _t);
         let k_len = k.dim(2)?;
 

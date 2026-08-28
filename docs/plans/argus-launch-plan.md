@@ -3450,3 +3450,118 @@ as bytes-not-moved, is exact everywhere. Holding out for the stopwatch did not
 make the reporting more honest — it made it *less* accurate, because it threw
 away nine real reductions in favour of the three that happened to be large
 enough for a bad instrument to see.
+
+## 29. THE TEXT SIDE — a quadratic in the KV cache (2026-08-28)
+
+Vision had four optimisation rounds; the text tower had one. Prefill was
+profiled per-op, decode never was — and that gap, not the analysis, is why this
+survived.
+
+### Prefill is at its floor, and the two obvious leads were already taken
+
+| op | ms | GF/s |
+|---|---:|---:|
+| gate+up proj | 232.1 | 522 |
+| down proj | 120.3 | 504 |
+| o proj | 48.2 | 472 |
+| qkv proj | 91.4 | 415 |
+| q.k^T | 159.4 | 283 |
+| attn.v | 112.9 | 399 |
+
+**Our matmuls alone take 764 ms against PyTorch's ENTIRE 675 ms prefill.** The
+gap is in the gemms, and the two things worth trying were already done and
+documented in `text.rs`: GQA grouped so `repeat_kv` is never materialised, and
+fused-QKV refuted with a three-sequence table (3.62x vs 3.52x at seq 1142,
+because GQA's differing widths force a strided `narrow` that reintroduces the
+copies the fusion removes).
+
+### Decode: the KV cache was quadratic
+
+Profiled for the first time. The first run reported "causal softmax 54.8 %,
+102 ms/token" — **which is impossible**, because at `seq = 1` that softmax
+covers 10 K elements. Adding a profiling-OFF null arm gave 53.8 ms/token
+against 52.2 profiled: the instrument was innocent and the run was contended.
+Re-measured quiet, twice, the real top line was:
+
+```
+kv cache    14.0 ms/token    26 % of the step
+```
+
+`Tensor::cat(&[&prev, &new], 2)` allocates the full length and recopies the
+whole history **every step, every layer**:
+
+```
+2 (k,v) x 3 kv-heads x 1143 x 64 x 4 B x 30 layers  =  52.7 MB PER TOKEN
+```
+
+at 3.8 GB/s — the single-threaded-copy signature this codebase keeps finding.
+And it GROWS with position, so the cost is quadratic in the generation.
+
+`KvAppend` writes into a preallocated buffer instead. Narrowing axis 2 keeps
+each head's slice contiguous, so candle's batched matmul takes it without
+reintroducing a copy.
+
+| | before | after |
+|---|---:|---:|
+| kv cache | 14.0 ms/token | **0.04** |
+| whole decode | 53.9 ms/token | **42.6 (1.27x)** |
+| bytes copied per token | 52.7 MB | **46 KB** |
+
+The arithmetic closes: 54 - 14 = 40. `next_power_of_two` sizing was rejected —
+it takes a 1142-token prompt to 2048 slots and 41 MB of cache never touched,
+against a footprint gate that already fails; 256 positions of headroom covers a
+whole generation with no regrowth.
+
+**The win scales with output length**, and the demo is close to the least
+favourable case:
+
+| tokens | old bytes copied | saved |
+|---:|---:|---:|
+| 11 (demo) | 582 MB | ~150 ms |
+| 64 (reference budget) | 3.4 GB | ~900 ms |
+| 256 | 15.0 GB | ~3.9 s |
+
+### Decode is now at 78-92 % of its memory floor
+
+Every token must read **591 MB** — 425 MB of layer weights, 113.5 MB of
+`lm_head` (vocab 49280), 52.7 MB of KV cache. At 17-20 GB/s that is a
+**29.6-34.8 ms floor** against 37.98 measured.
+
+That also explains the profile's `UNACCOUNTED`: it is `lm_head`, which sits
+outside `Block::forward` and so outside the profiler. At 20.3 GB/s it is
+exactly at the floor — not a mystery and not an opportunity.
+
+| op | GB/s | verdict |
+|---|---:|---|
+| gate+up / down / qkv / o / lm_head | 17.5-20.3 | **at the DRAM floor** |
+| attn.v | 10.2 | headroom |
+| q.k^T | 7.0 | headroom |
+| causal softmax | 0.6 | overhead-bound |
+
+### Two refutations on the causal softmax
+
+It moves 2.5 MB per token in 3.8 ms — 0.6 GB/s, which is not a bandwidth
+number. Both explanations failed:
+
+| hypothesis | verdict |
+|---|---|
+| rayon dispatch on 9 tiny rows; add a serial threshold | **3.80 -> 4.04 ms**, no better |
+| the accumulator chain + `fastmath::exp` needing `target_feature` (the fix `siglip.rs` documents for ITS softmax) | **neutral** on both halves — decode share 10.0 % -> 11.1 %, prefill flat |
+
+The second premise was simply wrong about this function: `fastmath::exp` uses
+**magic-number rounding** (`+1.5*2^23`, a plain float add), not `round()`, so it
+never needed `target_feature` and `roundps` was never in the picture. The
+`siglip` note describes `exp_poly`, a different polynomial. **A fix that is
+documented as correct for one kernel is not evidence for another that merely
+looks like it.** Both reverted rather than carried as neutral `unsafe`.
+
+### What is left
+
+~5.7 ms/token, all of it in `q.k^T` and `attn.v` reading the KV cache at 7 and
+10 GB/s against 17. They are candle matmuls at `M = 3` — a GEMV shape it does
+not do well. Vision refuted hand-writing a gemm at 0.11x, but that was a large
+one; a streaming reduction at `M = 3` is a different case and is genuinely open.
+
+Beyond that only fewer bytes: 77 % of a decode token is weight streaming, so
+f16 would be roughly 2x — and would break the byte-identical caption gate. That
+is a product decision, not an optimisation.

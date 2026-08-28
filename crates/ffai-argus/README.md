@@ -218,6 +218,49 @@ engine sets `kernels_parallel = workers*6 <= cores` = **false**: production runs
 six concurrent towers with these kernels *serial*, which is not the regime a
 single-tower benchmark measures.
 
+**Round 6: the KV cache was quadratic.** Vision had four optimisation rounds;
+the text tower had one, and decode had **never been profiled per-op**. That gap
+— the instrument, not the analysis — is why this survived so long. `kv cache`
+reads **0.0 ms in prefill**; it only exists at `seq = 1`.
+
+Profiled, it was the largest line in the decode step:
+`Tensor::cat(&[&prev, &new], 2)` allocates the full length and recopies the
+entire history every step, every layer —
+
+```text
+2 (k,v) x 3 kv-heads x 1143 x 64 x 4 B x 30 layers  =  52.7 MB PER TOKEN
+```
+
+— at 3.8 GB/s, and **growing with position**, so the cost is quadratic in the
+generation. `KvAppend` writes into a preallocated buffer instead; narrowing the
+position axis keeps each head's slice contiguous, so candle's batched matmul
+takes it without reintroducing a copy.
+
+| | before | after |
+|---|---:|---:|
+| `kv cache` | 14.0 ms/token | **0.04 ms/token** |
+| whole decode | 53.9 ms/token | **42.6 — 1.27x** |
+| bytes copied per token | 52.7 MB | **46 KB** |
+
+The win scales with output length, because what was deleted was a quadratic:
+**~150 ms** at 11 generated tokens, **~900 ms** at the reference budget of 64,
+**~3.9 s** at 256 — and video pays it per window.
+
+**Decode is now at 78-92 % of its memory floor.** Every token must read
+**591 MB**: 425 MB of layer weights, 113.5 MB of `lm_head`, 52.7 MB of KV cache.
+At 17-20 GB/s that is a 29.6-34.8 ms floor against 37.98 measured. Four
+projections and `lm_head` all sit at **17.5-20.3 GB/s** — the only lever left on
+those is fewer bytes, which means a dtype change, which would break the
+byte-identical caption gate.
+
+**Also refuted, twice, on the causal softmax** (0.6 GB/s — an overhead number,
+not a bandwidth one): a serial threshold for rayon's dispatch on 9 tiny rows
+(**3.80 -> 4.04 ms**, no better), and the eight-accumulator + `target_feature`
+fix that `siglip.rs` documents for ITS softmax (**neutral**). The second premise
+was wrong about this function — `fastmath::exp` uses magic-number rounding, a
+plain float add, so it never needed `target_feature`. A fix documented as
+correct for one kernel is not evidence for another that merely resembles it.
+
 **Where a caption's time goes now** (`examples/stage_split`, min of 3, warm):
 
 | stage | time | share |
