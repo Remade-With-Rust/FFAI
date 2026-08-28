@@ -69,7 +69,7 @@ libmimalloc-sys = { version = "0.1", default-features = false }
 rusty_alloc-api = "=1.1.6"
 # The core, for `alloc::collect` — the reclaim `examples/scaling.rs` drives.
 # `rusty_alloc-api` deliberately exposes collect only per-`Heap`.
-rusty_alloc = "=1.1.4"
+rusty_alloc = "=1.1.6"
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 
