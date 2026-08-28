@@ -22,7 +22,10 @@ ffai-core = { workspace = true }
 # release calls `reqwest::blocking` — a module that does not exist on wasm32.
 # Nothing in a browser can fetch weights through the model cache anyway: the
 # caller supplies bytes.
-ffai-argus = { path = "../ffai-argus", version = "0.7.1", default-features = false }
+# **0.7.2, not 0.7.1** — see the note in `ffai-mercury-wasm`. `SmolVlm::from_bytes`
+# and `ArgusBytes` first exist in 0.7.2, and a tarball verification resolves
+# this from crates.io rather than from the path.
+ffai-argus = { path = "../ffai-argus", version = "0.7.2", default-features = false }
 wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
 
 # The binary is the only thing entitled to choose an allocator, and a cdylib IS

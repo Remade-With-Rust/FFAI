@@ -22,7 +22,13 @@ ffai-core = { workspace = true }
 # release calls `reqwest::blocking` — a module that does not exist on wasm32.
 # Nothing in a browser can fetch weights through the model cache anyway: the
 # caller supplies bytes.
-ffai-mercury = { path = "../ffai-mercury", version = "1.0.1", default-features = false }
+# **1.0.2, not 1.0.1**, and the distinction is load-bearing rather than tidy.
+# When cargo VERIFIES a package tarball it resolves this dependency from
+# crates.io, never from the path beside it — and `WhisperCandle::from_bytes`,
+# the constructor this crate is built on, first exists in 1.0.2. A `^1.0.1`
+# requirement resolves happily in the workspace and then fails to compile the
+# moment it is packaged, which is exactly how it failed.
+ffai-mercury = { path = "../ffai-mercury", version = "1.0.2", default-features = false }
 wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
 
 # The binary is the only thing entitled to choose an allocator, and a cdylib IS
