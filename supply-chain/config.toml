@@ -40,6 +40,9 @@ audit-as-crates-io = true
 [policy.ffai-carmenta]
 audit-as-crates-io = true
 
+[policy.ffai-carmenta-wasm]
+audit-as-crates-io = true
+
 [policy.ffai-cli]
 audit-as-crates-io = true
 
@@ -59,6 +62,9 @@ audit-as-crates-io = true
 audit-as-crates-io = true
 
 [policy.ffai-wasm]
+audit-as-crates-io = true
+
+[policy.tokenizers]
 audit-as-crates-io = true
 
 [[exemptions.ahash]]
@@ -151,6 +157,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.chacha20]]
 version = "0.10.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.chacha20]]
+version = "0.10.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.chrono]]
@@ -897,8 +907,16 @@ criteria = "safe-to-run"
 version = "0.3.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.rusty_alloc]]
+version = "1.1.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.rusty_alloc-api]]
 version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.rusty_alloc-api]]
+version = "1.1.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_h264]]
@@ -955,6 +973,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.security-framework-sys]]
 version = "2.17.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.serde-wasm-bindgen]]
+version = "0.6.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_plain]]
