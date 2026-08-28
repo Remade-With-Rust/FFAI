@@ -103,6 +103,77 @@ code is reached).
 
 Then serve `demo.html` beside `pkg/` and open it.
 
+## Memory is the budget here, and it has a hard edge
+
+wasm32 has a 4 GB address space and its linear memory **only ever grows** —
+nothing you free is given back to the browser. Peak is therefore the whole
+budget, and running out is not a slowdown, it is
+`RuntimeError: unreachable`: Rust's allocation-failure abort, which carries no
+panic message because it never reaches the panic hook.
+
+This module uses `rusty_alloc`. That was an open question when the crate was
+written, it got measured, and the measurement found a real defect and then
+watched it close. Peak linear memory on the same module, byte-identical OCR
+output throughout:
+
+| | dlmalloc | rusty_alloc 1.1.4 | 1.1.5 | **1.1.6** |
+|---|---:|---:|---:|---:|
+| model load | 54 MiB | 128 MB | 128 MiB | **98 MiB** |
+| A4 page, steady state | 507 MiB | **trapped** | 1280 MiB | **733 MiB** |
+| 12 MP photo, one read | 593 MiB | — | 1280 MiB | **701 MiB** |
+
+On 1.1.4 a single `Reader` grew ~750 MB per page with no plateau and hit the
+4 GB wall on the sixth image. 1.1.5 fixed the underlying leak — freed segments
+were never returned to any free list, because `prim::free` is correctly a no-op
+on a memory that cannot shrink and the arena that would have caught them was
+disabled on that target. 1.1.6 fixed the segment-size rounding that left the
+resulting plateau at twice dlmalloc's.
+
+Today it is bounded and stays within 1.2–1.5× of dlmalloc, which is a cost worth
+paying on a 4 GB budget for the house allocator. `--no-default-features` builds
+the dlmalloc arm if you want to re-run the comparison against a future release;
+the two builds differ in exactly one `#[global_allocator]` line.
+
+## `setDetMaxShort` — the knob that decides whether a big image fits
+
+Detection cost and detection MEMORY both scale with the detector's input area,
+and the detector works at a short side of roughly 736. Carmenta caps the short
+side at **1280** by default, so a phone photo no longer reaches the network at
+12 megapixels:
+
+| input | detector input | peak linear memory | time |
+|---|---|---:|---:|
+| 3000x4000 photo, ceiling off | 3008x4000 (12.0 MP) | 2487 MiB | 75.8 s |
+| 3000x4000 photo, default | 1280x1696 (2.2 MP) | **593 MiB** | **31.7 s** |
+| A4 1240x1754, default | 1248x1760 (2.2 MP) | 507 MiB | 99.9 s |
+| A4 1240x1754, `setDetMaxShort(736)` | 736x1056 (0.8 MP) | **205 MiB** | 107.8 s |
+
+(Measured on the dlmalloc arm, so the ceiling's effect is read without the
+allocator's contribution mixed in.)
+
+An A4 page at 150 dpi has a short side of 1240 and is BELOW the default
+ceiling, so it is untouched. `setDetMaxShort(736)` takes another 2.5x off its
+peak — worth it in a browser that is close to the edge, and it costs accuracy:
+736 regressed both gated corpora (§8.3 of the plan has the table). Lowering it
+is a deployment choice with a published price, not a free win.
+
+```js
+import init, { Reader, setDetMaxShort } from './ffai_carmenta_wasm.js';
+await init();
+setDetMaxShort(736);        // module-wide; 0 restores the 1280 default
+```
+
+Note what the ceiling does NOT touch: boxes are mapped back to original image
+pixels and crops are cut from the full-resolution image, so the recognizer
+always reads full-resolution pixels. Only the resolution at which box geometry
+is computed changes.
+
+Two more things that cost memory and are already handled: `read`, `readLine`
+and `text` take the buffer **by value**, so wasm-bindgen's copy is used
+directly instead of being copied a second time; and preprocessing samples the
+interleaved source pixels straight into the resize instead of materialising an
+`f32` plane per channel first.
+
 ## What is different on this target
 
 **Serial.** `wasm32-unknown-unknown` has no threads, so `ffai_carmenta::par`

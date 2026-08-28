@@ -1,7 +1,11 @@
 [package]
 name = "ffai-carmenta-wasm"
 description = "Carmenta in the browser — pure-Rust OCR compiled to WebAssembly, no ONNX runtime, no Tesseract"
-version = "0.1.0"
+# 0.2.0: `read`/`readLine`/`text` take the RGBA buffer by value rather than by
+# slice. The JS signature is unchanged — it is still a `Uint8Array` — but the
+# Rust signature is, so this is a breaking change for a Rust consumer even
+# though a browser sees nothing. Adds `setDetMaxShort` and `linearMemoryBytes`.
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -22,7 +26,7 @@ ffai-core = { workspace = true }
 # release calls `reqwest::blocking` — a module that does not exist on wasm32.
 # Nothing in a browser can fetch weights through the model cache anyway: the
 # caller supplies bytes.
-ffai-carmenta = { path = "../ffai-carmenta", version = "0.9.1", default-features = false }
+ffai-carmenta = { path = "../ffai-carmenta", version = "0.10.0", default-features = false }
 wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -33,11 +37,46 @@ serde-wasm-bindgen = "0.6"
 # rusty_alloc at parity with dlmalloc on Diana's workload. Carmenta's
 # allocation pattern is different (many small line crops rather than one big
 # tensor chain), so the answer here is its own open measurement.
-rusty_alloc-api = { version = "=1.1.4", optional = true }
+rusty_alloc-api = { version = "=1.1.6", optional = true }
+# The allocator CORE, for `arena::reserve_os_memory_ex`. `rusty_alloc-api` is
+# the mi_*-compatible surface and does not re-export the arena module, but on
+# wasm the arena is the ONLY layer that recycles a freed segment — `prim::free`
+# is a no-op there because linear memory cannot shrink. Same version as the
+# api crate, so this adds no second copy of the allocator.
+rusty_alloc = { version = "=1.1.6", optional = true }
 
 [features]
+# **`rusty_alloc`, and the "open measurement" this comment used to ask for has
+# now been taken three times — once to find a defect, twice to watch it close.**
+#
+# v1.1.4 never reused a freed SEGMENT on wasm32. `prim::free` is a no-op there
+# (linear memory cannot shrink), the crate has no segment cache (upstream
+# mimalloc v2 deleted it in favour of arenas), and `arena.rs` disabled the
+# default arena on wasm — so `segment_free`/`huge_free` fell through to
+# `os::free`, i.e. to nothing, and every 32 MiB reservation became permanently
+# unreachable. Reading one A4 page repeatedly: 128 MB -> 977 -> 1,745 -> 2,481,
+# ~750 MB per page with no plateau, trapping on the sixth at the 4 GB wall.
+#
+# v1.1.5 fixed the leak (`adopt_os_block` registers each OS block as arena
+# chunks at the moment it is FREED, so the pool grows to the workload's peak and
+# no further) and v1.1.6 fixed the segment-size ROUNDING that made the resulting
+# plateau twice dlmalloc's — a huge block now costs `size + 64 KiB` instead of
+# rounding up to a whole 32 MiB segment.
+#
+# Peak linear memory, same module, byte-identical OCR output:
+#
+#                        dlmalloc   1.1.4      1.1.5    1.1.6
+#   model load              54 MiB   128 MB    128 MiB   98 MiB
+#   A4 page, steady state  507 MiB   trapped  1280 MiB  733 MiB
+#   12 MP photo, one read  593 MiB        -   1280 MiB  701 MiB
+#
+# Bounded, and within 1.2-1.5x of dlmalloc on a 4 GB budget. One residual, not a
+# regression: `LARGE_OBJ_SIZE_MAX` is now a segment's whole usable span, so two
+# blocks in the 16-31.9 MiB band can never share a segment and each takes 32 MiB.
+# `--no-default-features` leaves dlmalloc, the target default, so the A/B stays
+# runnable against any future release.
 default = ["rusty-alloc"]
-rusty-alloc = ["dep:rusty_alloc-api"]
+rusty-alloc = ["dep:rusty_alloc-api", "dep:rusty_alloc"]
 # The second half of the conv A/B — see `ffai-carmenta`'s feature of the same
 # name. wasm cannot switch conv arms at run time, so the arms are two builds.
 wasm-candle-conv = ["ffai-carmenta/wasm-candle-conv"]

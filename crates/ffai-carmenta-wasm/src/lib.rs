@@ -170,7 +170,14 @@ impl Reader {
 
     /// Read an RGBA buffer — the layout `CanvasRenderingContext2D.getImageData`
     /// hands out. Alpha is ignored.
-    pub fn read(&self, rgba: &[u8], width: u32, height: u32) -> Result<Vec<Line>, JsValue> {
+    ///
+    /// `Vec<u8>` rather than `&[u8]`, and that is a memory fix rather than a
+    /// style choice: wasm-bindgen has ALREADY copied the caller's bytes into
+    /// linear memory to form the argument. Borrowing them meant `ImageBuffer`
+    /// had to copy a second time, so a 1240x1754 page held two 8.7 MB copies of
+    /// the same pixels at once. Taking ownership hands that first copy straight
+    /// through — same JS signature, one buffer instead of two.
+    pub fn read(&self, rgba: Vec<u8>, width: u32, height: u32) -> Result<Vec<Line>, JsValue> {
         self.read_with(rgba, width, height, false)
     }
 
@@ -182,13 +189,13 @@ impl Reader {
     /// a caller who already knows where the text is (a selection rectangle, a
     /// receipt field, a subtitle bar) skips almost all of the cost.
     #[wasm_bindgen(js_name = readLine)]
-    pub fn read_line(&self, rgba: &[u8], width: u32, height: u32) -> Result<Vec<Line>, JsValue> {
+    pub fn read_line(&self, rgba: Vec<u8>, width: u32, height: u32) -> Result<Vec<Line>, JsValue> {
         self.read_with(rgba, width, height, true)
     }
 
     fn read_with(
         &self,
-        rgba: &[u8],
+        rgba: Vec<u8>,
         width: u32,
         height: u32,
         single_line: bool,
@@ -201,7 +208,7 @@ impl Reader {
             )));
         }
         let image = ImageBuffer {
-            data: rgba.to_vec(),
+            data: rgba,
             width,
             height,
             format: PixelFormat::Rgba8,
@@ -244,7 +251,7 @@ impl Reader {
     /// The whole page as text, lines joined with newlines and blocks separated
     /// by a blank line — the reading order the engine computed, not the order
     /// the boxes were found in.
-    pub fn text(&self, rgba: &[u8], width: u32, height: u32) -> Result<String, JsValue> {
+    pub fn text(&self, rgba: Vec<u8>, width: u32, height: u32) -> Result<String, JsValue> {
         let want = (width as usize) * (height as usize) * 4;
         if rgba.len() != want {
             return Err(JsValue::from_str(&format!(
@@ -253,7 +260,7 @@ impl Reader {
             )));
         }
         let image = ImageBuffer {
-            data: rgba.to_vec(),
+            data: rgba,
             width,
             height,
             format: PixelFormat::Rgba8,
@@ -264,6 +271,66 @@ impl Reader {
             .map_err(|e| JsValue::from_str(&format!("recognize failed: {e}")))?;
         Ok(out.text())
     }
+}
+
+/// Cap the DETECTOR's short side at `px` pixels.
+///
+/// `0` restores the gated default (1280); `0xFFFF_FFFF` disables the ceiling
+/// and restores the 0.9.x policy, in which nothing bounded a large image except
+/// the 4000-pixel cap on the LONG side.
+///
+/// `mobiledet_input` floors the short side at 736 and caps only the LONG side,
+/// at 4000 — so a 3000x4000 phone photo reaches the detector at 12 MP, every
+/// pixel above the resolution the network works at. Natively that is
+/// `FFAI_DET_MAX_SHORT`; a browser has no environment, so it gets this.
+///
+/// Detection is **86-89 % of the time** on a browser-sized capture and its cost
+/// is in the input area, so this is the largest speed knob a caller has — and
+/// on wasm32 it is a memory knob too, because the detector input tensor and
+/// every activation above it scale with the same area.
+#[wasm_bindgen(js_name = setDetMaxShort)]
+pub fn set_det_max_short(px: u32) {
+    ffai_carmenta::image::set_det_max_short(px as usize);
+}
+
+/// Current size of the wasm linear memory, in bytes.
+///
+/// The 4 GiB cap is a cap on THIS number, and linear memory only ever grows —
+/// so a growth curve across repeated reads is the only honest memory
+/// instrument on this target. `performance.memory` measures the JS heap and
+/// says nothing about ours.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = linearMemoryBytes)]
+#[must_use]
+pub fn linear_memory_bytes() -> f64 {
+    (core::arch::wasm32::memory_size::<0>() * 65536) as f64
+}
+
+/// Reserve a rusty_alloc ARENA of `mib` mebibytes, up front.
+///
+/// On wasm this is not an optimisation, it is the recycling layer. `prim::free`
+/// is a no-op (linear memory cannot shrink), and the arena is the ONLY other
+/// place a freed 32 MiB segment can go: `segment_free` and `huge_free` both try
+/// `arena::chunk_free*` first and fall through to `os::free` — i.e. to nothing —
+/// when the address belongs to no arena. rusty_alloc disables its own default
+/// arena on wasm (`DEFAULT_ARENA_PAYS = false`), so out of the box every freed
+/// segment is lost and linear memory grows without bound.
+///
+/// **Kept as an instrument; no longer needed as a workaround.** It existed
+/// because rusty_alloc 1.1.4 leaked a whole segment per >16 MiB alloc/free
+/// cycle on wasm, and an arena was the only free list that could catch them.
+/// It was never a good workaround even then: an arena only bounds growth while
+/// it has chunks left, and `reserveArena(256)` followed by one A4 read still
+/// went 352 MiB -> 2162 MiB, because Carmenta's peak exceeds 256 MiB and the
+/// overflow fell straight back to the leaking path. 1.1.5 fixed the leak at
+/// the source and 1.1.6 the rounding above it, so the default allocator now
+/// recycles without help.
+///
+/// Returns whether the reservation succeeded.
+#[cfg(all(target_arch = "wasm32", feature = "rusty-alloc"))]
+#[wasm_bindgen(js_name = reserveArena)]
+pub fn reserve_arena(mib: u32) -> bool {
+    rusty_alloc::arena::reserve_os_memory_ex(mib as usize * 1024 * 1024, true, false, false).is_ok()
 }
 
 /// Which allocator this module was built with, so a browser A/B can report it.

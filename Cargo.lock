@@ -1189,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ffai-carmenta",
  "ffai-core",
@@ -3807,9 +3807,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "037acdf50c589a85578aab74b848346b353c94db19ddad4774bfa925afbd128a"
+checksum = "c93620fee9935a120a50df2086fe48fa072f7d391f129a5e04bf20ea9b83097d"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
@@ -3817,9 +3817,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc-api"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02301ad2df6159237fe4087334310d48543aa626ae9b89410b38a9d5b77e04e0"
+checksum = "05ce52d7f72842a590e4588013d70ea02d27edbf6b6af9bc193f6e1ac173845a"
 dependencies = [
  "rusty_alloc",
 ]

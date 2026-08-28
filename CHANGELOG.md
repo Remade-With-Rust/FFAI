@@ -26,6 +26,100 @@ mechanics are in `.github/workflows/release.yml`.
 
 ## [Unreleased]
 
+### `ffai-carmenta` 0.10.0 — the detector's short side gains a ceiling
+
+- **Changed** — `mobiledet_input` floored the short side at 736 and capped only
+  the LONG side, at 4000. Nothing brought a large image DOWN, so a 3000x4000
+  phone photo reached the detector at **12 megapixels**, every pixel of it above
+  the resolution the network works at. `max_short` (`FFAI_DET_MAX_SHORT`, or
+  `image::set_det_max_short` where there is no environment) is the missing
+  ceiling, default **1280**; the short side is now bounded on both ends.
+
+  This changes output on any image whose short side exceeds 1280, which this
+  crate versions as a compatibility break. `FFAI_DET_MAX_SHORT=4294967295`
+  restores 0.9.x.
+
+  **1280 and not the 736 a single page suggested.** One document page measured
+  word-for-word identical at 736 and ~16 % faster, which opened the question;
+  `examples/det_scale_sweep.rs` then gated the two corpora where the ceiling
+  actually fires. On HOLDOUT, mean CER delta against uncapped, worst single-clip
+  regression beside it:
+
+  | cap | cord | worst clip | doc | worst clip |
+  |---|---:|---:|---:|---:|
+  | 736 | +0.0033 | +0.1928 | +0.0395 | +0.2920 |
+  | 960 | -0.0157 | +0.0377 | -0.0011 | +0.2628 |
+  | **1280** | **-0.0065** | **+0.0189** | **-0.0195** | **+0.0869** |
+
+  736 loses on both holdouts and takes a clip with it — `cord-039` is 2304x4096
+  and lands at 736x1308, close to the 544x960 that once merged a whole receipt
+  into one 1903x1781 blob. 1280 is the only arm that improves both corpora with
+  no badly-regressing clip. `carmenta-capture` is unaffected by construction:
+  all 108 clips are 620x200, so the floor fires and the ceiling cannot.
+
+  The ceiling is safe because it changes only the resolution at which **box
+  geometry** is computed — boxes are mapped back to original image pixels and
+  crops are cut from the full-resolution plane, so the recognizer always reads
+  full-resolution pixels.
+
+- **Added** — `examples/det_scale_sweep.rs`, the gate above, re-runnable.
+- **Added** — `image::resize_bilinear_u8`, which samples one channel of an
+  interleaved `u8` image directly into the resize.
+- **Changed** — `mobiledet_input`, `craft_input_color`, `doclayout` and `table`
+  each built a **source-resolution `f32` plane per channel** that held nothing
+  but a `u8 -> f32` cast — `w*h*4` bytes, three times per page. They now sample
+  the source. Output is bit-identical and `resize_u8_matches_plane_path` asserts
+  it across all three pixel formats and up/down/identity scaling.
+
+### `ffai-carmenta-wasm` 0.2.0 — the 4 GB wall
+
+- **Fixed** — a single `Reader` could not read six A4 pages. Peak linear memory
+  grew ~750 MB per page with no plateau and aborted with
+  `RuntimeError: unreachable` — Rust's allocation-failure abort against wasm32's
+  4 GB ceiling. The cause was **not** in Carmenta: `rusty_alloc` 1.1.4 never
+  reused a freed segment on wasm32, because `prim::free` is correctly a no-op on
+  a memory that cannot shrink and the arena that would have caught the segment
+  was disabled on that target. Fixed upstream in 1.1.5 (the leak) and 1.1.6 (the
+  segment-size rounding above it); this crate pins `=1.1.6`.
+
+  Peak linear memory, byte-identical OCR output in every cell:
+
+  | | dlmalloc | 1.1.4 | 1.1.5 | 1.1.6 |
+  |---|---:|---:|---:|---:|
+  | model load | 54 MiB | 128 MB | 128 MiB | **98 MiB** |
+  | A4 page, steady state | 507 MiB | **trap on read 6** | 1280 MiB | **733 MiB** |
+  | 12 MP photo, one read | 593 MiB | — | 1280 MiB | **701 MiB** |
+
+- **Changed** *(breaking, Rust only)* — `read`, `readLine` and `text` take the
+  RGBA buffer **by value** (`Vec<u8>`) rather than by slice. wasm-bindgen has
+  already copied the caller's bytes into linear memory to form the argument, so
+  borrowing them forced `ImageBuffer` to copy a second time — two 8.7 MB buffers
+  for one A4 page. **The JS signature is unchanged**; it is still a
+  `Uint8Array`, and no browser caller needs to change.
+- **Added** — `setDetMaxShort(px)`, reaching the ceiling above from a target
+  with no environment. On wasm this is a memory bound, not just a speed knob:
+  a 12 MP photo goes from 2487 MiB of peak to 593 MiB.
+- **Added** — `linearMemoryBytes()`, the only honest memory instrument on a
+  target whose memory never shrinks.
+
+### Security
+
+Two resource-exhaustion issues on the untrusted-input path, both now bounded.
+
+- **Unbounded allocation as a function of image dimensions.** Detector memory
+  scaled with the full input area, so a caller-supplied 12 MP image drove ~2.5 GB
+  of wasm linear memory in a single call — within reach of the 4 GB ceiling on
+  one image, and reachable on smaller images by repetition. The short-side
+  ceiling bounds detector input area regardless of what the caller submits.
+- **Unbounded growth across calls** (`ffai-carmenta-wasm` only) — the allocator
+  defect above, fixed by the `=1.1.6` pin. Peak is now flat across repeated
+  reads instead of monotonically rising to an abort.
+
+No change to `unsafe` code or to any crate's `UNSAFE.md` invariants; no change to
+what is trusted or to what personal data is processed; no advisory resolved or
+waived; no hardening gate moved.
+
+
 ### `ffai-carmenta` — one dependency dropped
 
 - **Removed** — `candle-transformers`. It was declared and **never imported**:

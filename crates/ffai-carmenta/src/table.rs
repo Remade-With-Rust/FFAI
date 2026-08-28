@@ -148,11 +148,10 @@ impl TableModel {
                         ((h as f32 * scale) as usize).max(1).min(SIDE));
         let mut chw = vec![0f32; 3 * SIDE * SIDE];
         for c in 0..3 {
-            // BGR: the reference config decodes with `img_mode: BGR`
+            // BGR: the reference config decodes with `img_mode: BGR`.
+            // Sampled straight from the source; see `image::resize_bilinear_u8`.
             let src_c = if bpp == 1 { 0 } else { 2 - c };
-            let plane: Vec<f32> =
-                (0..w * h).map(|i| img.data[i * bpp + src_c] as f32).collect();
-            let r = crate::image::resize_bilinear(&plane, w, h, rw, rh);
+            let r = crate::image::resize_bilinear_u8(&img.data, bpp, src_c, w, h, rw, rh);
             let dst = &mut chw[c * SIDE * SIDE..(c + 1) * SIDE * SIDE];
             // pad region stays at the normalised value of zero-intensity pixels
             let pad = (0.0 - MEAN[c]) / STD[c];

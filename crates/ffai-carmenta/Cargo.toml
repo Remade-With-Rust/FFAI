@@ -25,7 +25,20 @@ description = "Carmenta — pure-Rust OCR: documents, screens, and a change-gate
 # restores 0.8.x. Both change output order/content, which this crate versions
 # as a compatibility break. Inline-formula splicing is added but stays OFF:
 # it wins text and loses reading order, and order is a non-regression gate.
-version = "0.9.1"
+# 0.10.0: the detector's short side gains a CEILING (`max_short`, default
+# 1280) to go with `min_side`'s floor, so it is now bounded on both ends.
+# Nothing brought a large image DOWN before — `max_side` watches only the LONG
+# side — so a 3000x4000 phone photo reached the detector at 12 MP, every pixel
+# above the resolution the network works at. Output-changing on any image whose
+# short side exceeds 1280, hence the minor bump; `FFAI_DET_MAX_SHORT=4294967295`
+# (or `image::set_det_max_short(usize::MAX)`) restores 0.9.x.
+#
+# 1280 rather than the 736 a single page suggested: `examples/det_scale_sweep.rs`
+# gated both corpora where the ceiling fires, and 736 REGRESSED both holdouts
+# (cord +0.0033 with a +0.1928 clip, doc +0.0395 with a +0.2920 clip) — the same
+# failure the 544x960 arm produced, smaller. 1280 is the only arm that improves
+# both with no badly-regressing clip. The table lives on `DET_MAX_SHORT_DEFAULT`.
+version = "0.10.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -71,7 +84,7 @@ tokenizers = { version = "0.23", default-features = false, features = ["unstable
 mimalloc = { version = "0.1", default-features = false }
 # Superseded as the default by the pure-Rust remake; see the allocator
 # doc comment in `ffai-cli/src/main.rs` for the measurement.
-rusty_alloc-api = "=1.1.4"
+rusty_alloc-api = "=1.1.6"
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 
