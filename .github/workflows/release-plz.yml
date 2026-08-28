@@ -42,6 +42,29 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # nasm assembles OpenH264's SIMD kernels, reached through rusty_h264 in
+      # ffai-media. `harden.yml` and `release.yml` both install it; THIS workflow
+      # did not, and it is the only one that links a BINARY.
+      #
+      # That asymmetry is exactly how it failed. `rusty_h264-accel`'s build.rs
+      # skips the asm when nasm is absent and says so in a warning, so every
+      # LIBRARY still packages and publishes cleanly — ffai-media, the engines
+      # and ffai-argus-wasm all went out. Then `cargo package` reached ffai-cli,
+      # the one binary in the release, and the link failed on a wall of
+      # "undefined symbol: McHorVer22Width8VerLastAlign_sse2". Nine crates
+      # published and the release still exited non-zero, leaving
+      # ffai-mercury-wasm and ffai-wasm unpublished behind it.
+      #
+      # A missing BUILD TOOL, not broken code — which is what harden.yml's copy
+      # of this step has said in a comment since before this happened.
+      - name: Install nasm (OpenH264 SIMD)
+        timeout-minutes: 6
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 nasm
+          nasm -v
       # Pinned to an exact release. `@v0` does not exist -- there is no moving
       # major tag on this action -- and referencing it fails to resolve, which is
       # why the copy this replaced never ran successfully once.
