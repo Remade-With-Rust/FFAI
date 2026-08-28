@@ -3,7 +3,7 @@ name = "ffai-diana"
 description = "Diana — FFai's detection component (YOLO26 on candle, pure Rust)"
 # 0.7.3 is a documentation-only republish: README restructured to the shared
 # Remade With Rust page layout. No code, API or output change.
-version = "0.7.4"
+version = "0.7.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
