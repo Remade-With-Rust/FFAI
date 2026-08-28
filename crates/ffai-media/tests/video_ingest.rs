@@ -74,7 +74,10 @@ fn fps_samples_at_the_rate_requested() {
     let all = ffai_media::sample_frames(&p, 0.0).expect("all");
     assert!(all.len() > 10, "need a few frames to decimate");
     let span = all.last().unwrap().timestamp - all[0].timestamp;
-    assert!(span > 0.0, "frames carry no timestamps: cannot judge a rate");
+    assert!(
+        span > 0.0,
+        "frames carry no timestamps: cannot judge a rate"
+    );
     eprintln!("clip: {} frames spanning {span:.3}s", all.len());
 
     for fps in [5.0f64, 10.0, 20.0] {
@@ -104,13 +107,20 @@ fn fps_samples_at_the_rate_requested() {
 
         // 3. Never more than the source has.
         assert!(got.len() <= all.len(), "{fps} fps invented frames");
-        eprintln!("  {fps:>4} fps -> {:>3} frames (expected ~{expected:.1})", got.len());
+        eprintln!(
+            "  {fps:>4} fps -> {:>3} frames (expected ~{expected:.1})",
+            got.len()
+        );
     }
 
     // A rate above the source's keeps everything, rather than erroring or
     // duplicating.
     let over = ffai_media::sample_frames(&p, 10_000.0).expect("oversample");
-    assert_eq!(over.len(), all.len(), "oversampling should keep every frame");
+    assert_eq!(
+        over.len(),
+        all.len(),
+        "oversampling should keep every frame"
+    );
 
     let again = ffai_media::sample_frames(&p, 5.0).expect("5 fps twice");
     let once = ffai_media::sample_frames(&p, 5.0).expect("5 fps");
