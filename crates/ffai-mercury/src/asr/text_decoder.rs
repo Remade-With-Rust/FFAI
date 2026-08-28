@@ -367,7 +367,7 @@ impl ffai_core::candle::CustomOp1 for FastGelu {
         storage: &ffai_core::candle::CpuStorage,
         layout: &ffai_core::candle::Layout,
     ) -> CandleResult<(ffai_core::candle::CpuStorage, ffai_core::candle::Shape)> {
-        use rayon::prelude::*;
+        use crate::par::prelude::*;
 
         use ffai_core::candle::CpuStorage;
 
@@ -441,7 +441,7 @@ impl ffai_core::candle::CustomOp1 for FastSoftmax {
         layout: &ffai_core::candle::Layout,
     ) -> CandleResult<(ffai_core::candle::CpuStorage, ffai_core::candle::Shape)> {
         use ffai_core::candle::CpuStorage;
-        use rayon::prelude::*;
+        use crate::par::prelude::*;
 
         let dims = layout.shape().dims();
         let last = *dims.last().unwrap_or(&1);

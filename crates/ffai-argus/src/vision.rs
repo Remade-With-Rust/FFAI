@@ -37,7 +37,7 @@
 use candle_core::{DType, Device, Module, Result as CandleResult, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::siglip;
-use rayon::prelude::{IndexedParallelIterator, ParallelIterator, ParallelSliceMut};
+use crate::par::prelude::*;
 
 /// The connector's tensor name in the checkpoint. One tensor, no bias.
 const PROJ_WEIGHT: &str = "modality_projection.proj.weight";
@@ -369,7 +369,6 @@ pub fn load(
     config_json: &str,
     device: &Device,
 ) -> Result<SmolVlmVision, String> {
-    let (cfg, scale_factor) = vision_config_from_json(config_json)?;
     // f32 throughout: step 3 compares against an f32 reference dump, and a
     // dtype difference would read as a tower bug. Quantization is a later,
     // separately-gated decision.
@@ -379,6 +378,18 @@ pub fn load(
         VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&weights), DType::F32, device)
     }
     .map_err(|e| format!("load {}: {e}", weights.display()))?;
+    load_vb(vb, config_json)
+}
+
+/// Build the tower from a `VarBuilder` the caller already has.
+///
+/// The path constructor above is written in terms of this, so a browser and a
+/// server build the same tower from the same tensors — the only difference is
+/// where the bytes came from. `wasm32-unknown-unknown` has no mmap, so this is
+/// the entry point a wasm build reaches (via
+/// `VarBuilder::from_buffered_safetensors`).
+pub fn load_vb(vb: VarBuilder<'static>, config_json: &str) -> Result<SmolVlmVision, String> {
+    let (cfg, scale_factor) = vision_config_from_json(config_json)?;
     SmolVlmVision::new(&cfg, scale_factor, "model.vision_model", "model.connector", vb)
         .map_err(|e| format!("build vision tower: {e}"))
 }

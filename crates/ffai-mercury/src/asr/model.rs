@@ -43,6 +43,23 @@ pub struct LoadedWhisper {
     pub decoder_dtype: DType,
 }
 
+/// The three artefacts a Whisper load needs, supplied by the caller.
+///
+/// Every field is the byte content of the file the manifest path resolves, so
+/// [`LoadedWhisper::from_bytes`] and [`LoadedWhisper::from_manifest`] parse
+/// identical inputs — there is no lenient door here, and a malformed field is
+/// an error naming what it wanted rather than a silent fallback.
+pub struct WhisperBytes {
+    /// `model.safetensors`.
+    pub weights: Vec<u8>,
+    /// The text of `config.json`.
+    pub config: String,
+    /// The bytes of `tokenizer.json`.
+    pub tokenizer: Vec<u8>,
+    /// What to call this model in `EngineInfo` and error messages.
+    pub name: String,
+}
+
 impl LoadedWhisper {
     /// Load by manifest name from a manifest directory (e.g. `models/`).
     pub fn from_manifest_dir(
@@ -101,6 +118,7 @@ impl LoadedWhisper {
         // decoder gave back most of what it won.
         let decoder_dtype = DType::F32;
         let weights = resolved.file("model.safetensors")?.to_path_buf();
+        let name = manifest.name.clone();
         // SAFETY: memory-mapping a file is unsound only if the bytes change
         // while mapped. These weights live in the immutable content-addressed
         // Hugging Face cache (a blob under `blobs/<sha>`), are never written
@@ -112,23 +130,53 @@ impl LoadedWhisper {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[weights], dtype, &device)
                 .map_err(|e| Error::Model(format!("mapping safetensors: {e}")))?
         };
+        let vb_dec = vb.clone();
+        Self::assemble(vb, vb_dec, config, tokenizer, name, device, dtype, decoder_dtype, precision)
+    }
+
+    /// Build from weights the caller already holds — **no `std::fs` and no
+    /// `mmap` on this path at all.**
+    ///
+    /// `from_manifest` reaches `std::fs::read_to_string` for the config and
+    /// `VarBuilder::from_mmaped_safetensors` for the weights; a browser has
+    /// neither a filesystem nor an mmap. This is the constructor a wasm build
+    /// uses, and the one an embedded target that ships weights in flash wants
+    /// for the same reason.
+    ///
+    /// It is not a more lenient door into the engine: both constructors hand
+    /// the same three artefacts to [`Self::assemble`], so a model built here
+    /// is the model built there.
+    pub fn from_bytes(w: WhisperBytes, device: Device, precision: Precision) -> Result<Self> {
+        let config: Config = serde_json::from_str(&w.config)
+            .map_err(|e| Error::Model(format!("parsing config.json: {e}")))?;
+        let tokenizer = WhisperTokenizer::from_bytes(&w.tokenizer, "supplied bytes")?;
+        let dtype = DType::F32;
+        let decoder_dtype = DType::F32;
+        // `from_buffered_safetensors` TAKES the Vec: the caller has already
+        // paid to get these bytes into memory, and on wasm32 that memory is
+        // the whole budget, so it is moved rather than copied.
+        let vb = candle_nn::VarBuilder::from_buffered_safetensors(w.weights, dtype, &device)
+            .map_err(|e| Error::Model(format!("reading safetensors: {e}")))?;
+        let vb_dec = vb.clone();
+        Self::assemble(vb, vb_dec, config, tokenizer, w.name, device, dtype, decoder_dtype, precision)
+    }
+
+    /// The half both constructors share: everything downstream of "we have a
+    /// config, a tokenizer and a `VarBuilder`".
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        vb: candle_nn::VarBuilder<'static>,
+        vb_dec: candle_nn::VarBuilder<'static>,
+        config: Config,
+        tokenizer: WhisperTokenizer,
+        name: String,
+        device: Device,
+        dtype: DType,
+        decoder_dtype: DType,
+        precision: Precision,
+    ) -> Result<Self> {
         let model = m::model::Whisper::load(&vb, config.clone())
             .map_err(|e| Error::Model(format!("building whisper: {e}")))?;
-        // A second view of the same mmapped file at the decoder's dtype.
-        #[allow(unsafe_code)]
-        let vb_dec = if decoder_dtype == dtype {
-            vb.clone()
-        } else {
-            // SAFETY: as above — the same immutable cache blob, mapped again.
-            unsafe {
-                candle_nn::VarBuilder::from_mmaped_safetensors(
-                    &[resolved.file("model.safetensors")?.to_path_buf()],
-                    decoder_dtype,
-                    &device,
-                )
-                .map_err(|e| Error::Model(format!("mapping safetensors (decoder): {e}")))?
-            }
-        };
         // Ours loads from the same VarBuilder and the same tensor names, so
         // both decoders are views of one set of mmapped weights.
         let decoder = super::text_decoder::TextDecoder::load(
@@ -160,7 +208,7 @@ impl LoadedWhisper {
             tokenizer,
             device,
             dtype,
-            name: manifest.name.clone(),
+            name,
             precision,
             decoder_dtype,
         })

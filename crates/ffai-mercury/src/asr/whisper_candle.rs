@@ -179,6 +179,39 @@ impl WhisperCandle {
             stream: Mutex::new(None),
         }
     }
+
+    /// Build from weights the caller already holds — **no `std::fs`, no `mmap`
+    /// and no manifest on this path at all.**
+    ///
+    /// `new()` and `with_model` defer loading to the first `transcribe`, where
+    /// they reach a manifest, the model cache and an mmap. A browser has none
+    /// of the three, so this is the constructor a wasm build uses, and the one
+    /// an embedded target that ships weights in flash wants for the same
+    /// reason.
+    ///
+    /// **Eager, not lazy**, and unlike the others it cannot fail later: the
+    /// caller has already paid to get the bytes here, so there is nothing left
+    /// to defer, and a malformed checkpoint surfaces at construction where it
+    /// can be reported rather than on the first second of audio.
+    pub fn from_bytes(w: super::model::WhisperBytes, precision: Precision) -> Result<Self> {
+        let model_name = w.name.clone();
+        let whisper = LoadedWhisper::from_bytes(w, ffai_core::best_device(), precision)?;
+        let front_end = MelSpectrogram::new(whisper.n_mels());
+        Ok(Self {
+            manifest_dir: None,
+            model_name,
+            precision,
+            state: Mutex::new(Some(State {
+                whisper,
+                front_end,
+                warmed: false,
+            })),
+            aligner: Mutex::new(None),
+            diarizer: Mutex::new(None),
+            speakers: Mutex::new(None),
+            stream: Mutex::new(None),
+        })
+    }
 }
 
 impl Default for WhisperCandle {

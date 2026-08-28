@@ -31,7 +31,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Instant;
+use crate::clock::Instant;
 
 use ffai_core::candle::{DType, Device, Tensor};
 
@@ -100,6 +100,17 @@ pub fn matmul_dtype(m: usize, k: usize, n: usize, device: &Device) -> DType {
     if let Some(forced) = forced() {
         return forced;
     }
+    // wasm32 has no clock, so `time_matmul` returns zero for both candidates
+    // and the margin test below would answer F32 anyway — after running two
+    // probe matmuls to learn nothing. Answer directly instead. This is the
+    // same verdict the "cannot be timed" path already documents.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (m, k, n, device);
+        return DType::F32;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     let key = (m, k, n);
     if let Some(hit) = cache().lock().ok().and_then(|c| c.get(&key).copied()) {
         return hit.dtype;
@@ -143,6 +154,7 @@ pub fn matmul_dtype(m: usize, k: usize, n: usize, device: &Device) -> DType {
         c.insert(key, choice);
     }
     dtype
+    }
 }
 
 /// Precision for a cross-attention K/V cache, decided on the **whole chain**.

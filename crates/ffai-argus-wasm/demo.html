@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Argus — image captioning in the browser</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.6 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1.5rem; }
+  h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+  p.sub { color: #666; margin-top: 0; }
+  fieldset { border: 1px solid #8884; border-radius: 6px; margin: 1rem 0; padding: 1rem; }
+  legend { font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .06em; }
+  label { display: block; margin: .5rem 0; font-size: .9rem; }
+  input[type=text] { font: inherit; width: 100%; padding: .4rem; border-radius: 6px; border: 1px solid #8886; }
+  button { font: inherit; padding: .5rem 1rem; border-radius: 6px; cursor: pointer; }
+  button[disabled] { opacity: .5; cursor: default; }
+  #out { white-space: pre-wrap; background: #8881; border-radius: 6px; padding: 1rem; min-height: 3rem; }
+  canvas { max-width: 100%; border-radius: 6px; margin-top: .5rem; }
+  code { background: #8882; padding: .1em .35em; border-radius: 3px; }
+  .warn { border-left: 3px solid #c80; padding-left: .75rem; color: #a70; font-size: .9rem; }
+</style>
+
+<h1>Argus — image captioning in the browser</h1>
+<p class="sub">Pure Rust on WebAssembly. SigLIP vision tower, pixel-shuffle connector, Llama decoder. No ONNX Runtime, no Python, no server.</p>
+
+<p class="warn"><strong>Expect this to be slow.</strong> <code>candle</code> 0.11
+cannot be built with <code>+simd128</code>, so every matmul in the tower and the
+decoder runs scalar. A caption takes minutes, not seconds. That is an upstream
+defect rather than a limit of the port — see the crate README.</p>
+
+<fieldset>
+  <legend>1 · Weights</legend>
+  <p>Supply the three files from <code>SmolVLM-256M-Instruct</code> — nothing is
+  bundled or fetched for you. That is ~500 MB of weights into a 4 GB address
+  space that never shrinks.</p>
+  <label>model.safetensors <input type="file" id="w" accept=".safetensors"></label>
+  <label>config.json <input type="file" id="c" accept=".json"></label>
+  <label>tokenizer.json <input type="file" id="t" accept=".json"></label>
+</fieldset>
+
+<fieldset>
+  <legend>2 · Image</legend>
+  <label><input type="file" id="img" accept="image/*"></label>
+  <label>Prompt <input type="text" id="prompt" value="What is in this image?"></label>
+  <label>Max new tokens <input type="number" id="max" value="40" min="1" max="256" style="width:6rem"></label>
+  <button id="go" disabled>Caption</button>
+  <canvas id="cv" hidden></canvas>
+</fieldset>
+
+<div id="out">Load the three model files and an image to begin.</div>
+
+<script type="module">
+  import init, { Captioner, allocator, linearMemoryBytes } from './pkg/ffai_argus_wasm.js';
+
+  const $ = (id) => document.getElementById(id);
+  const out = $('out');
+  const MiB = (b) => (b / 1048576).toFixed(0) + ' MiB';
+  let captioner = null;
+
+  await init();
+  out.textContent = `Ready — allocator: ${allocator()}, ${MiB(linearMemoryBytes())} linear memory.`;
+
+  const ready = () => { $('go').disabled = !($('w').files[0] && $('c').files[0] && $('t').files[0] && $('img').files[0]); };
+  for (const id of ['w', 'c', 't', 'img']) $(id).addEventListener('change', ready);
+
+  $('img').addEventListener('change', async () => {
+    const bmp = await createImageBitmap($('img').files[0]);
+    const cv = $('cv');
+    cv.width = bmp.width; cv.height = bmp.height; cv.hidden = false;
+    cv.getContext('2d').drawImage(bmp, 0, 0);
+  });
+
+  $('go').addEventListener('click', async () => {
+    $('go').disabled = true;
+    try {
+      if (!captioner) {
+        out.textContent = 'Loading weights…';
+        const [w, c, t] = await Promise.all([
+          $('w').files[0].arrayBuffer(), $('c').files[0].text(), $('t').files[0].arrayBuffer(),
+        ]);
+        const t0 = performance.now();
+        captioner = Captioner.smolvlm(new Uint8Array(w), c, new Uint8Array(t));
+        out.textContent = `Weights loaded in ${(performance.now() - t0).toFixed(0)} ms — ${MiB(linearMemoryBytes())} resident.\n`;
+      }
+
+      const cv = $('cv');
+      const { data } = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height);
+      out.textContent += `Captioning ${cv.width}x${cv.height}… (this takes minutes — see the note above)\n`;
+      // Yield once so the line above actually paints before the module blocks
+      // the main thread for the whole forward pass.
+      await new Promise((r) => setTimeout(r, 0));
+
+      const t1 = performance.now();
+      const caption = captioner.describeWithLimit(
+        data, cv.width, cv.height, $('prompt').value, Number($('max').value),
+      );
+      out.textContent += `\n${((performance.now() - t1) / 1000).toFixed(1)}s · ${MiB(linearMemoryBytes())} peak\n\n${caption.trim()}\n`;
+    } catch (e) {
+      out.textContent += `\nError: ${e}`;
+    }
+    $('go').disabled = false;
+  });
+</script>

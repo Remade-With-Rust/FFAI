@@ -1162,11 +1162,23 @@ dependencies = [
  "ffai-core",
  "ffai-media",
  "ffai-models",
+ "getrandom 0.3.4",
  "rayon",
  "rusty_alloc-api",
  "serde",
  "serde_json",
  "tokenizers 0.23.2",
+]
+
+[[package]]
+name = "ffai-argus-wasm"
+version = "0.1.0"
+dependencies = [
+ "ffai-argus",
+ "ffai-core",
+ "getrandom 0.3.4",
+ "rusty_alloc-api",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1314,12 +1326,24 @@ dependencies = [
  "ffai-core",
  "ffai-media",
  "ffai-models",
+ "getrandom 0.3.4",
  "half",
  "proptest",
  "rayon",
  "rustfft",
  "serde_json",
  "tokenizers 0.23.2",
+]
+
+[[package]]
+name = "ffai-mercury-wasm"
+version = "0.1.0"
+dependencies = [
+ "ffai-core",
+ "ffai-mercury",
+ "getrandom 0.3.4",
+ "rusty_alloc-api",
+ "wasm-bindgen",
 ]
 
 [[package]]

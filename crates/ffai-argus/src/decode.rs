@@ -156,13 +156,34 @@ impl TextDecoder {
     /// Propagates `candle`'s load errors; a missing tensor names itself, which
     /// is what a wrong prefix produces.
     pub fn load(weights: &std::path::Path, config_json: &str, device: &Device) -> Result<Self, String> {
-        let config = text_config_from_json(config_json)?;
         // SAFETY: the mapped file is owned by the model cache and is not
         // mutated while this process holds it.
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&weights), DType::F32, device)
         }
         .map_err(|e| format!("load {}: {e}", weights.display()))?;
+        Self::load_vb(vb, config_json, device)
+    }
+
+    /// Build the decoder from a `VarBuilder` the caller already has.
+    ///
+    /// The path constructor above is written in terms of this, so a browser
+    /// and a server build the same decoder from the same tensors.
+    ///
+    /// **One builder, cloned — not two loads.** The path version used to map
+    /// the file twice, once renamed for candle's tower and once raw for ours.
+    /// A `VarBuilder` is cheap to clone (its backend is shared), and on wasm a
+    /// second load would mean a second COPY of the checkpoint in a 32-bit
+    /// address space that is already the binding constraint.
+    pub fn load_vb(
+        vb: VarBuilder<'static>,
+        config_json: &str,
+        device: &Device,
+    ) -> Result<Self, String> {
+        let config = text_config_from_json(config_json)?;
+        // Our tower reads the checkpoint's own names, so it keeps a builder
+        // WITHOUT the rename applied below.
+        let raw = vb.clone();
 
         // Rewrite the lookup, do not copy the weights: candle asks for
         // `model.embed_tokens`, the checkpoint stores
@@ -184,13 +205,6 @@ impl TextDecoder {
             llama::Llama::load(vb, &config).map_err(|e| format!("text tower: {e}"))
         };
 
-        // Our tower reads the checkpoint's own names, so it takes a builder
-        // WITHOUT the rename above.
-        // SAFETY: same mapped file, same ownership as the builder above.
-        let raw = unsafe {
-            VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&weights), DType::F32, device)
-        }
-        .map_err(|e| format!("load {}: {e}", weights.display()))?;
         let v: serde_json::Value =
             serde_json::from_str(config_json).map_err(|e| format!("config.json: {e}"))?;
         let t = v.get("text_config").unwrap_or(&v);
@@ -424,7 +438,7 @@ impl TextDecoder {
 
         let (_b, prefill_len, _d) = inputs_embeds.dims3()?;
         // Prefill: the whole prompt in one pass, populating the KV cache.
-        let t_prefill = std::time::Instant::now();
+        let t_prefill = crate::clock::Instant::now();
         let mut logits = self.forward_embeds(inputs_embeds, 0)?;
         if let Some(t) = trace.as_deref_mut() {
             t.prefill_ms = t_prefill.elapsed().as_secs_f64() * 1e3;
@@ -434,7 +448,7 @@ impl TextDecoder {
         let mut pos = prefill_len;
 
         for _ in 0..max_new_tokens {
-            let t_step = std::time::Instant::now();
+            let t_step = crate::clock::Instant::now();
             let mut step = logits.flatten_all()?;
             // A LOGIT transform, so it applies to greedy too — which is why it
             // is not a field of `Decoding::Sampled`. Small models loop under
