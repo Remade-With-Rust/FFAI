@@ -71,7 +71,7 @@ tokenizers = { version = "0.23", default-features = false, features = ["unstable
 mimalloc = { version = "0.1", default-features = false }
 # Superseded as the default by the pure-Rust remake; see the allocator
 # doc comment in `ffai-cli/src/main.rs` for the measurement.
-rusty_alloc-api = "=1.1.4"
+rusty_alloc-api = "=1.1.6"
 ffai-media = { workspace = true }
 ffai-bench = { workspace = true }
 
