@@ -1,3 +1,8 @@
+> **In the wild** — [RAG Converter](https://ragconverter.com) uses `ffai-carmenta` for OCR, reading scans and screenshots in the browser.
+> It makes personal and work files AI-readable without them leaving the machine:
+> the whole conversion runs as WebAssembly in the browser tab, with nothing
+> uploaded and nothing to install.
+
 # ffai-carmenta
 
 [![crates.io](https://img.shields.io/crates/v/ffai-carmenta?logo=rust)](https://crates.io/crates/ffai-carmenta)
