@@ -25,12 +25,27 @@ Oniguruma's C **executes on every tokenization call** in Argus, Mercury and
 Carmenta. It remains genuinely dead weight for **Diana**, which never
 references tokenizers at all.
 
-`tokenizers` marks `onig` optional and ships a pure-Rust `fancy-regex`
-alternative — the one our own wasm build already uses — so removing it is one
-feature line upstream in candle rather than a redesign here. It cannot be done
-from this workspace: Cargo does not let a consumer strip a feature a transitive
-dependency selected. Stated at the top because a supply-chain claim that is
-wrong is worse than one that is qualified.
+**Third correction, and the fix: onig is now patched out.** Cargo will not let a
+consumer strip a feature a transitive dependency selected, so the fix is to
+replace the dependency.
+[`Remade-With-Rust/tokenizers`](https://github.com/Remade-With-Rust/tokenizers)
+deletes the optional `onig` dependency and re-points the `onig` *feature* at
+[`rusty_expressions`](https://github.com/Remade-With-Rust/rusty_expressions),
+our pure-Rust Oniguruma — candle's request is satisfied by name, and nothing in
+the graph can compile libonig. `cargo tree -i onig_sys` now reports no such
+package. It is gated on behaviour, not on compilation: Argus's caption oracle
+still reproduces the Python reference **byte-identically** with the regex engine
+swapped.
+
+Two limits stated plainly. `[patch]` is a workspace mechanism and is **not**
+carried into published crates, so building from this repository is onig-free
+while `ffai-argus` taken from crates.io is not, until the change lands upstream
+in candle. And onig was never the only C here: **`aws-lc-sys`** — the C crypto
+behind `rustls`, reached via `hf-hub` — is still in the native tree. We will not
+say "no C" until there is none.
+
+Stated at the top because a supply-chain claim that is wrong is worse than one
+that is qualified.
 
 **And one that went the other way.** The `ffai` binary's global allocator was
 `mimalloc` — a C library, and not an incidental one: it is the **largest single

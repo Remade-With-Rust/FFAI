@@ -169,7 +169,7 @@ impl Embeddings {
             .contiguous()?
             .reshape((b * seq, k))?;
         crate::cost::copy((b * seq * k) as u64);
-        let mut xs = cols.matmul(&self.w_flat)?;
+        let xs = cols.matmul(&self.w_flat)?;
         let c_out = self.w_flat.dim(1)?;
         crate::cost::matmul(1, (b * seq) as u64, k as u64, c_out as u64);
         // Both adds in ONE parallel pass — see [`EmbedAddOp`]. candle's two

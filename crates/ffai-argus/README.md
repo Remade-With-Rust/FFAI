@@ -62,7 +62,7 @@ on **token equality with the Python reference**:
 |---|---|---|
 | Runtime to deploy | Python, PyTorch, ~GB of wheels | **one binary** |
 | Caption vs the reference | *is* the reference | **byte-identical** |
-| C/C++ in the tree | PyTorch, its BLAS, ONNX | candle's `onig_sys` — **linked and called at runtime**, gated off wasm |
+| C/C++ in the tree | PyTorch, its BLAS, ONNX | **none from candle** — `onig_sys` is patched out (see below) |
 | `unsafe` in this crate | — | `unsafe_code = "warn"`; the few sites are `#[target_feature]` kernels and `spare_capacity_mut` |
 | Steady-state footprint | 1852 MiB | **1309 MiB — 0.71×** |
 | Licence | mixed | **MIT OR Apache-2.0** |
@@ -78,17 +78,38 @@ whenever that feature is on; `pre_tokenizers/byte_level.rs` holds a
 `static RE: LazyLock<SysRegex>` carrying the GPT-2 splitting pattern; and this
 checkpoint's `tokenizer.json` uses `Sequence[Digits, ByteLevel]` with
 `use_regex: true`. So Oniguruma's C runs on **every tokenization call**.<br><br>
-It **cannot be removed from our side.** Cargo does not let a consumer strip a
-feature that a transitive dependency selected, so no combination of settings in
-this workspace drops it while `candle-core 0.11` is the tensor spine — the routes
-are a `[patch]`ed fork of candle-core or an upstream change making the regex
-backend selectable (`tokenizers` already ships a pure-Rust `fancy-regex`
-alternative, which is exactly what the wasm build uses). **On `wasm32` there is
-no onig**, verified against the actual deliverables rather than the manifest:
-`cargo tree -p ffai-wasm -p ffai-carmenta-wasm --target wasm32-unknown-unknown
--i onig_sys` finds nothing.<br><br>
-We will not tell you there is "no C in the tree" for a native candle build —
-there is, it executes, and this is where it is.</sub>
+**It is now patched out of this workspace.** Cargo will not let a consumer strip
+a feature a transitive dependency selected, so the fix is to replace the
+dependency: [`Remade-With-Rust/tokenizers`](https://github.com/Remade-With-Rust/tokenizers)
+deletes the optional `onig` dependency outright and re-points the `onig`
+*feature* at [`rusty_expressions`](https://github.com/Remade-With-Rust/rusty_expressions),
+our pure-Rust Oniguruma. candle's request is still satisfied by name, and
+nothing left in the graph can compile libonig. Two `[patch.crates-io]` entries
+are needed because two incompatible versions are in the tree — candle pins
+`^0.22`, our engines take `^0.23`:
+
+```
+$ cargo tree -i onig_sys
+error: package ID specification `onig_sys` did not match any packages
+```
+
+**Gated, not assumed.** Swapping a regex engine changes tokenization if the two
+disagree anywhere, so this is verified by the caption oracle, not by "it
+compiles": `describe_image_reproduces_the_reference_caption` still reproduces
+the Python reference **byte-identically** with `rusty_expressions` in place.
+
+**One honest limit.** `[patch]` is a workspace mechanism and is **not** carried
+into published crates. Building FFai from this repository gets you no onig;
+taking `ffai-argus` from crates.io still pulls candle's, because a published
+crate cannot patch its own dependencies. Both are only true once the change
+lands upstream in candle.
+
+**On `wasm32` there was never any onig**, verified against the deliverables
+rather than the manifest: `cargo tree -p ffai-wasm -p ffai-carmenta-wasm
+--target wasm32-unknown-unknown -i onig_sys` finds nothing.<br><br>
+`aws-lc-sys` — the C crypto behind `rustls`, reached through `hf-hub` — is still
+in the native tree. We will not tell you there is "no C" until there is
+none.</sub>
 
 ### Performance
 

@@ -98,3 +98,27 @@ lto = "thin"
 # cache, downloads without hash verification - this decision expires WITH them
 # and overflow-checks goes back on.
 codegen-units = 1
+
+# ---- onig, removed from the native graph -------------------------------------
+#
+# `candle-core` declares `tokenizers` with `features = ["onig"]` under
+# `cfg(not(target_arch = "wasm32"))`, and Cargo does not let a consumer strip a
+# feature that a transitive dependency selected. So `onig_sys` — Oniguruma, a C
+# regex engine — compiled into every native build. It is NOT dead weight: it
+# backs `SysRegex`, which `ByteLevel` calls on every tokenization.
+#
+# These forks delete the optional `onig` dependency outright and re-point the
+# `onig` FEATURE at `rusty_expressions`, our pure-Rust Oniguruma. candle's
+# request is still satisfied by name, and nothing left in the graph can compile
+# libonig.
+#
+# TWO entries because two incompatible versions are in the tree: candle pins
+# ^0.22 and our own engines take ^0.23. Cargo allows that through a renamed key
+# carrying an explicit `package`.
+#
+# NOTE: `[patch]` is NOT carried into published crates. This makes OUR builds
+# onig-free; anyone depending on `ffai-argus` from crates.io still gets candle's
+# onig until the change lands upstream in candle itself.
+[patch.crates-io]
+tokenizers = { git = "https://github.com/Remade-With-Rust/tokenizers", branch = "rusty-expressions-deploy" }
+tokenizers-v022 = { git = "https://github.com/Remade-With-Rust/tokenizers", branch = "v0.22-rusty-expressions", package = "tokenizers" }
