@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mercury — speech recognition in the browser</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.6 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1.5rem; }
+  h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+  p.sub { color: #666; margin-top: 0; }
+  fieldset { border: 1px solid #8884; border-radius: 6px; margin: 1rem 0; padding: 1rem; }
+  legend { font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .06em; }
+  label { display: block; margin: .5rem 0; font-size: .9rem; }
+  button { font: inherit; padding: .5rem 1rem; border-radius: 6px; cursor: pointer; }
+  button[disabled] { opacity: .5; cursor: default; }
+  #out { white-space: pre-wrap; background: #8881; border-radius: 6px; padding: 1rem; min-height: 3rem; }
+  code { background: #8882; padding: .1em .35em; border-radius: 3px; }
+</style>
+
+<h1>Mercury — speech recognition in the browser</h1>
+<p class="sub">Pure Rust on WebAssembly. No whisper.cpp, no ONNX Runtime, no server.</p>
+
+<fieldset>
+  <legend>1 · Weights</legend>
+  <p>Supply the three files from a Whisper checkpoint — nothing is bundled or
+  fetched for you. <code>whisper-tiny.en</code> is the one to start with.</p>
+  <label>model.safetensors <input type="file" id="w" accept=".safetensors"></label>
+  <label>config.json <input type="file" id="c" accept=".json"></label>
+  <label>tokenizer.json <input type="file" id="t" accept=".json"></label>
+</fieldset>
+
+<fieldset>
+  <legend>2 · Audio</legend>
+  <p>Any file the browser can decode. It is resampled to 16 kHz mono here, by
+  the browser's own resampler — the module deliberately does not ship one.</p>
+  <label><input type="file" id="a" accept="audio/*"></label>
+  <button id="go" disabled>Transcribe</button>
+</fieldset>
+
+<div id="out">Load the three model files and an audio file to begin.</div>
+
+<script type="module">
+  import init, { Recognizer, allocator, linearMemoryBytes } from './pkg/ffai_mercury_wasm.js';
+
+  const $ = (id) => document.getElementById(id);
+  const out = $('out');
+  const MiB = (b) => (b / 1048576).toFixed(0) + ' MiB';
+  let reader = null;
+
+  await init();
+  out.textContent = `Ready — allocator: ${allocator()}, ${MiB(linearMemoryBytes())} linear memory.`;
+
+  const ready = () => { $('go').disabled = !($('w').files[0] && $('c').files[0] && $('t').files[0] && $('a').files[0]); };
+  for (const id of ['w', 'c', 't', 'a']) $(id).addEventListener('change', ready);
+
+  $('go').addEventListener('click', async () => {
+    $('go').disabled = true;
+    try {
+      if (!reader) {
+        out.textContent = 'Loading weights…';
+        const [w, c, t] = await Promise.all([
+          $('w').files[0].arrayBuffer(), $('c').files[0].text(), $('t').files[0].arrayBuffer(),
+        ]);
+        const t0 = performance.now();
+        reader = Recognizer.whisper(new Uint8Array(w), c, new Uint8Array(t), 'whisper');
+        out.textContent = `Weights loaded in ${(performance.now() - t0).toFixed(0)} ms — ${MiB(linearMemoryBytes())} resident.\n`;
+      }
+
+      out.textContent += 'Decoding audio…\n';
+      const raw = await $('a').files[0].arrayBuffer();
+      const buf = await new AudioContext().decodeAudioData(raw);
+      // Whisper is a 16 kHz mono model and the engine refuses anything else.
+      // OfflineAudioContext is the browser's own resampler; duplicating it
+      // inside the wasm module would be strictly worse.
+      const off = new OfflineAudioContext(1, Math.ceil(buf.duration * 16000), 16000);
+      const src = off.createBufferSource();
+      src.buffer = buf; src.connect(off.destination); src.start();
+      const pcm = (await off.startRendering()).getChannelData(0);
+
+      out.textContent += `Transcribing ${buf.duration.toFixed(1)}s…\n`;
+      const t1 = performance.now();
+      const segs = reader.transcribe(pcm, 16000);
+      const secs = (performance.now() - t1) / 1000;
+
+      out.textContent += `\n${(buf.duration / secs).toFixed(2)}x realtime · ${MiB(linearMemoryBytes())} peak\n\n`;
+      for (const s of segs) {
+        out.textContent += `[${s.start.toFixed(2)}–${s.end.toFixed(2)}] ${s.text.trim()}\n`;
+      }
+    } catch (e) {
+      out.textContent += `\nError: ${e}`;
+    }
+    $('go').disabled = false;
+  });
+</script>

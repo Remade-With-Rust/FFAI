@@ -38,13 +38,23 @@ pub struct WhisperTokenizer {
 
 impl WhisperTokenizer {
     pub fn load(path: &Path) -> Result<Self> {
-        let inner = tokenizers::Tokenizer::from_file(path)
-            .map_err(|e| Error::Model(format!("loading tokenizer {}: {e}", path.display())))?;
+        let bytes = std::fs::read(path)?;
+        Self::from_bytes(&bytes, &path.display().to_string())
+    }
+
+    /// Build from the BYTES of `tokenizer.json` — the constructor a target
+    /// with no filesystem needs.
+    ///
+    /// `load` is written in terms of this rather than beside it, so the two
+    /// cannot drift: a browser and a server parse the same bytes through the
+    /// same code. `whence` names the source in error messages only.
+    pub fn from_bytes(bytes: &[u8], whence: &str) -> Result<Self> {
+        let inner = tokenizers::Tokenizer::from_bytes(bytes)
+            .map_err(|e| Error::Model(format!("loading tokenizer {whence}: {e}")))?;
         let id = |tok: &str| -> Result<u32> {
             inner.token_to_id(tok).ok_or_else(|| {
                 Error::Model(format!(
-                    "tokenizer {} has no `{tok}` token — is this a Whisper tokenizer?",
-                    path.display()
+                    "tokenizer {whence} has no `{tok}` token — is this a Whisper tokenizer?"
                 ))
             })
         };

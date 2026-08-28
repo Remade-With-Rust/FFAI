@@ -18,9 +18,11 @@
 //! `cargo publish` refuses a git dependency — a constraint that has already
 //! made every downstream `FFai` crate unpublishable once.
 
+pub mod clock;
 pub mod cost;
 pub mod decode;
 pub mod engine;
+pub mod par;
 pub mod preprocess;
 pub mod prompt;
 pub mod siglip;

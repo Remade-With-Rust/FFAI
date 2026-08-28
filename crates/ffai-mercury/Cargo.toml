@@ -23,9 +23,21 @@ candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 tokenizers = { workspace = true }
 rustfft = { workspace = true }
-rayon = "1"
 half = "2"
 serde_json = { workspace = true }
+
+# rayon is NOT a wasm dependency. `wasm32-unknown-unknown` has no threads to
+# spawn, so `crate::par` supplies the identical serial iterators there and a
+# call site that still reaches for a parallel one fails to COMPILE rather than
+# panicking in someone's browser.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# getrandom 0.3 needs its `wasm_js` FEATURE in addition to the
+# `--cfg getrandom_backend` that .cargo/config.toml supplies; it errors if
+# either half is missing. Arrives here through tokenizers -> ahash.
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 # Gate H-28: property tests for the advertised invariants (tests/properties.rs).

@@ -187,6 +187,38 @@ impl SmolVlm {
         }
     }
 
+    /// Build from weights the caller already holds — **no `std::fs`, no `mmap`
+    /// and no manifest on this path at all.**
+    ///
+    /// `new()` and `with_manifest_dir` defer loading to first use, where they
+    /// reach a manifest, the model cache and an mmap. A browser has none of the
+    /// three, so this is the constructor a wasm build uses.
+    ///
+    /// **Eager, not lazy**: the caller has already paid to get the bytes here,
+    /// so there is nothing left to defer, and a malformed checkpoint surfaces
+    /// at construction rather than on the first image.
+    pub fn from_bytes(w: ArgusBytes) -> Result<Self> {
+        let tokenizer = tokenizers::Tokenizer::from_bytes(&w.tokenizer)
+            .map_err(|e| Error::Model(format!("tokenizer: {e}")))?;
+        let device = Device::Cpu;
+        // `from_buffered_safetensors` TAKES the Vec: the caller has already
+        // paid to get these bytes into memory, and on wasm32 that memory is
+        // the whole budget, so it is moved rather than copied.
+        let vb = candle_nn::VarBuilder::from_buffered_safetensors(
+            w.weights,
+            candle_core::DType::F32,
+            &device,
+        )
+        .map_err(|e| Error::Model(format!("reading safetensors: {e}")))?;
+        let model = build(vb, &w.config, tokenizer, device)?;
+        let cell = OnceLock::new();
+        let _ = cell.set(Ok(model));
+        Ok(Self {
+            manifest_dir: PathBuf::new(),
+            model: cell,
+        })
+    }
+
     /// Are the weights already resident?
     ///
     /// Loading is ~1 GB of safetensors and happens once, on first use. A
@@ -390,7 +422,7 @@ fn run_tower(
         let mut out = Vec::with_capacity(pre.tiles);
         let mut ms = Vec::with_capacity(pre.tiles);
         for t in 0..pre.tiles {
-            let t0 = std::time::Instant::now();
+            let t0 = crate::clock::Instant::now();
             let px = pre.pixel_values[t * per..(t + 1) * per].to_vec();
             let tensor = Tensor::from_vec(px, (1, 3, pre.tile, pre.tile), device)?;
             out.push(vision.forward(&tensor)?.squeeze(0)?);
@@ -447,7 +479,7 @@ fn run_tower(
                 if i >= pre.tiles {
                     break;
                 }
-                let t0 = std::time::Instant::now();
+                let t0 = crate::clock::Instant::now();
                 let px = pre.pixel_values[i * per..(i + 1) * per].to_vec();
                 let done = Tensor::from_vec(px, (1, 3, pre.tile, pre.tile), device)
                     .and_then(|t| vision.forward(&t))
@@ -563,7 +595,7 @@ impl SmolVlm {
             match piece {
                 Piece::Text(t) => text.push_str(t),
                 Piece::Image(img) => {
-                    let t_pre = std::time::Instant::now();
+                    let t_pre = crate::clock::Instant::now();
                     let rgb = to_rgb8(img)?;
                     let pre = preprocess_rgb8_opts(
                         &rgb,
@@ -582,7 +614,7 @@ impl SmolVlm {
                             img.height as usize,
                         ));
                     }
-                    let t_tower = std::time::Instant::now();
+                    let t_tower = crate::clock::Instant::now();
                     let (tiles, per_tile_ms) = run_tower(&m.vision, &pre, &m.device)?;
                     blocks.extend(tiles);
                     if let Some(tr) = trace.as_deref_mut() {
@@ -602,7 +634,7 @@ impl SmolVlm {
 
         // The chat turn. `user_turn` would rebuild the image block, so the
         // template is applied to the text already assembled.
-        let t_asm = std::time::Instant::now();
+        let t_asm = crate::clock::Instant::now();
         let templated = format!("<|im_start|>User:{text}<end_of_utterance>\nAssistant:");
         let enc = m
             .tokenizer
@@ -651,7 +683,7 @@ impl SmolVlm {
         )?;
         drop(dec);
 
-        let t_detok = std::time::Instant::now();
+        let t_detok = crate::clock::Instant::now();
         let decoded = m
             .tokenizer
             .decode(&out, true)
@@ -746,10 +778,49 @@ fn load(manifest_dir: &Path) -> Result<Model> {
     let config_json = std::fs::read_to_string(config_path)?;
 
     let device = Device::Cpu;
-    let vision = crate::vision::load(&weights, &config_json, &device).map_err(Error::Model)?;
-    let decoder = TextDecoder::load(&weights, &config_json, &device).map_err(Error::Model)?;
+    // SAFETY: the mapped file is owned by the model cache and is not mutated
+    // while this process holds it.
+    #[allow(unsafe_code)]
+    let vb = unsafe {
+        candle_nn::VarBuilder::from_mmaped_safetensors(
+            std::slice::from_ref(&weights),
+            candle_core::DType::F32,
+            &device,
+        )
+    }
+    .map_err(|e| Error::Model(format!("load {}: {e}", weights.display())))?;
     let tokenizer = tokenizers::Tokenizer::from_file(tokenizer_path)
         .map_err(|e| Error::Model(format!("tokenizer: {e}")))?;
+    build(vb, &config_json, tokenizer, device)
+}
+
+/// The three artefacts a SmolVLM load needs, supplied by the caller.
+///
+/// Every field is the byte content of the file the manifest resolves, so
+/// [`SmolVlm::from_bytes`] and the manifest path parse identical inputs.
+pub struct ArgusBytes {
+    /// `model.safetensors`.
+    pub weights: Vec<u8>,
+    /// The text of `config.json`.
+    pub config: String,
+    /// The bytes of `tokenizer.json`.
+    pub tokenizer: Vec<u8>,
+}
+
+/// Everything downstream of "we have a `VarBuilder`, a config and a tokenizer".
+///
+/// Both constructors funnel through here, so a browser and a server assemble
+/// the same model — the geometry, the image token and the stop-token set are
+/// all read from the checkpoint's own config rather than assumed, on both
+/// paths.
+fn build(
+    vb: candle_nn::VarBuilder<'static>,
+    config_json: &str,
+    tokenizer: tokenizers::Tokenizer,
+    device: Device,
+) -> Result<Model> {
+    let vision = crate::vision::load_vb(vb.clone(), config_json).map_err(Error::Model)?;
+    let decoder = TextDecoder::load_vb(vb, config_json, &device).map_err(Error::Model)?;
 
     // Geometry from the checkpoint, never constants: a different SmolVLM size
     // changes tokens_per_tile, and a hard-coded 64 would be silently wrong

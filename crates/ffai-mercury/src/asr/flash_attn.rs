@@ -33,7 +33,7 @@
 use ffai_core::candle::{
     CpuStorage, CustomOp3, DType, Device, Layout, Result as CandleResult, Shape, Tensor,
 };
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{

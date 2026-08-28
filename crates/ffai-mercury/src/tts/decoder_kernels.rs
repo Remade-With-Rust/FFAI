@@ -34,7 +34,7 @@
 
 use ffai_core::candle::{Device, Tensor};
 use ffai_core::error::{Error, Result};
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 fn e<T>(r: ffai_core::candle::Result<T>) -> Result<T> {
     r.map_err(|err| Error::Model(format!("decoder kernel: {err}")))
@@ -645,7 +645,7 @@ impl FlatDecoder {
         let mut t_clone = 0f64;
         let mut t_act = 0f64;
         let mut t_add = 0f64;
-        let clock = std::time::Instant::now;
+        let clock = crate::clock::Instant::now;
 
         let t0 = clock();
         let (mut x, mut len) = self.conv_pre.conv(z, len);
@@ -1047,7 +1047,7 @@ impl FlatFlow {
     pub fn run(&self, z: &mut [f32], len: usize) -> Result<()> {
         let profile = std::env::var("FFAI_PROFILE").is_ok();
         let (mut t_conv_in, mut t_conv_rs, mut t_gate, mut t_other) = (0f64, 0f64, 0f64, 0f64);
-        let clock = std::time::Instant::now;
+        let clock = crate::clock::Instant::now;
         let c = self.hidden;
         let half = c / 2;
         for coupling in &self.couplings {

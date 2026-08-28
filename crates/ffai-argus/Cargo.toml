@@ -31,7 +31,6 @@ candle-transformers = { workspace = true }
 # The vision tower's elementwise kernels run across cores; candle's do not
 # (its CPU backend parallelises conv2d and nothing else), and that half of a
 # SigLIP layer is where the time was. See src/siglip.rs.
-rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -41,6 +40,19 @@ serde_json = { workspace = true }
 # Deliberately not added in Phase 0: it is a large git dependency every
 # contributor would fetch while the feature is still a stub. It lands together
 # with the first working describe_image().
+
+# rayon is NOT a wasm dependency. `wasm32-unknown-unknown` has no threads to
+# spawn, so `crate::par` supplies the identical serial iterators there and a
+# call site that still reaches for a parallel one fails to COMPILE rather than
+# panicking in someone's browser.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# getrandom 0.3 needs its `wasm_js` FEATURE in addition to the
+# `--cfg getrandom_backend` that .cargo/config.toml supplies; it errors if
+# either half is missing. Arrives here through tokenizers -> ahash.
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 # The SAME allocator the `ffai` binary declares.

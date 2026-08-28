@@ -429,7 +429,7 @@ impl Vits {
         // long-form text: the same code is worth ~9.6x at T=1024.
         let parallel = HEADS * t_len >= 32 && std::env::var("FFAI_SERIAL_ATTN").is_err();
         if parallel {
-            use rayon::prelude::*;
+            use crate::par::prelude::*;
             outh.par_chunks_mut(hd).enumerate().for_each_init(
                 || vec![0f32; t_len],
                 |p, (hi, orow)| row_kernel(p, hi, orow),
@@ -720,7 +720,7 @@ impl Vits {
         // The de-plumbing above (three heap Vecs per column -> stack arrays) is
         // kept separately, on byte-identity and strictly-less-work.
         let out: Vec<f32> = if t_len >= 32 && std::env::var("FFAI_PAR_SPLINE").is_ok() {
-            use rayon::prelude::*;
+            use crate::par::prelude::*;
             (0..t_len).into_par_iter().map(column).collect()
         } else {
             (0..t_len).map(column).collect()

@@ -44,7 +44,7 @@
 //! * resamples horizontally then vertically — separable, and it is what makes
 //!   the cost `O(w*h*support)` instead of `O(w*h*support^2)`.
 
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 /// Lanczos-3 kernel: `sinc(x) * sinc(x/3)`, zero outside `|x| < 3`.
 #[must_use]
