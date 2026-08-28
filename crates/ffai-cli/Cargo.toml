@@ -67,7 +67,7 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 rusty_alloc-api = "=1.1.6"
 # The core, for `alloc::collect` — see `spawn_page_trimmer` in main.rs.
 # Without it rusty_alloc's RSS does not bound on a rayon pool.
-rusty_alloc = "=1.1.4"
+rusty_alloc = "=1.1.6"
 clap = { workspace = true }
 
 [features]
