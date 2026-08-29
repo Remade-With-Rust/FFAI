@@ -131,7 +131,17 @@ impl LoadedWhisper {
                 .map_err(|e| Error::Model(format!("mapping safetensors: {e}")))?
         };
         let vb_dec = vb.clone();
-        Self::assemble(vb, vb_dec, config, tokenizer, name, device, dtype, decoder_dtype, precision)
+        Self::assemble(
+            vb,
+            vb_dec,
+            config,
+            tokenizer,
+            name,
+            device,
+            dtype,
+            decoder_dtype,
+            precision,
+        )
     }
 
     /// Build from weights the caller already holds — **no `std::fs` and no
@@ -158,7 +168,17 @@ impl LoadedWhisper {
         let vb = candle_nn::VarBuilder::from_buffered_safetensors(w.weights, dtype, &device)
             .map_err(|e| Error::Model(format!("reading safetensors: {e}")))?;
         let vb_dec = vb.clone();
-        Self::assemble(vb, vb_dec, config, tokenizer, w.name, device, dtype, decoder_dtype, precision)
+        Self::assemble(
+            vb,
+            vb_dec,
+            config,
+            tokenizer,
+            w.name,
+            device,
+            dtype,
+            decoder_dtype,
+            precision,
+        )
     }
 
     /// The half both constructors share: everything downstream of "we have a

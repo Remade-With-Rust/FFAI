@@ -42,8 +42,8 @@ mod proofs;
 
 pub mod asr;
 pub mod clock;
-pub mod par;
 pub mod manifests;
+pub mod par;
 pub mod tts;
 
 pub use asr::{OxiWhisper, WhisperCandle};

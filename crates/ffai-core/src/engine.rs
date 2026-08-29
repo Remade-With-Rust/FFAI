@@ -712,8 +712,7 @@ mod vlm_surface_tests {
         assert_eq!(prompt.image_count(), 2);
         let out = e.describe(&prompt, &VlmOptions::default()).unwrap();
         assert_eq!(
-            out,
-            "text:before|image:1|text:between|image:2|text:after",
+            out, "text:before|image:1|text:between|image:2|text:after",
             "the sequence an engine receives must be the sequence it was given"
         );
     }

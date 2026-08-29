@@ -31,7 +31,22 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 [imports.zcash]
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
+[policy.candle-core]
+audit-as-crates-io = true
+
+[policy.candle-kernels]
+audit-as-crates-io = true
+
+[policy.candle-metal-kernels]
+audit-as-crates-io = true
+
+[policy.candle-ug]
+audit-as-crates-io = true
+
 [policy.ffai-argus]
+audit-as-crates-io = true
+
+[policy.ffai-argus-wasm]
 audit-as-crates-io = true
 
 [policy.ffai-bench]
@@ -56,6 +71,9 @@ audit-as-crates-io = true
 audit-as-crates-io = true
 
 [policy.ffai-mercury]
+audit-as-crates-io = true
+
+[policy.ffai-mercury-wasm]
 audit-as-crates-io = true
 
 [policy.ffai-models]
@@ -124,15 +142,19 @@ version = "1.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-core]]
-version = "0.11.0"
+version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-kernels]]
-version = "0.11.0"
+version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-metal-kernels]]
 version = "0.11.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.candle-metal-kernels]]
+version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-nn]]
@@ -144,7 +166,7 @@ version = "0.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-ug]]
-version = "0.11.0"
+version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
 criteria = "safe-to-deploy"
 
 [[exemptions.castaway]]
@@ -153,10 +175,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.cc]]
 version = "1.4.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.chacha20]]
-version = "0.10.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.chacha20]]
@@ -248,7 +266,7 @@ version = "0.19.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.daachorse]]
-version = "1.0.1"
+version = "3.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.darling]]
@@ -336,6 +354,10 @@ version = "0.1.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.fancy-regex]]
+version = "0.17.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.fancy-regex]]
 version = "0.18.0"
 criteria = "safe-to-deploy"
 
@@ -344,43 +366,55 @@ version = "2.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-argus]]
-version = "0.6.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-bench]]
-version = "0.7.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-carmenta]]
-version = "0.7.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-cli]]
-version = "0.6.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-core]]
-version = "0.6.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-diana]]
 version = "0.7.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.ffai-argus-wasm]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-bench]]
+version = "0.7.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-carmenta]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-carmenta-wasm]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-cli]]
+version = "0.6.7"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-core]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-diana]]
+version = "0.7.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.ffai-media]]
-version = "0.6.3"
+version = "0.6.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-mercury]]
-version = "1.0.0"
+version = "1.0.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-mercury-wasm]]
+version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-models]]
-version = "0.6.2"
+version = "0.6.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-wasm]]
-version = "0.1.0"
+version = "0.1.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
@@ -699,14 +733,6 @@ criteria = "safe-to-deploy"
 version = "0.1.13"
 criteria = "safe-to-deploy"
 
-[[exemptions.onig]]
-version = "6.5.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.onig_sys]]
-version = "69.9.3"
-criteria = "safe-to-deploy"
-
 [[exemptions.openssl-probe]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
@@ -904,19 +930,15 @@ version = "0.3.1"
 criteria = "safe-to-run"
 
 [[exemptions.rusty_alloc]]
-version = "0.3.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.rusty_alloc]]
 version = "1.1.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_alloc-api]]
-version = "0.3.2"
+version = "1.1.6"
 criteria = "safe-to-deploy"
 
-[[exemptions.rusty_alloc-api]]
-version = "1.1.6"
+[[exemptions.rusty_expressions]]
+version = "0.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_h264]]
@@ -1068,11 +1090,11 @@ version = "1.12.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokenizers]]
-version = "0.22.2"
+version = "0.22.2@git:cae193a2f70c56226786796ae6dbe85d2c2b5217"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokenizers]]
-version = "0.23.1"
+version = "0.23.2@git:ef352c7ce3dd00b546a09aa06ab9cdf882cd045d"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-retry]]

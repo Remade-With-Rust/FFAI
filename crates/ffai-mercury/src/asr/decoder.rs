@@ -849,7 +849,11 @@ fn decode_once(
 /// Temperature sampling from raw logits, with a deterministic RNG so a run is
 /// reproducible — a benchmark that cannot be repeated is not a measurement.
 fn sample(logits: &[f32], temperature: f32, rng: &mut u64) -> u32 {
-    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    // Vectorised. Runs once per decode STEP over ~51 865 logits, and a
+    // `fold(NEG_INFINITY, f32::max)` is a loop-carried reduction on a
+    // NaN-aware function that LLVM will not lane. Exact — max is associative
+    // on non-NaN floats — so this is byte-identical, not a tolerance.
+    let max = ffai_core::fastmath::max_f32(logits);
     if !max.is_finite() {
         return 0;
     }
@@ -985,10 +989,7 @@ fn apply_logit_filters(
     let ts = tk.timestamp_begin as usize;
     if ts < logits.len() {
         let timestamp_mass = logsumexp(&logits[ts..]);
-        let best_text = logits[..ts]
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let best_text = ffai_core::fastmath::max_f32(&logits[..ts]);
         if timestamp_mass > best_text {
             suppress_range(logits, 0..tk.timestamp_begin);
         }
@@ -997,7 +998,8 @@ fn apply_logit_filters(
 
 /// Numerically stable `log(sum(exp(xs)))`, skipping suppressed (-inf) entries.
 fn logsumexp(xs: &[f32]) -> f32 {
-    let max = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    // Vectorised max; the same whole-vocabulary shape as `sample` above.
+    let max = ffai_core::fastmath::max_f32(xs);
     if !max.is_finite() {
         return f32::NEG_INFINITY;
     }

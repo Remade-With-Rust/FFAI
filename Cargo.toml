@@ -120,5 +120,21 @@ codegen-units = 1
 # onig-free; anyone depending on `ffai-argus` from crates.io still gets candle's
 # onig until the change lands upstream in candle itself.
 [patch.crates-io]
+# candle-core 0.11.0 cannot be built with `-C target-feature=+simd128`: its
+# `cpu/mod.rs` re-exports three types for avx and neon but only `CurrentCpu` for
+# simd128, while four f16/bf16 helpers are gated on `any(neon, avx2, simd128)`
+# and use the two that do not exist. Our branch removes simd128 from those four
+# gates and their four matching scalar arms, so f16/bf16 fall back to scalar and
+# f32 stays vectorised.
+#
+# That flag is worth 1.32-1.40x on Mercury (Whisper tiny.en, interleaved ABBA,
+# n=12 per arm, byte-identical transcript), and it is set for wasm32 in
+# `.cargo/config.toml`. Branched from the 0.11.0 TAG rather than main so the
+# patched crate stays version-compatible with what the workspace requires.
+#
+# `[patch]` is global, so native builds resolve candle-core here too. That is
+# behaviour-neutral: every line this branch changes sits behind a
+# `target_feature = "simd128"` cfg, which is never active off wasm.
+candle-core = { git = "https://github.com/Remade-With-Rust/candle", branch = "simd128-f16-gates-0.11.0" }
 tokenizers = { git = "https://github.com/Remade-With-Rust/tokenizers", branch = "rusty-expressions-deploy" }
 tokenizers-v022 = { git = "https://github.com/Remade-With-Rust/tokenizers", branch = "v0.22-rusty-expressions", package = "tokenizers" }

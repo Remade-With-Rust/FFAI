@@ -454,6 +454,12 @@ impl TextDecoder {
             // is not a field of `Decoding::Sampled`. Small models loop under
             // greedy more than under sampling, not less.
             if let Some(p) = repetition_penalty {
+                // SITE-REVIEWED false positive. This is not an equality
+                // test on a computed float, it is a SENTINEL check: 1.0 is the
+                // documented "penalty disabled" default and arrives as that
+                // literal from the config. An epsilon window would make a
+                // penalty of 1.0000001 silently do nothing.
+                #[allow(clippy::float_cmp)]
                 if p != 1.0 && !out.is_empty() {
                     step = candle_transformers::utils::apply_repeat_penalty(&step, p, &out)?;
                 }

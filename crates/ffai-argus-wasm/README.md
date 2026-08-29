@@ -33,23 +33,62 @@ the build.
 
 ## Performance
 
-`SmolVLM-256M-Instruct`, a 586×640 COCO photo, 40-token budget, Node on
-x86-64 Windows, single-threaded.
+`SmolVLM-256M-Instruct`, a COCO photo, 20-token budget, Node on x86-64 Windows,
+single-threaded.
 
-| | wasm | native, same bytes and same pixels |
+| path | tiles / image tokens | time | caption |
+|---|---|---:|---|
+| **`describeFast`** | **1 / 64** | **37.6 s** | *"In the foreground of the picture there is a bear. In the background there is grass."* |
+| `describe` | 17 / 1088 | 544.1 s | *"A grizzly bear is in the center of the frame."* |
+
+**14.5x, and read the captions before assuming what it cost.** The unsplit run
+keeps the subject and adds background the split run missed; what splitting buys
+is fine print and small objects, not the gist. Use `describe` when you need to
+read text in the image and can afford nine minutes.
+
+**Image size does not matter, and that is the whole insight.** `describe` takes
+505 s on a 224x224 image and 504 s on a 586x640 one, because both are resized
+into the same fixed tile grid. The grid is the cost, not the pixels — shrinking
+the input does nothing, dropping the split does everything.
+
+### How far this can go, measured — and it is not far
+
+Same image, same 20-token budget, so these are comparable:
+
+| | time | |
 |---|---:|---|
-| weights load | 932 ms | — |
-| caption | 446 s | — |
-| peak linear memory | 1691 MiB | — |
-| caption text | *"A grizzly bear is in the foreground of the picture."* | **byte-identical** |
+| native, 24 cores | **1.4 s** | |
+| native, ONE thread | **3.8 s** | threads are worth only **2.74x** |
+| **wasm** (one thread, by definition) | **~25 s** | **6.5x slower than native single-thread** |
 
-**446 seconds is the upstream SIMD defect, not the port.** `candle-core` 0.11
-cannot be built with `-C target-feature=+simd128`, so `gemm` has no wasm SIMD
-kernels and LLVM cannot auto-vectorise — and Argus is a transformer, so that is
-essentially all of its arithmetic. It is a few lines in someone else's
-repository and it is tracked in `docs/plans/carmenta-wasm-plan.md` §2. Until it
-lands, treat this crate as a demonstration that the port is correct rather than
-as something to put in front of users.
+**Threads are not the answer, and that is the surprise.** They would take this
+from ~25 s to ~9 s at best. The dominant term is the 6.5x single-threaded gap,
+and threading cannot touch it.
+
+That gap is the instruction set, and it is a floor:
+
+* **AVX2 is 256-bit** (8 x f32); **wasm SIMD128 is 128-bit** (4 x f32) — 2x.
+* **AVX2 has FMA; base wasm SIMD does not.** A fused multiply-add becomes two
+  instructions — roughly another 2x.
+
+4x from the ISA plus overhead lands on the measured 6.5x. This is *after* SIMD
+is fully enabled: gemm's simd128 microkernels (worth 3.53x — turning them off
+costs 505 s -> 1786 s) and the workspace's `+simd128` flag are both already in
+that 25 s. **There is no SIMD work left that moves this number.** Only wasm
+relaxed-SIMD, which has FMA, would change the floor, and nothing in this stack
+targets it yet.
+
+**So plan for ~25 s today and ~9 s with threads. Argus in a browser is a
+background job, not an interactive one.** If you need interactive captioning,
+run `ffai-argus` on a server; this crate is for the cases where the image must
+not leave the device.
+
+### One thing that IS free: the caption length
+
+99 % of the time is the vision tower and prefill; decode is **0.01 s per
+token**. Measured at 1 token vs 20 tokens: 24.7 s vs 25.0 s. So a generous
+`maxNewTokens` costs essentially nothing — do not shorten the caption to save
+time, because there is no time there to save.
 
 ## Usage
 
@@ -58,14 +97,16 @@ import init, { Captioner } from './ffai_argus_wasm.js';
 await init();
 
 const c = Captioner.smolvlm(weights, configJson, tokenizerJson);
-console.log(c.describe(rgbaFromCanvas, width, height, 'What is in this image?'));
+// describeFast, not describe — see Performance. 14.5x, and the caption holds up.
+console.log(c.describeFast(rgbaFromCanvas, width, height, 'What is in this image?', 40));
 ```
 
 | | |
 |---|---|
 | `Captioner.smolvlm(weights, config, tokenizer)` | load; throws a descriptive error on a bad checkpoint |
-| `c.describe(rgba, w, h, prompt)` | caption; an empty prompt uses the model's default |
-| `c.describeWithLimit(rgba, w, h, prompt, maxNewTokens)` | the same, with a token budget |
+| `c.describeFast(rgba, w, h, prompt, maxNewTokens)` | **start here** — 1 tile, 14.5x faster |
+| `c.describe(rgba, w, h, prompt)` | 17 tiles; reads fine print, costs ~9 minutes |
+| `c.describeWithLimit(rgba, w, h, prompt, maxNewTokens)` | `describe` with a token budget |
 | `allocator()` | which allocator this module was built with |
 | `linearMemoryBytes()` | current linear memory — the only honest memory instrument here |
 

@@ -29,9 +29,9 @@
 //! `FFAI_PRECISION=f32|f16` overrides it for A/B; `FFAI_PROFILE=1` prints
 //! what was chosen and why.
 
+use crate::clock::Instant;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use crate::clock::Instant;
 
 use ffai_core::candle::{DType, Device, Tensor};
 
@@ -111,49 +111,49 @@ pub fn matmul_dtype(m: usize, k: usize, n: usize, device: &Device) -> DType {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-    let key = (m, k, n);
-    if let Some(hit) = cache().lock().ok().and_then(|c| c.get(&key).copied()) {
-        return hit.dtype;
-    }
+        let key = (m, k, n);
+        if let Some(hit) = cache().lock().ok().and_then(|c| c.get(&key).copied()) {
+            return hit.dtype;
+        }
 
-    // Same reasoning as matmul_pad_rows: probe a narrowed output. The
-    // bandwidth-vs-compute balance that decides the dtype is a property of the
-    // shape's aspect, not its absolute size.
-    let probe_n = n.min(8192).max(1);
-    let (Some(f32_secs), Some(f16_secs)) = (
-        time_matmul(m, k, probe_n, DType::F32, device),
-        time_matmul(m, k, probe_n, DType::F16, device),
-    ) else {
-        return DType::F32;
-    };
+        // Same reasoning as matmul_pad_rows: probe a narrowed output. The
+        // bandwidth-vs-compute balance that decides the dtype is a property of the
+        // shape's aspect, not its absolute size.
+        let probe_n = n.min(8192).max(1);
+        let (Some(f32_secs), Some(f16_secs)) = (
+            time_matmul(m, k, probe_n, DType::F32, device),
+            time_matmul(m, k, probe_n, DType::F16, device),
+        ) else {
+            return DType::F32;
+        };
 
-    // Require a real margin before leaving f32: f16 costs a little accuracy,
-    // so it has to earn its place rather than win on noise.
-    const MARGIN: f64 = 1.10;
-    let dtype = if f32_secs > f16_secs * MARGIN {
-        DType::F16
-    } else {
-        DType::F32
-    };
-    let choice = Choice {
-        dtype,
-        f32_secs,
-        f16_secs,
-    };
-
-    if super::profile::is_enabled() {
-        eprintln!(
-            "[precision] ({m}x{k})@({k}x{n}): f32 {:.3} ms vs f16 {:.3} ms -> {:?} ({:.2}x)",
-            f32_secs * 1e3,
-            f16_secs * 1e3,
+        // Require a real margin before leaving f32: f16 costs a little accuracy,
+        // so it has to earn its place rather than win on noise.
+        const MARGIN: f64 = 1.10;
+        let dtype = if f32_secs > f16_secs * MARGIN {
+            DType::F16
+        } else {
+            DType::F32
+        };
+        let choice = Choice {
             dtype,
-            choice.speedup(),
-        );
-    }
-    if let Ok(mut c) = cache().lock() {
-        c.insert(key, choice);
-    }
-    dtype
+            f32_secs,
+            f16_secs,
+        };
+
+        if super::profile::is_enabled() {
+            eprintln!(
+                "[precision] ({m}x{k})@({k}x{n}): f32 {:.3} ms vs f16 {:.3} ms -> {:?} ({:.2}x)",
+                f32_secs * 1e3,
+                f16_secs * 1e3,
+                dtype,
+                choice.speedup(),
+            );
+        }
+        if let Ok(mut c) = cache().lock() {
+            c.insert(key, choice);
+        }
+        dtype
     }
 }
 

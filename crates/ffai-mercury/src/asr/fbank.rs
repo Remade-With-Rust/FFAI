@@ -139,6 +139,7 @@ impl Fbank {
     /// the per-utterance mean of each feature, do **not** divide by the
     /// standard deviation. Skipping it leaves a channel offset the network
     /// never saw in training.
+    #[must_use]
     pub fn compute(&self, samples: &[f32]) -> (Vec<f32>, usize) {
         let frames = Self::n_frames(samples.len());
         if frames == 0 {
@@ -175,7 +176,7 @@ impl Fbank {
 
         // top_db: nothing more than 80 dB below the loudest value survives,
         // so a near-silent frame cannot dominate the mean subtraction below.
-        let peak = out.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let peak = ffai_core::fastmath::max_f32(&out);
         if peak.is_finite() {
             let floor = peak - TOP_DB;
             for v in &mut out {

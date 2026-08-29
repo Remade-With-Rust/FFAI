@@ -78,7 +78,7 @@ struct Reader {
 /// able to stall a live transcription and vice versa.
 struct Seer {
     argus: SmolVlm,
-    /// PyTorch + `transformers` on the SAME checkpoint, held open.
+    /// `PyTorch` + `transformers` on the SAME checkpoint, held open.
     ///
     /// This is the demo's equivalent of `whisper-cli`, and it is the same arm
     /// the ledger's quality gate uses — `corpora/refs/smolvlm_hf_ref.py`, the
@@ -88,8 +88,8 @@ struct Seer {
     ///
     /// **Held open, not spawned per click.** Each spawn reloads a gigabyte of
     /// weights; a per-click process would put ~15 s of model load inside every
-    /// reference reading and make PyTorch look absurdly slow for a reason that
-    /// has nothing to do with PyTorch. The demo already warms Mercury before
+    /// reference reading and make `PyTorch` look absurdly slow for a reason that
+    /// has nothing to do with `PyTorch`. The demo already warms Mercury before
     /// serving so the first click is not paying load — this extends the same
     /// courtesy to the side being compared against, which is the only way the
     /// two numbers mean the same thing.
@@ -153,7 +153,12 @@ impl RefWorker {
     }
 
     /// One caption. `Err` is a message for the pane, never a panic.
-    fn caption(&mut self, path: &Path, prompt: &str, max_new_tokens: usize) -> Result<(String, f64), String> {
+    fn caption(
+        &mut self,
+        path: &Path,
+        prompt: &str,
+        max_new_tokens: usize,
+    ) -> Result<(String, f64), String> {
         let req = json!({
             "path": path.to_string_lossy(),
             "prompt": prompt,
@@ -960,7 +965,7 @@ fn query<'a>(path: &'a str, key: &str) -> Option<&'a str> {
 /// there.
 ///
 /// **It races the same reference the benchmark does.** Listen puts Mercury
-/// beside `whisper-cli`; this puts Argus beside PyTorch + `transformers`
+/// beside `whisper-cli`; this puts Argus beside `PyTorch` + `transformers`
 /// running the identical `SmolVLM-256M-Instruct` checkpoint, through
 /// `corpora/refs/smolvlm_hf_ref.py` — the file that pins the decode config the
 /// ledger's quality gate is measured under. Both sides get the SAME staged
@@ -1105,7 +1110,7 @@ fn describe_image(body: &[u8], path: &str, seer: &Arc<Mutex<Seer>>) -> String {
             "text": tr.text_tokens,
             "prompt": tr.prompt_tokens,
             "generated": tr.step_ms.len(),
-            "per_tile": if tr.tiles > 0 { tr.image_tokens / tr.tiles } else { 0 },
+            "per_tile": tr.image_tokens.checked_div(tr.tiles).unwrap_or(0),
             "max_positions": tr.max_positions,
         },
         "stages": stages,
@@ -1226,7 +1231,10 @@ mod tests {
     fn segment_takes_the_turn_that_covers_its_start() {
         let t = transcript(
             vec![seg(0.0, 2.5, "hello there"), seg(2.6, 4.0, "hi")],
-            Some(vec![seg(0.0, 2.0, "SPEAKER_00"), seg(2.5, 4.0, "SPEAKER_01")]),
+            Some(vec![
+                seg(0.0, 2.0, "SPEAKER_00"),
+                seg(2.5, 4.0, "SPEAKER_01"),
+            ]),
         );
         let us = utterances(&t, 0.0);
         assert_eq!(us[0].speaker.as_deref(), Some("SPEAKER_00"));
@@ -1262,7 +1270,11 @@ mod tests {
     #[test]
     fn no_speakers_is_the_plain_transcript() {
         let t = transcript(
-            vec![seg(0.0, 1.0, "one"), seg(1.0, 2.0, "  "), seg(2.0, 3.0, "two")],
+            vec![
+                seg(0.0, 1.0, "one"),
+                seg(1.0, 2.0, "  "),
+                seg(2.0, 3.0, "two"),
+            ],
             None,
         );
         let us = utterances(&t, 0.0);

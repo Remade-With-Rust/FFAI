@@ -50,9 +50,8 @@ impl CustomOp1 for ElemOp {
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        let src = match storage {
-            CpuStorage::F32(v) => v,
-            _ => candle_core::bail!("{}: expects f32", self.name),
+        let CpuStorage::F32(src) = storage else {
+            candle_core::bail!("{}: expects f32", self.name)
         };
         // `contiguous_offsets` is `Some` only for a genuinely flat run. A
         // strided view read as if it were dense is silent corruption, not an
@@ -172,8 +171,16 @@ mod tests {
         assert_ne!(4099 % CHUNK, 0, "the tail must not be a whole chunk");
 
         let cases: Vec<(&str, Tensor, Tensor)> = vec![
-            ("gelu_erf", gelu_erf(&xs).expect("ours"), xs.gelu_erf().expect("candle")),
-            ("gelu_tanh", gelu_tanh(&xs).expect("ours"), xs.gelu().expect("candle")),
+            (
+                "gelu_erf",
+                gelu_erf(&xs).expect("ours"),
+                xs.gelu_erf().expect("candle"),
+            ),
+            (
+                "gelu_tanh",
+                gelu_tanh(&xs).expect("ours"),
+                xs.gelu().expect("candle"),
+            ),
             ("tanh", tanh(&xs).expect("ours"), xs.tanh().expect("candle")),
             ("silu", silu(&xs).expect("ours"), xs.silu().expect("candle")),
             ("erf", erf(&xs).expect("ours"), xs.erf().expect("candle")),
@@ -199,9 +206,23 @@ mod tests {
     fn the_two_gelus_stay_different() {
         let d = Device::Cpu;
         let xs = Tensor::rand(-4.0f32, 4.0, 2048, &d).expect("xs");
-        let a = gelu_erf(&xs).expect("erf").flatten_all().expect("f").to_vec1::<f32>().expect("v");
-        let b = gelu_tanh(&xs).expect("tanh").flatten_all().expect("f").to_vec1::<f32>().expect("v");
-        let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        let a = gelu_erf(&xs)
+            .expect("erf")
+            .flatten_all()
+            .expect("f")
+            .to_vec1::<f32>()
+            .expect("v");
+        let b = gelu_tanh(&xs)
+            .expect("tanh")
+            .flatten_all()
+            .expect("f")
+            .to_vec1::<f32>()
+            .expect("v");
+        let worst = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
         assert!(
             worst > 1e-4,
             "gelu_erf and gelu_tanh differ by only {worst:.3e} — one has been aliased to the other"
@@ -226,10 +247,21 @@ mod tests {
         assert_eq!(ours.dims(), theirs.dims());
         let (a, b) = (
             ours.flatten_all().expect("a").to_vec1::<f32>().expect("av"),
-            theirs.flatten_all().expect("b").to_vec1::<f32>().expect("bv"),
+            theirs
+                .flatten_all()
+                .expect("b")
+                .to_vec1::<f32>()
+                .expect("bv"),
         );
-        let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
-        assert!(worst < 1e-5, "strided result differs by {worst:.3e} — misread as dense?");
+        let worst = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 1e-5,
+            "strided result differs by {worst:.3e} — misread as dense?"
+        );
     }
 
     #[test]

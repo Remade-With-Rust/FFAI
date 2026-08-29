@@ -190,7 +190,7 @@ impl Costs {
     ///
     /// Deterministic like everything else here: same input, same number.
     #[must_use]
-    pub fn weighted(&self) -> u64 {
+    pub const fn weighted(&self) -> u64 {
         const ELEM_WEIGHT: u64 = 264; // 660e9 / 2.5e9
         const TRANS_WEIGHT: u64 = 8800; // 660e9 / 75e6  (scalar libm)
         const TRANS_VEC_WEIGHT: u64 = 244; // 660e9 / 2.7e9 (vectorised)
@@ -235,7 +235,9 @@ mod tests {
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn guard() -> std::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[test]

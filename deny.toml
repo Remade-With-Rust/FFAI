@@ -65,6 +65,20 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# ...but a wildcard on a PATH dependency is a different thing from a wildcard on
+# a registry one, and only the second is the hazard `wildcards = "deny"` exists
+# to catch: an unpinned crates.io version can change under you between builds,
+# while `{ path = "../ffai-media" }` resolves to the file next door and cannot.
+#
+# The dev-dependencies in this workspace are deliberately version-less. A
+# dev-dependency that carries a version must resolve from crates.io when the
+# crate is PACKAGED, which makes it a publish-ordering edge — and release-plz
+# does not treat dev-dependencies as edges in its topological sort. Ten of them
+# chained (carmenta/mercury -> bench -> argus -> media) and deadlocked the
+# release until they were made path-only. Cargo drops a version-less
+# dev-dependency from the published manifest entirely, so consumers never see
+# them either way.
+allow-wildcard-paths = true
 highlight = "all"
 deny = []
 
@@ -84,4 +98,7 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/Remade-With-Rust/remade_ffmpeg_rs",
     "https://github.com/Remade-With-Rust/tokenizers",
+    # Our candle branch off the 0.11.0 tag — see the `[patch.crates-io]` note in
+    # the root manifest. Four cfg gates; nothing else differs from the tag.
+    "https://github.com/Remade-With-Rust/candle",
 ]

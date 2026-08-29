@@ -53,6 +53,37 @@ nursery = { level = "warn", priority = -1 }
 # 14 sites. Real documentation debt rather than a bad lint - worth doing, not
 # worth blocking on today. Revisit 2026-11-15.
 missing_errors_doc = "allow"
+
+# --- the numeric-kernel set, added when fastmath grew its SIMD twins.
+# Each is a deliberate decision, not a blanket. The CAST lints stay split by
+# trust boundary exactly as the note above describes: only cast_precision_loss
+# is crate-wide, and truncation / sign_loss / wrap remain DENIED so they keep
+# firing on new code, allowed individually at their four sites with the
+# reasoning written there. ---
+#
+# `exp`, `ln`, `tanh`, `sigmoid`, `silu` and `round_ties_even_fast` are single
+# expressions on the hottest path in the workspace, and they exist to REPLACE a
+# libm call. Leaving the inlining to chance is the one thing that would undo
+# them.
+inline_always = "allow"
+# clippy wants `mul_add`. Taking that suggestion would be a BUG here: `mul_add`
+# is a fused multiply-add, it rounds once instead of twice, and this module's
+# whole contract is tracking libm within a stated tolerance -- `exp_tracks_libm`
+# and its siblings pin exactly that. The polynomials are also transcribed from a
+# derivation where the operation order is the approximation.
+suboptimal_flops = "allow"
+# The polynomial coefficients are `const` items declared next to the expression
+# that uses them, which reads better than hoisting them away from their maths.
+items_after_statements = "allow"
+# Trimming a digit to satisfy this lint silently selects a DIFFERENT f32 and
+# breaks the oracle -- the module says so at the `exp2_unchecked` coefficients,
+# and the same applies to `SQRT_2_OVER_PI`, which the SIMD twins must match
+# bit-for-bit.
+excessive_precision = "allow"
+# Rounding, never aliasing: every instance is a small count or index widened for
+# float maths. It cannot map two distinct values onto one, which is the property
+# the other three cast lints exist to protect and which is why they stay denied.
+cast_precision_loss = "allow"
 # `out.push_str(&format!(..))` in the caption writers. `write!` avoids the
 # intermediate String; the difference is unmeasurable while building a subtitle
 # file, and the push_str form reads better.

@@ -258,6 +258,41 @@ impl SmolVlm {
     ///
     /// # Errors
     /// Whatever `describe_image` would return.
+    /// Caption a still with tile splitting **off** — one tile, not seventeen.
+    ///
+    /// [`VlmEngine::describe_image`] splits, because seventeen tiles is what
+    /// lets the model read fine print and a single still has all 8192 text
+    /// positions to itself. That is the right default when the compute is
+    /// free. It is not free everywhere.
+    ///
+    /// A split still is 17 tiles / 1088 image tokens; unsplit it is **1 tile /
+    /// 64 tokens**, so the vision tower does roughly a seventeenth of the work.
+    /// `describe_video` has always taken this path — not to trade quality for
+    /// speed, but because a split frame caps a window at seven frames against
+    /// the tower's 8192 positions. Wasm wants it for the other reason: the
+    /// browser has no threads, and 17 tiles of scalar-plus-gemm arithmetic is
+    /// minutes per image.
+    ///
+    /// **The detail loss is bounded and known.** The unsplit tile is exactly
+    /// the global thumbnail the split path already computes and prepends, so
+    /// this is not a different preprocessing path with its own oracle — it is
+    /// the same path, stopping before the tiles. What goes is fine print and
+    /// small objects; what stays is the whole-image gist the thumbnail carries.
+    ///
+    /// Prefer [`VlmEngine::describe_image`] wherever the seventeen tiles are
+    /// affordable.
+    pub fn describe_image_unsplit(
+        &self,
+        image: &ImageBuffer,
+        opts: &VlmOptions,
+    ) -> Result<String> {
+        let mut pieces = vec![Piece::Image(image)];
+        if let Some(t) = opts.prompt.as_deref() {
+            pieces.push(Piece::Text(t));
+        }
+        self.caption(&pieces, false, opts)
+    }
+
     pub fn describe_image_traced(
         &self,
         image: &ImageBuffer,

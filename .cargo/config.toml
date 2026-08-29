@@ -6,7 +6,25 @@
 #
 # Scoped to the wasm target so native builds are untouched.
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+rustflags = [
+    '--cfg', 'getrandom_backend="wasm_js"',
+    # SIMD128. Measured 1.32-1.40x on Mercury (Whisper tiny.en, interleaved
+    # ABBA, n=12 per arm, byte-identical transcript) — the win is LLVM
+    # auto-vectorising candle's scalar loops, which this flag is the only way to
+    # reach. gemm's own microkernels were already vectorised without it: they
+    # carry `#[target_feature(enable = "simd128")]` per function.
+    #
+    # Needs the `[patch.crates-io]` candle fork in the root manifest; stock
+    # candle-core 0.11.0 does not compile under this flag at all.
+    #
+    # **This makes SIMD a BASELINE REQUIREMENT of every wasm module we ship**,
+    # not a runtime upgrade: wasm validates a whole module ahead of time, so one
+    # v128 instruction anywhere means the module needs SIMD support, and there
+    # is no `is_wasm_feature_detected!`. Every browser has shipped it since
+    # Safari 16.4 (March 2023). A non-SIMD fallback would have to be a second
+    # module, not a second branch.
+    '-C', 'target-feature=+simd128',
+]
 
 # ---- binary hardening (gate H-04) --------------------------------------------
 #
