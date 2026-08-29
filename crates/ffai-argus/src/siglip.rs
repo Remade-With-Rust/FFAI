@@ -402,7 +402,16 @@ impl Layer {
                 prof::add("q.k^T", _t);
                 crate::cost::matmul(bu, sq, hdim, sq);
                 let _t = crate::clock::Instant::now();
-                let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+                // Ours, in place — not `candle_nn::ops::softmax_last_dim`.
+                //
+                // This branch was the one the 17-tile path takes, and it was
+                // the reason vectorising the other two softmax sites moved the
+                // 1-tile caption 1.49x and left the 17-tile one flat. candle's
+                // version is scalar AND allocates a second (seq, seq) buffer
+                // per head; `SoftmaxInplace` reuses the scores tensor and goes
+                // through the same lane-split kernels.
+                scores.inplace_op1(&SoftmaxInplace)?;
+                let probs = scores;
                 prof::add("softmax", _t);
                 crate::cost::elementwise(bu * sq * sq, 2, 1);
                 crate::cost::transcendental_vector(bu * sq * sq);
@@ -1280,16 +1289,25 @@ impl candle_core::InplaceOp1 for SoftmaxExpInplace {
         crate::cost::transcendental_vector((e - o) as u64);
         let sums = &self.sums;
         x[o..e].par_chunks_mut(width).enumerate().for_each(|(r, row)| {
-            let mut max = f32::NEG_INFINITY;
-            for &v in row.iter() {
-                max = max.max(v);
-            }
-            let mut sum = 0.0f32;
-            for v in row.iter_mut() {
-                let ex = (*v - max).exp();
-                *v = ex;
-                sum += ex;
-            }
+            // Vectorised too — this is a full pass over the same 50 MB-per-layer
+            // score tensor, and `max = max.max(v)` is a loop-carried reduction
+            // on a NaN-aware function, so LLVM lanes it no better than the sum.
+            // Exact (max is associative on non-NaN floats), so its twin is
+            // gated by `assert_eq!` rather than a tolerance.
+            let max = ffai_core::fastmath::max_f32(row);
+            // Explicit lanes, not a scalar rewrite. This loop was 22.7 % of
+            // the vision tower at 228 M elem/s — 2.7x the `q.k^T` matmul that
+            // produces its input, which is the impossible ratio that pointed
+            // here. `(*v - max).exp()` is a libm CALL per element and
+            // `sum += ex` is a loop-carried dependency on a non-associative
+            // add, so LLVM will not lane it.
+            //
+            // A scalar polynomial exp with eight split accumulators was tried
+            // first and measured SLOWER than libm (2410 ms vs 2090 ms): it
+            // removes the call and still does not vectorise. Only explicit
+            // intrinsics move it. See `ffai_core::fastmath::exp_sub_sum_inplace`
+            // — AVX2 twin, wasm SIMD128 twin, scalar oracle, tolerance-gated.
+            let sum = ffai_core::fastmath::exp_sub_sum_inplace(row, max);
             // SAFETY: `r < self.rows` because the chunks partition a buffer of
             // exactly `rows * width`, and this chunk is the only writer of `r`.
             #[allow(unsafe_code)]
@@ -1444,17 +1462,13 @@ impl candle_core::InplaceOp1 for SoftmaxInplace {
         let rows = &mut x[o..e];
         crate::cost::elementwise((e - o) as u64, 2, 1);
         crate::cost::transcendental_vector((e - o) as u64);
+        // The same vectorised primitives as the deferred-normalise kernel this
+        // is the fallback for (`SoftmaxExpInplace`). Reachable when
+        // `FFAI_ARGUS_LATE_NORMALIZE=0`, and there is no reason for the arm a
+        // measurement selects to be slower than the arm that ships.
         let row = |r: &mut [f32]| {
-            let mut max = f32::NEG_INFINITY;
-            for &v in r.iter() {
-                max = max.max(v);
-            }
-            let mut sum = 0.0f32;
-            for v in r.iter_mut() {
-                let e = (*v - max).exp();
-                *v = e;
-                sum += e;
-            }
+            let max = ffai_core::fastmath::max_f32(r);
+            let sum = ffai_core::fastmath::exp_sub_sum_inplace(r, max);
             let inv = 1.0 / sum;
             for v in r.iter_mut() {
                 *v *= inv;
@@ -1817,14 +1831,12 @@ impl candle_core::CustomOp2 for GeluBiasOp {
                 for ((o, &v), &b) in o.iter_mut().zip(i).zip(bias) {
                     *o = v + b;
                 }
-                #[cfg(target_arch = "x86_64")]
-                if have_avx2_cached() {
-                    // SAFETY: `have_avx2_cached()` verified avx2+fma, which is
-                    // `gelu_chunk_avx2`'s documented precondition.
-                    unsafe { gelu_chunk_avx2(o) };
-                    return;
-                }
-                gelu_chunk_scalar(o);
+                // `fastmath` dispatches AVX2 / wasm SIMD128 / scalar. The
+                // block this replaces had an x86_64 arm and NOTHING for wasm,
+                // so the browser took the scalar loop for an activation that
+                // runs over `seq * 4 * hidden` elements per layer — the same
+                // ISA asymmetry the softmax had.
+                ffai_core::fastmath::gelu_tanh_inplace(o);
             };
             if kernels_parallel() {
                 dst.par_chunks_mut(width).zip(x.par_chunks(width)).for_each(row);
@@ -1929,17 +1941,14 @@ impl candle_core::CustomOp1 for GeluOp {
 /// Fill `dst` with `gelu(src)`. `dst` and `src` must be the same length.
 fn fill_gelu(dst: &mut [f32], src: &[f32], parallel: bool) {
     debug_assert_eq!(dst.len(), src.len());
-    let avx2 = cfg!(target_arch = "x86_64") && have_avx2_cached();
-    let kernel = move |(o, i): (&mut [f32], &[f32])| {
+    // `fastmath::gelu_tanh_inplace` carries the AVX2 kernel this used to call
+    // AND a wasm SIMD128 twin. The block it replaces dispatched on
+    // `have_avx2_cached()`, which is `false` by construction off x86_64, so
+    // every browser ran `gelu_chunk_scalar` over `seq * 4 * hidden` elements
+    // per layer. Same ISA asymmetry the softmax had.
+    let kernel = |(o, i): (&mut [f32], &[f32])| {
         o.copy_from_slice(i);
-        #[cfg(target_arch = "x86_64")]
-        if avx2 {
-            // SAFETY: `have_avx2_cached()` returned true above, which is
-            // `gelu_chunk_avx2`'s documented precondition.
-            unsafe { gelu_chunk_avx2(o) };
-            return;
-        }
-        gelu_chunk_scalar(o);
+        ffai_core::fastmath::gelu_tanh_inplace(o);
     };
     if parallel {
         dst.par_chunks_mut(8192).zip(src.par_chunks(8192)).for_each(kernel);

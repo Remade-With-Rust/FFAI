@@ -175,7 +175,7 @@ impl Fbank {
 
         // top_db: nothing more than 80 dB below the loudest value survives,
         // so a near-silent frame cannot dominate the mean subtraction below.
-        let peak = out.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let peak = ffai_core::fastmath::max_f32(&out);
         if peak.is_finite() {
             let floor = peak - TOP_DB;
             for v in &mut out {

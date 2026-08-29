@@ -231,6 +231,78 @@ pub fn log10(x: f32) -> f32 {
 }
 
 #[cfg(test)]
+mod exp_sub_sum_tests {
+    use super::*;
+
+    /// Every vector twin against the scalar oracle, on the shape the caller
+    /// actually uses (1024-wide attention rows) plus the tail lengths that
+    /// exercise the scalar remainder in both the 8-lane and 4-lane kernels.
+    #[test]
+    fn vector_twins_match_the_scalar_oracle() {
+        for &n in &[0usize, 1, 3, 4, 7, 8, 9, 15, 16, 31, 33, 64, 1024, 1031] {
+            // Deterministic, and spanning the range attention scores occupy —
+            // including values far below the max, where exp underflows.
+            let src: Vec<f32> = (0..n)
+                .map(|i| ((i * 37 % 211) as f32 - 105.0) * 0.15)
+                .collect();
+            let max = src.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+            let mut want = src.clone();
+            let want_sum = exp_sub_sum_scalar(&mut want, if n == 0 { 0.0 } else { max });
+            let mut got = src.clone();
+            let got_sum = exp_sub_sum_inplace(&mut got, if n == 0 { 0.0 } else { max });
+
+            for (i, (a, b)) in want.iter().zip(got.iter()).enumerate() {
+                let err = (a - b).abs() / a.abs().max(1e-30);
+                assert!(err < 1e-5, "n={n} i={i}: {a} vs {b} (rel {err:e})");
+            }
+            let serr = (want_sum - got_sum).abs() / want_sum.abs().max(1e-30);
+            // Lane splitting reassociates the sum, so this is a tolerance and
+            // not an equality — by construction, not by accident.
+            assert!(serr < 1e-5, "n={n} sum {want_sum} vs {got_sum} (rel {serr:e})");
+        }
+    }
+
+    /// `max_f32`'s twins are EXACT — max is associative on non-NaN floats — so
+    /// this is `assert_eq!`, not a tolerance.
+    #[test]
+    fn max_twins_are_exact() {
+        for &n in &[0usize, 1, 3, 4, 7, 8, 9, 15, 31, 33, 1024, 1031] {
+            let xs: Vec<f32> = (0..n).map(|i| ((i * 89 % 401) as f32 - 200.0) * 0.37).collect();
+            assert_eq!(max_f32_scalar(&xs), max_f32(&xs), "n={n}");
+        }
+        assert_eq!(max_f32(&[]), f32::NEG_INFINITY);
+    }
+
+    /// The GELU twins against the scalar oracle, across the range an MLP
+    /// activation actually sees plus both saturating tails.
+    #[test]
+    fn gelu_twins_match_the_scalar_oracle() {
+        for &n in &[0usize, 1, 3, 4, 7, 8, 9, 15, 33, 4096, 4099] {
+            let src: Vec<f32> = (0..n).map(|i| ((i * 53 % 601) as f32 - 300.0) * 0.09).collect();
+            let mut want = src.clone();
+            for v in &mut want { *v = gelu_tanh(*v); }
+            let mut got = src.clone();
+            gelu_tanh_inplace(&mut got);
+            for (i, (a, b)) in want.iter().zip(got.iter()).enumerate() {
+                let err = (a - b).abs() / a.abs().max(1e-6);
+                assert!(err < 1e-5, "n={n} i={i} x={}: {a} vs {b} (rel {err:e})", src[i]);
+            }
+        }
+    }
+
+    /// A softmax built on it sums to 1 — the property the caller depends on.
+    #[test]
+    fn normalises_to_one() {
+        let mut row: Vec<f32> = (0..1024).map(|i| ((i % 97) as f32) * 0.11 - 5.0).collect();
+        let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let sum = exp_sub_sum_inplace(&mut row, max);
+        let total: f32 = row.iter().map(|v| v / sum).sum();
+        assert!((total - 1.0).abs() < 1e-4, "sums to {total}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -450,5 +522,428 @@ mod tests {
             let back = ln(exp(x));
             assert!((back - x).abs() < 1e-4, "ln(exp({x})) = {back}");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vectorised softmax inner loop
+// ---------------------------------------------------------------------------
+
+/// `row[i] = exp(row[i] - max)`, returning the sum — the softmax inner loop.
+///
+/// # Why this exists as one function rather than `map` + `sum`
+///
+/// Measured on Argus's `SoftmaxExpInplace`: 151 M elements per caption at
+/// **228 M elem/s**, 22.7 % of the whole vision tower and 2.7x the `q.k^T`
+/// matmul that produces its input. An elementwise pass beating the O(n^3)
+/// matmul that feeds it is the tell.
+///
+/// Two costs, and neither yields to a scalar rewrite:
+///
+/// * `(x - max).exp()` is a libm `expf` CALL per element, ~75 M/s.
+/// * `sum += e` is a loop-carried dependency on a non-associative add, so LLVM
+///   will not lane the loop — and a scalar polynomial `exp` with eight split
+///   accumulators was **measured slower** than libm here (2410 ms vs 2090 ms),
+///   because it removes the call but still will not vectorise.
+///
+/// So the fix has to be explicit lanes, which is what this is. The scalar body
+/// below stays as the oracle and as the fallback for targets with neither ISA.
+///
+/// Accuracy: `exp` here is the degree-5 `exp2` polynomial, ~4.2e-6 relative.
+/// Lane splitting reassociates the sum, so it differs from a sequential fold in
+/// the last bits — gate on tolerance, never bit-identity.
+#[must_use]
+pub fn exp_sub_sum_inplace(row: &mut [f32], max: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: both features probed immediately above.
+            return unsafe { exp_sub_sum_avx2(row, max) };
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Unconditional, unlike the x86 arm's runtime check: wasm validates a
+        // whole module ahead of time, so a v128 instruction anywhere makes the
+        // MODULE require SIMD. There is no `is_wasm_feature_detected!` and no
+        // per-call dispatch. The workspace already sets `+simd128` for this
+        // target in `.cargo/config.toml`, which makes SIMD a baseline
+        // requirement rather than an upgrade.
+        //
+        // SAFETY: `simd128` is a compile-time guarantee on this target.
+        return unsafe { exp_sub_sum_simd128(row, max) };
+    }
+    #[allow(unreachable_code)]
+    exp_sub_sum_scalar(row, max)
+}
+
+/// The oracle. Every vector twin is gated against this.
+#[must_use]
+pub fn exp_sub_sum_scalar(row: &mut [f32], max: f32) -> f32 {
+    let mut sum = 0.0f32;
+    for v in row.iter_mut() {
+        let e = exp(*v - max);
+        *v = e;
+        sum += e;
+    }
+    sum
+}
+
+/// AVX2 + FMA, eight lanes.
+///
+/// # Safety
+/// Caller must have verified `avx2` and `fma`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn exp_sub_sum_avx2(row: &mut [f32], max: f32) -> f32 {
+    use std::arch::x86_64::*;
+    const L1: f32 = std::f32::consts::LN_2;
+    const L2: f32 = L1 * L1 / 2.0;
+    const L3: f32 = L1 * L1 * L1 / 6.0;
+    const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+    const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+
+    let vmax = _mm256_set1_ps(max);
+    let log2e = _mm256_set1_ps(std::f32::consts::LOG2_E);
+    let magic = _mm256_set1_ps(MAGIC);
+    let lo = _mm256_set1_ps(-125.0);
+    let hi = _mm256_set1_ps(125.0);
+    let c1 = _mm256_set1_ps(L1);
+    let c2 = _mm256_set1_ps(L2);
+    let c3 = _mm256_set1_ps(L3);
+    let c4 = _mm256_set1_ps(L4);
+    let c5 = _mm256_set1_ps(L5);
+    let one = _mm256_set1_ps(1.0);
+    let bias = _mm256_set1_epi32(127);
+
+    let mut acc = _mm256_setzero_ps();
+    let n = row.len();
+    let mut i = 0;
+    while i + 8 <= n {
+        let x = _mm256_loadu_ps(row.as_ptr().add(i));
+        // exp(x - max) == exp2((x - max) * log2(e)), clamped like the scalar.
+        let t = _mm256_mul_ps(_mm256_sub_ps(x, vmax), log2e);
+        let t = _mm256_min_ps(_mm256_max_ps(t, lo), hi);
+        // round-to-nearest-even without an SSE4.1 instruction: (t+M)-M.
+        let r = _mm256_sub_ps(_mm256_add_ps(t, magic), magic);
+        let f = _mm256_sub_ps(t, r);
+        // Horner, FMA-fused.
+        let p = _mm256_fmadd_ps(f, c5, c4);
+        let p = _mm256_fmadd_ps(f, p, c3);
+        let p = _mm256_fmadd_ps(f, p, c2);
+        let p = _mm256_fmadd_ps(f, p, c1);
+        let p = _mm256_fmadd_ps(f, p, one);
+        // 2^r straight into the exponent field.
+        let e = _mm256_cvtps_epi32(r);
+        let e = _mm256_slli_epi32::<23>(_mm256_add_epi32(e, bias));
+        let out = _mm256_mul_ps(p, _mm256_castsi256_ps(e));
+        _mm256_storeu_ps(row.as_mut_ptr().add(i), out);
+        acc = _mm256_add_ps(acc, out);
+        i += 8;
+    }
+    // Horizontal reduce, then the scalar tail through the SAME polynomial.
+    let mut lanes = [0f32; 8];
+    _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    let mut sum = ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3]))
+        + ((lanes[4] + lanes[5]) + (lanes[6] + lanes[7]));
+    while i < n {
+        let e = exp(row[i] - max);
+        row[i] = e;
+        sum += e;
+        i += 1;
+    }
+    sum
+}
+
+/// wasm SIMD128, four lanes.
+///
+/// **No FMA.** Base wasm SIMD has no fused multiply-add, so each Horner step is
+/// a separate multiply and add — which is half of why this target runs ~6.5x
+/// behind native single-thread even with SIMD on.
+///
+/// # Safety
+/// `simd128` is a compile-time guarantee on `wasm32` here.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+unsafe fn exp_sub_sum_simd128(row: &mut [f32], max: f32) -> f32 {
+    use core::arch::wasm32::*;
+    const L1: f32 = core::f32::consts::LN_2;
+    const L2: f32 = L1 * L1 / 2.0;
+    const L3: f32 = L1 * L1 * L1 / 6.0;
+    const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+    const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+
+    let vmax = f32x4_splat(max);
+    let log2e = f32x4_splat(core::f32::consts::LOG2_E);
+    let magic = f32x4_splat(MAGIC);
+    let lo = f32x4_splat(-125.0);
+    let hi = f32x4_splat(125.0);
+    let c1 = f32x4_splat(L1);
+    let c2 = f32x4_splat(L2);
+    let c3 = f32x4_splat(L3);
+    let c4 = f32x4_splat(L4);
+    let c5 = f32x4_splat(L5);
+    let one = f32x4_splat(1.0);
+    let bias = i32x4_splat(127);
+
+    let mut acc = f32x4_splat(0.0);
+    let n = row.len();
+    let mut i = 0;
+    while i + 4 <= n {
+        let x = v128_load(row.as_ptr().add(i).cast());
+        let t = f32x4_mul(f32x4_sub(x, vmax), log2e);
+        let t = f32x4_pmin(hi, f32x4_pmax(lo, t));
+        let r = f32x4_sub(f32x4_add(t, magic), magic);
+        let f = f32x4_sub(t, r);
+        let p = f32x4_add(f32x4_mul(f, c5), c4);
+        let p = f32x4_add(f32x4_mul(f, p), c3);
+        let p = f32x4_add(f32x4_mul(f, p), c2);
+        let p = f32x4_add(f32x4_mul(f, p), c1);
+        let p = f32x4_add(f32x4_mul(f, p), one);
+        let e = i32x4_trunc_sat_f32x4(r);
+        let e = i32x4_shl(i32x4_add(e, bias), 23);
+        let out = f32x4_mul(p, e);
+        v128_store(row.as_mut_ptr().add(i).cast(), out);
+        acc = f32x4_add(acc, out);
+        i += 4;
+    }
+    let mut sum = (f32x4_extract_lane::<0>(acc) + f32x4_extract_lane::<1>(acc))
+        + (f32x4_extract_lane::<2>(acc) + f32x4_extract_lane::<3>(acc));
+    while i < n {
+        let e = exp(row[i] - max);
+        row[i] = e;
+        sum += e;
+        i += 1;
+    }
+    sum
+}
+
+/// Maximum of a slice — vectorised.
+///
+/// The other half of the softmax row. `for &v in row { max = max.max(v) }` is a
+/// loop-carried reduction on a function with NaN semantics, so LLVM will not
+/// lane it any more than it lanes the sum. It is a full pass over the same
+/// 50 MB-per-layer score tensor that `exp_sub_sum_inplace` then walks again.
+///
+/// Returns `f32::NEG_INFINITY` for an empty slice, matching a fold from that
+/// identity. Lane-splitting a MAX is exact — `max` is associative and
+/// commutative on non-NaN floats — so unlike the sum this twin is gated by
+/// `assert_eq!`, not by tolerance.
+#[must_use]
+pub fn max_f32(xs: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            // SAFETY: probed immediately above.
+            return unsafe { max_f32_avx2(xs) };
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // SAFETY: `simd128` is a compile-time guarantee on this target.
+        return unsafe { max_f32_simd128(xs) };
+    }
+    #[allow(unreachable_code)]
+    max_f32_scalar(xs)
+}
+
+/// The oracle.
+#[must_use]
+pub fn max_f32_scalar(xs: &[f32]) -> f32 {
+    let mut m = f32::NEG_INFINITY;
+    for &v in xs {
+        m = m.max(v);
+    }
+    m
+}
+
+/// # Safety
+/// Caller must have verified `avx2`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn max_f32_avx2(xs: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let n = xs.len();
+    if n < 8 {
+        return max_f32_scalar(xs);
+    }
+    let mut acc = _mm256_loadu_ps(xs.as_ptr());
+    let mut i = 8;
+    while i + 8 <= n {
+        acc = _mm256_max_ps(acc, _mm256_loadu_ps(xs.as_ptr().add(i)));
+        i += 8;
+    }
+    let mut lanes = [0f32; 8];
+    _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+    let mut m = lanes[0];
+    for &v in &lanes[1..] {
+        m = m.max(v);
+    }
+    while i < n {
+        m = m.max(xs[i]);
+        i += 1;
+    }
+    m
+}
+
+/// # Safety
+/// `simd128` is a compile-time guarantee on `wasm32` here.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+unsafe fn max_f32_simd128(xs: &[f32]) -> f32 {
+    use core::arch::wasm32::*;
+    let n = xs.len();
+    if n < 4 {
+        return max_f32_scalar(xs);
+    }
+    // `f32x4_pmax` is the raw max: it returns the second operand when either is
+    // NaN, which matches nothing in particular — but these are attention
+    // scores, never NaN, and the scalar oracle gate covers the range we feed.
+    let mut acc = v128_load(xs.as_ptr().cast());
+    let mut i = 4;
+    while i + 4 <= n {
+        acc = f32x4_pmax(acc, v128_load(xs.as_ptr().add(i).cast()));
+        i += 4;
+    }
+    let mut m = f32x4_extract_lane::<0>(acc);
+    m = m.max(f32x4_extract_lane::<1>(acc));
+    m = m.max(f32x4_extract_lane::<2>(acc));
+    m = m.max(f32x4_extract_lane::<3>(acc));
+    while i < n {
+        m = m.max(xs[i]);
+        i += 1;
+    }
+    m
+}
+
+/// `xs[i] = gelu_tanh(xs[i])`, vectorised.
+///
+/// The activation between a transformer MLP's two projections, so it runs over
+/// `seq * 4 * hidden` elements per layer. Argus's tower had an AVX2 twin for it
+/// and **no wasm twin at all**, so the browser took a scalar loop — the same
+/// asymmetry the softmax had.
+///
+/// `gelu_tanh` is branch-free (`x / (1 + exp(-2z))`), so unlike `tanh` there is
+/// no small-|x| special case to reproduce; the twins are the same expression in
+/// lanes. Gated by tolerance against the scalar oracle.
+pub fn gelu_tanh_inplace(xs: &mut [f32]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: probed immediately above.
+            unsafe { gelu_tanh_avx2(xs) };
+            return;
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // SAFETY: `simd128` is a compile-time guarantee on this target.
+        unsafe { gelu_tanh_simd128(xs) };
+        return;
+    }
+    #[allow(unreachable_code)]
+    for v in xs.iter_mut() {
+        *v = gelu_tanh(*v);
+    }
+}
+
+/// # Safety
+/// Caller must have verified `avx2` and `fma`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn gelu_tanh_avx2(xs: &mut [f32]) {
+    use std::arch::x86_64::*;
+    const L1: f32 = std::f32::consts::LN_2;
+    const L2: f32 = L1 * L1 / 2.0;
+    const L3: f32 = L1 * L1 * L1 / 6.0;
+    const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+    const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+    let sq2pi = _mm256_set1_ps(0.797_884_56);
+    let k = _mm256_set1_ps(0.044_715);
+    let one = _mm256_set1_ps(1.0);
+    let m2 = _mm256_set1_ps(-2.0);
+    let log2e = _mm256_set1_ps(std::f32::consts::LOG2_E);
+    let magic = _mm256_set1_ps(MAGIC);
+    let lo = _mm256_set1_ps(-125.0);
+    let hi = _mm256_set1_ps(125.0);
+    let (c1, c2, c3, c4, c5) = (
+        _mm256_set1_ps(L1), _mm256_set1_ps(L2), _mm256_set1_ps(L3),
+        _mm256_set1_ps(L4), _mm256_set1_ps(L5),
+    );
+    let bias = _mm256_set1_epi32(127);
+    let n = xs.len();
+    let mut i = 0;
+    while i + 8 <= n {
+        let x = _mm256_loadu_ps(xs.as_ptr().add(i));
+        // z = sqrt(2/pi) * x * (1 + k x^2)
+        let x2 = _mm256_mul_ps(x, x);
+        let z = _mm256_mul_ps(_mm256_mul_ps(sq2pi, x), _mm256_fmadd_ps(k, x2, one));
+        // exp(-2z)
+        let t = _mm256_mul_ps(_mm256_mul_ps(m2, z), log2e);
+        let t = _mm256_min_ps(_mm256_max_ps(t, lo), hi);
+        let r = _mm256_sub_ps(_mm256_add_ps(t, magic), magic);
+        let f = _mm256_sub_ps(t, r);
+        let p = _mm256_fmadd_ps(f, c5, c4);
+        let p = _mm256_fmadd_ps(f, p, c3);
+        let p = _mm256_fmadd_ps(f, p, c2);
+        let p = _mm256_fmadd_ps(f, p, c1);
+        let p = _mm256_fmadd_ps(f, p, one);
+        let e = _mm256_slli_epi32::<23>(_mm256_add_epi32(_mm256_cvtps_epi32(r), bias));
+        let ex = _mm256_mul_ps(p, _mm256_castsi256_ps(e));
+        _mm256_storeu_ps(xs.as_mut_ptr().add(i), _mm256_div_ps(x, _mm256_add_ps(one, ex)));
+        i += 8;
+    }
+    while i < n {
+        xs[i] = gelu_tanh(xs[i]);
+        i += 1;
+    }
+}
+
+/// # Safety
+/// `simd128` is a compile-time guarantee on `wasm32` here.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+unsafe fn gelu_tanh_simd128(xs: &mut [f32]) {
+    use core::arch::wasm32::*;
+    const L1: f32 = core::f32::consts::LN_2;
+    const L2: f32 = L1 * L1 / 2.0;
+    const L3: f32 = L1 * L1 * L1 / 6.0;
+    const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+    const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+    let sq2pi = f32x4_splat(0.797_884_56);
+    let k = f32x4_splat(0.044_715);
+    let one = f32x4_splat(1.0);
+    let m2 = f32x4_splat(-2.0);
+    let log2e = f32x4_splat(core::f32::consts::LOG2_E);
+    let magic = f32x4_splat(MAGIC);
+    let lo = f32x4_splat(-125.0);
+    let hi = f32x4_splat(125.0);
+    let (c1, c2, c3, c4, c5) = (
+        f32x4_splat(L1), f32x4_splat(L2), f32x4_splat(L3), f32x4_splat(L4), f32x4_splat(L5),
+    );
+    let bias = i32x4_splat(127);
+    let n = xs.len();
+    let mut i = 0;
+    while i + 4 <= n {
+        let x = v128_load(xs.as_ptr().add(i).cast());
+        let x2 = f32x4_mul(x, x);
+        let z = f32x4_mul(f32x4_mul(sq2pi, x), f32x4_add(f32x4_mul(k, x2), one));
+        let t = f32x4_mul(f32x4_mul(m2, z), log2e);
+        let t = f32x4_pmin(hi, f32x4_pmax(lo, t));
+        let r = f32x4_sub(f32x4_add(t, magic), magic);
+        let f = f32x4_sub(t, r);
+        let p = f32x4_add(f32x4_mul(f, c5), c4);
+        let p = f32x4_add(f32x4_mul(f, p), c3);
+        let p = f32x4_add(f32x4_mul(f, p), c2);
+        let p = f32x4_add(f32x4_mul(f, p), c1);
+        let p = f32x4_add(f32x4_mul(f, p), one);
+        let e = i32x4_shl(i32x4_add(i32x4_trunc_sat_f32x4(r), bias), 23);
+        let ex = f32x4_mul(p, e);
+        v128_store(xs.as_mut_ptr().add(i).cast(), f32x4_div(x, f32x4_add(one, ex)));
+        i += 4;
+    }
+    while i < n {
+        xs[i] = gelu_tanh(xs[i]);
+        i += 1;
     }
 }
