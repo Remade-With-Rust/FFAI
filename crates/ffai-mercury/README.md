@@ -1,3 +1,8 @@
+> **In the wild** — [RAG Converter](https://ragconverter.com) uses `ffai-mercury` for speech recognition, turning recordings into transcripts.
+> It makes personal and work files AI-readable without them leaving the machine:
+> the whole conversion runs as WebAssembly in the browser tab, with nothing
+> uploaded and nothing to install.
+
 # ffai-mercury
 
 **Speech recognition (ASR) and text-to-speech (TTS) in pure Rust.** Whisper/WhisperX-class recognition — voice activity detection, word-level timestamps, speaker diarization — and VITS/Piper-class synthesis running piper's own voices on candle. No Python runtime, no C/C++ by default, no HuggingFace token, no gated weights, and nothing GPL.
