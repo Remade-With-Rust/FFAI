@@ -52,7 +52,7 @@
 //! real gate remains what it has always been: 32/32 tokens and a caption
 //! identical to the reference's.
 
-use candle_core::{IndexOp, Module, Result as CandleResult, Tensor, D};
+use candle_core::{IndexOp, Module, Result as CandleResult, Tensor};
 use candle_nn::{Conv2dConfig, LayerNorm, Linear, VarBuilder};
 use candle_transformers::models::siglip::VisionConfig;
 use crate::par::prelude::*;
@@ -963,6 +963,12 @@ impl candle_core::CustomOp3 for LayerNormOp {
                 let mean = sum * inv_n;
                 // Clamped: catastrophic cancellation in E[x^2] - E[x]^2 can
                 // produce a tiny negative, and sqrt of that is NaN.
+                // SITE-REVIEWED false positive. clippy reads this as a
+                // typo and offers `sq * mean`, which is meaningless here: this
+                // is E[x^2] - E[x]^2, the standard fused variance, and it is
+                // exactly why one accumulation pass can produce both moments.
+                // Clamped at zero so cancellation cannot reach `sqrt` negative.
+                #[allow(clippy::suspicious_operation_groupings)]
                 let var = (sq * inv_n - mean * mean).max(0.0);
                 let inv_std = 1.0 / (var + eps).sqrt();
                 let (mean, inv_std) = (mean as f32, inv_std as f32);

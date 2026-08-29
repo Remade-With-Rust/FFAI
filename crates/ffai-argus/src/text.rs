@@ -46,7 +46,7 @@
 //! memory-bound steps rewritten, which is exactly what `siglip.rs` says about
 //! itself.
 
-use candle_core::{DType, Device, IndexOp, Result as CandleResult, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result as CandleResult, Tensor};
 use candle_nn::VarBuilder;
 use crate::par::prelude::*;
 
