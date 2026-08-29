@@ -89,6 +89,14 @@ fn exp2_unchecked(x: f32) -> f32 {
     const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
     let p = 1.0 + f * (L1 + f * (L2 + f * (L3 + f * (L4 + f * L5))));
     // 2^n straight into the exponent field.
+    // SITE-REVIEWED cast allows. This function is `exp2_unchecked`: its
+    // contract, stated above, is that the caller has ALREADY clamped `x` to a
+    // sane exponent range, and every caller does. So `n` is a small integral
+    // f32 -- the `as i32` cannot truncate anything that was there -- and
+    // `n + 127` is then in [2, 252], so the `as u32` has no sign to lose.
+    // Allowed here rather than crate-wide precisely so these two lints keep
+    // firing on code that has not been read.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let scale = f32::from_bits((((n as i32) + 127) as u32) << 23);
     p * scale
 }
@@ -213,6 +221,9 @@ pub fn ln(x: f32) -> f32 {
     }
     let bits = x.to_bits();
     // Exponent field, unbiased.
+    // SITE-REVIEWED. `& 0xff` bounds this at 255 before the cast, so `as i32`
+    // cannot wrap; it is an 8-bit IEEE-754 exponent field by construction.
+    #[allow(clippy::cast_possible_wrap)]
     let e = ((bits >> 23) & 0xff) as i32 - 127;
     // Mantissa forced into [1, 2), then centred on [-1/3, 1/3] by the
     // `m > sqrt(2)` split so the polynomial converges fast.

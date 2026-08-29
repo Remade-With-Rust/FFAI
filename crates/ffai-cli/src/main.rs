@@ -454,9 +454,7 @@ fn is_video_path(path: &std::path::Path) -> bool {
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some(
-            "mp4" | "mov" | "m4v" | "mkv" | "webm" | "mka" | "avi" | "ts" | "m2ts" | "mts"
-        )
+        Some("mp4" | "mov" | "m4v" | "mkv" | "webm" | "mka" | "avi" | "ts" | "m2ts" | "mts")
     )
 }
 
@@ -485,7 +483,7 @@ fn caption_video(
     let mut last_ts = 0.0f64;
 
     let flush = |buf: &mut Vec<ffai_core::types::VideoFrame>,
-                     out: &mut Vec<ffai_core::types::TimedSegment<String>>|
+                 out: &mut Vec<ffai_core::types::TimedSegment<String>>|
      -> Result<()> {
         if buf.is_empty() {
             return Ok(());
@@ -512,7 +510,10 @@ fn caption_video(
     }
     flush(&mut buf, &mut out)?;
     if seen > 0 {
-        eprintln!("\r  {seen} frames sampled at {fps} fps -> {} captions", out.len());
+        eprintln!(
+            "\r  {seen} frames sampled at {fps} fps -> {} captions",
+            out.len()
+        );
     } else {
         return Err(anyhow::anyhow!(
             "no frames decoded from {} — the container may hold no H.264 video track",
@@ -530,10 +531,10 @@ fn caption_video(
     // the median spacing of the frames it was handed, which is right for a
     // multi-frame window and degrades to a flat 1.0 s for a single-frame one.
     // Here the true sampling interval is known, so say it.
-    if fps > 0.0 {
-        if let Some(last) = out.last_mut() {
-            last.end = last_ts + 1.0 / fps;
-        }
+    if fps > 0.0
+        && let Some(last) = out.last_mut()
+    {
+        last.end = last_ts + 1.0 / fps;
     }
     Ok(out)
 }
@@ -806,8 +807,21 @@ fn main() -> Result<()> {
             ffai_media::save_wav(&output, &audio)?;
             println!("wrote {}", output.display());
         }
-        Cmd::Ocr { input, engine, language, live, fps, change_fraction, sample_every, output, watch } => {
-            let opts = OcrOptions { languages: language, ..Default::default() };
+        Cmd::Ocr {
+            input,
+            engine,
+            language,
+            live,
+            fps,
+            change_fraction,
+            sample_every,
+            output,
+            watch,
+        } => {
+            let opts = OcrOptions {
+                languages: language,
+                ..Default::default()
+            };
             // §8.171: the DOCUMENT default is SVTR (+1.521 pp macro on the
             // OmniDocBench text holdout, CI excluding zero), but it costs 1.91x
             // wall time and `--live` runs through this same resolution. LIVE
@@ -1248,7 +1262,11 @@ fn main() -> Result<()> {
                 match output {
                     Some(path) => {
                         std::fs::write(&path, &rendered)?;
-                        println!("wrote {} ({} captions)", path.display(), track.segments.len());
+                        println!(
+                            "wrote {} ({} captions)",
+                            path.display(),
+                            track.segments.len()
+                        );
                     }
                     None => println!("{rendered}"),
                 }
