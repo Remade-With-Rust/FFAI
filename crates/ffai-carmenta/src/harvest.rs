@@ -63,7 +63,7 @@ pub struct Row {
 
 impl Row {
     pub fn new() -> Self {
-        Row { cols: Vec::with_capacity(32) }
+        Self { cols: Vec::with_capacity(32) }
     }
 
     /// Record a feature. NaN and infinities are written as empty cells rather
@@ -116,7 +116,7 @@ impl Row {
         }
         line.push('\n');
 
-        let need_header = std::fs::metadata(p).map(|m| m.len() == 0).unwrap_or(true);
+        let need_header = std::fs::metadata(p).map_or(true, |m| m.len() == 0);
         let mut f = match std::fs::OpenOptions::new().create(true).append(true).open(p) {
             Ok(f) => f,
             // A tap that panics would take the engine down over telemetry.

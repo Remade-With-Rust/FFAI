@@ -103,13 +103,11 @@ fn env_f32(k: &str, d: f32) -> f32 {
 }
 
 pub fn enabled() -> bool {
-    std::env::var("FFAI_ROUTE").map(|v| v != "0").unwrap_or(false)
+    std::env::var("FFAI_ROUTE").is_ok_and(|v| v != "0")
 }
 
 fn fixtures() -> PathBuf {
-    std::env::var("FFAI_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| Path::new("corpora/refs/fixtures").to_path_buf())
+    std::env::var("FFAI_FIXTURES").map_or_else(|_| Path::new("corpora/refs/fixtures").to_path_buf(), PathBuf::from)
 }
 
 /// The three ONNX-backed stages, loaded once. Kept separate from the engine's
@@ -310,8 +308,7 @@ pub fn apply(
                 t.label(),
                 ti,
                 inside.len(),
-                out.as_deref().map(|s| format!("{} chars", s.len()))
-                    .unwrap_or_else(|| format!("REJECTED, kept {had} chars of text"))
+                out.as_deref().map_or_else(|| format!("REJECTED, kept {had} chars of text"), |s| format!("{} chars", s.len()))
             );
         }
         rendered.push(out);
@@ -364,8 +361,8 @@ pub fn apply(
     // span you hand it — §48's law); a degenerate LaTeX is refused. A refusal
     // costs nothing: the line keeps the characters it already had.
     let mut spliced: Vec<*const Region> = Vec::new();
-    if ithr > 0.0 {
-        if let Some(fm) = r.formula() {
+    if ithr > 0.0
+        && let Some(fm) = r.formula() {
             for g in regions.iter().filter(|g| g.routes_to_latex() && g.score >= ithr) {
                 // regions that already replaced lines are done
                 if targets.iter().enumerate().any(|(ti, t)| emitted[ti] && std::ptr::eq(*t, g)) {
@@ -457,7 +454,6 @@ pub fn apply(
                 spliced.push(g as *const Region);
             }
         }
-    }
 
     // §M/R2 — TEXT-DRIVEN span finder (`FFAI_ROUTE_INLINE_TEXT=1`).
     //
@@ -472,8 +468,8 @@ pub fn apply(
     // §59: decoupled from the region-inline pass — the text finder needs no
     // layout regions, and the region pass carries an order tax (§56/§58) the
     // text finder measurably does not (r2b: order −0.0008 spans 0).
-    if std::env::var("FFAI_ROUTE_INLINE_TEXT").as_deref() == Ok("1") {
-        if let Some(fm) = r.formula() {
+    if std::env::var("FFAI_ROUTE_INLINE_TEXT").as_deref() == Ok("1")
+        && let Some(fm) = r.formula() {
             let is_mathy = |c: char| {
                 matches!(c, '='|'+'|'±'|'×'|'÷'|'<'|'>'|'≤'|'≥'|'≠'|'≈'|'∈'|'∼'|'∝'|'∞'|'∂'|'∇'|'√'|'∑'|'∏'|'∫'|'^'|'_'|'\\'|'|'|'∀'|'∃'|'∅'|'⊂'|'⊆'|'∪'|'∩'|'→'|'⇒'|'⇔'|'·'|'μ'|'σ'|'λ'|'α'|'β'|'γ'|'δ'|'ε'|'θ'|'π'|'ω'|'Δ'|'Ω'|'Σ'|'Φ'|'φ'|'ψ'|'ρ'|'τ'|'ξ'|'η'|'ζ'|'ν'|'κ'|'χ')
                     || ('₀'..='₉').contains(&c) || ('⁰'..='ⁿ').contains(&c)
@@ -621,7 +617,6 @@ pub fn apply(
                 );
             }
         }
-    }
 
     // A region that absorbed NOTHING still has content — an isolated equation
     // the text detector missed entirely is exactly the §40 case this whole

@@ -166,6 +166,10 @@ impl Svtr {
         Ok(t)
     }
 
+    // Unreferenced today. Kept rather than deleted because it is the
+    // shaped-weight accessor the other loaders are written against;
+    // deleting it is a call for whoever owns this loader.
+    #[allow(dead_code)]
     fn w(&self, name: &str, shape: (usize, usize, usize, usize)) -> Result<Tensor> {
         self.vb.get(shape, name)
     }
@@ -191,7 +195,7 @@ impl Svtr {
             ..Default::default() };
         let y = candle_nn::Conv2d::new(w, None, cfg).forward(&x)?;
         let y = if stride.0 > 1 {
-            let n = (y.dim(2)? + stride.0 - 1) / stride.0;
+            let n = y.dim(2)?.div_ceil(stride.0);
             y.index_select(
                 &Tensor::from_vec(
                     (0..n).map(|i| (i * stride.0) as u32).collect::<Vec<_>>(),
@@ -204,7 +208,7 @@ impl Svtr {
             y
         };
         let y = if stride.1 > 1 {
-            let n = (y.dim(3)? + stride.1 - 1) / stride.1;
+            let n = y.dim(3)?.div_ceil(stride.1);
             y.index_select(
                 &Tensor::from_vec(
                     (0..n).map(|i| (i * stride.1) as u32).collect::<Vec<_>>(),
@@ -425,7 +429,7 @@ pub fn svtr_input(
             let x1i = (x0i + 1).min(cw - 1);
             let at = |yy: usize, xx: usize, c: usize| -> f32 {
                 let i = ((y0 + yy) * iw + (x0 + xx)) * stride;
-                if stride == 1 { img.data[i] as f32 } else { img.data[i + c] as f32 }
+                if stride == 1 { f32::from(img.data[i]) } else { f32::from(img.data[i + c]) }
             };
             for c in 0..3 {
                 // source channel: BGR output from RGB input
