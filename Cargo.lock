@@ -1176,7 +1176,7 @@ dependencies = [
  "ffai-models",
  "getrandom 0.3.4",
  "rayon",
- "rusty_alloc-api",
+ "rusty_alloc-api 1.1.6",
  "serde",
  "serde_json",
  "tokenizers 0.23.2",
@@ -1190,7 +1190,7 @@ dependencies = [
  "ffai-core",
  "gemm 0.19.0",
  "getrandom 0.3.4",
- "rusty_alloc-api",
+ "rusty_alloc-api 1.1.6",
  "wasm-bindgen",
 ]
 
@@ -1227,7 +1227,7 @@ dependencies = [
  "mimalloc",
  "png",
  "rayon",
- "rusty_alloc-api",
+ "rusty_alloc-api 1.1.6",
  "serde",
  "serde_json",
  "tokenizers 0.23.2",
@@ -1240,8 +1240,8 @@ dependencies = [
  "ffai-carmenta",
  "ffai-core",
  "getrandom 0.3.4",
- "rusty_alloc",
- "rusty_alloc-api",
+ "rusty_alloc 1.1.6",
+ "rusty_alloc-api 1.1.6",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -1263,8 +1263,8 @@ dependencies = [
  "ffai-mercury",
  "ffai-models",
  "mimalloc",
- "rusty_alloc",
- "rusty_alloc-api",
+ "rusty_alloc 1.1.6",
+ "rusty_alloc-api 1.1.6",
 ]
 
 [[package]]
@@ -1303,8 +1303,8 @@ dependencies = [
  "libmimalloc-sys",
  "mimalloc",
  "rayon",
- "rusty_alloc",
- "rusty_alloc-api",
+ "rusty_alloc 1.1.6",
+ "rusty_alloc-api 1.1.6",
  "serde",
  "serde_json",
 ]
@@ -1355,7 +1355,7 @@ dependencies = [
  "ffai-core",
  "ffai-mercury",
  "getrandom 0.3.4",
- "rusty_alloc-api",
+ "rusty_alloc-api 1.1.6",
  "wasm-bindgen",
 ]
 
@@ -1389,7 +1389,7 @@ dependencies = [
  "ffai-core",
  "ffai-diana",
  "getrandom 0.3.4",
- "rusty_alloc-api",
+ "rusty_alloc-api 1.1.6",
  "wasm-bindgen",
 ]
 
@@ -3844,6 +3844,16 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f05c71564028538eeba6e2e08c6a512267e85e6a1584beca45c6f26af8651b"
+dependencies = [
+ "libc",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "rusty_alloc"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c93620fee9935a120a50df2086fe48fa072f7d391f129a5e04bf20ea9b83097d"
@@ -3854,11 +3864,20 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc-api"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65c8c3ecd14424ba980d005147945a745836dea7798d447c419e08be1f79e88f"
+dependencies = [
+ "rusty_alloc 0.3.2",
+]
+
+[[package]]
+name = "rusty_alloc-api"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05ce52d7f72842a590e4588013d70ea02d27edbf6b6af9bc193f6e1ac173845a"
 dependencies = [
- "rusty_alloc",
+ "rusty_alloc 1.1.6",
 ]
 
 [[package]]
@@ -3869,9 +3888,9 @@ checksum = "94a120f95964673259579b109114ebc3438a488010e023993adb2cd31da521ef"
 
 [[package]]
 name = "rusty_h264"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fbafa4757ced9c5c1d1185aa936bb040b00c456098874f209e04ed1c1c2d73b"
+checksum = "2e662f4359350e34ecb76bc6c7d59e5b13ed8ebfe41024a9e39fd06fb21d5b11"
 dependencies = [
  "rusty_h264-common",
  "rusty_h264-decoder",
@@ -3880,29 +3899,27 @@ dependencies = [
 
 [[package]]
 name = "rusty_h264-accel"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2094232cdd4a1048894111dd905bb756402d08436fa7e9513c39829fa21239a6"
-dependencies = [
- "cc",
-]
+checksum = "3ec42d350faa168c872d6cbd335a24651530592cc7d914807157a8b65f6975e4"
 
 [[package]]
 name = "rusty_h264-common"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "421e458fcfcb2580232f212f99451f9075a03d00752a934ee27be6148a6765e3"
+checksum = "3db19143a49b193cf0dde353a4f146bb77579b0591795818a13af6fd27b2c5e3"
 dependencies = [
  "bytemuck",
+ "rusty_alloc-api 0.3.2",
  "rusty_h264-accel",
  "wide",
 ]
 
 [[package]]
 name = "rusty_h264-decoder"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6316ecba57a77d530fff4fab7be9cc3e0e107e381360ac9d2ffa0895b5b0947a"
+checksum = "0cdca997a1f405919078109e74e04c160d98f61a0212fcaf02a4b8e99930b9a5"
 dependencies = [
  "rusty_h264-accel",
  "rusty_h264-common",
@@ -3910,9 +3927,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_h264-encoder"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4fb69d8977d1d067d6d603df0614678c4a35ac1201fff38783c8847e429c879"
+checksum = "e95e69b92aaf0f994565b07465bd8929dda0452627bd810eb5537f5130e6f55a"
 dependencies = [
  "rusty_h264-accel",
  "rusty_h264-common",
