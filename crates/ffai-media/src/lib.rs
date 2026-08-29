@@ -411,11 +411,23 @@ impl Iterator for VideoStream {
                 // an interval on every step. Clamped forward for sources whose
                 // gaps exceed the interval, so a long gap does not leave a
                 // backlog of instantly-due frames afterwards.
-                self.next_due = if self.started {
+                // SITE-REVIEWED: clippy offers `self.interval.mul_add(0.5, ts)`
+                // and it is REFUSED here. `mul_add` is a fused multiply-add --
+                // one rounding where this expression has two -- so it can move
+                // the deadline by an ULP. This value is a frame-selection
+                // boundary, compared against `ts` on the next iteration, so an
+                // ULP either way can change WHICH FRAME a source emits at an
+                // exact tick. A decoder does not get to be 1 ULP creative.
+                //
+                // Bound through a `let` because an attribute on the assignment
+                // itself is `#![feature(stmt_expr_attributes)]`, still unstable.
+                #[allow(clippy::suboptimal_flops)]
+                let due = if self.started {
                     (self.next_due + self.interval).max(ts + self.interval * 0.5)
                 } else {
                     ts + self.interval
                 };
+                self.next_due = due;
                 self.started = true;
             }
             return Some(from_rusty_frame(&v, ts));

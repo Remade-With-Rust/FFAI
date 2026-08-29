@@ -110,6 +110,13 @@ cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 cast_possible_wrap = "allow"
+# * the single-character names are the maths': `h`/`w` for an image, `p` for
+#   patch size, `gh`/`gw` for the patch grid, `k` for the im2col contraction.
+#   `SiglipEmbeddings::forward` derives a convolution AS a matmul, and the
+#   whole point of writing it that way is that it can be read against the
+#   shapes. Spelling them out makes that check harder, not easier -- the same
+#   call ffai-mercury's manifest makes for `q`, `k`, `v`.
+many_single_char_names = "allow"
 suboptimal_flops = "allow"
 # Documentation debt on the internal loaders; the public gates are documented.
 missing_errors_doc = "allow"

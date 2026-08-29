@@ -139,6 +139,7 @@ impl Fbank {
     /// the per-utterance mean of each feature, do **not** divide by the
     /// standard deviation. Skipping it leaves a channel offset the network
     /// never saw in training.
+    #[must_use]
     pub fn compute(&self, samples: &[f32]) -> (Vec<f32>, usize) {
         let frames = Self::n_frames(samples.len());
         if frames == 0 {
