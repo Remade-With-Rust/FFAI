@@ -440,8 +440,8 @@ impl ffai_core::candle::CustomOp1 for FastSoftmax {
         storage: &ffai_core::candle::CpuStorage,
         layout: &ffai_core::candle::Layout,
     ) -> CandleResult<(ffai_core::candle::CpuStorage, ffai_core::candle::Shape)> {
-        use ffai_core::candle::CpuStorage;
         use crate::par::prelude::*;
+        use ffai_core::candle::CpuStorage;
 
         let dims = layout.shape().dims();
         let last = *dims.last().unwrap_or(&1);

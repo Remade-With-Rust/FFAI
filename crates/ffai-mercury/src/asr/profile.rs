@@ -22,9 +22,9 @@
     clippy::cast_possible_wrap
 )]
 
+use crate::clock::Instant;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use crate::clock::Instant;
 
 fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();

@@ -32,9 +32,9 @@
     clippy::cast_possible_wrap
 )]
 
+use crate::par::prelude::*;
 use ffai_core::candle::{Device, Tensor};
 use ffai_core::error::{Error, Result};
-use crate::par::prelude::*;
 
 fn e<T>(r: ffai_core::candle::Result<T>) -> Result<T> {
     r.map_err(|err| Error::Model(format!("decoder kernel: {err}")))

@@ -23,8 +23,12 @@ use ffai_mercury::asr::whisper_candle::WhisperCandle;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let dir = args.next().expect("usage: from_bytes_smoke <model-dir> <clip.wav>");
-    let wav = args.next().expect("usage: from_bytes_smoke <model-dir> <clip.wav>");
+    let dir = args
+        .next()
+        .expect("usage: from_bytes_smoke <model-dir> <clip.wav>");
+    let wav = args
+        .next()
+        .expect("usage: from_bytes_smoke <model-dir> <clip.wav>");
 
     let read = |name: &str| {
         std::fs::read(std::path::Path::new(&dir).join(name))
@@ -58,7 +62,10 @@ fn main() {
         }
         off += 8 + sz + (sz & 1);
     }
-    assert!(rate > 0 && !data.is_empty(), "{wav}: no fmt/data chunk found");
+    assert!(
+        rate > 0 && !data.is_empty(),
+        "{wav}: no fmt/data chunk found"
+    );
     let stride = 2 * channels as usize;
     let samples: Vec<f32> = data
         .chunks_exact(stride)
