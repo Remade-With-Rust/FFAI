@@ -175,6 +175,32 @@ impl Captioner {
     }
 }
 
+/// Turn gemm's wasm SIMD128 microkernels on or off at run time, for A/B.
+///
+/// **This is a measurement instrument, not a knob to ship off.** gemm's
+/// simd128 microkernels are gated on `target_arch = "wasm32"` and carry
+/// `#[target_feature(enable = "simd128")]`, so they COMPILE into this module
+/// without the global `-C target-feature=+simd128` flag — the same per-function
+/// trick `ffai-carmenta`'s conv3x3 uses. Dispatch is then a runtime read of
+/// `get_wasm_simd128()`, which `wasm-simd128-enable` defaults to `true`.
+///
+/// So this module already runs SIMD gemm. Flipping this to `false` selects the
+/// scalar microkernels instead, which is the only way to measure what that is
+/// worth from inside a browser.
+#[cfg(feature = "gemm-probe")]
+#[wasm_bindgen(js_name = setGemmSimd128)]
+pub fn set_gemm_simd128(on: bool) {
+    gemm::set_wasm_simd128(on);
+}
+
+/// Whether gemm's SIMD128 path is currently selected.
+#[cfg(feature = "gemm-probe")]
+#[wasm_bindgen(js_name = gemmSimd128)]
+#[must_use]
+pub fn gemm_simd128() -> bool {
+    gemm::get_wasm_simd128()
+}
+
 /// Current size of the wasm linear memory, in bytes.
 ///
 /// The 4 GB cap is a cap on THIS number, and linear memory only ever grows — so

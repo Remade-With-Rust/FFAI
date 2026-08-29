@@ -338,12 +338,11 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "candle-core"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ecb245093b0f791b89d3420c3df9c6d49c60ab63ba54db896bf8a3baf486706"
+source = "git+https://github.com/Remade-With-Rust/candle?branch=simd128-f16-gates-0.11.0#fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
 dependencies = [
  "byteorder",
  "candle-kernels",
- "candle-metal-kernels",
+ "candle-metal-kernels 0.11.0 (git+https://github.com/Remade-With-Rust/candle?branch=simd128-f16-gates-0.11.0)",
  "candle-ug",
  "cudarc 0.19.8",
  "float8",
@@ -371,8 +370,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67450168a281bbb195a14cc85cf164c7a12023a54a03409a3324f476346e0789"
+source = "git+https://github.com/Remade-With-Rust/candle?branch=simd128-f16-gates-0.11.0#fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
 dependencies = [
  "cudaforge",
 ]
@@ -394,13 +392,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "candle-metal-kernels"
+version = "0.11.0"
+source = "git+https://github.com/Remade-With-Rust/candle?branch=simd128-f16-gates-0.11.0#fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
+dependencies = [
+ "block2",
+ "half",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
+ "once_cell",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "candle-nn"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaa10b6ccc365b33210ce404fbf45e60d3e0bdac1004463cf1052e6ee1c1739a"
 dependencies = [
  "candle-core",
- "candle-metal-kernels",
+ "candle-metal-kernels 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "half",
  "intel-mkl-src",
  "libc",
@@ -434,8 +447,7 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "257411c33abf7d898a31ac20d80813dfe96ff09e23a73039e22ab293aea9b871"
+source = "git+https://github.com/Remade-With-Rust/candle?branch=simd128-f16-gates-0.11.0#fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -1176,6 +1188,7 @@ version = "0.1.0"
 dependencies = [
  "ffai-argus",
  "ffai-core",
+ "gemm 0.19.0",
  "getrandom 0.3.4",
  "rusty_alloc-api",
  "wasm-bindgen",

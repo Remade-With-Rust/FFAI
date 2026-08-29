@@ -38,8 +38,15 @@ wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two 
 # that measurement.
 rusty_alloc-api = { version = "=1.1.6", optional = true }
 
+# The gemm SIMD A/B, off by default. `gemm` is already in the tree beneath
+# candle; this makes its runtime switch reachable so a browser can measure
+# whether the simd128 microkernels are actually firing, instead of us reasoning
+# about it from a disassembly.
+gemm = { version = "0.19", optional = true }
+
 [features]
 default = ["rusty-alloc"]
+gemm-probe = ["dep:gemm"]
 rusty-alloc = ["dep:rusty_alloc-api"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
