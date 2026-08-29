@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.7.5...ffai-diana-v0.7.6) - 2026-08-29
+
+### Other
+
+- *(carmenta,diana)* the third blocking clippy command, which I had missed
+
 ## [0.7.5](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.7.4...ffai-diana-v0.7.5) - 2026-08-28
 
 ### Other

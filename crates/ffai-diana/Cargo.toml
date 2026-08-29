@@ -3,7 +3,7 @@ name = "ffai-diana"
 description = "Diana — FFai's detection component (YOLO26 on candle, pure Rust)"
 # 0.7.3 is a documentation-only republish: README restructured to the shared
 # Remade With Rust page layout. No code, API or output change.
-version = "0.7.5"
+version = "0.7.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -35,7 +35,7 @@ ffai-core = { workspace = true }
 # Declared directly rather than inherited: `default-features = false` cannot
 # override a workspace dependency's defaults, and setting it at the workspace
 # level would silently strip `fetch` from every other crate that expects it.
-ffai-models = { path = "../ffai-models", version = "0.6.3", default-features = false }
+ffai-models = { path = "../ffai-models", version = "0.6.4", default-features = false }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 serde = { workspace = true }

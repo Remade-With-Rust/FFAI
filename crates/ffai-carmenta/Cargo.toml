@@ -38,7 +38,7 @@ description = "Carmenta — pure-Rust OCR: documents, screens, and a change-gate
 # (cord +0.0033 with a +0.1928 clip, doc +0.0395 with a +0.2920 clip) — the same
 # failure the 544x960 arm produced, smaller. 1280 is the only arm that improves
 # both with no badly-regressing clip. The table lives on `DET_MAX_SHORT_DEFAULT`.
-version = "0.10.0"
+version = "0.10.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -50,7 +50,7 @@ categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }
-ffai-models = { path = "../ffai-models", version = "0.6.2", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
+ffai-models = { path = "../ffai-models", version = "0.6.4", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
