@@ -561,6 +561,18 @@ pub fn exp_sub_sum_inplace(row: &mut [f32], max: f32) -> f32 {
             return unsafe { exp_sub_sum_avx2(row, max) };
         }
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // Unconditional, like the wasm arm and unlike x86's runtime probe:
+        // NEON is BASELINE on aarch64, so there is nothing to detect. That is
+        // also why this arm is easy to forget -- the scalar body below already
+        // auto-vectorises for the ELEMENTWISE primitives, so the gap only bites
+        // the two REDUCTIONS, where a loop-carried non-associative accumulator
+        // stops LLVM cold no matter what the baseline is.
+        //
+        // SAFETY: `neon` is a compile-time guarantee on this target.
+        return unsafe { exp_sub_sum_neon(row, max) };
+    }
     #[cfg(target_arch = "wasm32")]
     {
         // Unconditional, unlike the x86 arm's runtime check: wasm validates a
@@ -655,6 +667,82 @@ unsafe fn exp_sub_sum_avx2(row: &mut [f32], max: f32) -> f32 {
     sum
 }
 
+/// NEON, four lanes, FMA-fused.
+///
+/// **Why this exists even though NEON is baseline.** The scalar oracle below
+/// auto-vectorises on aarch64 for elementwise work, so the obvious reading is
+/// that this arm is redundant. It is not: `sum += e` is a loop-carried
+/// dependency on a NON-ASSOCIATIVE add, and LLVM may not reassociate it
+/// without fast-math. So the oracle stays a scalar dependency chain on every
+/// target regardless of the baseline, and only explicit lanes break it. The
+/// same argument covers [`max_f32_neon`]; it does NOT cover
+/// [`gelu_tanh_neon`], which is elementwise and would likely have vectorised
+/// unaided -- that one is here for symmetry and to pin the numerics.
+///
+/// Mirrors the AVX2 arm rather than the wasm one, because NEON HAS an FMA
+/// (`vfmaq_f32`) and wasm's base SIMD does not.
+///
+/// # Safety
+/// `neon` is a compile-time guarantee on `aarch64` here.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn exp_sub_sum_neon(row: &mut [f32], max: f32) -> f32 {
+    use core::arch::aarch64::*;
+    const L1: f32 = core::f32::consts::LN_2;
+    const L2: f32 = L1 * L1 / 2.0;
+    const L3: f32 = L1 * L1 * L1 / 6.0;
+    const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+    const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+
+    let vmax = vdupq_n_f32(max);
+    let log2e = vdupq_n_f32(core::f32::consts::LOG2_E);
+    let magic = vdupq_n_f32(MAGIC);
+    let lo = vdupq_n_f32(-125.0);
+    let hi = vdupq_n_f32(125.0);
+    let c1 = vdupq_n_f32(L1);
+    let c2 = vdupq_n_f32(L2);
+    let c3 = vdupq_n_f32(L3);
+    let c4 = vdupq_n_f32(L4);
+    let c5 = vdupq_n_f32(L5);
+    let one = vdupq_n_f32(1.0);
+    let bias = vdupq_n_s32(127);
+
+    let mut acc = vdupq_n_f32(0.0);
+    let n = row.len();
+    let mut i = 0;
+    while i + 4 <= n {
+        let x = vld1q_f32(row.as_ptr().add(i));
+        let t = vmulq_f32(vsubq_f32(x, vmax), log2e);
+        let t = vminq_f32(vmaxq_f32(t, lo), hi);
+        // Round-to-nearest-even via the magic constant, exactly as the other
+        // twins do -- NEON has `vrndnq_f32`, but using it here would make this
+        // arm disagree with them in the last bit at the ties.
+        let r = vsubq_f32(vaddq_f32(t, magic), magic);
+        let f = vsubq_f32(t, r);
+        // `vfmaq_f32(a, b, c)` is `a + b * c`.
+        let p = vfmaq_f32(c4, f, c5);
+        let p = vfmaq_f32(c3, f, p);
+        let p = vfmaq_f32(c2, f, p);
+        let p = vfmaq_f32(c1, f, p);
+        let p = vfmaq_f32(one, f, p);
+        let e = vshlq_n_s32::<23>(vaddq_s32(vcvtq_s32_f32(r), bias));
+        let out = vmulq_f32(p, vreinterpretq_f32_s32(e));
+        vst1q_f32(row.as_mut_ptr().add(i), out);
+        acc = vaddq_f32(acc, out);
+        i += 4;
+    }
+    // Same pairwise order as the wasm twin, so the two four-lane arms agree.
+    let mut sum = (vgetq_lane_f32::<0>(acc) + vgetq_lane_f32::<1>(acc))
+        + (vgetq_lane_f32::<2>(acc) + vgetq_lane_f32::<3>(acc));
+    while i < n {
+        let e = exp(row[i] - max);
+        row[i] = e;
+        sum += e;
+        i += 1;
+    }
+    sum
+}
+
 /// wasm SIMD128, four lanes.
 ///
 /// **No FMA.** Base wasm SIMD has no fused multiply-add, so each Horner step is
@@ -738,6 +826,11 @@ pub fn max_f32(xs: &[f32]) -> f32 {
             return unsafe { max_f32_avx2(xs) };
         }
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: `neon` is a compile-time guarantee on this target.
+        return unsafe { max_f32_neon(xs) };
+    }
     #[cfg(target_arch = "wasm32")]
     {
         // SAFETY: `simd128` is a compile-time guarantee on this target.
@@ -779,6 +872,32 @@ unsafe fn max_f32_avx2(xs: &[f32]) -> f32 {
     for &v in &lanes[1..] {
         m = m.max(v);
     }
+    while i < n {
+        m = m.max(xs[i]);
+        i += 1;
+    }
+    m
+}
+
+/// NEON, four lanes. Exact, like the other max twins.
+///
+/// # Safety
+/// `neon` is a compile-time guarantee on `aarch64` here.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn max_f32_neon(xs: &[f32]) -> f32 {
+    use core::arch::aarch64::*;
+    let n = xs.len();
+    if n < 4 {
+        return max_f32_scalar(xs);
+    }
+    let mut acc = vld1q_f32(xs.as_ptr());
+    let mut i = 4;
+    while i + 4 <= n {
+        acc = vmaxq_f32(acc, vld1q_f32(xs.as_ptr().add(i)));
+        i += 4;
+    }
+    let mut m = vmaxvq_f32(acc);
     while i < n {
         m = m.max(xs[i]);
         i += 1;
@@ -834,6 +953,12 @@ pub fn gelu_tanh_inplace(xs: &mut [f32]) {
             unsafe { gelu_tanh_avx2(xs) };
             return;
         }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: `neon` is a compile-time guarantee on this target.
+        unsafe { gelu_tanh_neon(xs) };
+        return;
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -892,6 +1017,61 @@ unsafe fn gelu_tanh_avx2(xs: &mut [f32]) {
         let ex = _mm256_mul_ps(p, _mm256_castsi256_ps(e));
         _mm256_storeu_ps(xs.as_mut_ptr().add(i), _mm256_div_ps(x, _mm256_add_ps(one, ex)));
         i += 8;
+    }
+    while i < n {
+        xs[i] = gelu_tanh(xs[i]);
+        i += 1;
+    }
+}
+
+/// NEON, four lanes, FMA-fused.
+///
+/// # Safety
+/// `neon` is a compile-time guarantee on `aarch64` here.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn gelu_tanh_neon(xs: &mut [f32]) {
+    use core::arch::aarch64::*;
+    const L1: f32 = core::f32::consts::LN_2;
+    const L2: f32 = L1 * L1 / 2.0;
+    const L3: f32 = L1 * L1 * L1 / 6.0;
+    const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+    const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+    let sq2pi = vdupq_n_f32(0.797_884_56);
+    let k = vdupq_n_f32(0.044_715);
+    let one = vdupq_n_f32(1.0);
+    let m2 = vdupq_n_f32(-2.0);
+    let log2e = vdupq_n_f32(core::f32::consts::LOG2_E);
+    let magic = vdupq_n_f32(MAGIC);
+    let lo = vdupq_n_f32(-125.0);
+    let hi = vdupq_n_f32(125.0);
+    let (c1, c2, c3, c4, c5) = (
+        vdupq_n_f32(L1),
+        vdupq_n_f32(L2),
+        vdupq_n_f32(L3),
+        vdupq_n_f32(L4),
+        vdupq_n_f32(L5),
+    );
+    let bias = vdupq_n_s32(127);
+    let n = xs.len();
+    let mut i = 0;
+    while i + 4 <= n {
+        let x = vld1q_f32(xs.as_ptr().add(i));
+        let x2 = vmulq_f32(x, x);
+        let z = vmulq_f32(vmulq_f32(sq2pi, x), vfmaq_f32(one, k, x2));
+        let t = vmulq_f32(vmulq_f32(m2, z), log2e);
+        let t = vminq_f32(vmaxq_f32(t, lo), hi);
+        let r = vsubq_f32(vaddq_f32(t, magic), magic);
+        let f = vsubq_f32(t, r);
+        let p = vfmaq_f32(c4, f, c5);
+        let p = vfmaq_f32(c3, f, p);
+        let p = vfmaq_f32(c2, f, p);
+        let p = vfmaq_f32(c1, f, p);
+        let p = vfmaq_f32(one, f, p);
+        let e = vshlq_n_s32::<23>(vaddq_s32(vcvtq_s32_f32(r), bias));
+        let ex = vmulq_f32(p, vreinterpretq_f32_s32(e));
+        vst1q_f32(xs.as_mut_ptr().add(i), vdivq_f32(x, vaddq_f32(one, ex)));
+        i += 4;
     }
     while i < n {
         xs[i] = gelu_tanh(xs[i]);
