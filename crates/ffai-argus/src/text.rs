@@ -333,12 +333,12 @@ impl candle_core::CustomOp1 for CausalSoftmax {
                         sum += e;
                     }
                     let inv = 1.0 / sum;
-                    for o in o[..lim].iter_mut() {
+                    for o in &mut o[..lim] {
                         *o *= inv;
                     }
                     // The masked tail is exactly zero — what softmax over
                     // `-inf` produces, without producing it.
-                    for o in o[lim..].iter_mut() {
+                    for o in &mut o[lim..] {
                         *o = 0.0;
                     }
                 });
@@ -843,20 +843,20 @@ impl TextTower {
         let blk = &self.blocks[i];
 
         // ---- attention ----------------------------------------------------
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let normed = rms_norm(xs, &blk.ln1, c.eps)?;
-        prof::add("rms_norm", _t);
+        prof::add("rms_norm", t);
         // Three matmuls, deliberately — see [`Block::q`] for the measured
         // refutation of fusing them.
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let q = linear(&normed, &blk.q)?;
         let k = linear(&normed, &blk.k)?;
         let v = linear(&normed, &blk.v)?;
-        prof::add("qkv proj", _t);
+        prof::add("qkv proj", t);
         crate::cost::matmul(1, bu * sq, hd, (c.heads * c.head_dim) as u64);
         crate::cost::matmul(2, bu * sq, hd, (c.kv_heads * c.head_dim) as u64);
 
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let q = q
             .reshape((b, seq, c.heads, c.head_dim))?
             .transpose(1, 2)?
@@ -870,12 +870,12 @@ impl TextTower {
             .transpose(1, 2)?
             .contiguous()?;
         crate::cost::copy(bu * sq * hd);
-        prof::add("qkv reshape+transpose", _t);
+        prof::add("qkv reshape+transpose", t);
 
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let q = self.rope(&q, index_pos)?;
         let k = self.rope(&k, index_pos)?;
-        prof::add("rope", _t);
+        prof::add("rope", t);
 
         // KV cache: write the new positions INTO a preallocated buffer.
         //
@@ -883,7 +883,7 @@ impl TextTower {
         // length and recopies the entire history every step — 52.7 MB per
         // token at position 1142, measured at 14.0 ms and 26 % of a decode
         // step, growing quadratically with the generation. See [`KvAppend`].
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let (k, v) = {
             // Grow by doubling so the copy is amortised, and only ever on the
             // rare step that outgrows the buffer.
@@ -928,7 +928,7 @@ impl TextTower {
         // layer sees the same positions, so tracking it on the last layer
         // written keeps it correct for both prefill and decode.
         self.kv_len = index_pos + seq;
-        prof::add("kv cache", _t);
+        prof::add("kv cache", t);
         let k_len = k.dim(2)?;
 
         // GQA WITHOUT materialising `repeat_kv`.
@@ -953,9 +953,9 @@ impl TextTower {
         let qg = q.reshape((b, c.kv_heads, reps * seq, c.head_dim))?;
 
         // No `/ sqrt(head_dim)` — it is already in q's weights.
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let att = qg.matmul(&k.t()?)?;
-        prof::add("q.k^T", _t);
+        prof::add("q.k^T", t);
         crate::cost::matmul(
             bu * c.heads as u64,
             sq,
@@ -965,13 +965,13 @@ impl TextTower {
         // Back to per-head rows so the causal kernel sees `(.., q_len, k_len)`.
         let att = att.reshape((b, c.heads, seq, k_len))?;
         // No `masked_fill` — causality is in the kernel.
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         // In place: the scores buffer is freshly produced by the matmul above
         // and nothing else references it, so there is no reason to allocate a
         // second 47 MB tensor to hold the result.
         att.inplace_op1(&CausalSoftmaxInplace { offset: index_pos })?;
-        prof::add("causal softmax", _t);
-        let _t = crate::clock::Instant::now();
+        prof::add("causal softmax", t);
+        let t = crate::clock::Instant::now();
         let y = att
             .reshape((b, c.kv_heads, reps * seq, k_len))?
             .matmul(&v)?
@@ -982,43 +982,43 @@ impl TextTower {
             k_len as u64,
             c.head_dim as u64,
         );
-        prof::add("attn.v", _t);
-        let _t = crate::clock::Instant::now();
+        prof::add("attn.v", t);
+        let t = crate::clock::Instant::now();
         let y = y.transpose(1, 2)?.reshape((b, seq, c.hidden))?;
-        prof::add("transpose back", _t);
+        prof::add("transpose back", t);
         crate::cost::copy(bu * sq * hd);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let y = linear(&y, &blk.o)?;
-        prof::add("o proj", _t);
+        prof::add("o proj", t);
         crate::cost::matmul(1, bu * sq, hd, hd);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         // `y` is the projection's own output and nothing else holds it, so the
         // sum lands there instead of in a third 2.6 MB tensor.
         y.inplace_op2(xs, &AddInplace)?;
         let xs = y;
-        prof::add("residual", _t);
+        prof::add("residual", t);
 
         // ---- mlp ----------------------------------------------------------
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let normed = rms_norm(&xs, &blk.ln2, c.eps)?;
-        prof::add("rms_norm", _t);
-        let _t = crate::clock::Instant::now();
+        prof::add("rms_norm", t);
+        let t = crate::clock::Instant::now();
         let g = linear(&normed, &blk.gate)?;
         let u = linear(&normed, &blk.up)?;
-        prof::add("gate+up proj", _t);
+        prof::add("gate+up proj", t);
         crate::cost::matmul(2, bu * sq, hd, c.inter as u64);
         // silu(gate) * up in ONE pass.
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         g.inplace_op2(&u, &SwiGluInplace)?;
         let h = g;
-        prof::add("swiglu", _t);
-        let _t = crate::clock::Instant::now();
+        prof::add("swiglu", t);
+        let t = crate::clock::Instant::now();
         let down = linear(&h, &blk.down)?;
-        prof::add("down proj", _t);
+        prof::add("down proj", t);
         crate::cost::matmul(1, bu * sq, c.inter as u64, hd);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         down.inplace_op2(&xs, &AddInplace)?;
-        prof::add("residual", _t);
+        prof::add("residual", t);
         Ok(down)
     }
 

@@ -90,10 +90,10 @@ fn build_taps(src: usize, dst: usize) -> Taps {
         let n = xmax.saturating_sub(xmin);
         let row = &mut weights[i * width..i * width + width];
         let mut sum = 0.0f32;
-        for k in 0..n.min(width) {
+        for (k, slot) in row.iter_mut().take(n.min(width)).enumerate() {
             let x = (xmin + k) as f32 - center + 0.5;
             let w = lanczos3(x / filter_scale);
-            row[k] = w;
+            *slot = w;
             sum += w;
         }
         // Normalise so the filter preserves brightness. A kernel that sums to
@@ -301,7 +301,7 @@ fn lanczos3_f64(x: f64) -> f64 {
 
 /// `clamp(acc >> PRECISION_BITS, 0, 255)` — PIL's `clip8`, which is a lookup
 /// table over the same arithmetic.
-fn clip8(acc: i32) -> u8 {
+const fn clip8(acc: i32) -> u8 {
     let v = acc >> PRECISION_BITS;
     if v <= 0 {
         0
