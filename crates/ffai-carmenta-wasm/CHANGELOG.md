@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-wasm-v0.2.0...ffai-carmenta-wasm-v0.2.1) - 2026-08-29
+
+### Other
+
+- updated the following local packages: ffai-core, ffai-carmenta
+
 ## [0.2.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-wasm-v0.1.0...ffai-carmenta-wasm-v0.2.0) - 2026-08-28
 
 ### Other

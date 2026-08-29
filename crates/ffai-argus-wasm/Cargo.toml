@@ -1,7 +1,7 @@
 [package]
 name = "ffai-argus-wasm"
 description = "Argus in the browser — pure-Rust SmolVLM image captioning compiled to WebAssembly, no ONNX runtime, no Python"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -25,7 +25,7 @@ ffai-core = { workspace = true }
 # **0.7.2, not 0.7.1** — see the note in `ffai-mercury-wasm`. `SmolVlm::from_bytes`
 # and `ArgusBytes` first exist in 0.7.2, and a tarball verification resolves
 # this from crates.io rather than from the path.
-ffai-argus = { path = "../ffai-argus", version = "0.7.2", default-features = false }
+ffai-argus = { path = "../ffai-argus", version = "0.7.3", default-features = false }
 wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
 
 # The binary is the only thing entitled to choose an allocator, and a cdylib IS

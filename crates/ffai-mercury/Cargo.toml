@@ -6,7 +6,7 @@ description = "Mercury — FFai's voice component: pure-Rust ASR (Whisper/Whispe
 # to 0.6.1 -- the API is purely additive, but this crate advertises byte-stable
 # determinism, so a changed waveform is a compatibility break for anyone who
 # pinned bytes. Its dependencies stay at the published 0.6.1.
-version = "1.0.2"
+version = "1.0.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,7 +18,7 @@ categories = ["multimedia::audio", "science", "accessibility"]
 
 [dependencies]
 ffai-core = { workspace = true }
-ffai-models = { path = "../ffai-models", version = "0.6.2", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
+ffai-models = { path = "../ffai-models", version = "0.6.4", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 tokenizers = { workspace = true }

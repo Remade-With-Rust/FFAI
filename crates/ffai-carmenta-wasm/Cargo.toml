@@ -5,7 +5,7 @@ description = "Carmenta in the browser — pure-Rust OCR compiled to WebAssembly
 # slice. The JS signature is unchanged — it is still a `Uint8Array` — but the
 # Rust signature is, so this is a breaking change for a Rust consumer even
 # though a browser sees nothing. Adds `setDetMaxShort` and `linearMemoryBytes`.
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -26,7 +26,7 @@ ffai-core = { workspace = true }
 # release calls `reqwest::blocking` — a module that does not exist on wasm32.
 # Nothing in a browser can fetch weights through the model cache anyway: the
 # caller supplies bytes.
-ffai-carmenta = { path = "../ffai-carmenta", version = "0.10.0", default-features = false }
+ffai-carmenta = { path = "../ffai-carmenta", version = "0.10.1", default-features = false }
 wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
 serde = { workspace = true }
 serde_json = { workspace = true }

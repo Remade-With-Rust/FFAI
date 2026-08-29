@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5](https://github.com/Remade-With-Rust/FFAI/compare/ffai-bench-v0.7.4...ffai-bench-v0.7.5) - 2026-08-29
+
+### Other
+
+- updated the following local packages: ffai-core, ffai-media
+
 ## [0.7.4](https://github.com/Remade-With-Rust/FFAI/compare/ffai-bench-v0.7.3...ffai-bench-v0.7.4) - 2026-08-28
 
 ### Other
