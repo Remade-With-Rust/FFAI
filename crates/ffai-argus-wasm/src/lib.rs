@@ -138,6 +138,61 @@ impl Captioner {
             .map_err(|e| JsValue::from_str(&format!("describe failed: {e}")))
     }
 
+    /// Caption with tile splitting **off** — the path that makes this usable
+    /// in a browser at all.
+    ///
+    /// [`Self::describe`] splits a still into **17 tiles / 1088 image tokens**.
+    /// This takes **1 tile / 64 tokens**, so the vision tower does roughly a
+    /// seventeenth of the work. On this machine, 224x224 and 4 tokens:
+    ///
+    /// | | |
+    /// |---|---:|
+    /// | `describe` (17 tiles) | 505 s |
+    /// | `describeFast` (1 tile) | see the crate README |
+    ///
+    /// Splitting is why image SIZE does not change the cost — 505 s at 224x224
+    /// and 504 s at 586x640, because both are resized into the same fixed tile
+    /// grid. The grid is the cost, not the pixels, so shrinking the input does
+    /// nothing and dropping the split does everything.
+    ///
+    /// **What you give up is bounded.** The unsplit tile is exactly the global
+    /// thumbnail the split path already computes and prepends, so this is the
+    /// same preprocessing stopping earlier, not a second path with its own
+    /// risks. Fine print and small objects go; the whole-image gist stays. Use
+    /// [`Self::describe`] when you can afford it and need to read text in the
+    /// image.
+    #[wasm_bindgen(js_name = describeFast)]
+    pub fn describe_fast(
+        &self,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        prompt: String,
+        max_new_tokens: usize,
+    ) -> Result<String, JsValue> {
+        let want = (width as usize) * (height as usize) * 4;
+        if rgba.len() != want {
+            return Err(JsValue::from_str(&format!(
+                "expected {want} bytes of RGBA for {width}x{height}, got {}",
+                rgba.len()
+            )));
+        }
+        let image = ImageBuffer {
+            data: rgba,
+            width,
+            height,
+            format: PixelFormat::Rgba8,
+        };
+        let opts = VlmOptions {
+            prompt: (!prompt.trim().is_empty()).then_some(prompt),
+            max_new_tokens: Some(max_new_tokens),
+            ..VlmOptions::default()
+        };
+        self.engine
+            .describe_image_unsplit(&image, &opts)
+            .map_err(|e| JsValue::from_str(&format!("describe failed: {e}")))
+    }
+
     /// As [`Self::describe`], with an explicit token budget.
     ///
     /// Decode is autoregressive and the KV cache grows with every token, so

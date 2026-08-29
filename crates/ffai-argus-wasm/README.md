@@ -33,23 +33,39 @@ the build.
 
 ## Performance
 
-`SmolVLM-256M-Instruct`, a 586×640 COCO photo, 40-token budget, Node on
-x86-64 Windows, single-threaded.
+`SmolVLM-256M-Instruct`, a COCO photo, 20-token budget, Node on x86-64 Windows,
+single-threaded.
 
-| | wasm | native, same bytes and same pixels |
-|---|---:|---|
-| weights load | 932 ms | — |
-| caption | 446 s | — |
-| peak linear memory | 1691 MiB | — |
-| caption text | *"A grizzly bear is in the foreground of the picture."* | **byte-identical** |
+| path | tiles / image tokens | time | caption |
+|---|---|---:|---|
+| **`describeFast`** | **1 / 64** | **37.6 s** | *"In the foreground of the picture there is a bear. In the background there is grass."* |
+| `describe` | 17 / 1088 | 544.1 s | *"A grizzly bear is in the center of the frame."* |
 
-**446 seconds is the upstream SIMD defect, not the port.** `candle-core` 0.11
-cannot be built with `-C target-feature=+simd128`, so `gemm` has no wasm SIMD
-kernels and LLVM cannot auto-vectorise — and Argus is a transformer, so that is
-essentially all of its arithmetic. It is a few lines in someone else's
-repository and it is tracked in `docs/plans/carmenta-wasm-plan.md` §2. Until it
-lands, treat this crate as a demonstration that the port is correct rather than
-as something to put in front of users.
+**14.5x, and read the captions before assuming what it cost.** The unsplit run
+keeps the subject and adds background the split run missed; what splitting buys
+is fine print and small objects, not the gist. Use `describe` when you need to
+read text in the image and can afford nine minutes.
+
+**Image size does not matter, and that is the whole insight.** `describe` takes
+505 s on a 224x224 image and 504 s on a 586x640 one, because both are resized
+into the same fixed tile grid. The grid is the cost, not the pixels — shrinking
+the input does nothing, dropping the split does everything.
+
+### On SIMD, since it is the obvious suspect
+
+It is already on, and it is already load-bearing. Turning gemm's simd128
+microkernels off costs **3.53x** (505 s -> 1786 s, identical caption), which is
+the proof they execute. They compile without `-C target-feature=+simd128`
+because they are gated on `target_arch = "wasm32"` and carry
+`#[target_feature(enable = "simd128")]` per function.
+
+The workspace does now set `+simd128` (see `.cargo/config.toml`), which is worth
+**1.32-1.40x on Mercury** by letting LLVM vectorise candle's own scalar loops.
+On Argus it measures ~3%, inside noise, because Argus's hot path is gemm and
+gemm was never scalar. Do not expect SIMD work to move this crate further.
+
+The remaining gap to native is threads: `wasm32-unknown-unknown` has none, and
+Argus fans out across roughly a dozen rayon sites natively.
 
 ## Usage
 
@@ -58,14 +74,16 @@ import init, { Captioner } from './ffai_argus_wasm.js';
 await init();
 
 const c = Captioner.smolvlm(weights, configJson, tokenizerJson);
-console.log(c.describe(rgbaFromCanvas, width, height, 'What is in this image?'));
+// describeFast, not describe — see Performance. 14.5x, and the caption holds up.
+console.log(c.describeFast(rgbaFromCanvas, width, height, 'What is in this image?', 40));
 ```
 
 | | |
 |---|---|
 | `Captioner.smolvlm(weights, config, tokenizer)` | load; throws a descriptive error on a bad checkpoint |
-| `c.describe(rgba, w, h, prompt)` | caption; an empty prompt uses the model's default |
-| `c.describeWithLimit(rgba, w, h, prompt, maxNewTokens)` | the same, with a token budget |
+| `c.describeFast(rgba, w, h, prompt, maxNewTokens)` | **start here** — 1 tile, 14.5x faster |
+| `c.describe(rgba, w, h, prompt)` | 17 tiles; reads fine print, costs ~9 minutes |
+| `c.describeWithLimit(rgba, w, h, prompt, maxNewTokens)` | `describe` with a token budget |
 | `allocator()` | which allocator this module was built with |
 | `linearMemoryBytes()` | current linear memory — the only honest memory instrument here |
 

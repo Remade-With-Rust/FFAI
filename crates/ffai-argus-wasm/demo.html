@@ -41,6 +41,7 @@ defect rather than a limit of the port — see the crate README.</p>
   <label><input type="file" id="img" accept="image/*"></label>
   <label>Prompt <input type="text" id="prompt" value="What is in this image?"></label>
   <label>Max new tokens <input type="number" id="max" value="40" min="1" max="256" style="width:6rem"></label>
+  <label><input type="checkbox" id="fast" checked> Fast path (1 tile) &mdash; untick for 17 tiles, minutes not seconds</label>
   <button id="go" disabled>Caption</button>
   <canvas id="cv" hidden></canvas>
 </fieldset>
@@ -89,9 +90,10 @@ defect rather than a limit of the port — see the crate README.</p>
       await new Promise((r) => setTimeout(r, 0));
 
       const t1 = performance.now();
-      const caption = captioner.describeWithLimit(
-        data, cv.width, cv.height, $('prompt').value, Number($('max').value),
-      );
+      const fast = $('fast').checked;
+      const caption = fast
+        ? captioner.describeFast(data, cv.width, cv.height, $('prompt').value, Number($('max').value))
+        : captioner.describeWithLimit(data, cv.width, cv.height, $('prompt').value, Number($('max').value));
       out.textContent += `\n${((performance.now() - t1) / 1000).toFixed(1)}s · ${MiB(linearMemoryBytes())} peak\n\n${caption.trim()}\n`;
     } catch (e) {
       out.textContent += `\nError: ${e}`;
