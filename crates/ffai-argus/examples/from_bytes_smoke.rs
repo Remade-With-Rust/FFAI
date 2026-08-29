@@ -53,7 +53,20 @@ fn main() {
         max_new_tokens: Some(40),
         ..VlmOptions::default()
     };
-    let caption = engine.describe_image(&image, &opts).expect("describe");
     println!("image: {width}x{height}");
-    println!("NATIVE: {}", caption.trim());
+    // Warm: first call pays lazy init and first-touch, which is not what a
+    // per-image cost means.
+    let _ = engine.describe_image_unsplit(&image, &opts);
+
+    let t = std::time::Instant::now();
+    let fast = engine.describe_image_unsplit(&image, &opts).expect("unsplit");
+    let t_fast = t.elapsed().as_secs_f64();
+    println!("NATIVE describe_image_unsplit (1 tile):  {t_fast:8.3} s");
+    println!("   {}", fast.trim());
+
+    let t = std::time::Instant::now();
+    let full = engine.describe_image(&image, &opts).expect("describe");
+    let t_full = t.elapsed().as_secs_f64();
+    println!("NATIVE describe_image        (17 tiles): {t_full:8.3} s");
+    println!("   {}", full.trim());
 }

@@ -51,21 +51,44 @@ read text in the image and can afford nine minutes.
 into the same fixed tile grid. The grid is the cost, not the pixels — shrinking
 the input does nothing, dropping the split does everything.
 
-### On SIMD, since it is the obvious suspect
+### How far this can go, measured — and it is not far
 
-It is already on, and it is already load-bearing. Turning gemm's simd128
-microkernels off costs **3.53x** (505 s -> 1786 s, identical caption), which is
-the proof they execute. They compile without `-C target-feature=+simd128`
-because they are gated on `target_arch = "wasm32"` and carry
-`#[target_feature(enable = "simd128")]` per function.
+Same image, same 20-token budget, so these are comparable:
 
-The workspace does now set `+simd128` (see `.cargo/config.toml`), which is worth
-**1.32-1.40x on Mercury** by letting LLVM vectorise candle's own scalar loops.
-On Argus it measures ~3%, inside noise, because Argus's hot path is gemm and
-gemm was never scalar. Do not expect SIMD work to move this crate further.
+| | time | |
+|---|---:|---|
+| native, 24 cores | **1.4 s** | |
+| native, ONE thread | **3.8 s** | threads are worth only **2.74x** |
+| **wasm** (one thread, by definition) | **~25 s** | **6.5x slower than native single-thread** |
 
-The remaining gap to native is threads: `wasm32-unknown-unknown` has none, and
-Argus fans out across roughly a dozen rayon sites natively.
+**Threads are not the answer, and that is the surprise.** They would take this
+from ~25 s to ~9 s at best. The dominant term is the 6.5x single-threaded gap,
+and threading cannot touch it.
+
+That gap is the instruction set, and it is a floor:
+
+* **AVX2 is 256-bit** (8 x f32); **wasm SIMD128 is 128-bit** (4 x f32) — 2x.
+* **AVX2 has FMA; base wasm SIMD does not.** A fused multiply-add becomes two
+  instructions — roughly another 2x.
+
+4x from the ISA plus overhead lands on the measured 6.5x. This is *after* SIMD
+is fully enabled: gemm's simd128 microkernels (worth 3.53x — turning them off
+costs 505 s -> 1786 s) and the workspace's `+simd128` flag are both already in
+that 25 s. **There is no SIMD work left that moves this number.** Only wasm
+relaxed-SIMD, which has FMA, would change the floor, and nothing in this stack
+targets it yet.
+
+**So plan for ~25 s today and ~9 s with threads. Argus in a browser is a
+background job, not an interactive one.** If you need interactive captioning,
+run `ffai-argus` on a server; this crate is for the cases where the image must
+not leave the device.
+
+### One thing that IS free: the caption length
+
+99 % of the time is the vision tower and prefill; decode is **0.01 s per
+token**. Measured at 1 token vs 20 tokens: 24.7 s vs 25.0 s. So a generous
+`maxNewTokens` costs essentially nothing — do not shorten the caption to save
+time, because there is no time there to save.
 
 ## Usage
 
