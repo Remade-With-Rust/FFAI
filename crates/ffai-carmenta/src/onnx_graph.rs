@@ -144,6 +144,10 @@ impl Graph {
     /// Resolve an Identity chain. The exporter folds `Identity` nodes into an
     /// alias map rather than executing them; every consumer name must be walked
     /// back to the tensor that actually produced it.
+    // Unreferenced today; see the note on `w` in svtr.rs. These are the
+    // scope-resolution half of the graph walker and deleting them is a
+    // call for whoever owns it.
+    #[allow(dead_code)]
     fn resolve<'a>(&'a self, name: &'a str, scope: Scope<'a>) -> &'a str {
         let mut n = name;
         for _ in 0..32 {
@@ -209,6 +213,7 @@ impl Graph {
         Err(candle_core::Error::Msg(format!("missing tensor `{name}` (-> `{n}`)")))
     }
 
+    #[allow(dead_code)]
     fn get(&self, env: &HashMap<String, Tensor>, name: &str) -> CResult<Tensor> {
         self.get_s(env, name, &[])
     }
@@ -393,7 +398,7 @@ impl Graph {
                     }
                     cond = out[0].clone();
                     let n_carry = carried.len().min(out.len().saturating_sub(1));
-                    carried = out[1..1 + n_carry].to_vec();
+                    carried = out[1..=n_carry].to_vec();
                     let sc: Vec<Tensor> = out[1 + n_carry..].to_vec();
                     if !sc.is_empty() {
                         scans.push(sc);
@@ -668,10 +673,10 @@ impl Graph {
             "Slice" => {
                 let a = x(0)?;
                 let gv = |i: usize| -> CResult<Vec<i64>> {
-                    Ok(self.get_s(env, &n.inputs[i], scope)?
+                    self.get_s(env, &n.inputs[i], scope)?
                         .to_dtype(DType::I64)?
                         .flatten_all()?
-                        .to_vec1::<i64>()?)
+                        .to_vec1::<i64>()
                 };
                 let starts = gv(1)?;
                 let ends = gv(2)?;
@@ -763,7 +768,7 @@ impl Graph {
                     // shift the tensor to be non-negative first and shift back
                     // after: max(x - m) + m == max(x) exactly, for any m below
                     // the minimum.
-                    let m = a.min_all()?.to_dtype(DType::F32)?.to_scalar::<f32>()? as f64;
+                    let m = f64::from(a.min_all()?.to_dtype(DType::F32)?.to_scalar::<f32>()?);
                     let z = pad_nchw(&a.affine(1.0, -m)?, p)?;
                     z.max_pool2d_with_stride(k[0], s[0])?.affine(1.0, m)?
                 };
@@ -843,7 +848,7 @@ impl Graph {
                 let axes = n.ints("axes").unwrap_or_else(|| vec![a.rank() - 1]);
                 let keep = n.int("keepdims", 1) != 0;
                 let mut t = a;
-                for &ax in axes.iter() {
+                for &ax in &axes {
                     t = if n.op == "ReduceMax" { t.max_keepdim(ax)? } else { t.min_keepdim(ax)? };
                 }
                 if !keep {
@@ -870,10 +875,10 @@ impl Graph {
                 // it only surfaced because PP-FormulaNet is the first graph with
                 // a `Range` inside a subgraph.
                 let sc = |k: usize| -> CResult<f64> {
-                    Ok(self.get_s(env, &n.inputs[k], scope)?
+                    Ok(f64::from(self.get_s(env, &n.inputs[k], scope)?
                         .to_dtype(DType::F32)?
                         .flatten_all()?
-                        .to_vec1::<f32>()?[0] as f64)
+                        .to_vec1::<f32>()?[0]))
                 };
                 let (s, l, d) = (sc(0)?, sc(1)?, sc(2)?);
                 let mut v: Vec<i64> = Vec::new();
@@ -927,7 +932,7 @@ impl Graph {
                     let iv = idx.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
                     eprintln!("    scatter self{:?} idx{:?} upd{:?} ax{ax} idx[0]={} idxmax={}",
                               data.dims(), idx.dims(), upd.dims(), iv[0],
-                              iv.iter().cloned().fold(f32::MIN, f32::max));
+                              iv.iter().copied().fold(f32::MIN, f32::max));
                 }
                 vec![data.scatter(&idx.to_dtype(DType::U32)?, &upd, ax)?]
             }

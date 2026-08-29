@@ -96,13 +96,13 @@ impl FormulaModel {
         let grey: Vec<f32> = (0..w * h)
             .map(|i| {
                 if bpp == 1 {
-                    img.data[i] as f32
+                    f32::from(img.data[i])
                 } else {
                     // Rec. 601 luma, the same weights `image` uses elsewhere
                     let p = i * bpp;
-                    0.299 * img.data[p] as f32
-                        + 0.587 * img.data[p + 1] as f32
-                        + 0.114 * img.data[p + 2] as f32
+                    0.299 * f32::from(img.data[p])
+                        + 0.587 * f32::from(img.data[p + 1])
+                        + 0.114 * f32::from(img.data[p + 2])
                 }
             })
             .collect();
@@ -124,7 +124,7 @@ impl FormulaModel {
         let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
         for y in 0..h {
             for x in 0..w {
-                if ink(grey[y * w + x]) < INK as f32 {
+                if ink(grey[y * w + x]) < f32::from(INK) {
                     x0 = x0.min(x);
                     y0 = y0.min(y);
                     x1 = x1.max(x + 1);

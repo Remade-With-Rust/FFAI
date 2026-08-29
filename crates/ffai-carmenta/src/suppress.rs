@@ -892,26 +892,26 @@ fn probe_decide(
         let confs: Vec<f32> = lines.iter().filter_map(|l| l.confidence).collect();
         let mut sorted = confs.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median = if sorted.is_empty() { f64::NAN } else { sorted[sorted.len() / 2] as f64 };
-        let heights: f64 = lines.iter().filter_map(|l| l.bbox.as_ref()).map(|b| b.height as f64).sum();
+        let median = if sorted.is_empty() { f64::NAN } else { f64::from(sorted[sorted.len() / 2]) };
+        let heights: f64 = lines.iter().filter_map(|l| l.bbox.as_ref()).map(|b| f64::from(b.height)).sum();
         let chars: f64 = lines.iter().map(|l| l.text.chars().count() as f64).sum();
         r.put("n_col", st.n_col as f64);
-        r.put("cover", st.cover as f64);
-        r.put("aspect", st.aspect as f64);
+        r.put("cover", f64::from(st.cover));
+        r.put("aspect", f64::from(st.aspect));
         r.put("n_all", st.n_all as f64);
         r.put("n_lines", lines.len() as f64);
         r.put("body_frac", lines.len() as f64 / st.n_all.max(1) as f64);
-        r.put("page_w", page_w as f64);
-        r.put("page_h", page_h as f64);
-        r.put("page_aspect", (page_h / page_w.max(1.0)) as f64);
+        r.put("page_w", f64::from(page_w));
+        r.put("page_h", f64::from(page_h));
+        r.put("page_aspect", f64::from(page_h / page_w.max(1.0)));
         r.put("conf_median", median);
-        r.put("conf_mean", if confs.is_empty() { f64::NAN } else { confs.iter().map(|&c| c as f64).sum::<f64>() / confs.len() as f64 });
+        r.put("conf_mean", if confs.is_empty() { f64::NAN } else { confs.iter().map(|&c| f64::from(c)).sum::<f64>() / confs.len() as f64 });
         r.put("conf_frac_low", confs.iter().filter(|&&c| c < lowconf).count() as f64 / confs.len().max(1) as f64);
         r.put("conf_frac_low_096", confs.iter().filter(|&&c| c < 0.96).count() as f64 / confs.len().max(1) as f64);
         r.put("mean_line_h", heights / n);
         r.put("total_chars", chars);
         r.put("mean_chars", chars / n);
-        r.put("lowconf_thresh", lowconf as f64);
+        r.put("lowconf_thresh", f64::from(lowconf));
         // FLOAT-INTERRUPTION PROXIES (§13). 67.9 % of English reading-order
         // error is on pages carrying a figure, table or isolated equation, and
         // our detector emits no such regions — so the signal has to be
@@ -938,7 +938,7 @@ fn probe_decide(
             }
         }
         let widths: Vec<f32> = bx.iter().map(|b| b.3).collect();
-        let wmax = widths.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+        let wmax = widths.iter().copied().fold(0.0f32, f32::max).max(1.0);
         let wmean = if widths.is_empty() { 0.0 } else { widths.iter().sum::<f32>() / widths.len() as f32 };
         let wsd = if widths.len() < 2 { 0.0 } else {
             (widths.iter().map(|w| (w - wmean).powi(2)).sum::<f32>() / widths.len() as f32).sqrt()
@@ -948,13 +948,13 @@ fn probe_decide(
         let rsd = if rights.len() < 2 { 0.0 } else {
             (rights.iter().map(|r| (r - rmean).powi(2)).sum::<f32>() / rights.len() as f32).sqrt()
         };
-        r.put("max_vgap", (max_gap / page_h.max(1.0)) as f64);
+        r.put("max_vgap", f64::from(max_gap / page_h.max(1.0)));
         r.put("n_bands", bands as f64);
-        r.put("width_cv", if wmean > 0.0 { (wsd / wmean) as f64 } else { f64::NAN });
+        r.put("width_cv", if wmean > 0.0 { f64::from(wsd / wmean) } else { f64::NAN });
         r.put("frac_short", widths.iter().filter(|&&w| w < 0.6 * wmax).count() as f64
             / widths.len().max(1) as f64);
-        r.put("right_cv", if rmean > 0.0 { (rsd / rmean) as f64 } else { f64::NAN });
-        r.put("max_line_w_frac", (wmax / page_w.max(1.0)) as f64);
+        r.put("right_cv", if rmean > 0.0 { f64::from(rsd / rmean) } else { f64::NAN });
+        r.put("max_line_w_frac", f64::from(wmax / page_w.max(1.0)));
     }
     // §8.160 widens §8.157: the probe order is computed for EVERY dense
     // multi-column page, and accepted on either of two grounds:
@@ -1042,12 +1042,12 @@ fn probe_decide(
         r.put_bool("probe_valid", true);
         r.put_bool("gate_fires", probe_gate_fires(st, lines.len()));
         r.put_bool("verifier_blind", verifier_blind(&lines, lowconf));
-        r.put("join_shipped", js as f64);
-        r.put("join_probe", jp as f64);
-        r.put("join_margin", (jp - js) as f64);
-        r.put("numseq_shipped", ns as f64);
-        r.put("numseq_probe", np as f64);
-        r.put("numseq_margin", (np - ns) as f64);
+        r.put("join_shipped", f64::from(js));
+        r.put("join_probe", f64::from(jp));
+        r.put("join_margin", f64::from(jp - js));
+        r.put("numseq_shipped", f64::from(ns));
+        r.put("numseq_probe", f64::from(np));
+        r.put("numseq_margin", f64::from(np - ns));
         r.put("frac_moved", moved as f64 / lines.len().max(1) as f64);
     }
     // §31: ground 1 (the §8.157 geometric guard) BYPASSES the text verifier, and
@@ -1092,7 +1092,7 @@ fn probe_decide(
             false
         }
     };
-    if let Some(r) = row.as_deref_mut() {
+    if let Some(r) = row {
         r.put_bool("accepted", accept);
     }
     if !accept {
@@ -1744,18 +1744,18 @@ mod tests {
         // therefore never rank two orders on 54 % of the benchmark (§15).
         let good = ["本文提出了一种新的方法", "用于解决图像识别中的", "长期存在的问题。"];
         let bad = ["长期存在的问题。", "本文提出了一种新的方法", "用于解决图像识别中的"];
-        let (lg, lb) = (join_fluency_latin(&good.to_vec()), join_fluency_latin(&bad.to_vec()));
+        let (lg, lb) = (join_fluency_latin(good.as_ref()), join_fluency_latin(bad.as_ref()));
         assert!((lg - lb).abs() < 1e-6,
                 "the Latin arm is supposed to be blind here — that is the bug: {lg} vs {lb}");
 
         // THE FIX: routed by script, the flowing order now scores strictly higher.
-        let (fg, fb) = (join_fluency(&good.to_vec()), join_fluency(&bad.to_vec()));
+        let (fg, fb) = (join_fluency(good.as_ref()), join_fluency(bad.as_ref()));
         assert!(fg > fb, "CJK arm must prefer the flowing order: {fg} vs {fb}");
 
         // CONTROL: Latin text must still take the Latin arm and still separate.
         let eg = ["this paper proposes a new", "method for solving the", "long-standing problem."];
         let eb = ["long-standing problem.", "this paper proposes a new", "method for solving the"];
-        let (eg_s, eb_s) = (join_fluency(&eg.to_vec()), join_fluency(&eb.to_vec()));
+        let (eg_s, eb_s) = (join_fluency(eg.as_ref()), join_fluency(eb.as_ref()));
         assert!(eg_s > eb_s, "Latin routing regressed: {eg_s} vs {eb_s}");
     }
 
@@ -1766,15 +1766,15 @@ mod tests {
     #[test]
     fn script_router_picks_the_right_arm() {
         let latin_with_cjk_quote = ["the term (中文) appears here", "and the sentence continues"];
-        assert!(!mostly_cjk(&latin_with_cjk_quote.to_vec()),
+        assert!(!mostly_cjk(latin_with_cjk_quote.as_ref()),
                 "a Latin line quoting CJK must stay on the Latin arm");
 
         let cjk_with_numerals = ["本文提出了一种新的方法 2024", "用于解决图像识别问题"];
-        assert!(mostly_cjk(&cjk_with_numerals.to_vec()),
+        assert!(mostly_cjk(cjk_with_numerals.as_ref()),
                 "CJK with Latin numerals must still take the CJK arm");
 
         // Too little evidence to route on: stay with the Latin default.
-        assert!(!mostly_cjk(&["中文".to_string().as_str()].to_vec()),
+        assert!(!mostly_cjk(["中文".to_string().as_str()].as_ref()),
                 "a two-character fragment is not enough evidence to switch arms");
     }
 

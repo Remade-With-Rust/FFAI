@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (a, b) in g.iter().zip(want.iter()) {
         let d = (a - b).abs();
         mx = mx.max(d);
-        sum += d as f64;
+        sum += f64::from(d);
     }
     let n_t = got.dim(1)?;
     let n_c = got.dim(2)?;

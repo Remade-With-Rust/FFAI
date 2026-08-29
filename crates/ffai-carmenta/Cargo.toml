@@ -134,6 +134,10 @@ unsafe_code = "warn"
 # working the list is the next piece of security work on this crate.
 # Tracked in the audit memo and in ffai-mercury's plan file.
 [lints.clippy]
+# Two arms that look identical today document two DISTINCT cases: the §13
+# harvest bypass and the shipped §8.157 order guard both accept, for unrelated
+# reasons, and collapsing them would lose which one fired.
+if_same_then_else = "allow"
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 # --- DEFERRED: unreviewed casts on an untrusted-input path (see above) ---

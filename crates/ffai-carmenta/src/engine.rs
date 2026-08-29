@@ -386,7 +386,7 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
         RecStage::Svtr => {
             let f = find("ppocrv5-mobile-rec")?.fetch()?;
             let weights = f.file("rec.safetensors")?.to_path_buf();
-            let charset = crate::svtr::load_charset(&f.file("charset.txt")?.to_path_buf())
+            let charset = crate::svtr::load_charset(f.file("charset.txt")?)
                 .map_err(image::candle_err)?;
             // Head classes = charset + 1 blank. Asserted at load rather than
             // trusted: an off-by-one shifts every decoded character (§8.168).

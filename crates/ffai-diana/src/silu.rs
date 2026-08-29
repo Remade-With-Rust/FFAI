@@ -348,12 +348,10 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
                     .zip(xs.par_chunks(1 << 14))
                     .for_each(|(o, i)| silu_fill(i, o));
             }
+        } else if old_rounding() {
+            v.extend(xs.iter().map(|v| silu_scalar_legacy_round(*v)));
         } else {
-            if old_rounding() {
-                v.extend(xs.iter().map(|v| silu_scalar_legacy_round(*v)));
-            } else {
-                v.extend(xs.iter().map(|v| silu_scalar(*v)));
-            }
+            v.extend(xs.iter().map(|v| silu_scalar(*v)));
         }
         Ok((v, l.shape().clone()))
     })

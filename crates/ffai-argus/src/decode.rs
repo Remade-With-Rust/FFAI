@@ -445,9 +445,7 @@ impl TextDecoder {
             t.prompt_tokens = prefill_len;
         }
         let mut out: Vec<u32> = Vec::with_capacity(max_new_tokens);
-        let mut pos = prefill_len;
-
-        for _ in 0..max_new_tokens {
+        for pos in prefill_len..prefill_len + max_new_tokens {
             let t_step = crate::clock::Instant::now();
             let mut step = logits.flatten_all()?;
             // A LOGIT transform, so it applies to greedy too — which is why it
@@ -478,7 +476,6 @@ impl TextDecoder {
             let ids = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
             let emb = self.embed(&ids)?;
             logits = self.forward_embeds(&emb, pos)?;
-            pos += 1;
             if let Some(t) = trace.as_deref_mut() {
                 t.steps_ms.push(t_step.elapsed().as_secs_f64() * 1e3);
             }

@@ -117,6 +117,30 @@ cast_possible_wrap = "allow"
 #   shapes. Spelling them out makes that check harder, not easier -- the same
 #   call ffai-mercury's manifest makes for `q`, `k`, `v`.
 many_single_char_names = "allow"
+
+# --- The remainder, which the crate had accumulated unseen. `-D warnings`
+# aborts a crate's COMPILE, so a crate whose dependency fails is never linted at
+# all: ffai-argus sat behind ffai-core and ffai-media and had not been checked
+# for a long time. These are the same allows ffai-mercury documents, for the
+# same reasons, and nothing here can change behaviour. ---
+#
+# `manual_let_else`: the `match` form reads better where the else-arm carries a
+# `bail!` with a message, which is most of them here.
+manual_let_else = "allow"
+# Model and library names in prose: SmolVLM, SigLIP, PyTorch, HuggingFace.
+# Back-ticking every one of them makes the docs noisier, not clearer.
+doc_markdown = "allow"
+# Small `Copy` config structs passed by value on purpose.
+needless_pass_by_value = "allow"
+# The tower's forward pass and the decode loop are long because the arithmetic
+# is; splitting them adds call overhead to the measured hot path.
+too_many_lines = "allow"
+too_long_first_doc_paragraph = "allow"
+# nursery. `map_or_else` is not clearer than the `if let` it would replace.
+option_if_let_else = "allow"
+# `gelu_one` is one expression on the tower's hottest path and exists to
+# replace a libm call; leaving its inlining to chance would undo it.
+inline_always = "allow"
 suboptimal_flops = "allow"
 # Documentation debt on the internal loaders; the public gates are documented.
 missing_errors_doc = "allow"

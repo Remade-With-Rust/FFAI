@@ -180,7 +180,7 @@ impl SmolVlm {
     }
 
     #[must_use]
-    pub fn with_manifest_dir(dir: PathBuf) -> Self {
+    pub const fn with_manifest_dir(dir: PathBuf) -> Self {
         Self {
             manifest_dir: dir,
             model: OnceLock::new(),
@@ -724,7 +724,7 @@ impl SmolVlm {
             .decode(&out, true)
             .map_err(|e| Error::Model(format!("detokenize: {e}")))?;
         let answer = truncate_at_stop(&decoded, &opts.stop).trim().to_string();
-        if let Some(tr) = trace.as_deref_mut() {
+        if let Some(tr) = &mut trace {
             tr.prefill_ms = dtrace.prefill_ms;
             tr.step_ms = dtrace.steps_ms;
             tr.detokenize_ms = t_detok.elapsed().as_secs_f64() * 1e3;
@@ -860,7 +860,7 @@ fn build(
     // Geometry from the checkpoint, never constants: a different SmolVLM size
     // changes tokens_per_tile, and a hard-coded 64 would be silently wrong
     // there — the same defect class prompt.rs exists to guard against.
-    let cfg: serde_json::Value = serde_json::from_str(&config_json)
+    let cfg: serde_json::Value = serde_json::from_str(config_json)
         .map_err(|e| Error::Model(format!("config.json: {e}")))?;
     let vision_cfg = cfg.get("vision_config");
     let get = |k: &str, d: usize| -> usize {

@@ -144,8 +144,10 @@ impl TableModel {
         let (w, h) = (img.width as usize, img.height as usize);
         let bpp = img.format.bytes_per_pixel();
         let scale = SIDE as f32 / w.max(h) as f32;
-        let (rw, rh) = (((w as f32 * scale) as usize).max(1).min(SIDE),
-                        ((h as f32 * scale) as usize).max(1).min(SIDE));
+        let (rw, rh) = (
+            ((w as f32 * scale) as usize).clamp(1, SIDE),
+            ((h as f32 * scale) as usize).clamp(1, SIDE),
+        );
         let mut chw = vec![0f32; 3 * SIDE * SIDE];
         for c in 0..3 {
             // BGR: the reference config decodes with `img_mode: BGR`.
@@ -213,7 +215,7 @@ impl TableModel {
 
         if std::env::var("FFAI_TABLE_DEBUG").is_ok() {
             let mut mn = f32::MAX; let mut mx = f32::MIN; let mut s0 = 0f32;
-            for v in lv.iter() { mn = mn.min(*v); mx = mx.max(*v); }
+            for v in &lv { mn = mn.min(*v); mx = mx.max(*v); }
             for k in 0..n_tok.min(lv.len()) { s0 += lv[k]; }
             eprintln!("  logits dims {ld:?}  min {mn:.4} max {mx:.4}  step0 sum {s0:.4}");
             eprintln!("  step0 first 12: {:?}", &lv[..lv.len().min(12)]);
@@ -237,21 +239,20 @@ impl TableModel {
             }
             let tok = TOKENS.get(bi).copied().unwrap_or("?").to_string();
             let stop = tok == "eos";
-            if tok == "<td></td>" || tok == "<td" {
-                if let Some(b) = &bv {
+            if (tok == "<td></td>" || tok == "<td")
+                && let Some(b) = &bv {
                     let o = s * 8;
                     if o + 7 < b.len() {
                         let xs = [b[o], b[o + 2], b[o + 4], b[o + 6]];
                         let ys = [b[o + 1], b[o + 3], b[o + 5], b[o + 7]];
                         cells.push(Cell {
-                            x0: xs.iter().cloned().fold(f32::MAX, f32::min) * w,
-                            y0: ys.iter().cloned().fold(f32::MAX, f32::min) * h,
-                            x1: xs.iter().cloned().fold(f32::MIN, f32::max) * w,
-                            y1: ys.iter().cloned().fold(f32::MIN, f32::max) * h,
+                            x0: xs.iter().copied().fold(f32::MAX, f32::min) * w,
+                            y0: ys.iter().copied().fold(f32::MAX, f32::min) * h,
+                            x1: xs.iter().copied().fold(f32::MIN, f32::max) * w,
+                            y1: ys.iter().copied().fold(f32::MIN, f32::max) * h,
                         });
                     }
                 }
-            }
             tokens.push(tok);
             if stop {
                 break;

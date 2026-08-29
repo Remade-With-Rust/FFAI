@@ -322,14 +322,14 @@ impl Layer {
         let hdim = self.head_dim as u64;
 
         // ---- attention -----------------------------------------------------
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let normed = layer_norm(&self.ln1, xs)?;
-        prof::add("ln1+ln2", _t);
+        prof::add("ln1+ln2", t);
         // layer_norm: one pass, plus the mean/var reduction over the same data.
         crate::cost::elementwise(bu * sq * hd, 2, 1);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let qkv = self.qkv.forward(&normed)?;
-        prof::add("qkv linear", _t);
+        prof::add("qkv linear", t);
         crate::cost::matmul(1, bu * sq, hd, 3 * hd);
         // ONE copy, not three.
         //
@@ -360,7 +360,7 @@ impl Layer {
         // `packed.i(0)` selects a whole contiguous block for any `b`. Same
         // single copy, same volume, and identical at `b == 1` — which is what
         // the existing oracle gates confirm.
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         // One pass: the permute-copy the layout forces anyway, with `qkv`'s
         // bias added on the way through instead of in a pass of its own.
         let packed = match (self.qkv_bias.as_ref(), fuse_bias()) {
@@ -379,7 +379,7 @@ impl Layer {
             }
         };
         crate::cost::copy(3 * bu * sq * hd);
-        prof::add("packed permute+copy", _t);
+        prof::add("packed permute+copy", t);
         let q = packed.i(0)?;
         let k = packed.i(1)?;
         let v = packed.i(2)?;
@@ -395,13 +395,13 @@ impl Layer {
             // softmax and attn.v read what q.k^T just wrote, still in cache.
             let mut per_head = Vec::with_capacity(self.heads);
             for h in 0..self.heads {
-                let _t = crate::clock::Instant::now();
+                let t = crate::clock::Instant::now();
                 let qh = q.i((.., h))?;
                 let kh = k.i((.., h))?;
                 let scores = qh.matmul(&kh.t()?)?;
-                prof::add("q.k^T", _t);
+                prof::add("q.k^T", t);
                 crate::cost::matmul(bu, sq, hdim, sq);
-                let _t = crate::clock::Instant::now();
+                let t = crate::clock::Instant::now();
                 // Ours, in place — not `candle_nn::ops::softmax_last_dim`.
                 //
                 // This branch was the one the 17-tile path takes, and it was
@@ -412,20 +412,20 @@ impl Layer {
                 // through the same lane-split kernels.
                 scores.inplace_op1(&SoftmaxInplace)?;
                 let probs = scores;
-                prof::add("softmax", _t);
+                prof::add("softmax", t);
                 crate::cost::elementwise(bu * sq * sq, 2, 1);
                 crate::cost::transcendental_vector(bu * sq * sq);
-                let _t = crate::clock::Instant::now();
+                let t = crate::clock::Instant::now();
                 per_head.push(probs.matmul(&v.i((.., h))?)?);
                 crate::cost::matmul(bu, sq, sq, hdim);
-                prof::add("attn.v", _t);
+                prof::add("attn.v", t);
             }
-            let _t = crate::clock::Instant::now();
+            let t = crate::clock::Instant::now();
             let attn = Tensor::stack(&per_head, 1)?
                 .transpose(1, 2)?
                 .reshape((b, seq, hidden))?;
             crate::cost::copy(bu * sq * hd);
-            prof::add("attn transpose", _t);
+            prof::add("attn transpose", t);
             return self.finish_attention(residual, &attn, bu, sq, hd);
         }
 
@@ -443,13 +443,13 @@ impl Layer {
                 // contiguous lhs. The copy is `heads * len * head_dim` — 786 KB
                 // at BLOCK 256 — against the 12.6 MB of scores it makes
                 // cache-resident.
-                let _t = crate::clock::Instant::now();
+                let t = crate::clock::Instant::now();
                 let q_blk = q.narrow(2, start, len)?.contiguous()?;
                 let scores = q_blk.matmul(&kt)?;
                 crate::cost::matmul(bu * heads, len as u64, hdim, sq);
-                prof::add("q.k^T", _t);
+                prof::add("q.k^T", t);
 
-                let _t = crate::clock::Instant::now();
+                let t = crate::clock::Instant::now();
                 let rows = (bu * heads) as usize * len;
                 let mut sums = vec![0f32; rows];
                 scores.inplace_op1(&SoftmaxExpInplace {
@@ -457,16 +457,16 @@ impl Layer {
                     rows,
                 })?;
                 crate::cost::transcendental_vector(bu * heads * len as u64 * sq);
-                prof::add("softmax", _t);
+                prof::add("softmax", t);
                 sums_parts.push(Tensor::from_vec(sums, (b, self.heads, len), scores.device())?);
 
-                let _t = crate::clock::Instant::now();
+                let t = crate::clock::Instant::now();
                 outs.push(scores.matmul(&v)?);
                 crate::cost::matmul(bu * heads, len as u64, sq, hdim);
-                prof::add("attn.v", _t);
+                prof::add("attn.v", t);
                 start += len;
             }
-            let _t = crate::clock::Instant::now();
+            let t = crate::clock::Instant::now();
             let attn = Tensor::cat(&outs, 2)?;
             let sums = Tensor::cat(&sums_parts, 2)?;
             let attn = attn.apply_op2_no_bwd(
@@ -474,16 +474,16 @@ impl Layer {
                 &AttnMergeOp { heads: self.heads, head_dim: self.head_dim },
             )?;
             crate::cost::copy(bu * sq * hd);
-            prof::add("attn transpose", _t);
+            prof::add("attn transpose", t);
             return self.finish_attention(residual, &attn, bu, sq, hd);
         }
 
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let scores = q.matmul(&k.t()?)?;
-        prof::add("q.k^T", _t);
+        prof::add("q.k^T", t);
         crate::cost::matmul(bu * heads, sq, hdim, sq);
         // candle's, measured 11x faster than ours here — see the note above.
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         // Deferred normalisation: exp in place, keep the row totals, and let
         // `AttnMergeOp` divide the (seq, head_dim) OUTPUT instead of the
         // (seq, seq) scores. One 100 MB round trip per layer deleted.
@@ -494,19 +494,19 @@ impl Layer {
                 sums: RowSums(sums.as_mut_ptr()),
                 rows,
             })?;
-            prof::add("softmax", _t);
+            prof::add("softmax", t);
             let sums = Tensor::from_vec(sums, (b, self.heads, seq), scores.device())?;
-            let _t = crate::clock::Instant::now();
+            let t = crate::clock::Instant::now();
             let attn = scores.matmul(&v)?;
             crate::cost::matmul(bu * heads, sq, sq, hdim);
-            prof::add("attn.v", _t);
-            let _t = crate::clock::Instant::now();
+            prof::add("attn.v", t);
+            let t = crate::clock::Instant::now();
             let attn = attn.apply_op2_no_bwd(
                 &sums,
                 &AttnMergeOp { heads: self.heads, head_dim: self.head_dim },
             )?;
             crate::cost::copy(bu * sq * hd);
-            prof::add("attn transpose", _t);
+            prof::add("attn transpose", t);
             return self.finish_attention(residual, &attn, bu, sq, hd);
         }
 
@@ -516,7 +516,7 @@ impl Layer {
         } else {
             candle_nn::ops::softmax_last_dim(&scores)?
         };
-        prof::add("softmax", _t);
+        prof::add("softmax", t);
         // softmax: read the row for the max, read again for exp+sum, write.
         crate::cost::elementwise(bu * heads * sq * sq, 2, 1);
         // candle's softmax uses a vectorized exp (~2.7 G/s measured), NOT the
@@ -524,14 +524,14 @@ impl Layer {
         // weight predicted 32 s of transcendentals against a ~16 s tower —
         // the arithmetic failing to close is what exposed the conflation.
         crate::cost::transcendental_vector(bu * heads * sq * sq);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let attn = probs.matmul(&v)?;
         crate::cost::matmul(bu * heads, sq, sq, hdim);
-        prof::add("attn.v", _t);
-        let _t = crate::clock::Instant::now();
+        prof::add("attn.v", t);
+        let t = crate::clock::Instant::now();
         let attn = attn.transpose(1, 2)?.reshape((b, seq, hidden))?;
         crate::cost::copy(bu * sq * hd);
-        prof::add("attn transpose", _t);
+        prof::add("attn transpose", t);
         self.finish_attention(residual, &attn, bu, sq, hd)
     }
 
@@ -551,32 +551,32 @@ impl Layer {
     ) -> CandleResult<Tensor> {
         let (b, seq, hidden) = attn.dims3()?;
         let _ = (b, seq, hidden);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let out = self.out_proj.forward(attn)?;
-        prof::add("out_proj", _t);
+        prof::add("out_proj", t);
         crate::cost::matmul(1, bu * sq, hd, hd);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         // `out_proj`'s bias rides along here rather than costing its own pass.
         let xs = match (self.out_bias.as_ref(), fuse_bias()) {
             (Some(bias), true) => residual.apply_op3_no_bwd(&out, bias, &AddBiasOp)?,
             (Some(bias), false) => (residual + out.broadcast_add(bias)?)?,
             (None, _) => (residual + out)?,
         };
-        prof::add("residual+bias", _t);
+        prof::add("residual+bias", t);
         crate::cost::elementwise(bu * sq * hd, 2, 1);
 
         // ---- mlp -----------------------------------------------------------
         let residual = &xs;
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let normed = layer_norm(&self.ln2, &xs)?;
-        prof::add("ln1+ln2", _t);
+        prof::add("ln1+ln2", t);
         crate::cost::elementwise(bu * sq * hd, 2, 1);
         let inter = self.fc1.weight().dims()[0] as u64;
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let h = self.fc1.forward(&normed)?;
-        prof::add("fc1", _t);
+        prof::add("fc1", t);
         crate::cost::matmul(1, bu * sq, hd, inter);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         // The bias `fc1` no longer applies is folded in here, where the data
         // is already being read and written.
         let h = match (self.fc1_bias.as_ref(), fuse_bias()) {
@@ -584,19 +584,19 @@ impl Layer {
             (Some(b), false) => gelu_tanh_par(&h.broadcast_add(b)?)?,
             (None, _) => gelu_tanh_par(&h)?,
         };
-        prof::add("gelu+bias", _t);
-        let _t = crate::clock::Instant::now();
+        prof::add("gelu+bias", t);
+        let t = crate::clock::Instant::now();
         let down = self.fc2.forward(&h)?;
-        prof::add("fc2", _t);
+        prof::add("fc2", t);
         crate::cost::matmul(1, bu * sq, inter, hd);
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         // Likewise `fc2`'s.
         let out = match (self.fc2_bias.as_ref(), fuse_bias()) {
             (Some(bias), true) => residual.apply_op3_no_bwd(&down, bias, &AddBiasOp)?,
             (Some(bias), false) => (residual + down.broadcast_add(bias)?)?,
             (None, _) => (residual + down)?,
         };
-        prof::add("residual+bias", _t);
+        prof::add("residual+bias", t);
         crate::cost::elementwise(bu * sq * hd, 2, 1);
         Ok(out)
     }
@@ -781,7 +781,7 @@ pub fn gelu_kernel_name() -> &'static str {
         if have_avx2_cached() {
             return "avx2+fma";
         }
-        return "scalar (no avx2)";
+        "scalar (no avx2)"
     }
     #[cfg(not(target_arch = "x86_64"))]
     "scalar (non-x86_64)"
@@ -2101,22 +2101,22 @@ impl VisionTower {
     /// # Errors
     /// Propagates candle's errors.
     pub fn forward(&self, pixel_values: &Tensor) -> CandleResult<Tensor> {
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let mut xs = self.embeddings.forward(pixel_values)?;
-        prof::add("patch+pos embed", _t);
+        prof::add("patch+pos embed", t);
         for layer in &self.layers {
-            let _t = crate::clock::Instant::now();
+            let t = crate::clock::Instant::now();
             let next = layer.forward(&xs)?;
             // Timed OUTSIDE the layer's own probes, so the difference between
             // this and their sum is the layer's untimed remainder — chiefly the
             // drop of ~165 MB of intermediates per layer. That remainder was
             // 12 % of the tower and invisible until it was given a name.
-            prof::add("LAYER TOTAL", _t);
+            prof::add("LAYER TOTAL", t);
             xs = next;
         }
-        let _t = crate::clock::Instant::now();
+        let t = crate::clock::Instant::now();
         let out = layer_norm(&self.post_ln, &xs);
-        prof::add("post_ln", _t);
+        prof::add("post_ln", t);
         out
     }
 }
@@ -2377,7 +2377,11 @@ mod tests {
         assert!(worst < 1e-6, "parallel softmax differs by {worst:.3e}");
 
         // And it is a softmax: every row sums to one.
-        let sums = ours.sum(D::Minus1).expect("sum").flatten_all().expect("f");
+        let sums = ours
+            .sum(candle_core::D::Minus1)
+            .expect("sum")
+            .flatten_all()
+            .expect("f");
         for s in sums.to_vec1::<f32>().expect("v") {
             assert!((s - 1.0).abs() < 1e-5, "row sums to {s}");
         }
