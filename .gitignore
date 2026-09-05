@@ -104,6 +104,11 @@ crates/ffai-carmenta-wasm/pkg/
 crates/ffai-carmenta-wasm/pkg-node/
 crates/ffai-carmenta-wasm/pkg-simd/
 crates/ffai-carmenta-wasm/pkg-candle/
+# Same for the Mercury and Argus modules.
+crates/ffai-mercury-wasm/pkg/
+crates/ffai-mercury-wasm/pkg-node/
+crates/ffai-argus-wasm/pkg/
+crates/ffai-argus-wasm/pkg-node/
 
 # The Great Gate rule-search tool — LOCAL ONLY, NEVER PUBLISHED.
 # Imported 2026-08-08 from remade_ffmpeg_rs@ae6b5ce (_greatgate/, itself
