@@ -187,3 +187,50 @@ char-ratio localises; Text^Edit decides. Screen on the 305-page subset
 * Probes written for the ordering audit that apply here unchanged:
   `stage0_coverage.py` (char-ratio per GT block), `stage1_tiling.py`
   (boxes per row-band vs char-ratio).
+
+
+---
+
+## R.2 RESULT (2026-09-05) — the v5 server tier is REFUTED; PP-OCRv6 medium is the candidate
+
+Full record: campaign log §60. Method: `.tools-bench/rec_tier_probe.py` —
+detection held constant (our `boxes_fullcur` lines), 69 seeded pages (the
+§8.165 nine, the 40 heaviest substitution-mass pages from the wmfinal match
+records, 20 random controls), whole-block sampling to ~60 lines/page, scored
+per GT block with the evaluator's OWN `normalized_text` on both sides.
+
+| arm | Δ macro vs mobile | 95 % CI | win/lose | english | simplified chinese |
+|---|---:|---|---:|---|---|
+| PP-OCRv5_server_rec | +0.0025 | [−0.0011, +0.0075] | 34/20 | +0.0056 (13/13) | −0.0014 (20/6, CI spans 0) |
+| **PP-OCRv6_medium_rec** | **−0.0039** | **[−0.0058, −0.0019]** | **42/7** | **−0.0035, CI excl. 0 (19/4)** | **−0.0029, CI excl. 0 (21/3)** |
+
+* **Server: do not port.** Net worse, worse on English, noise on Chinese, and
+  60× the per-crop cost. It garbles stylised Latin and drops inter-word spaces
+  (paddle's own pipeline does the same on the same crops — the model, not our
+  decode).
+* **v6 medium: a content-uniform ~7 % relative reduction of recognition edit**,
+  worth roughly +0.002–0.003 on Text^Edit against the 0.0225 substitution pool.
+  Only `exam_paper` is mixed (3/2, 5 pages). No dispatch needed.
+* Port consistency re-confirmed at scale: onnxruntime-mobile on our tensor ==
+  the engine's text on 3 560 / 3 569 lines.
+
+**Instrument law learned here:** the evaluator's `clean_string` deletes every
+space and punctuation mark before `Edit_dist`; a proxy that keeps them read the
+server model 0.04 worse on a page the benchmark scores at +0.003. Score with
+their normaliser, imported, or the verdict is fiction.
+
+### R.2b — the port (queued)
+
+`corpora/refs/fixtures/ppocrv6_medium_rec_graph.json` (DAG, by
+`tools/carmenta_rec_graph_dump.py`): 14 inverted-residual blocks with
+squeeze-excite and GELU, a 1×7 depthwise sequence conv, two transformer blocks
+at width 192, an 18 710-class CTC head, 19.1 M params. Every op exists in the
+candle port. Same discipline as §8.165–§8.170: numpy reference driven by the
+DAG → oracle fixture (`svtr_fixture.py` shape) → candle → `RecStage` variant
+behind engine name `mobiledet-svtr6`, opt-in, LIVE untouched. Bank by the
+one-binary engine A/B (subset screen, full-corpus bank), text CI excluding
+zero, order non-regressing. Speed is measured in candle, not inferred from
+paddle's 2.3 s/crop.
+
+R.3 (loss position inside the line) is moot for the port decision and stays
+unrun.

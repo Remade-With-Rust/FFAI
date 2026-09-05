@@ -3221,3 +3221,124 @@ refusal-stage counters, the early-return bugfix (a real correctness fix on
 the routing path), the reachability census, and rule 9's fourth and fifth
 catches — including one where the expected number nearly got written into
 this log in place of the measured one.
+
+
+---
+
+## §60 — R.2 RECOGNIZER TIER PROBE: PP-OCRv5 server REFUTED on our crops; PP-OCRv6 medium wins 42/7 (−0.0039 proxy, CI excludes zero)
+
+The recognition audit's R.2 asked what a bigger recognizer of the same family
+reads on the crops OUR detector produces, priced BEFORE any port (§8.155's
+law; §8.165 did this for mobile-vs-CRNN and was right). Two candidates: the
+planned `PP-OCRv5_server_rec` (84 MB, same 18 385-class head and preprocessing
+as mobile), and `PP-OCRv6_medium_rec` (76 MB, 18 710 classes) — which had been
+sitting unevaluated in the paddlex cache since 2026-07-29, the day the M-C0
+adapter first ran. Nobody in this log had mentioned it.
+
+### Method (`.tools-bench/rec_tier_probe.py`, local; two stages, two venvs)
+
+Detection held constant: our `boxes_fullcur` lines, cropped from the source
+page, fed to all three recognizers. 69 pages, seeded: the nine §8.165 pages
+(comparability), the 40 pages carrying the most SUBSTITUTION-shaped edit mass
+in the banked wmfinal match records (pred within 15 % of gt length, edit > 0),
+and 20 random controls. Each page sampled to ~60 lines by drawing WHOLE GT text
+blocks (a block is never cut; a chosen block our detector left empty scores as
+a miss). Scored per GT block exactly as the evaluator does — lev / max(len) on
+`normalized_text` of BOTH sides, its own import — macro over pages with a
+bootstrap CI on the paired delta vs mobile, plus micro and win/lose counts.
+Proxy, not the evaluator: our block assignment is centre-in-box, theirs is a
+matcher. It ranks recognizers; the engine A/B banks one.
+
+| arm | route | ms/crop | macro | micro | Δ macro vs mobile | 95 % CI | win/lose |
+|---|---|---:|---:|---:|---:|---|---:|
+| mobile (shipped) | onnxruntime, `svtr_input` tensor | 59 | 0.0565 | 0.0419 | — | — | — |
+| **v5 server** | onnxruntime, same tensor | 3473 | 0.0590 | 0.0455 | **+0.0025** | [−0.0011, +0.0075] | 34/20 |
+| **v6 medium** | paddle, batched | 2338 | **0.0526** | **0.0389** | **−0.0039** | **[−0.0058, −0.0019]** | **42/7** |
+
+67 pages scored (two had no lines in their sampled blocks), 663 blocks, 3 569
+lines. Port consistency: onnxruntime-mobile on our tensor == our engine's line
+text on **3 560 / 3 569 (99.7 %)** — the baseline arm IS the shipped recognizer.
+
+| split | n pages | server Δ (CI) | w/l | v6 Δ (CI) | w/l |
+|---|---:|---|---:|---|---:|
+| §8.165 nine | 9 | −0.0023 [−0.0072, +0.0009] | 2/3 | −0.0020 [−0.0055, +0.0001] | 4/1 |
+| substitution pool | 40 | +0.0038 [−0.0015, +0.0119] | 23/12 | **−0.0046 [−0.0068, −0.0027]** | **28/3** |
+| random controls | 18 | +0.0021 [−0.0032, +0.0080] | 9/5 | −0.0032 [−0.0095, +0.0021] | 10/3 |
+| english | 32 | +0.0056 [−0.0009, +0.0152] | 13/13 | **−0.0035 [−0.0059, −0.0015]** | 19/4 |
+| simplified chinese | 33 | −0.0014 [−0.0035, +0.0009] | 20/6 | **−0.0029 [−0.0055, −0.0003]** | 21/3 |
+| newspaper | 32 | −0.0004 | 19/8 | **−0.0044 [−0.0066, −0.0024]** | 23/2 |
+| magazine | 4 | +0.0295 | 3/1 | −0.0051 | 3/1 |
+| exam_paper | 5 | +0.0103 | 2/3 | +0.0034 [−0.0035, +0.0144] | 3/2 |
+
+### Verdicts
+
+**v5 server is REFUTED as a tier upgrade for this pipeline. Do not port it.**
+Net worse (+0.0025), worse on English by 0.0056 at a 13/13 coin flip by
+count — i.e. it loses BIG where it loses — and only noise on Chinese. The
+mechanism, read from the lines: on stylised Latin it garbles what mobile and
+v6 read ("cuthor" / "asoillustrated" / "Reolution" against v6's exact "JOIDES
+Resolution", "Salt Marsh"), and it habitually drops inter-word spaces
+("aConsultingPartnerfromDeloitte") — which the benchmark cannot see (below),
+so that is not what costs it. Paddle's own pipeline produces the same
+space-dropping on the same crops (3/8 identical, the rest differing by spaces
+only), so it is the model, not our decode. At 60× mobile's per-crop cost it
+would also have consumed the whole 9× speed margin over the reference VLM for a
+loss.
+
+**v6 medium is a real, modest, content-uniform win: 42/7, every language
+split's CI excludes zero, newspapers 23/2, and the substitution pool — the
+population R.2 was aimed at — −0.0046 [−0.0068, −0.0027], 28/3.** The only
+mixed source is `exam_paper` (3/2, +0.0034, CI spans zero, 5 pages). No
+sign-flip by content class, so no dispatch is needed (§55's law satisfied).
+Micro 0.0419 → 0.0389 is a 7 % relative reduction of recognition-attributable
+edit. Against §57's 0.0225 recognition-substitution pool that is worth roughly
+**+0.002–0.003 on Text^Edit** — the size of §51's ordering v2 (+0.0035) and
+§56's splice (+0.0023). A lever, not a campaign.
+
+### Three instrument catches, recorded because each would have shipped a wrong verdict
+
+1. **Paddle's CPU path cannot run this probe.** With oneDNN off (the only
+   configuration that runs on this box, M-C0's trap) the server model took
+   **5.1 s per crop** and the first 90-line page ran fifteen minutes. The v5
+   models have official ONNX exports on the hub (`PaddlePaddle/*_rec_onnx`);
+   onnxruntime reads the same crop in 54 ms (mobile) / 1.24 s (server) at 320
+   wide, 3–6 s on 2 048-wide lines. Fed our exact `svtr_input` tensor
+   (numpy replica) and our greedy CTC decode, that is the R.1 hand-off, and it
+   reproduced the engine on 99.7 % of lines. v6 has no ONNX export.
+2. **The evaluator deletes every space and punctuation mark before it
+   measures.** `normalized_text = clean_string(textblock2unicode(t))`, and
+   `clean_string` keeps only `\w` and CJK. The first interim score used a
+   whitespace-collapsing normaliser and read the server model **0.04 worse on a
+   clean book page** whose only defect was run-together words. With THEIR
+   normaliser that page reads +0.0030. Every home-made proxy for this
+   benchmark must import their function or it is a verdict about a metric
+   nobody runs — the §8.173 lesson, one layer down.
+3. **The mobile model emitting a fullwidth `ａ` inside English** (page one,
+   `ofａ` for `of a`; the metric DOES score it, fullwidth letters are `\w`)
+   looked like a named 18k-head mechanism. Census over all 3 569 lines: **1**
+   occurrence, 0 in the other arms, 0 in GT. Not a mechanism; not recorded as
+   one.
+
+### Port cost, from the fixtures
+
+`tools/carmenta_rec_graph_dump.py` records a recognizer's inference program as
+a DAG — every op with the producers of its operands — because the mobile
+fixture was a SEQUENCE and neither candidate is a chain (server: 8 concats).
+Written for both: `corpora/refs/fixtures/ppocrv5_server_rec_graph.json`,
+`ppocrv6_medium_rec_graph.json`. v5 server = HGNetV2 conv/BN/ReLU backbone
+(58 conv, 28 depthwise, 21.1 M params) + EXACTLY mobile's SVTR encoder and
+120×18385 head. **v6 medium** = 14 inverted-residual blocks (1×1 expand,
+depthwise 3×3, squeeze-excite via mean + hardsigmoid, 1×1 project, GELU),
+channels 64→1536 across strides 2/4/8 vertically to a 3-row map, a 1×7
+depthwise sequence conv, then TWO transformer blocks at width 192 (8 heads,
+MLP 768), 18 710-class CTC head; 19.1 M params, 161 tensors, every op already
+in the candle port. Same shape of work as the SVTR port (§8.165–§8.170):
+numpy reference off the DAG → oracle fixture → candle backbone → `RecStage`
+variant behind an engine name, LIVE untouched. Speed is unmeasured until it
+runs in candle — paddle's 2.3 s/crop is not that number — and the 1×1-heavy
+backbone at 3–12 rows should be far cheaper than the server's dense 3×3s at 24.
+
+**NEXT (the R.2b brick):** port v6 medium as `mobiledet-svtr6` (opt-in), oracle
+to the paddle fixture, then the one-binary engine A/B on `bench_subset_300`
+(screen, ±0.005) and the full corpus (bank), text objective, order
+non-regression. Gate: Text^Edit CI excludes zero. Expected +0.002–0.003.

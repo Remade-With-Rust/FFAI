@@ -1,0 +1,10700 @@
+{
+"model": "PP-OCRv6_medium_rec",
+"feeds": [
+"x"
+],
+"n_params": 161,
+"params": {
+"linear_8.b_0": {
+"shape": [
+18710
+],
+"dtype": "float32",
+"sha256": "5dd147d8403975f7"
+},
+"linear_8.w_0": {
+"shape": [
+192,
+18710
+],
+"dtype": "float32",
+"sha256": "b91f46fe4d94ca25"
+},
+"batch_norm2d_60.w_2": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "f7bbf80ca6e2006c"
+},
+"batch_norm2d_60.w_1": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "3594e5819faeb7e5"
+},
+"batch_norm2d_60.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "096dadfe5b184dfa"
+},
+"batch_norm2d_60.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "7d192a5a690bafbb"
+},
+"conv2d_72.w_0": {
+"shape": [
+192,
+768,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "18dc646df30f1c11"
+},
+"layer_norm_4.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "347882006123604f"
+},
+"layer_norm_4.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "8db81805ddab20dc"
+},
+"linear_7.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "2340d5def3d877b7"
+},
+"linear_7.w_0": {
+"shape": [
+768,
+192
+],
+"dtype": "float32",
+"sha256": "87d753ee73ee16a9"
+},
+"linear_6.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "4282360526a19a82"
+},
+"linear_6.w_0": {
+"shape": [
+192,
+768
+],
+"dtype": "float32",
+"sha256": "6848bef937ebe7db"
+},
+"layer_norm_3.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "425777835221bdad"
+},
+"layer_norm_3.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "0f662cda8c48197c"
+},
+"linear_5.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "098b69506f0a9c5a"
+},
+"linear_5.w_0": {
+"shape": [
+192,
+192
+],
+"dtype": "float32",
+"sha256": "e79f76a826fe3378"
+},
+"linear_4.b_0": {
+"shape": [
+576
+],
+"dtype": "float32",
+"sha256": "88f59c8c3b88b783"
+},
+"linear_4.w_0": {
+"shape": [
+192,
+576
+],
+"dtype": "float32",
+"sha256": "d6d8b75c9f5a1c91"
+},
+"layer_norm_2.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "81c9f5d4e48abbb0"
+},
+"layer_norm_2.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "e268bf27b44062bf"
+},
+"linear_3.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "901fe1294ad45298"
+},
+"linear_3.w_0": {
+"shape": [
+768,
+192
+],
+"dtype": "float32",
+"sha256": "fa28e3f0ea2bce68"
+},
+"linear_2.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "5ce8546f5e87044e"
+},
+"linear_2.w_0": {
+"shape": [
+192,
+768
+],
+"dtype": "float32",
+"sha256": "46a9d7e7e3ca9da2"
+},
+"layer_norm_1.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "ec6d1216f1cc5abe"
+},
+"layer_norm_1.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "09563ea23c4cc329"
+},
+"linear_1.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "c62754057b8daf87"
+},
+"linear_1.w_0": {
+"shape": [
+192,
+192
+],
+"dtype": "float32",
+"sha256": "13065060cb182aba"
+},
+"linear_0.b_0": {
+"shape": [
+576
+],
+"dtype": "float32",
+"sha256": "5efe472741dd8aa4"
+},
+"linear_0.w_0": {
+"shape": [
+192,
+576
+],
+"dtype": "float32",
+"sha256": "19e593c4189f48c5"
+},
+"layer_norm_0.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "173b7bc0d968791e"
+},
+"layer_norm_0.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "9886ec04b3bb3b34"
+},
+"batch_norm2d_59.w_2": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "8dd581b85748ca08"
+},
+"batch_norm2d_59.w_1": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "cf20f17725891888"
+},
+"batch_norm2d_59.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "b068096807a114f9"
+},
+"batch_norm2d_59.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "d4316e6591f343ef"
+},
+"conv2d_71.w_0": {
+"shape": [
+192,
+1,
+1,
+7
+],
+"dtype": "float32",
+"sha256": "813084fb9315ebda"
+},
+"batch_norm2d_58.w_2": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "359178737ac52638"
+},
+"batch_norm2d_58.w_1": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "1a3ed78bc79028e2"
+},
+"batch_norm2d_58.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "7d4c2f507c953e05"
+},
+"batch_norm2d_58.w_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "80e4d68cd5e1c9a6"
+},
+"conv2d_70.w_0": {
+"shape": [
+192,
+768,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "6eba32a1579c5d2e"
+},
+"conv2d_130.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "c0c191016ad0cec6"
+},
+"conv2d_130.w_0": {
+"shape": [
+768,
+1536,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "1df31fa08ab63f17"
+},
+"conv2d_129.b_0": {
+"shape": [
+1536
+],
+"dtype": "float32",
+"sha256": "a2175dc59ce06046"
+},
+"conv2d_129.w_0": {
+"shape": [
+1536,
+768,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "b4a54cd0a5ce9387"
+},
+"conv2d_128.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "acf880264871ad60"
+},
+"conv2d_128.w_0": {
+"shape": [
+768,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "50530a9283643ac4"
+},
+"conv2d_126.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "c4a4903ab8f693c1"
+},
+"conv2d_126.w_0": {
+"shape": [
+768,
+1536,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "d1444913f32a74eb"
+},
+"conv2d_125.b_0": {
+"shape": [
+1536
+],
+"dtype": "float32",
+"sha256": "92329c095b68b0ce"
+},
+"conv2d_125.w_0": {
+"shape": [
+1536,
+768,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "7d244b23daa8fe22"
+},
+"conv2d_63.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "df70199715b2525f"
+},
+"conv2d_63.w_0": {
+"shape": [
+768,
+192,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "8fb8a62a62940733"
+},
+"conv2d_62.b_0": {
+"shape": [
+192
+],
+"dtype": "float32",
+"sha256": "296a76e1284f7500"
+},
+"conv2d_62.w_0": {
+"shape": [
+192,
+768,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "0d0c5b372b259940"
+},
+"conv2d_124.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "deee5d33b5220d7b"
+},
+"conv2d_124.w_0": {
+"shape": [
+768,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "b09e0e2f1f430410"
+},
+"conv2d_122.b_0": {
+"shape": [
+768
+],
+"dtype": "float32",
+"sha256": "16134bb5e1360c32"
+},
+"conv2d_122.w_0": {
+"shape": [
+768,
+1024,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "b0c2cc393ca6166a"
+},
+"conv2d_121.b_0": {
+"shape": [
+1024
+],
+"dtype": "float32",
+"sha256": "4157026aa5075f79"
+},
+"conv2d_121.w_0": {
+"shape": [
+1024,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "a27ecb7c0b22cd3b"
+},
+"conv2d_120.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "532712bce013930f"
+},
+"conv2d_120.w_0": {
+"shape": [
+512,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "2f83eeb555a11a4c"
+},
+"conv2d_119.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "ddeb72a631cde9eb"
+},
+"conv2d_119.w_0": {
+"shape": [
+512,
+1024,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "e959fb3dde7e5b43"
+},
+"conv2d_118.b_0": {
+"shape": [
+1024
+],
+"dtype": "float32",
+"sha256": "9d928e40dd14ecd4"
+},
+"conv2d_118.w_0": {
+"shape": [
+1024,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "280d36ffc36f9c55"
+},
+"conv2d_117.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "780ed95360cfc42f"
+},
+"conv2d_117.w_0": {
+"shape": [
+512,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "22d2e5efe77bc39c"
+},
+"conv2d_115.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "9b6542f6de41c828"
+},
+"conv2d_115.w_0": {
+"shape": [
+512,
+1024,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "d6e9f48ce2240120"
+},
+"conv2d_114.b_0": {
+"shape": [
+1024
+],
+"dtype": "float32",
+"sha256": "3bbd72c5dce76d2f"
+},
+"conv2d_114.w_0": {
+"shape": [
+1024,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "4744ff7d265d75ec"
+},
+"conv2d_50.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "c15998c3d3f1af74"
+},
+"conv2d_50.w_0": {
+"shape": [
+512,
+128,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "e57f45374b03316a"
+},
+"conv2d_49.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "0c3816000cf8cd34"
+},
+"conv2d_49.w_0": {
+"shape": [
+128,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "2f19e6bdc929d9d9"
+},
+"conv2d_113.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "fa58a4d6ddd5b2ab"
+},
+"conv2d_113.w_0": {
+"shape": [
+512,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "7b8d4dfb04b4a3ea"
+},
+"conv2d_111.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "110601057b128dc2"
+},
+"conv2d_111.w_0": {
+"shape": [
+512,
+1024,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "65cfa11bafb8292d"
+},
+"conv2d_110.b_0": {
+"shape": [
+1024
+],
+"dtype": "float32",
+"sha256": "c7a955bed1037bf5"
+},
+"conv2d_110.w_0": {
+"shape": [
+1024,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "7f8f16c934beaf96"
+},
+"conv2d_109.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "79f0422d8ea77a41"
+},
+"conv2d_109.w_0": {
+"shape": [
+512,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "32c7683c4187a53e"
+},
+"conv2d_107.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "bfa10eff61a396bf"
+},
+"conv2d_107.w_0": {
+"shape": [
+512,
+1024,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "bc04689d0054b965"
+},
+"conv2d_106.b_0": {
+"shape": [
+1024
+],
+"dtype": "float32",
+"sha256": "ee56196c26a3a77a"
+},
+"conv2d_106.w_0": {
+"shape": [
+1024,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "c4d0abe16a97269d"
+},
+"conv2d_40.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "d8e69f866137480c"
+},
+"conv2d_40.w_0": {
+"shape": [
+512,
+128,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "26d49d43a5a8542e"
+},
+"conv2d_39.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "8a972b2863754eb6"
+},
+"conv2d_39.w_0": {
+"shape": [
+128,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "13db0b506a54b015"
+},
+"conv2d_105.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "b959972a620a0c92"
+},
+"conv2d_105.w_0": {
+"shape": [
+512,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "1bad5af332fdad5e"
+},
+"conv2d_103.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "ab51ef984567c461"
+},
+"conv2d_103.w_0": {
+"shape": [
+512,
+1024,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "46e955f294246274"
+},
+"conv2d_102.b_0": {
+"shape": [
+1024
+],
+"dtype": "float32",
+"sha256": "24b05be021c8aebc"
+},
+"conv2d_102.w_0": {
+"shape": [
+1024,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "c9f56c0cdbc288c6"
+},
+"conv2d_101.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "707cb4c58fc5558d"
+},
+"conv2d_101.w_0": {
+"shape": [
+512,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "9295951bb108343b"
+},
+"conv2d_99.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "73e399247fb7c82d"
+},
+"conv2d_99.w_0": {
+"shape": [
+512,
+1024,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "e125eeaa0144a076"
+},
+"conv2d_98.b_0": {
+"shape": [
+1024
+],
+"dtype": "float32",
+"sha256": "6dd974934abc5393"
+},
+"conv2d_98.w_0": {
+"shape": [
+1024,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "457daf24e78e7355"
+},
+"conv2d_30.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "81e79bd599f5254b"
+},
+"conv2d_30.w_0": {
+"shape": [
+512,
+128,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "0ce82a7eeed22c90"
+},
+"conv2d_29.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "b0f7a827d67f2a0a"
+},
+"conv2d_29.w_0": {
+"shape": [
+128,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "45246fde36f33638"
+},
+"conv2d_97.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "0e35cd444f472d17"
+},
+"conv2d_97.w_0": {
+"shape": [
+512,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "577c09a92a020e61"
+},
+"conv2d_95.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "9691efebedc1932f"
+},
+"conv2d_95.w_0": {
+"shape": [
+512,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "4ab29ccb1ef56bab"
+},
+"conv2d_94.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "ec3d3ee77179e0bc"
+},
+"conv2d_94.w_0": {
+"shape": [
+512,
+256,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "4e7a8e3de60b48b9"
+},
+"conv2d_93.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "556946300f24b6a9"
+},
+"conv2d_93.w_0": {
+"shape": [
+256,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "c73ca4c3da1510c6"
+},
+"conv2d_92.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "8f11490861964311"
+},
+"conv2d_92.w_0": {
+"shape": [
+256,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "c4fbb7b0118200e4"
+},
+"conv2d_91.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "275ffb5172432650"
+},
+"conv2d_91.w_0": {
+"shape": [
+512,
+256,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "099c21b506e913d3"
+},
+"conv2d_21.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "c8d816a1926c4912"
+},
+"conv2d_21.w_0": {
+"shape": [
+256,
+64,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "bacd1a711727f2c9"
+},
+"conv2d_20.b_0": {
+"shape": [
+64
+],
+"dtype": "float32",
+"sha256": "d7c7a79d0b6060e6"
+},
+"conv2d_20.w_0": {
+"shape": [
+64,
+256,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "08ba7984eba8c25f"
+},
+"conv2d_90.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "5a8e989551eb69ec"
+},
+"conv2d_90.w_0": {
+"shape": [
+256,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "a21324629429e638"
+},
+"conv2d_88.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "d7a3149832d8f940"
+},
+"conv2d_88.w_0": {
+"shape": [
+256,
+512,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "2d742459429074d0"
+},
+"conv2d_87.b_0": {
+"shape": [
+512
+],
+"dtype": "float32",
+"sha256": "940ac91633da557c"
+},
+"conv2d_87.w_0": {
+"shape": [
+512,
+256,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "89ca245f391957a2"
+},
+"conv2d_86.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "55dcbce65c9f9586"
+},
+"conv2d_86.w_0": {
+"shape": [
+256,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "294d1b0aa0689506"
+},
+"conv2d_84.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "2dc645417e5621ba"
+},
+"conv2d_84.w_0": {
+"shape": [
+256,
+256,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "74d518fc59a31ab9"
+},
+"conv2d_83.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "b8dc0fab3d6b80eb"
+},
+"conv2d_83.w_0": {
+"shape": [
+256,
+128,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "b2ef6edbb1220546"
+},
+"conv2d_82.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "bcd6165e6dab3779"
+},
+"conv2d_82.w_0": {
+"shape": [
+128,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "f2f9ce2e623b626a"
+},
+"conv2d_81.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "f4998a8e3a6d55ba"
+},
+"conv2d_81.w_0": {
+"shape": [
+128,
+256,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "4ac36a582f279303"
+},
+"conv2d_80.b_0": {
+"shape": [
+256
+],
+"dtype": "float32",
+"sha256": "67339b720ce309d0"
+},
+"conv2d_80.w_0": {
+"shape": [
+256,
+128,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "d54176c8f29c542c"
+},
+"conv2d_8.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "7de84f27bdf63835"
+},
+"conv2d_8.w_0": {
+"shape": [
+128,
+32,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "bbbadb0a9c3272ec"
+},
+"conv2d_7.b_0": {
+"shape": [
+32
+],
+"dtype": "float32",
+"sha256": "372f15d729358284"
+},
+"conv2d_7.w_0": {
+"shape": [
+32,
+128,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "3787544977ce217b"
+},
+"conv2d_79.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "e3e951ed600c1528"
+},
+"conv2d_79.w_0": {
+"shape": [
+128,
+1,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "494504f0ec643a54"
+},
+"conv2d_77.b_0": {
+"shape": [
+128
+],
+"dtype": "float32",
+"sha256": "8458c4107a5f17f6"
+},
+"conv2d_77.w_0": {
+"shape": [
+128,
+64,
+1,
+1
+],
+"dtype": "float32",
+"sha256": "f6f78a6ea9a96879"
+},
+"conv2d_76.b_0": {
+"shape": [
+64
+],
+"dtype": "float32",
+"sha256": "4ecebe1c62c6c240"
+},
+"conv2d_76.w_0": {
+"shape": [
+64,
+128,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "cc4e0ab08c44d38f"
+},
+"conv2d_75.b_0": {
+"shape": [
+64
+],
+"dtype": "float32",
+"sha256": "91dd7e803a90bfc3"
+},
+"conv2d_75.w_0": {
+"shape": [
+64,
+32,
+2,
+2
+],
+"dtype": "float32",
+"sha256": "5dde6fccd9fe6126"
+},
+"conv2d_74.b_0": {
+"shape": [
+32
+],
+"dtype": "float32",
+"sha256": "ac2840a526f7d8a8"
+},
+"conv2d_74.w_0": {
+"shape": [
+32,
+64,
+2,
+2
+],
+"dtype": "float32",
+"sha256": "1dbe1853a1841a8b"
+},
+"conv2d_73.b_0": {
+"shape": [
+64
+],
+"dtype": "float32",
+"sha256": "e05cc864320b2598"
+},
+"conv2d_73.w_0": {
+"shape": [
+64,
+3,
+3,
+3
+],
+"dtype": "float32",
+"sha256": "25d3c1acaff86d04"
+}
+},
+"nodes": [
+{
+"i": 161,
+"op": "data",
+"in": [],
+"out": [
+[
+-1,
+3,
+48,
+-1
+]
+],
+"attr": {
+"shape": [
+-1,
+3,
+48,
+-1
+]
+}
+},
+{
+"i": 162,
+"op": "conv2d",
+"in": [
+161,
+{
+"param": "conv2d_73.w_0",
+"shape": [
+64,
+3,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+64,
+24,
+-1
+]
+],
+"attr": {
+"strides": [
+2,
+2
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 163,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 164,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_73.b_0",
+"shape": [
+64
+]
+},
+163
+],
+"out": [
+[
+1,
+64,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 165,
+"op": "add",
+"in": [
+162,
+164
+],
+"out": [
+[
+-1,
+64,
+24,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 166,
+"op": "relu",
+"in": [
+165
+],
+"out": [
+[
+-1,
+64,
+24,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 167,
+"op": "conv2d",
+"in": [
+166,
+{
+"param": "conv2d_74.w_0",
+"shape": [
+32,
+64,
+2,
+2
+]
+}
+],
+"out": [
+[
+-1,
+32,
+24,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "SAME",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 168,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 169,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_74.b_0",
+"shape": [
+32
+]
+},
+168
+],
+"out": [
+[
+1,
+32,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 170,
+"op": "add",
+"in": [
+167,
+169
+],
+"out": [
+[
+-1,
+32,
+24,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 171,
+"op": "relu",
+"in": [
+170
+],
+"out": [
+[
+-1,
+32,
+24,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 172,
+"op": "conv2d",
+"in": [
+171,
+{
+"param": "conv2d_75.w_0",
+"shape": [
+64,
+32,
+2,
+2
+]
+}
+],
+"out": [
+[
+-1,
+64,
+24,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "SAME",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 173,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 174,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_75.b_0",
+"shape": [
+64
+]
+},
+173
+],
+"out": [
+[
+1,
+64,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 175,
+"op": "add",
+"in": [
+172,
+174
+],
+"out": [
+[
+-1,
+64,
+24,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 176,
+"op": "relu",
+"in": [
+175
+],
+"out": [
+[
+-1,
+64,
+24,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 177,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+2,
+2
+]
+}
+},
+{
+"i": 178,
+"op": "pool2d",
+"in": [
+166,
+177
+],
+"out": [
+[
+-1,
+64,
+24,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"global_pooling": false,
+"paddings": [
+0,
+0
+],
+"ceil_mode": false,
+"adaptive": false,
+"exclusive": true,
+"pooling_type": "max",
+"padding_algorithm": "SAME"
+}
+},
+{
+"i": 179,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 1.0
+}
+},
+{
+"i": 180,
+"op": "combine",
+"in": [
+178,
+176
+],
+"out": [
+null
+],
+"attr": {}
+},
+{
+"i": 181,
+"op": "concat",
+"in": [
+{
+"combine": [
+178,
+176
+]
+},
+179
+],
+"out": [
+[
+-1,
+128,
+24,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 182,
+"op": "conv2d",
+"in": [
+181,
+{
+"param": "conv2d_76.w_0",
+"shape": [
+64,
+128,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+64,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+2,
+2
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 183,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 184,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_76.b_0",
+"shape": [
+64
+]
+},
+183
+],
+"out": [
+[
+1,
+64,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 185,
+"op": "add",
+"in": [
+182,
+184
+],
+"out": [
+[
+-1,
+64,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 186,
+"op": "relu",
+"in": [
+185
+],
+"out": [
+[
+-1,
+64,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 187,
+"op": "conv2d",
+"in": [
+186,
+{
+"param": "conv2d_77.w_0",
+"shape": [
+128,
+64,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 188,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 189,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_77.b_0",
+"shape": [
+128
+]
+},
+188
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 190,
+"op": "add",
+"in": [
+187,
+189
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 191,
+"op": "relu",
+"in": [
+190
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 192,
+"op": "depthwise_conv2d",
+"in": [
+191,
+{
+"param": "conv2d_79.w_0",
+"shape": [
+128,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 128,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 193,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 194,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_79.b_0",
+"shape": [
+128
+]
+},
+193
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 195,
+"op": "add",
+"in": [
+192,
+194
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 196,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+2,
+3
+]
+}
+},
+{
+"i": 197,
+"op": "mean",
+"in": [
+195,
+196
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {
+"keepdim": true
+}
+},
+{
+"i": 198,
+"op": "conv2d",
+"in": [
+197,
+{
+"param": "conv2d_7.w_0",
+"shape": [
+32,
+128,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+32,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 199,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 200,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_7.b_0",
+"shape": [
+32
+]
+},
+199
+],
+"out": [
+[
+1,
+32,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 201,
+"op": "add",
+"in": [
+198,
+200
+],
+"out": [
+[
+-1,
+32,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 202,
+"op": "relu",
+"in": [
+201
+],
+"out": [
+[
+-1,
+32,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 203,
+"op": "conv2d",
+"in": [
+202,
+{
+"param": "conv2d_8.w_0",
+"shape": [
+128,
+32,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 204,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 205,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_8.b_0",
+"shape": [
+128
+]
+},
+204
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 206,
+"op": "add",
+"in": [
+203,
+205
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 207,
+"op": "hardsigmoid",
+"in": [
+206
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {
+"slope": 0.16666670143604279,
+"offset": 0.5
+}
+},
+{
+"i": 208,
+"op": "multiply",
+"in": [
+195,
+207
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 209,
+"op": "conv2d",
+"in": [
+208,
+{
+"param": "conv2d_80.w_0",
+"shape": [
+256,
+128,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 210,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 211,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_80.b_0",
+"shape": [
+256
+]
+},
+210
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 212,
+"op": "add",
+"in": [
+209,
+211
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 213,
+"op": "gelu",
+"in": [
+212
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 214,
+"op": "conv2d",
+"in": [
+213,
+{
+"param": "conv2d_81.w_0",
+"shape": [
+128,
+256,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 215,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 216,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_81.b_0",
+"shape": [
+128
+]
+},
+215
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 217,
+"op": "add",
+"in": [
+214,
+216
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 218,
+"op": "add",
+"in": [
+208,
+217
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 219,
+"op": "depthwise_conv2d",
+"in": [
+218,
+{
+"param": "conv2d_82.w_0",
+"shape": [
+128,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 128,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 220,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 221,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_82.b_0",
+"shape": [
+128
+]
+},
+220
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 222,
+"op": "add",
+"in": [
+219,
+221
+],
+"out": [
+[
+-1,
+128,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 223,
+"op": "conv2d",
+"in": [
+222,
+{
+"param": "conv2d_83.w_0",
+"shape": [
+256,
+128,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 224,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 225,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_83.b_0",
+"shape": [
+256
+]
+},
+224
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 226,
+"op": "add",
+"in": [
+223,
+225
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 227,
+"op": "gelu",
+"in": [
+226
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 228,
+"op": "conv2d",
+"in": [
+227,
+{
+"param": "conv2d_84.w_0",
+"shape": [
+256,
+256,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 229,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 230,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_84.b_0",
+"shape": [
+256
+]
+},
+229
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 231,
+"op": "add",
+"in": [
+228,
+230
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 232,
+"op": "depthwise_conv2d",
+"in": [
+231,
+{
+"param": "conv2d_86.w_0",
+"shape": [
+256,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 256,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 233,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 234,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_86.b_0",
+"shape": [
+256
+]
+},
+233
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 235,
+"op": "add",
+"in": [
+232,
+234
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 236,
+"op": "conv2d",
+"in": [
+235,
+{
+"param": "conv2d_87.w_0",
+"shape": [
+512,
+256,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 237,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 238,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_87.b_0",
+"shape": [
+512
+]
+},
+237
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 239,
+"op": "add",
+"in": [
+236,
+238
+],
+"out": [
+[
+-1,
+512,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 240,
+"op": "gelu",
+"in": [
+239
+],
+"out": [
+[
+-1,
+512,
+12,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 241,
+"op": "conv2d",
+"in": [
+240,
+{
+"param": "conv2d_88.w_0",
+"shape": [
+256,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 242,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 243,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_88.b_0",
+"shape": [
+256
+]
+},
+242
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 244,
+"op": "add",
+"in": [
+241,
+243
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 245,
+"op": "add",
+"in": [
+235,
+244
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 246,
+"op": "depthwise_conv2d",
+"in": [
+245,
+{
+"param": "conv2d_90.w_0",
+"shape": [
+256,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 256,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 247,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 248,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_90.b_0",
+"shape": [
+256
+]
+},
+247
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 249,
+"op": "add",
+"in": [
+246,
+248
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 250,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+2,
+3
+]
+}
+},
+{
+"i": 251,
+"op": "mean",
+"in": [
+249,
+250
+],
+"out": [
+[
+-1,
+256,
+1,
+1
+]
+],
+"attr": {
+"keepdim": true
+}
+},
+{
+"i": 252,
+"op": "conv2d",
+"in": [
+251,
+{
+"param": "conv2d_20.w_0",
+"shape": [
+64,
+256,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+64,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 253,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 254,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_20.b_0",
+"shape": [
+64
+]
+},
+253
+],
+"out": [
+[
+1,
+64,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 255,
+"op": "add",
+"in": [
+252,
+254
+],
+"out": [
+[
+-1,
+64,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 256,
+"op": "relu",
+"in": [
+255
+],
+"out": [
+[
+-1,
+64,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 257,
+"op": "conv2d",
+"in": [
+256,
+{
+"param": "conv2d_21.w_0",
+"shape": [
+256,
+64,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+256,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 258,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 259,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_21.b_0",
+"shape": [
+256
+]
+},
+258
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 260,
+"op": "add",
+"in": [
+257,
+259
+],
+"out": [
+[
+-1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 261,
+"op": "hardsigmoid",
+"in": [
+260
+],
+"out": [
+[
+-1,
+256,
+1,
+1
+]
+],
+"attr": {
+"slope": 0.16666670143604279,
+"offset": 0.5
+}
+},
+{
+"i": 262,
+"op": "multiply",
+"in": [
+249,
+261
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 263,
+"op": "conv2d",
+"in": [
+262,
+{
+"param": "conv2d_91.w_0",
+"shape": [
+512,
+256,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 264,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 265,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_91.b_0",
+"shape": [
+512
+]
+},
+264
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 266,
+"op": "add",
+"in": [
+263,
+265
+],
+"out": [
+[
+-1,
+512,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 267,
+"op": "gelu",
+"in": [
+266
+],
+"out": [
+[
+-1,
+512,
+12,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 268,
+"op": "conv2d",
+"in": [
+267,
+{
+"param": "conv2d_92.w_0",
+"shape": [
+256,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 269,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 270,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_92.b_0",
+"shape": [
+256
+]
+},
+269
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 271,
+"op": "add",
+"in": [
+268,
+270
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 272,
+"op": "add",
+"in": [
+262,
+271
+],
+"out": [
+[
+-1,
+256,
+12,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 273,
+"op": "depthwise_conv2d",
+"in": [
+272,
+{
+"param": "conv2d_93.w_0",
+"shape": [
+256,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+256,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+2,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 256,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 274,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 275,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_93.b_0",
+"shape": [
+256
+]
+},
+274
+],
+"out": [
+[
+1,
+256,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 276,
+"op": "add",
+"in": [
+273,
+275
+],
+"out": [
+[
+-1,
+256,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 277,
+"op": "conv2d",
+"in": [
+276,
+{
+"param": "conv2d_94.w_0",
+"shape": [
+512,
+256,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 278,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 279,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_94.b_0",
+"shape": [
+512
+]
+},
+278
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 280,
+"op": "add",
+"in": [
+277,
+279
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 281,
+"op": "gelu",
+"in": [
+280
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 282,
+"op": "conv2d",
+"in": [
+281,
+{
+"param": "conv2d_95.w_0",
+"shape": [
+512,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 283,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 284,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_95.b_0",
+"shape": [
+512
+]
+},
+283
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 285,
+"op": "add",
+"in": [
+282,
+284
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 286,
+"op": "depthwise_conv2d",
+"in": [
+285,
+{
+"param": "conv2d_97.w_0",
+"shape": [
+512,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 512,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 287,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 288,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_97.b_0",
+"shape": [
+512
+]
+},
+287
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 289,
+"op": "add",
+"in": [
+286,
+288
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 290,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+2,
+3
+]
+}
+},
+{
+"i": 291,
+"op": "mean",
+"in": [
+289,
+290
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"keepdim": true
+}
+},
+{
+"i": 292,
+"op": "conv2d",
+"in": [
+291,
+{
+"param": "conv2d_29.w_0",
+"shape": [
+128,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 293,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 294,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_29.b_0",
+"shape": [
+128
+]
+},
+293
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 295,
+"op": "add",
+"in": [
+292,
+294
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 296,
+"op": "relu",
+"in": [
+295
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 297,
+"op": "conv2d",
+"in": [
+296,
+{
+"param": "conv2d_30.w_0",
+"shape": [
+512,
+128,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 298,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 299,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_30.b_0",
+"shape": [
+512
+]
+},
+298
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 300,
+"op": "add",
+"in": [
+297,
+299
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 301,
+"op": "hardsigmoid",
+"in": [
+300
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"slope": 0.16666670143604279,
+"offset": 0.5
+}
+},
+{
+"i": 302,
+"op": "multiply",
+"in": [
+289,
+301
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 303,
+"op": "conv2d",
+"in": [
+302,
+{
+"param": "conv2d_98.w_0",
+"shape": [
+1024,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 304,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 305,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_98.b_0",
+"shape": [
+1024
+]
+},
+304
+],
+"out": [
+[
+1,
+1024,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 306,
+"op": "add",
+"in": [
+303,
+305
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 307,
+"op": "gelu",
+"in": [
+306
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 308,
+"op": "conv2d",
+"in": [
+307,
+{
+"param": "conv2d_99.w_0",
+"shape": [
+512,
+1024,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 309,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 310,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_99.b_0",
+"shape": [
+512
+]
+},
+309
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 311,
+"op": "add",
+"in": [
+308,
+310
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 312,
+"op": "add",
+"in": [
+302,
+311
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 313,
+"op": "depthwise_conv2d",
+"in": [
+312,
+{
+"param": "conv2d_101.w_0",
+"shape": [
+512,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 512,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 314,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 315,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_101.b_0",
+"shape": [
+512
+]
+},
+314
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 316,
+"op": "add",
+"in": [
+313,
+315
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 317,
+"op": "conv2d",
+"in": [
+316,
+{
+"param": "conv2d_102.w_0",
+"shape": [
+1024,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 318,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 319,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_102.b_0",
+"shape": [
+1024
+]
+},
+318
+],
+"out": [
+[
+1,
+1024,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 320,
+"op": "add",
+"in": [
+317,
+319
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 321,
+"op": "gelu",
+"in": [
+320
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 322,
+"op": "conv2d",
+"in": [
+321,
+{
+"param": "conv2d_103.w_0",
+"shape": [
+512,
+1024,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 323,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 324,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_103.b_0",
+"shape": [
+512
+]
+},
+323
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 325,
+"op": "add",
+"in": [
+322,
+324
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 326,
+"op": "add",
+"in": [
+316,
+325
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 327,
+"op": "depthwise_conv2d",
+"in": [
+326,
+{
+"param": "conv2d_105.w_0",
+"shape": [
+512,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 512,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 328,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 329,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_105.b_0",
+"shape": [
+512
+]
+},
+328
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 330,
+"op": "add",
+"in": [
+327,
+329
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 331,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+2,
+3
+]
+}
+},
+{
+"i": 332,
+"op": "mean",
+"in": [
+330,
+331
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"keepdim": true
+}
+},
+{
+"i": 333,
+"op": "conv2d",
+"in": [
+332,
+{
+"param": "conv2d_39.w_0",
+"shape": [
+128,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 334,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 335,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_39.b_0",
+"shape": [
+128
+]
+},
+334
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 336,
+"op": "add",
+"in": [
+333,
+335
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 337,
+"op": "relu",
+"in": [
+336
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 338,
+"op": "conv2d",
+"in": [
+337,
+{
+"param": "conv2d_40.w_0",
+"shape": [
+512,
+128,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 339,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 340,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_40.b_0",
+"shape": [
+512
+]
+},
+339
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 341,
+"op": "add",
+"in": [
+338,
+340
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 342,
+"op": "hardsigmoid",
+"in": [
+341
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"slope": 0.16666670143604279,
+"offset": 0.5
+}
+},
+{
+"i": 343,
+"op": "multiply",
+"in": [
+330,
+342
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 344,
+"op": "conv2d",
+"in": [
+343,
+{
+"param": "conv2d_106.w_0",
+"shape": [
+1024,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 345,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 346,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_106.b_0",
+"shape": [
+1024
+]
+},
+345
+],
+"out": [
+[
+1,
+1024,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 347,
+"op": "add",
+"in": [
+344,
+346
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 348,
+"op": "gelu",
+"in": [
+347
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 349,
+"op": "conv2d",
+"in": [
+348,
+{
+"param": "conv2d_107.w_0",
+"shape": [
+512,
+1024,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 350,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 351,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_107.b_0",
+"shape": [
+512
+]
+},
+350
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 352,
+"op": "add",
+"in": [
+349,
+351
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 353,
+"op": "add",
+"in": [
+343,
+352
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 354,
+"op": "depthwise_conv2d",
+"in": [
+353,
+{
+"param": "conv2d_109.w_0",
+"shape": [
+512,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 512,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 355,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 356,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_109.b_0",
+"shape": [
+512
+]
+},
+355
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 357,
+"op": "add",
+"in": [
+354,
+356
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 358,
+"op": "conv2d",
+"in": [
+357,
+{
+"param": "conv2d_110.w_0",
+"shape": [
+1024,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 359,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 360,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_110.b_0",
+"shape": [
+1024
+]
+},
+359
+],
+"out": [
+[
+1,
+1024,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 361,
+"op": "add",
+"in": [
+358,
+360
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 362,
+"op": "gelu",
+"in": [
+361
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 363,
+"op": "conv2d",
+"in": [
+362,
+{
+"param": "conv2d_111.w_0",
+"shape": [
+512,
+1024,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 364,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 365,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_111.b_0",
+"shape": [
+512
+]
+},
+364
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 366,
+"op": "add",
+"in": [
+363,
+365
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 367,
+"op": "add",
+"in": [
+357,
+366
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 368,
+"op": "depthwise_conv2d",
+"in": [
+367,
+{
+"param": "conv2d_113.w_0",
+"shape": [
+512,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 512,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 369,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 370,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_113.b_0",
+"shape": [
+512
+]
+},
+369
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 371,
+"op": "add",
+"in": [
+368,
+370
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 372,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+2,
+3
+]
+}
+},
+{
+"i": 373,
+"op": "mean",
+"in": [
+371,
+372
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"keepdim": true
+}
+},
+{
+"i": 374,
+"op": "conv2d",
+"in": [
+373,
+{
+"param": "conv2d_49.w_0",
+"shape": [
+128,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 375,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 376,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_49.b_0",
+"shape": [
+128
+]
+},
+375
+],
+"out": [
+[
+1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 377,
+"op": "add",
+"in": [
+374,
+376
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 378,
+"op": "relu",
+"in": [
+377
+],
+"out": [
+[
+-1,
+128,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 379,
+"op": "conv2d",
+"in": [
+378,
+{
+"param": "conv2d_50.w_0",
+"shape": [
+512,
+128,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 380,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 381,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_50.b_0",
+"shape": [
+512
+]
+},
+380
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 382,
+"op": "add",
+"in": [
+379,
+381
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 383,
+"op": "hardsigmoid",
+"in": [
+382
+],
+"out": [
+[
+-1,
+512,
+1,
+1
+]
+],
+"attr": {
+"slope": 0.16666670143604279,
+"offset": 0.5
+}
+},
+{
+"i": 384,
+"op": "multiply",
+"in": [
+371,
+383
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 385,
+"op": "conv2d",
+"in": [
+384,
+{
+"param": "conv2d_114.w_0",
+"shape": [
+1024,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 386,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 387,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_114.b_0",
+"shape": [
+1024
+]
+},
+386
+],
+"out": [
+[
+1,
+1024,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 388,
+"op": "add",
+"in": [
+385,
+387
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 389,
+"op": "gelu",
+"in": [
+388
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 390,
+"op": "conv2d",
+"in": [
+389,
+{
+"param": "conv2d_115.w_0",
+"shape": [
+512,
+1024,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 391,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 392,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_115.b_0",
+"shape": [
+512
+]
+},
+391
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 393,
+"op": "add",
+"in": [
+390,
+392
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 394,
+"op": "add",
+"in": [
+384,
+393
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 395,
+"op": "depthwise_conv2d",
+"in": [
+394,
+{
+"param": "conv2d_117.w_0",
+"shape": [
+512,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 512,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 396,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 397,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_117.b_0",
+"shape": [
+512
+]
+},
+396
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 398,
+"op": "add",
+"in": [
+395,
+397
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 399,
+"op": "conv2d",
+"in": [
+398,
+{
+"param": "conv2d_118.w_0",
+"shape": [
+1024,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 400,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 401,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_118.b_0",
+"shape": [
+1024
+]
+},
+400
+],
+"out": [
+[
+1,
+1024,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 402,
+"op": "add",
+"in": [
+399,
+401
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 403,
+"op": "gelu",
+"in": [
+402
+],
+"out": [
+[
+-1,
+1024,
+6,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 404,
+"op": "conv2d",
+"in": [
+403,
+{
+"param": "conv2d_119.w_0",
+"shape": [
+512,
+1024,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 405,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 406,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_119.b_0",
+"shape": [
+512
+]
+},
+405
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 407,
+"op": "add",
+"in": [
+404,
+406
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 408,
+"op": "add",
+"in": [
+398,
+407
+],
+"out": [
+[
+-1,
+512,
+6,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 409,
+"op": "depthwise_conv2d",
+"in": [
+408,
+{
+"param": "conv2d_120.w_0",
+"shape": [
+512,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+512,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+2,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 512,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 410,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 411,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_120.b_0",
+"shape": [
+512
+]
+},
+410
+],
+"out": [
+[
+1,
+512,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 412,
+"op": "add",
+"in": [
+409,
+411
+],
+"out": [
+[
+-1,
+512,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 413,
+"op": "conv2d",
+"in": [
+412,
+{
+"param": "conv2d_121.w_0",
+"shape": [
+1024,
+512,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1024,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 414,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 415,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_121.b_0",
+"shape": [
+1024
+]
+},
+414
+],
+"out": [
+[
+1,
+1024,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 416,
+"op": "add",
+"in": [
+413,
+415
+],
+"out": [
+[
+-1,
+1024,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 417,
+"op": "gelu",
+"in": [
+416
+],
+"out": [
+[
+-1,
+1024,
+3,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 418,
+"op": "conv2d",
+"in": [
+417,
+{
+"param": "conv2d_122.w_0",
+"shape": [
+768,
+1024,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 419,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 420,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_122.b_0",
+"shape": [
+768
+]
+},
+419
+],
+"out": [
+[
+1,
+768,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 421,
+"op": "add",
+"in": [
+418,
+420
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 422,
+"op": "depthwise_conv2d",
+"in": [
+421,
+{
+"param": "conv2d_124.w_0",
+"shape": [
+768,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 768,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 423,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 424,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_124.b_0",
+"shape": [
+768
+]
+},
+423
+],
+"out": [
+[
+1,
+768,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 425,
+"op": "add",
+"in": [
+422,
+424
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 426,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+2,
+3
+]
+}
+},
+{
+"i": 427,
+"op": "mean",
+"in": [
+425,
+426
+],
+"out": [
+[
+-1,
+768,
+1,
+1
+]
+],
+"attr": {
+"keepdim": true
+}
+},
+{
+"i": 428,
+"op": "conv2d",
+"in": [
+427,
+{
+"param": "conv2d_62.w_0",
+"shape": [
+192,
+768,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+192,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 429,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 430,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_62.b_0",
+"shape": [
+192
+]
+},
+429
+],
+"out": [
+[
+1,
+192,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 431,
+"op": "add",
+"in": [
+428,
+430
+],
+"out": [
+[
+-1,
+192,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 432,
+"op": "relu",
+"in": [
+431
+],
+"out": [
+[
+-1,
+192,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 433,
+"op": "conv2d",
+"in": [
+432,
+{
+"param": "conv2d_63.w_0",
+"shape": [
+768,
+192,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+768,
+1,
+1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 434,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 435,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_63.b_0",
+"shape": [
+768
+]
+},
+434
+],
+"out": [
+[
+1,
+768,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 436,
+"op": "add",
+"in": [
+433,
+435
+],
+"out": [
+[
+-1,
+768,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 437,
+"op": "hardsigmoid",
+"in": [
+436
+],
+"out": [
+[
+-1,
+768,
+1,
+1
+]
+],
+"attr": {
+"slope": 0.16666670143604279,
+"offset": 0.5
+}
+},
+{
+"i": 438,
+"op": "multiply",
+"in": [
+425,
+437
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 439,
+"op": "conv2d",
+"in": [
+438,
+{
+"param": "conv2d_125.w_0",
+"shape": [
+1536,
+768,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1536,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 440,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 441,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_125.b_0",
+"shape": [
+1536
+]
+},
+440
+],
+"out": [
+[
+1,
+1536,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 442,
+"op": "add",
+"in": [
+439,
+441
+],
+"out": [
+[
+-1,
+1536,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 443,
+"op": "gelu",
+"in": [
+442
+],
+"out": [
+[
+-1,
+1536,
+3,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 444,
+"op": "conv2d",
+"in": [
+443,
+{
+"param": "conv2d_126.w_0",
+"shape": [
+768,
+1536,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 445,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 446,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_126.b_0",
+"shape": [
+768
+]
+},
+445
+],
+"out": [
+[
+1,
+768,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 447,
+"op": "add",
+"in": [
+444,
+446
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 448,
+"op": "add",
+"in": [
+438,
+447
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 449,
+"op": "depthwise_conv2d",
+"in": [
+448,
+{
+"param": "conv2d_128.w_0",
+"shape": [
+768,
+1,
+3,
+3
+]
+}
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+1,
+1
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 768,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 450,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 451,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_128.b_0",
+"shape": [
+768
+]
+},
+450
+],
+"out": [
+[
+1,
+768,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 452,
+"op": "add",
+"in": [
+449,
+451
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 453,
+"op": "conv2d",
+"in": [
+452,
+{
+"param": "conv2d_129.w_0",
+"shape": [
+1536,
+768,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+1536,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 454,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 455,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_129.b_0",
+"shape": [
+1536
+]
+},
+454
+],
+"out": [
+[
+1,
+1536,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 456,
+"op": "add",
+"in": [
+453,
+455
+],
+"out": [
+[
+-1,
+1536,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 457,
+"op": "gelu",
+"in": [
+456
+],
+"out": [
+[
+-1,
+1536,
+3,
+-1
+]
+],
+"attr": {
+"approximate": false
+}
+},
+{
+"i": 458,
+"op": "conv2d",
+"in": [
+457,
+{
+"param": "conv2d_130.w_0",
+"shape": [
+768,
+1536,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 459,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+4
+]
+],
+"attr": {
+"value": [
+1,
+-1,
+1,
+1
+]
+}
+},
+{
+"i": 460,
+"op": "reshape",
+"in": [
+{
+"param": "conv2d_130.b_0",
+"shape": [
+768
+]
+},
+459
+],
+"out": [
+[
+1,
+768,
+1,
+1
+]
+],
+"attr": {}
+},
+{
+"i": 461,
+"op": "add",
+"in": [
+458,
+460
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 462,
+"op": "add",
+"in": [
+452,
+461
+],
+"out": [
+[
+-1,
+768,
+3,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 463,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+2
+]
+],
+"attr": {
+"value": [
+3,
+2
+]
+}
+},
+{
+"i": 464,
+"op": "pool2d",
+"in": [
+462,
+463
+],
+"out": [
+[
+-1,
+768,
+1,
+-1
+]
+],
+"attr": {
+"strides": [
+3,
+2
+],
+"global_pooling": false,
+"paddings": [
+0,
+0
+],
+"ceil_mode": false,
+"adaptive": false,
+"exclusive": true,
+"pooling_type": "avg",
+"padding_algorithm": "EXPLICIT"
+}
+},
+{
+"i": 465,
+"op": "conv2d",
+"in": [
+464,
+{
+"param": "conv2d_72.w_0",
+"shape": [
+192,
+768,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 466,
+"op": "batch_norm_",
+"in": [
+465,
+{
+"param": "batch_norm2d_60.w_1",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_60.w_2",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_60.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_60.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+],
+[
+192
+],
+[
+192
+],
+[
+192
+],
+[
+192
+],
+[
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 467,
+"op": "swish",
+"in": [
+466
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 468,
+"op": "conv2d",
+"in": [
+464,
+{
+"param": "conv2d_70.w_0",
+"shape": [
+192,
+768,
+1,
+1
+]
+}
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+0
+],
+"padding_algorithm": "EXPLICIT",
+"dilations": [
+1,
+1
+],
+"groups": 1
+}
+},
+{
+"i": 469,
+"op": "batch_norm_",
+"in": [
+468,
+{
+"param": "batch_norm2d_58.w_1",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_58.w_2",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_58.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_58.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+],
+[
+192
+],
+[
+192
+],
+[
+192
+],
+[
+192
+],
+[
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 470,
+"op": "swish",
+"in": [
+469
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 471,
+"op": "depthwise_conv2d",
+"in": [
+470,
+{
+"param": "conv2d_71.w_0",
+"shape": [
+192,
+1,
+1,
+7
+]
+}
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {
+"strides": [
+1,
+1
+],
+"paddings": [
+0,
+3
+],
+"padding_algorithm": "EXPLICIT",
+"groups": 192,
+"dilations": [
+1,
+1
+]
+}
+},
+{
+"i": 472,
+"op": "batch_norm_",
+"in": [
+471,
+{
+"param": "batch_norm2d_59.w_1",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_59.w_2",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_59.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "batch_norm2d_59.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+],
+[
+192
+],
+[
+192
+],
+[
+192
+],
+[
+192
+],
+[
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06
+}
+},
+{
+"i": 473,
+"op": "swish",
+"in": [
+472
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 474,
+"op": "add",
+"in": [
+470,
+473
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 475,
+"op": "shape64",
+"in": [
+474
+],
+"out": [
+[
+4
+]
+],
+"attr": {}
+},
+{
+"i": 476,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+3
+]
+}
+},
+{
+"i": 477,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+4
+]
+}
+},
+{
+"i": 478,
+"op": "slice",
+"in": [
+475,
+476,
+477
+],
+"out": [
+[]
+],
+"attr": {
+"axes": [
+0
+]
+}
+},
+{
+"i": 479,
+"op": "flatten",
+"in": [
+474
+],
+"out": [
+[
+-1,
+192,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 480,
+"op": "transpose",
+"in": [
+479
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {
+"perm": [
+0,
+2,
+1
+]
+}
+},
+{
+"i": 481,
+"op": "layer_norm",
+"in": [
+480,
+{
+"param": "layer_norm_0.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "layer_norm_0.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1
+],
+[
+-1,
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06,
+"begin_norm_axis": 2
+}
+},
+{
+"i": 482,
+"op": "matmul",
+"in": [
+481,
+{
+"param": "linear_0.w_0",
+"shape": [
+192,
+576
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+576
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 483,
+"op": "add",
+"in": [
+482,
+{
+"param": "linear_0.b_0",
+"shape": [
+576
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+576
+]
+],
+"attr": {}
+},
+{
+"i": 484,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+5
+]
+],
+"attr": {
+"value": [
+0,
+-1,
+3,
+8,
+24
+]
+}
+},
+{
+"i": 485,
+"op": "reshape",
+"in": [
+483,
+484
+],
+"out": [
+[
+-1,
+-1,
+3,
+8,
+24
+]
+],
+"attr": {}
+},
+{
+"i": 486,
+"op": "transpose",
+"in": [
+485
+],
+"out": [
+[
+3,
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"perm": [
+2,
+0,
+3,
+1,
+4
+]
+}
+},
+{
+"i": 487,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+0
+]
+}
+},
+{
+"i": 488,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 489,
+"op": "slice",
+"in": [
+486,
+487,
+488
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"axes": [
+0
+]
+}
+},
+{
+"i": 490,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.20412415266036987
+}
+},
+{
+"i": 491,
+"op": "scale",
+"in": [
+489,
+490
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"bias": 0.0
+}
+},
+{
+"i": 492,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 493,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 494,
+"op": "slice",
+"in": [
+486,
+492,
+493
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"axes": [
+0
+]
+}
+},
+{
+"i": 495,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 496,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+3
+]
+}
+},
+{
+"i": 497,
+"op": "slice",
+"in": [
+486,
+495,
+496
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"axes": [
+0
+]
+}
+},
+{
+"i": 498,
+"op": "transpose",
+"in": [
+494
+],
+"out": [
+[
+-1,
+8,
+24,
+-1
+]
+],
+"attr": {
+"perm": [
+0,
+1,
+3,
+2
+]
+}
+},
+{
+"i": 499,
+"op": "matmul",
+"in": [
+491,
+498
+],
+"out": [
+[
+-1,
+8,
+-1,
+-1
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 500,
+"op": "softmax",
+"in": [
+499
+],
+"out": [
+[
+-1,
+8,
+-1,
+-1
+]
+],
+"attr": {
+"axis": -1
+}
+},
+{
+"i": 501,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 502,
+"op": "dropout",
+"in": [
+500,
+null,
+501
+],
+"out": [
+[
+-1,
+8,
+-1,
+-1
+],
+[
+-1,
+8,
+-1,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 503,
+"op": "matmul",
+"in": [
+502,
+497
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 504,
+"op": "transpose",
+"in": [
+503
+],
+"out": [
+[
+-1,
+-1,
+8,
+24
+]
+],
+"attr": {
+"perm": [
+0,
+2,
+1,
+3
+]
+}
+},
+{
+"i": 505,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+3
+]
+],
+"attr": {
+"value": [
+0,
+-1,
+192
+]
+}
+},
+{
+"i": 506,
+"op": "reshape",
+"in": [
+504,
+505
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 507,
+"op": "matmul",
+"in": [
+506,
+{
+"param": "linear_1.w_0",
+"shape": [
+192,
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 508,
+"op": "add",
+"in": [
+507,
+{
+"param": "linear_1.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 509,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 510,
+"op": "dropout",
+"in": [
+508,
+null,
+509
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 511,
+"op": "add",
+"in": [
+480,
+510
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 512,
+"op": "layer_norm",
+"in": [
+511,
+{
+"param": "layer_norm_1.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "layer_norm_1.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1
+],
+[
+-1,
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06,
+"begin_norm_axis": 2
+}
+},
+{
+"i": 513,
+"op": "matmul",
+"in": [
+512,
+{
+"param": "linear_2.w_0",
+"shape": [
+192,
+768
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+768
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 514,
+"op": "add",
+"in": [
+513,
+{
+"param": "linear_2.b_0",
+"shape": [
+768
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+768
+]
+],
+"attr": {}
+},
+{
+"i": 515,
+"op": "swish",
+"in": [
+514
+],
+"out": [
+[
+-1,
+-1,
+768
+]
+],
+"attr": {}
+},
+{
+"i": 516,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 517,
+"op": "dropout",
+"in": [
+515,
+null,
+516
+],
+"out": [
+[
+-1,
+-1,
+768
+],
+[
+-1,
+-1,
+768
+]
+],
+"attr": {}
+},
+{
+"i": 518,
+"op": "matmul",
+"in": [
+517,
+{
+"param": "linear_3.w_0",
+"shape": [
+768,
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 519,
+"op": "add",
+"in": [
+518,
+{
+"param": "linear_3.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 520,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 521,
+"op": "dropout",
+"in": [
+519,
+null,
+520
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 522,
+"op": "add",
+"in": [
+511,
+521
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 523,
+"op": "layer_norm",
+"in": [
+522,
+{
+"param": "layer_norm_2.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "layer_norm_2.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1
+],
+[
+-1,
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06,
+"begin_norm_axis": 2
+}
+},
+{
+"i": 524,
+"op": "matmul",
+"in": [
+523,
+{
+"param": "linear_4.w_0",
+"shape": [
+192,
+576
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+576
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 525,
+"op": "add",
+"in": [
+524,
+{
+"param": "linear_4.b_0",
+"shape": [
+576
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+576
+]
+],
+"attr": {}
+},
+{
+"i": 526,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+5
+]
+],
+"attr": {
+"value": [
+0,
+-1,
+3,
+8,
+24
+]
+}
+},
+{
+"i": 527,
+"op": "reshape",
+"in": [
+525,
+526
+],
+"out": [
+[
+-1,
+-1,
+3,
+8,
+24
+]
+],
+"attr": {}
+},
+{
+"i": 528,
+"op": "transpose",
+"in": [
+527
+],
+"out": [
+[
+3,
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"perm": [
+2,
+0,
+3,
+1,
+4
+]
+}
+},
+{
+"i": 529,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+0
+]
+}
+},
+{
+"i": 530,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 531,
+"op": "slice",
+"in": [
+528,
+529,
+530
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"axes": [
+0
+]
+}
+},
+{
+"i": 532,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.20412415266036987
+}
+},
+{
+"i": 533,
+"op": "scale",
+"in": [
+531,
+532
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"bias": 0.0
+}
+},
+{
+"i": 534,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+1
+]
+}
+},
+{
+"i": 535,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 536,
+"op": "slice",
+"in": [
+528,
+534,
+535
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"axes": [
+0
+]
+}
+},
+{
+"i": 537,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 538,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+3
+]
+}
+},
+{
+"i": 539,
+"op": "slice",
+"in": [
+528,
+537,
+538
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"axes": [
+0
+]
+}
+},
+{
+"i": 540,
+"op": "transpose",
+"in": [
+536
+],
+"out": [
+[
+-1,
+8,
+24,
+-1
+]
+],
+"attr": {
+"perm": [
+0,
+1,
+3,
+2
+]
+}
+},
+{
+"i": 541,
+"op": "matmul",
+"in": [
+533,
+540
+],
+"out": [
+[
+-1,
+8,
+-1,
+-1
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 542,
+"op": "softmax",
+"in": [
+541
+],
+"out": [
+[
+-1,
+8,
+-1,
+-1
+]
+],
+"attr": {
+"axis": -1
+}
+},
+{
+"i": 543,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 544,
+"op": "dropout",
+"in": [
+542,
+null,
+543
+],
+"out": [
+[
+-1,
+8,
+-1,
+-1
+],
+[
+-1,
+8,
+-1,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 545,
+"op": "matmul",
+"in": [
+544,
+539
+],
+"out": [
+[
+-1,
+8,
+-1,
+24
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 546,
+"op": "transpose",
+"in": [
+545
+],
+"out": [
+[
+-1,
+-1,
+8,
+24
+]
+],
+"attr": {
+"perm": [
+0,
+2,
+1,
+3
+]
+}
+},
+{
+"i": 547,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+3
+]
+],
+"attr": {
+"value": [
+0,
+-1,
+192
+]
+}
+},
+{
+"i": 548,
+"op": "reshape",
+"in": [
+546,
+547
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 549,
+"op": "matmul",
+"in": [
+548,
+{
+"param": "linear_5.w_0",
+"shape": [
+192,
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 550,
+"op": "add",
+"in": [
+549,
+{
+"param": "linear_5.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 551,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 552,
+"op": "dropout",
+"in": [
+550,
+null,
+551
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 553,
+"op": "add",
+"in": [
+522,
+552
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 554,
+"op": "layer_norm",
+"in": [
+553,
+{
+"param": "layer_norm_3.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "layer_norm_3.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1
+],
+[
+-1,
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999747378752e-06,
+"begin_norm_axis": 2
+}
+},
+{
+"i": 555,
+"op": "matmul",
+"in": [
+554,
+{
+"param": "linear_6.w_0",
+"shape": [
+192,
+768
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+768
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 556,
+"op": "add",
+"in": [
+555,
+{
+"param": "linear_6.b_0",
+"shape": [
+768
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+768
+]
+],
+"attr": {}
+},
+{
+"i": 557,
+"op": "swish",
+"in": [
+556
+],
+"out": [
+[
+-1,
+-1,
+768
+]
+],
+"attr": {}
+},
+{
+"i": 558,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 559,
+"op": "dropout",
+"in": [
+557,
+null,
+558
+],
+"out": [
+[
+-1,
+-1,
+768
+],
+[
+-1,
+-1,
+768
+]
+],
+"attr": {}
+},
+{
+"i": 560,
+"op": "matmul",
+"in": [
+559,
+{
+"param": "linear_7.w_0",
+"shape": [
+768,
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 561,
+"op": "add",
+"in": [
+560,
+{
+"param": "linear_7.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 562,
+"op": "full",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"shape": [
+1
+],
+"value": 0.10000000149011612
+}
+},
+{
+"i": 563,
+"op": "dropout",
+"in": [
+561,
+null,
+562
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 564,
+"op": "add",
+"in": [
+553,
+563
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 565,
+"op": "layer_norm",
+"in": [
+564,
+{
+"param": "layer_norm_4.w_0",
+"shape": [
+192
+]
+},
+{
+"param": "layer_norm_4.b_0",
+"shape": [
+192
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+192
+],
+[
+-1,
+-1
+],
+[
+-1,
+-1
+]
+],
+"attr": {
+"epsilon": 9.999999974752427e-07,
+"begin_norm_axis": 2
+}
+},
+{
+"i": 566,
+"op": "full",
+"in": [],
+"out": [
+[]
+],
+"attr": {
+"shape": [],
+"value": 0.0
+}
+},
+{
+"i": 567,
+"op": "full",
+"in": [],
+"out": [
+[]
+],
+"attr": {
+"shape": [],
+"value": 1.0
+}
+},
+{
+"i": 568,
+"op": "full",
+"in": [],
+"out": [
+[]
+],
+"attr": {
+"shape": [],
+"value": 192.0
+}
+},
+{
+"i": 569,
+"op": "combine",
+"in": [
+566,
+567,
+478,
+568
+],
+"out": [
+null
+],
+"attr": {}
+},
+{
+"i": 570,
+"op": "stack",
+"in": [
+{
+"combine": [
+566,
+567,
+478,
+568
+]
+}
+],
+"out": [
+[
+4
+]
+],
+"attr": {
+"axis": 0
+}
+},
+{
+"i": 571,
+"op": "reshape",
+"in": [
+565,
+570
+],
+"out": [
+[
+-1,
+1,
+-1,
+192
+]
+],
+"attr": {}
+},
+{
+"i": 572,
+"op": "transpose",
+"in": [
+571
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {
+"perm": [
+0,
+3,
+1,
+2
+]
+}
+},
+{
+"i": 573,
+"op": "add",
+"in": [
+572,
+467
+],
+"out": [
+[
+-1,
+192,
+1,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 574,
+"op": "full_int_array",
+"in": [],
+"out": [
+[
+1
+]
+],
+"attr": {
+"value": [
+2
+]
+}
+},
+{
+"i": 575,
+"op": "squeeze",
+"in": [
+573,
+574
+],
+"out": [
+[
+-1,
+192,
+-1
+]
+],
+"attr": {}
+},
+{
+"i": 576,
+"op": "transpose",
+"in": [
+575
+],
+"out": [
+[
+-1,
+-1,
+192
+]
+],
+"attr": {
+"perm": [
+0,
+2,
+1
+]
+}
+},
+{
+"i": 577,
+"op": "matmul",
+"in": [
+576,
+{
+"param": "linear_8.w_0",
+"shape": [
+192,
+18710
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+18710
+]
+],
+"attr": {
+"transpose_x": false,
+"transpose_y": false
+}
+},
+{
+"i": 578,
+"op": "add",
+"in": [
+577,
+{
+"param": "linear_8.b_0",
+"shape": [
+18710
+]
+}
+],
+"out": [
+[
+-1,
+-1,
+18710
+]
+],
+"attr": {}
+},
+{
+"i": 579,
+"op": "softmax",
+"in": [
+578
+],
+"out": [
+[
+-1,
+-1,
+18710
+]
+],
+"attr": {
+"axis": 2
+}
+}
+]
+}
