@@ -1,8 +1,10 @@
 ### In The Wild with 116,282 Active Installs
-> **In the wild** — [RAG Converter](https://ragconverter.com) uses `FFAI` for all three of its AI engines.
-> It makes personal and work files AI-readable without them leaving the machine:
-> the whole conversion runs as WebAssembly in the browser tab, with nothing
-> uploaded and nothing to install.
+
+<a href="https://mata.network">MATA Disco</a> is a sovereign distributed cloud and digital freedom toolkit. FFAI powers the Disco Party's AI edge functions.
+
+Build the new internet with our <a href="https://claude.ai/code/artifact/67cb6256-2326-4dc7-8d65-545b0a70a30e">AI skills for Rust</a>.
+
+FREE RAG Converter Online -- <a href="https://RAGconverter.com">RAGconverter.com</a>
 
 # FFAI
 
