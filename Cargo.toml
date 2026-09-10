@@ -120,6 +120,9 @@ codegen-units = 1
 # onig-free; anyone depending on `ffai-argus` from crates.io still gets candle's
 # onig until the change lands upstream in candle itself.
 [patch.crates-io]
+# THE JSON SWAP (rusty_json_turbo): the house serde_json fork, byte-identical
+# output by contract, gated per commit against upstream in the same process.
+serde_json = { git = "https://github.com/Remade-With-Rust/rusty_json_turbo", branch = "master" }
 # candle-core 0.11.0 cannot be built with `-C target-feature=+simd128`: its
 # `cpu/mod.rs` re-exports three types for avx and neon but only `CurrentCpu` for
 # simd128, while four f16/bf16 helpers are gated on `any(neon, avx2, simd128)`
