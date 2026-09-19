@@ -9,7 +9,7 @@ capability it ships, in pure Rust, measured against it at every milestone
 standard by `ffai bench` at every milestone. No claim without a ledger line.
 
 This mission supersedes §4.2 of the
-[finished Mercury plan](finished/mercury-mission-plan.md) (the kokoro-candle /
+[finished Mercury plan](mercury-mission-plan.md) (the kokoro-candle /
 any-tts engine ladder). Piper is the better first target for the same reason
 Whisper was: a small, CPU-first, massively deployed model with an installable
 reference implementation to answer to. Kokoro and the any-tts tier remain on
@@ -270,7 +270,7 @@ from day one.
 every-3rd-is-train rule as the LibriSpeech corpora. Texts are **committed**
 (public domain, ~25 KB — a TTS corpus whose inputs can vanish with a webpage
 is not pinned in any useful sense) and every file is SHA-256-pinned in
-[`corpora/harvard-sentences-v1.toml`](../corpora/harvard-sentences-v1.toml);
+[`corpora/harvard-sentences-v1.toml`](../../corpora/harvard-sentences-v1.toml);
 regenerate deterministically with `prepare_harvard`. Manifest fingerprint
 `47cfa0604493`.
 
@@ -320,13 +320,13 @@ here by reading the adapter's own per-clip output rather than the aggregate.
 **Also landed with this milestone, ahead of schedule:**
 
 - **Phoneme fixtures for M-T1 are already dumped and pinned:**
-  [`corpora/fixtures/harvard-espeak-phonemes-v1.jsonl`](../corpora/fixtures/harvard-espeak-phonemes-v1.jsonl)
+  [`corpora/fixtures/harvard-espeak-phonemes-v1.jsonl`](../../corpora/fixtures/harvard-espeak-phonemes-v1.jsonl)
   — all 200 sentences through piper's own embedded espeak-ng (the exact
   phonemizer the voices were trained on), carrying both the IPA phoneme
   sequences and the voice's literal model-input id sequences (BOS/EOS/pad
   interleaving included). M-T1's oracle and substitution gate both read from
   this file.
-- **The harness-side resampler** ([`crates/ffai-bench/src/resample.rs`](../crates/ffai-bench/src/resample.rs)):
+- **The harness-side resampler** ([`crates/ffai-bench/src/resample.rs`](../../crates/ffai-bench/src/resample.rs)):
   every implementation's audio reaches the judge as 16 kHz mono through the
   same windowed-sinc code path, tested on content (tone frequency/amplitude
   survival, alias rejection) rather than shape — the audio_encoder.rs lesson

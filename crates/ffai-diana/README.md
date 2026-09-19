@@ -316,7 +316,7 @@ Pinned with `=`, deliberately: a caret requirement silently resolved to a
 version that shipped a probabilistic segfault, and an exact pin is what stops
 that reaching a release. The evaluation, including five findings that did not
 reproduce and were retracted, is
-[docs/rusty-alloc-evaluation.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/rusty-alloc-evaluation.md).
+[docs/finished/rusty-alloc-evaluation.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/finished/rusty-alloc-evaluation.md).
 
 **The old `MIMALLOC_PURGE_DELAY=-1` knob no longer applies** — it was read by
 mimalloc itself, and mimalloc is no longer in the binary. Its replacement,

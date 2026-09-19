@@ -189,7 +189,7 @@ ffai detect -i captures/ --live --watch 5 --conf 0.25
 | Output | boxes, scores, classes in original image coordinates |
 
 **DETECT metrics** (all ledger-recorded, best-of-N, warm/cold separated
-exactly as [benchmarking.md](benchmarking.md) requires):
+exactly as [benchmarking.md](../benchmarking.md) requires):
 
 - **parity:** per-block activation max-abs/cosine vs the official dump;
   final box IoU / score deltas within recorded bands on identical pixels;

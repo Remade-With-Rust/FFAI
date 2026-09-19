@@ -95,7 +95,7 @@ This is a concrete mechanism for the long-form WER left unexplained in Phase E
 rather than a vague context effect.
 
 **RESOLVED 2026-07-29 — built, gated, and the gate said no** (full descent:
-[whys/adaptive-context.md](whys/adaptive-context.md)). `longform_why` ran
+[whys/adaptive-context.md](../whys/adaptive-context.md)). `longform_why` ran
 first, as this note asked, and it was right to insist: the long-form penalty
 was NOT diffuse context confusion — it was two utterances swallowed whole
 (0.00 → 1.00 WER) behind stretched segment timestamps. Prefix conditioning

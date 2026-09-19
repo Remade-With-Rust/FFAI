@@ -146,7 +146,7 @@ is 38 improved / 38 worsened over 400 clips — a sign test of z = 0.00 — and
 to the mechanism that was proposed. VAD perturbs where speech sits inside the
 fixed 30 s context and re-rolls the decode on ~19 % of clips, half each way.
 The aggregate moved because WER is dominated by a handful of high-delta clips.
-Full descent in [whys/vad-quality.md](whys/vad-quality.md); the transferable
+Full descent in [whys/vad-quality.md](../whys/vad-quality.md); the transferable
 rule went into the `codec-tune-quality` skill.
 
 `--no-vad` restores the fixed-grid behaviour. Alignment and diarization remain
@@ -339,7 +339,7 @@ packing (close a window when adding the next region would exceed
 > single window, so this changes nothing on the benchmark; and the stage that
 > *would* pay on CPU is the decoder (GEMV, ~80 MB streamed per token), not the
 > encoder. Descent and both probes:
-> [whys/mx2-batching.md](whys/mx2-batching.md). Gates:
+> [whys/mx2-batching.md](../whys/mx2-batching.md). Gates:
 > `examples/batch_encoder.rs`. Ceiling: `examples/batch_ceiling.rs`.
 
 <!-- superseded by the block above; kept for provenance -->
@@ -362,7 +362,7 @@ packing (close a window when adding the next region would exceed
 >
 > Full descent, including the proposed redefinition (M-X2′: throughput across
 > *files* rather than windows) and why it should wait for a workload that
-> needs it: [whys/mx2-batching.md](whys/mx2-batching.md).
+> needs it: [whys/mx2-batching.md](../whys/mx2-batching.md).
 >
 > Cost to find out: four profiler runs and a window count. The alternative was
 > extending four hand-written AVX2 kernels — `conv1d_gemm` and the
