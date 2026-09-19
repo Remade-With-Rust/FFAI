@@ -3925,6 +3925,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72162f7f238f1dc824cbc2d3b3ccac457682cce161b35e3dd8f1265498c5bc33"
 
 [[package]]
+name = "rusty_json_turbo"
+version = "0.2.0"
+source = "git+https://github.com/Remade-With-Rust/rusty_json_turbo?branch=master#77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"
+dependencies = [
+ "itoa",
+ "memchr",
+ "rusty_json_turbo-accel",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
+name = "rusty_json_turbo-accel"
+version = "0.2.0"
+source = "git+https://github.com/Remade-With-Rust/rusty_json_turbo?branch=master#77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"
+
+[[package]]
 name = "rusty_png"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4079,14 +4097,9 @@ dependencies = [
 [[package]]
 name = "serde_json"
 version = "1.0.151"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+source = "git+https://github.com/Remade-With-Rust/rusty_json_turbo?branch=master#77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"
 dependencies = [
- "itoa",
- "memchr",
- "serde",
- "serde_core",
- "zmij",
+ "rusty_json_turbo",
 ]
 
 [[package]]

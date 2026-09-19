@@ -214,13 +214,13 @@ fn to_source_resolution(out: &DepthOutput, image: &ImageBuffer) -> Result<DepthO
     for y in 0..sh {
         // source -> canvas -> map
         let cy = y as f32 * lb.scale + lb.pad_y;
-        let my = (cy / stride).floor() as isize;
+        let my = ffai_core::fastmath::floor_i32(cy / stride) as isize;
         if my < 0 || my as usize >= out.height {
             continue;
         }
         for x in 0..sw {
             let cx = x as f32 * lb.scale + lb.pad_x;
-            let mx = (cx / stride).floor() as isize;
+            let mx = ffai_core::fastmath::floor_i32(cx / stride) as isize;
             if mx < 0 || mx as usize >= out.width {
                 continue;
             }

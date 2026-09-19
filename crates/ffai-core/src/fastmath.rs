@@ -249,6 +249,129 @@ pub fn log10(x: f32) -> f32 {
     ln(x) * std::f32::consts::LOG10_E
 }
 
+/// `floor(x)` as an `i32`, branchless and without SSE4.1.
+///
+/// `f32::floor` lowers to `roundss`, which is **SSE4.1 — above the portable
+/// x86-64 baseline this workspace compiles to.** No `target-cpu` is set for
+/// native builds (`.cargo/config.toml` scopes its rustflags to wasm32 and to
+/// the GNU linker), so the call survives into the loop and blocks it from
+/// widening. That is the cost, not the op's own latency.
+///
+/// A plain `as i32` cast truncates toward zero — which is `floor` for
+/// `x >= 0` and one too high below it. Subtracting the comparison recovers the
+/// missing step, and lowers to compare-and-subtract rather than a branch, so
+/// the surrounding loop still vectorises. No `target_feature`, so aarch64 gets
+/// the same treatment with no feature gate to miss.
+///
+/// Exact for every finite `x` whose floor fits in an `i32`.
+#[inline(always)]
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+// The truncation IS the operation: `as i32` is floor for non-negatives, and
+// the comparison restores the missing step below zero. Rust's float->int casts
+// SATURATE rather than wrap, so an out-of-range input clamps to i32::MIN/MAX
+// instead of producing a plausible-looking wrong index.
+pub fn floor_i32(x: f32) -> i32 {
+    let t = x as i32;
+    t - i32::from(x < t as f32)
+}
+
+/// `(floor(x), x - floor(x))` for a **non-negative** `x` — a bilinear
+/// resampler's integer index and its interpolation weight, in one step.
+///
+/// The precondition is what buys the speed: for `x >= 0` the `as u32` cast
+/// *is* `floor`, so there is no correction term and no `f32::floor`. Every
+/// caller clamps with `.max(0.0)` or `.clamp(0.0, ..)` on the line above, and
+/// **that clamp is the whole licence** — it has to be re-read at each site
+/// rather than assumed, because a site that loses it silently truncates
+/// toward zero instead.
+///
+/// Debug-asserts the precondition, so a caller that drops the clamp fails
+/// loudly in tests instead of quietly changing one pixel.
+#[inline(always)]
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+// Truncation and sign-loss are both intended and both guarded: the
+// debug_asserts below pin `0 <= x < 2^24`, which is where truncation equals
+// floor and where `i as f32` is exact. Above 2^24 an f32 cannot represent
+// consecutive integers anyway, so the assert marks the real limit rather than
+// the cast's.
+pub fn floor_frac_nonneg(x: f32) -> (u32, f32) {
+    debug_assert!(x >= 0.0, "floor_frac_nonneg requires x >= 0, got {x}");
+    debug_assert!(
+        x < 16_777_216.0,
+        "floor_frac_nonneg loses integer precision at {x}"
+    );
+    let i = x as u32;
+    (i, x - i as f32)
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::*;
+
+    /// The whole point of the correction term. A cast alone is NOT floor, and
+    /// this is the one-line difference that decides whether a resize moves a
+    /// pixel.
+    #[test]
+    fn a_cast_alone_is_not_floor() {
+        assert_eq!(-0.5f32 as i32, 0, "the cast truncates toward zero");
+        assert_eq!(floor_i32(-0.5), -1, "floor goes the other way");
+        assert_eq!(floor_i32(-1.000_001), -2);
+    }
+
+    #[test]
+    fn floor_i32_matches_libm_across_signs() {
+        let mut x = -5000.0f32;
+        while x < 5000.0 {
+            assert_eq!(floor_i32(x), x.floor() as i32, "at {x}");
+            x += 0.013_671_875; // exact in binary, so the sweep does not drift
+        }
+        for &v in &[
+            0.0f32,
+            -0.0,
+            1.0,
+            -1.0,
+            0.999_999_94,
+            -0.999_999_94,
+            1e6,
+            -1e6,
+        ] {
+            assert_eq!(floor_i32(v), v.floor() as i32, "at {v}");
+        }
+    }
+
+    #[test]
+    fn floor_frac_nonneg_matches_libm() {
+        let mut x = 0.0f32;
+        while x < 4096.0 {
+            let (i, f) = floor_frac_nonneg(x);
+            assert_eq!(i, x.floor() as u32, "index at {x}");
+            assert_eq!(f, x - x.floor(), "fraction at {x}");
+            x += 0.013_671_875;
+        }
+    }
+
+    /// The two agree wherever both are defined, so a site can move between
+    /// them without a behaviour change.
+    #[test]
+    fn the_two_helpers_agree_on_non_negatives() {
+        let mut x = 0.0f32;
+        while x < 1024.0 {
+            assert_eq!(
+                i64::from(floor_i32(x)),
+                i64::from(floor_frac_nonneg(x).0),
+                "at {x}"
+            );
+            x += 0.007_812_5;
+        }
+    }
+}
+
 #[cfg(test)]
 mod exp_sub_sum_tests {
     use super::*;

@@ -47,14 +47,14 @@ pub fn bilinear2x_align_corners(x: &Tensor) -> Result<Tensor> {
         let dst = &mut out[plane * oh * ow..(plane + 1) * oh * ow];
         for oy in 0..oh {
             let fy = oy as f32 * sy;
-            let y0 = fy.floor() as usize;
+            let (y0u, ty) = ffai_core::fastmath::floor_frac_nonneg(fy);
+            let y0 = y0u as usize;
             let y1 = (y0 + 1).min(h - 1);
-            let ty = fy - y0 as f32;
             for ox in 0..ow {
                 let fx = ox as f32 * sx;
-                let x0 = fx.floor() as usize;
+                let (x0u, tx) = ffai_core::fastmath::floor_frac_nonneg(fx);
+                let x0 = x0u as usize;
                 let x1 = (x0 + 1).min(w - 1);
-                let tx = fx - x0 as f32;
                 let top = src[y0 * w + x0] * (1.0 - tx) + src[y0 * w + x1] * tx;
                 let bot = src[y1 * w + x0] * (1.0 - tx) + src[y1 * w + x1] * tx;
                 dst[oy * ow + ox] = top * (1.0 - ty) + bot * ty;

@@ -421,11 +421,13 @@ pub fn svtr_input(
     let mut planes = vec![0f32; 3 * H * w];
     for oy in 0..H {
         let sy = ((oy as f32 + 0.5) * ch as f32 / H as f32 - 0.5).max(0.0);
-        let (y0i, fy) = (sy.floor() as usize, sy - sy.floor());
+        let (y0u, fy) = ffai_core::fastmath::floor_frac_nonneg(sy);
+        let y0i = y0u as usize;
         let y1i = (y0i + 1).min(ch - 1);
         for ox in 0..w {
             let sx = ((ox as f32 + 0.5) * cw as f32 / w as f32 - 0.5).max(0.0);
-            let (x0i, fx) = (sx.floor() as usize, sx - sx.floor());
+            let (x0u, fx) = ffai_core::fastmath::floor_frac_nonneg(sx);
+            let x0i = x0u as usize;
             let x1i = (x0i + 1).min(cw - 1);
             let at = |yy: usize, xx: usize, c: usize| -> f32 {
                 let i = ((y0 + yy) * iw + (x0 + xx)) * stride;

@@ -41,14 +41,14 @@ pub fn resize_bilinear(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) 
     let mut out = vec![0f32; dw * dh];
     for oy in 0..dh {
         let fy = ((oy as f32 + 0.5) * sy - 0.5).max(0.0);
-        let y0 = (fy.floor() as usize).min(sh - 1);
+        let (fy_i, wy) = ffai_core::fastmath::floor_frac_nonneg(fy);
+        let y0 = (fy_i as usize).min(sh - 1);
         let y1 = (y0 + 1).min(sh - 1);
-        let wy = fy - fy.floor();
         for ox in 0..dw {
             let fx = ((ox as f32 + 0.5) * sx - 0.5).max(0.0);
-            let x0 = (fx.floor() as usize).min(sw - 1);
+            let (fx_i, wx) = ffai_core::fastmath::floor_frac_nonneg(fx);
+            let x0 = (fx_i as usize).min(sw - 1);
             let x1 = (x0 + 1).min(sw - 1);
-            let wx = fx - fx.floor();
             let top = src[y0 * sw + x0] * (1.0 - wx) + src[y0 * sw + x1] * wx;
             let bot = src[y1 * sw + x0] * (1.0 - wx) + src[y1 * sw + x1] * wx;
             out[oy * dw + ox] = top * (1.0 - wy) + bot * wy;
@@ -86,14 +86,14 @@ pub fn resize_bilinear_u8(
     let mut out = vec![0f32; dw * dh];
     for oy in 0..dh {
         let fy = ((oy as f32 + 0.5) * sy - 0.5).max(0.0);
-        let y0 = (fy.floor() as usize).min(sh - 1);
+        let (fy_i, wy) = ffai_core::fastmath::floor_frac_nonneg(fy);
+        let y0 = (fy_i as usize).min(sh - 1);
         let y1 = (y0 + 1).min(sh - 1);
-        let wy = fy - fy.floor();
         for ox in 0..dw {
             let fx = ((ox as f32 + 0.5) * sx - 0.5).max(0.0);
-            let x0 = (fx.floor() as usize).min(sw - 1);
+            let (fx_i, wx) = ffai_core::fastmath::floor_frac_nonneg(fx);
+            let x0 = (fx_i as usize).min(sw - 1);
             let x1 = (x0 + 1).min(sw - 1);
-            let wx = fx - fx.floor();
             let top = at(y0, x0) * (1.0 - wx) + at(y0, x1) * wx;
             let bot = at(y1, x0) * (1.0 - wx) + at(y1, x1) * wx;
             out[oy * dw + ox] = top * (1.0 - wy) + bot * wy;
@@ -128,11 +128,11 @@ pub fn resize_bicubic(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -
     let mut out = vec![0f32; dw * dh];
     for oy in 0..dh {
         let fy = (oy as f32 + 0.5) * sy - 0.5;
-        let y0 = fy.floor() as i64;
+        let y0 = i64::from(ffai_core::fastmath::floor_i32(fy));
         let wy: [f32; 4] = std::array::from_fn(|k| kernel(fy - (y0 - 1 + k as i64) as f32));
         for ox in 0..dw {
             let fx = (ox as f32 + 0.5) * sx - 0.5;
-            let x0 = fx.floor() as i64;
+            let x0 = i64::from(ffai_core::fastmath::floor_i32(fx));
             let wx: [f32; 4] = std::array::from_fn(|k| kernel(fx - (x0 - 1 + k as i64) as f32));
             let mut acc = 0f32;
             for (ky, wyv) in wy.iter().enumerate() {
