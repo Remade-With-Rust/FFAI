@@ -3,12 +3,15 @@
 **Status: 18 of 89 sites converted and gated; the other 71 have a recorded
 verdict. 2026-09-19.**
 
-**The vectorisation premise is REFUTED for the resize loops, and the calls are
-genuinely gone.** §7 has the disassembly A/B. Half the mechanism delivered — two
-`callq floorf` per function became zero — and half did not: the loops did not
-widen, because `floor` was never what was stopping them. No timing has been
-taken, and on this evidence the expected effect is small. The finding that
-matters is next door, in §7.3.
+**Measured: 1.30x on the resize kernel, byte-identical, 15/15 paired rounds —
+and no measurable change end to end.** Both are in §7.5, and neither alone is
+the answer: the kernel is ~0.2 % of an OCR page, against a 7-12 % noise floor
+that a null arm exposed.
+
+**The vectorisation premise was refuted three times** — by gathers, by
+`usize as f32` branches, and by saturating-cast branches. The win is real but
+came from *fewer instructions per pixel*, not wider ones. §7 has each
+disassembly A/B.
 
 The first turbocharger campaign
 ([docs/finished/turbocharger.md](../finished/turbocharger.md)) is closed and it
@@ -310,6 +313,63 @@ can prove the rails dead. The first is `unsafe`, and this workspace sets
 `unsafe_code = "warn"` at the root, so that is an owner's decision with a
 `SAFETY` invariant to write — not a drive-by. **That, not another rounding
 substitution, is the next experiment here.**
+
+---
+
+### 7.5 ★ MEASURED: 1.30x on the kernel, and invisible end to end
+
+Both statements are true and neither alone is the answer.
+
+**The bounds checks came out of the hot path.** After hoisting row slices, the
+pixel loop of `resize_bilinear` is 52 instructions with **zero**
+`panic_bounds_check` and zero `slice_index_fail` — all of them now sit in the
+per-row prologue. Whole-function size went *up* (395 → 512 lines) because six
+slice-range checks replaced five per-pixel ones; that trade only pays if a row
+is wide enough to amortise it, which is a question for a clock.
+
+**The end-to-end arm could not answer it, and the null arm is why.** Three
+binaries over `doc-000.png` (1700x2200), 9 ABBA rounds each:
+
+| arm | min s | median s | mean s | stdev |
+|---|---:|---:|---:|---:|
+| before | 6.320 | 7.106 | 7.109 | 0.396 |
+| after | 6.594 | **6.945** | 7.095 | 0.349 |
+| **null** (a byte-copy of `after`) | 6.939 | 7.439 | 7.678 | 0.873 |
+
+The null arm is the *same binary* as `after`, so the 0.49 s median gap between
+them is pure instrument noise — **three times the 0.16 s before/after gap**.
+Without the null arm this reads "2.3 % faster" and that number is an artifact.
+**Recorded as no measurable end-to-end change.**
+
+**At the right altitude it is unambiguous.** `examples/resize_bce_worth.rs`
+compiles both kernels into one binary (no build-to-build variation), gates
+byte-identity on all three channels before timing anything, and ABBA-
+interleaves 15 rounds at the shape `mobiledet_input` actually runs — a
+1700x2200 page entering at the 1280 short-side ceiling:
+
+| arm | min ms | med ms | mean ms |
+|---|---:|---:|---:|
+| old (`floor` + whole-slice indexing) | 14.99 | 15.96 | 16.46 |
+| new (cast-floor + row slices) | **11.83** | **12.25** | **12.48** |
+
+**1.27x on min, 1.30x on median, and new wins 15/15 paired rounds.**
+
+**Why it is faster, given it never vectorised.** The predicted mechanism was
+wrong three times over and the win is real anyway — it is simply *fewer
+instructions per pixel*, not wider ones: two `callq floorf` and five bounds
+checks left the inner loop. A narrower claim than "it vectorised", and the one
+the evidence supports.
+
+**And why end-to-end sees nothing.** ~4 ms saved per channel, three channels
+per page, against a ~6 600 ms page: **about 0.2 %**, against a noise floor of
+7-12 %. The kernel number is real and the page number is unmeasurable, and
+quoting the first as if it were the second would be the exact error this page
+exists to avoid.
+
+Not measured: the Diana depth path (`bilinear2x_align_corners`) and
+`svtr_input` got the identical treatment and identical byte-identical gates,
+but no timing arm. Their kernels are the same shape, so the same direction is
+*likely* — which is not a measurement, and they are not claimed.
 
 ---
 
