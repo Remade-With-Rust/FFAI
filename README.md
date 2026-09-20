@@ -65,6 +65,13 @@ every workload, parity on speed** (49 paired rounds, z = +2.43, against a null
 arm at z = -0.71), and a peak-RSS median *below* mimalloc's. The C allocator is
 out of the hot path and the 1.64x stayed.
 
+**That evaluation was run against `rusty_alloc` 1.1.x, and the pin is now
+`=2.2.0`.** The correctness half still holds — the engines' byte-identity
+oracles pass on 2.2.0, which is what gates every release here — but **the
+speed and peak-RSS halves have not been re-measured on it** and should not be
+read as current. Re-running them is the open item; until it happens the
+numbers above describe a version this repository no longer builds.
+
 Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 
 ```text
