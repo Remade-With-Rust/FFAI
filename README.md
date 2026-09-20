@@ -91,7 +91,7 @@ ffai models         # list model manifests, licenses, cache status
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
 | **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
 | **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection, tracking, and the browser.** YOLO26 on candle from official Ultralytics `.pt` — all five tiers from one tier-agnostic graph, no ONNX. **Every detection identical to PyTorch at n, m, l and x**, at **1.6–5.6× less memory** and up to **10× faster load**. **3.71× less CPU per frame than Ultralytics**, and **1.92× faster under load** — Diana is a ~2.4-core workload against their ~7.9. **ByteTrack** with no appearance model and no second weight file: IDF1 35.93 / MOTA 24.91 against 36.92 / 27.38 on identical weights and frames, with **218 ID switches to their 800**. **Runs in a browser** — [`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles the whole graph to WebAssembly with no ONNX runtime, agreeing with native to display precision. One failing gate, stated: **2.89× slower than ONNX Runtime**, which Diana beats on accuracy (0.7014 vs 0.6865). ([Status](#status)) |
-| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | **VLM live.** `SmolVLM-256M-Instruct` on candle — `SigLIP` tower, pixel-shuffle connector, Llama decoder, ported tensor by tensor, plus **our own `SmolLM2` text tower** and our own `SigLIP` encoder. The gate is the strong form: from a **raw image file** through our resize, tiling, tower, prompt assembly and decode loop, the caption is **byte-identical** to the reference — **32/32 tokens**, six stages each gated in isolation. Scored **525/1000 on OCRBench** through VLMEvalKit against the checkpoint's **published 526**. **1.20x off PyTorch end to end** (10 918 vs 9 106 ms, same image, idle box, both arms repeated), with the deficit concentrated in the vision tower — down from **2.4x** across three optimization rounds: prefill **3.07x**, generate **2.05x**, the connector's `broadcast_matmul` **14.1x**, the patch embedding as a matmul **2.6x**. A fourth round then took the **vision tower itself 1.199x (16.6 %)**: `candle_nn::Linear`'s bias is a *separate single-threaded pass* that evicted every GEMM's working set, and folding the four biases into ops that already touch every element restored the projections from **288-347 to 500-563 GF/s**; softmax's normalising divide moved past `attn.v` (786 K divides instead of 12.6 M), and the connector's two-permute pixel shuffle became one bit-identical pass. Eight counter-attempts were refuted, including a hand-written GEMM at **0.11x** — candle's GEMM rewards large batched calls, and every trade of call size for locality lost. A fifth round then found a **quadratic in the KV cache**: `Tensor::cat` recopied the whole history every step (**52.7 MB per token**, growing with position), which a preallocated in-place append took to **46 KB — decode 53.9 -> 42.6 ms/token, 1.27x**, worth ~900 ms at the reference 64-token budget and more for video. Decode now sits at **78-92 % of its memory floor** (591 MB read per token), so what remains there is a dtype decision, not an optimisation. Footprint **0.71x** PyTorch's. Video captions to `.srt`/`.vtt`/`.json` at constant memory per window; **no video quality claim is made** — the checkpoint is an image model with no published video row ([Status](#status)) |
+| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | **VLM live.** `SmolVLM-256M-Instruct` on candle — `SigLIP` tower, pixel-shuffle connector, Llama decoder, ported tensor by tensor, plus **our own `SmolLM2` text tower** and our own `SigLIP` encoder. The gate is the strong form: from a **raw image file** through our resize, tiling, tower, prompt assembly and decode loop, the caption is **byte-identical** to the reference — **32/32 tokens**, six stages each gated in isolation. Scored **525/1000 on OCRBench** through VLMEvalKit against the checkpoint's **published 526**. **1.20x off PyTorch end to end** (10 918 vs 9 106 ms, same image, idle box, both arms repeated), with the deficit concentrated in the vision tower — down from **2.4x** across three optimization rounds: prefill **3.07x**, generate **2.05x**, the connector's `broadcast_matmul` **14.1x**, the patch embedding as a matmul **2.6x**. A fourth round then took the **vision tower itself 1.199x (16.6 %)**: `candle_nn::Linear`'s bias is a *separate single-threaded pass* that evicted every GEMM's working set, and folding the four biases into ops that already touch every element restored the projections from **288-347 to 500-563 GF/s**; softmax's normalising divide moved past `attn.v` (786 K divides instead of 12.6 M), and the connector's two-permute pixel shuffle became one bit-identical pass. Eight counter-attempts were refuted, including a hand-written GEMM at **0.11x** — candle's GEMM rewards large batched calls, and every trade of call size for locality lost. A fifth round then found a **quadratic in the KV cache**: `Tensor::cat` recopied the whole history every step (**52.7 MB per token**, growing with position), which a preallocated in-place append took to **46 KB — decode 53.9 -> 42.6 ms/token, 1.27x**, worth ~900 ms at the reference 64-token budget and more for video. Decode now sits at **78-92 % of its memory floor** (591 MB read per token), so what remains there is a dtype decision, not an optimisation. Footprint **0.71x** PyTorch's — **contradicted by the two most recent gate runs, which measure 1.29x and 1.54x the reference's memory; see [Status](#status)**. Video captions to `.srt`/`.vtt`/`.json` at constant memory per window; **no video quality claim is made** — the checkpoint is an image model with no published video row ([Status](#status)) |
 
 Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
 tensor spine), `ffai-media` (ingest/egress, backed by
@@ -927,12 +927,35 @@ Vision is now **75 %** of a caption and the whole of the remaining gap, and its
 layer is **77 % matmul** — the elementwise phase is spent. Blocked attention has
 been refuted five times, the last with candle's own GEMM.
 
-**The four-gate verdict still reads `speed FAIL` at 2.4x, and that row is
-stale.** Re-running it is blocked by a defect in the harness rather than the
-engine: `ffai bench vlm`'s engine arm segfaults on the second `describe_image`
-in one process. Argus captions three differently-shaped images in one process
-without trouble, and the crash reproduces with the optimizations reverted, so
-the gate stays FAIL until a harness run replaces it.
+**The gate has now been re-run, and both of its rows had drifted — in
+opposite directions.** This page previously said the run was blocked by a
+harness segfault on the second `describe_image` in one process. **That is no
+longer true and may not have been for some time:** the engine arm now
+completes 50/50 clips of `argus-ocrbench-lite-v1` in a single process, twice,
+on two independent runs (ledger `bench-vlm-1789863219`, `-1789866779`).
+
+| four-gate row | what this page used to say | what two re-runs measure |
+|---|---|---|
+| speed | `FAIL`, 2.4x **slower** | **PASS** — engine ahead of the matched `transformers` arm on both runs |
+| footprint | 0.71x, a **win** | **FAIL** — engine uses **more**, 1.29x then 1.54x |
+| correctness | — | **PASS**, 50/50 both runs |
+| quality | — | **SKIP** — VLMEvalKit is not installed in `.venv-argus` |
+
+**No magnitude is claimed from these runs, and the reason is stated rather
+than buried.** The two runs disagree by a wide margin on both rows — speed
+1.14x then 1.53x, footprint 1.29x then 1.54x — so the *direction* is
+reproducible and the *size* is not. The box carried ~32 % ambient third-party
+load, and `ffai bench vlm` runs its reference and engine arms sequentially
+rather than ABBA-interleaved, so drift between the arms is not cancelled. A
+sampler during the second run put mean CPU at 92.2 % over the reference arm
+and 88.8 % over the engine arm, which is matched to within 3.4 points but is
+not an idle machine.
+
+What is safe to take from this: **the recorded `speed FAIL at 2.4x` is stale
+and its sign has flipped**, and **the 0.71x footprint claim above is
+contradicted** — every measurement since says Argus uses more memory than the
+reference, not less. Both need a quiet box and an interleaved harness before
+a number goes on this page.
 
 Full campaign history:
 [docs/plans/argus-launch-plan.md](docs/finished/argus-launch-plan.md);
