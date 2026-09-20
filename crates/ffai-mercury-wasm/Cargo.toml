@@ -1,7 +1,7 @@
 [package]
 name = "ffai-mercury-wasm"
 description = "Mercury in the browser — pure-Rust Whisper speech recognition compiled to WebAssembly, no whisper.cpp, no ONNX runtime"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -28,7 +28,7 @@ ffai-core = { workspace = true }
 # the constructor this crate is built on, first exists in 1.0.2. A `^1.0.1`
 # requirement resolves happily in the workspace and then fails to compile the
 # moment it is packaged, which is exactly how it failed.
-ffai-mercury = { path = "../ffai-mercury", version = "1.0.2", default-features = false }
+ffai-mercury = { path = "../ffai-mercury", version = "1.0.3", default-features = false }
 wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
 
 # The binary is the only thing entitled to choose an allocator, and a cdylib IS

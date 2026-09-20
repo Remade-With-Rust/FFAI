@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8](https://github.com/Remade-With-Rust/FFAI/compare/ffai-cli-v0.6.7...ffai-cli-v0.6.8) - 2026-08-29
+
+### Other
+
+- *(ci)* clippy green — the gate is REQUIRED, so this is the merge blocker
+
 ## [0.6.7](https://github.com/Remade-With-Rust/FFAI/compare/ffai-cli-v0.6.6...ffai-cli-v0.6.7) - 2026-08-28
 
 ### Other

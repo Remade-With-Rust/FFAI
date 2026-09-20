@@ -6,7 +6,7 @@ description = "FFai shared types, engine traits, and the engine registry"
 # published, so the crates.io copy of 0.6.1 cannot build ffai-diana — a gap
 # invisible locally, where path dependencies mask it, and caught only by
 # `cargo publish --dry-run`.
-version = "0.7.0"
+version = "0.7.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
