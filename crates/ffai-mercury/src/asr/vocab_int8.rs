@@ -147,9 +147,10 @@ impl Int8Vocab {
                 let sc = if amax > 0.0 { amax / 127.0 } else { 1.0 };
                 bscale[v * nblocks + b] = sc;
                 let mut bsum = 0i32;
-                for k in 0..blk {
-                    let qi = (bw[k] / sc).round().clamp(-127.0, 127.0) as i8;
-                    q[v * d + b * blk + k] = qi;
+                let qblk = &mut q[v * d + b * blk..][..blk];
+                for (slot, &bwk) in qblk.iter_mut().zip(bw) {
+                    let qi = (bwk / sc).round().clamp(-127.0, 127.0) as i8;
+                    *slot = qi;
                     bsum += i32::from(qi);
                 }
                 c += sc * bsum as f32;
@@ -228,9 +229,11 @@ impl CustomOp1 for Int8VocabOp {
         let amax = x.iter().fold(0f32, |m, &v| m.max(v.abs()));
         let sx = if amax > 0.0 { amax / 63.0 } else { 1.0 };
         let mut xu = vec![0u8; q.d];
-        for k in 0..q.d {
-            let qi = (x[k] / sx).round().clamp(-64.0, 63.0) as i32;
-            xu[k] = (qi + 64) as u8;
+        // Zipped rather than indexed: same elements in the same order, and no
+        // `panic_bounds_check` in a loop that runs `d` times per decode step.
+        for (slot, &v) in xu.iter_mut().zip(x) {
+            let qi = (v / sx).round().clamp(-64.0, 63.0) as i32;
+            *slot = (qi + 64) as u8;
         }
 
         let mut out = vec![0f32; q.vocab];

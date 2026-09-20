@@ -48,16 +48,24 @@ pub fn bilinear2x_align_corners(x: &Tensor) -> Result<Tensor> {
         for oy in 0..oh {
             let fy = oy as f32 * sy;
             let (y0u, ty) = ffai_core::fastmath::floor_frac_nonneg(fy);
-            let y0 = y0u as usize;
+            // `.min(h - 1)` is a no-op on the VALUE — `fy <= h - 1` because
+            // `sy` is corner-pinned — but the compiler cannot derive that from
+            // the float arithmetic, and it is the fact bounds-check elimination
+            // needs. It also closes a real hole: if `oy * sy` lands a hair above
+            // `h - 1` in f32, the old code indexed out of bounds and panicked.
+            let y0 = (y0u as usize).min(h - 1);
             let y1 = (y0 + 1).min(h - 1);
+            let row0 = &src[y0 * w..][..w];
+            let row1 = &src[y1 * w..][..w];
+            let drow = &mut dst[oy * ow..][..ow];
             for ox in 0..ow {
                 let fx = ox as f32 * sx;
                 let (x0u, tx) = ffai_core::fastmath::floor_frac_nonneg(fx);
-                let x0 = x0u as usize;
+                let x0 = (x0u as usize).min(w - 1);
                 let x1 = (x0 + 1).min(w - 1);
-                let top = src[y0 * w + x0] * (1.0 - tx) + src[y0 * w + x1] * tx;
-                let bot = src[y1 * w + x0] * (1.0 - tx) + src[y1 * w + x1] * tx;
-                dst[oy * ow + ox] = top * (1.0 - ty) + bot * ty;
+                let top = row0[x0] * (1.0 - tx) + row0[x1] * tx;
+                let bot = row1[x0] * (1.0 - tx) + row1[x1] * tx;
+                drow[ox] = top * (1.0 - ty) + bot * ty;
             }
         }
     }

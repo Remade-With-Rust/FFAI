@@ -422,22 +422,30 @@ pub fn svtr_input(
     for oy in 0..H {
         let sy = ((oy as f32 + 0.5) * ch as f32 / H as f32 - 0.5).max(0.0);
         let (y0u, fy) = ffai_core::fastmath::floor_frac_nonneg(sy);
-        let y0i = y0u as usize;
+        // `.min(ch - 1)` is a no-op on the value (`sy <= ch - 1` by
+        // construction) but it is the fact the bounds-check elimination needs.
+        let y0i = (y0u as usize).min(ch - 1);
         let y1i = (y0i + 1).min(ch - 1);
+        // The two source rows, hoisted out of the pixel loop as slices of
+        // exactly `iw * stride`. The `at` closure below used to be rebuilt per
+        // pixel and indexed the whole image, so every tap carried a bounds
+        // check; against a row of known length the index is provably inside.
+        let row0 = &img.data[(y0 + y0i) * iw * stride..][..iw * stride];
+        let row1 = &img.data[(y0 + y1i) * iw * stride..][..iw * stride];
         for ox in 0..w {
             let sx = ((ox as f32 + 0.5) * cw as f32 / w as f32 - 0.5).max(0.0);
             let (x0u, fx) = ffai_core::fastmath::floor_frac_nonneg(sx);
-            let x0i = x0u as usize;
+            let x0i = (x0u as usize).min(cw - 1);
             let x1i = (x0i + 1).min(cw - 1);
-            let at = |yy: usize, xx: usize, c: usize| -> f32 {
-                let i = ((y0 + yy) * iw + (x0 + xx)) * stride;
-                if stride == 1 { f32::from(img.data[i]) } else { f32::from(img.data[i + c]) }
-            };
+            let (i0, i1) = ((x0 + x0i) * stride, (x0 + x1i) * stride);
             for c in 0..3 {
-                // source channel: BGR output from RGB input
+                // source channel: BGR output from RGB input. For `stride == 1`
+                // `sc` is 0, so `row[i + sc]` is exactly the old `data[i]`.
                 let sc = if stride == 1 { 0 } else { 2 - c };
-                let top = at(y0i, x0i, sc) * (1.0 - fx) + at(y0i, x1i, sc) * fx;
-                let bot = at(y1i, x0i, sc) * (1.0 - fx) + at(y1i, x1i, sc) * fx;
+                let top = f32::from(row0[i0 + sc]) * (1.0 - fx)
+                    + f32::from(row0[i1 + sc]) * fx;
+                let bot = f32::from(row1[i0 + sc]) * (1.0 - fx)
+                    + f32::from(row1[i1 + sc]) * fx;
                 let v = top * (1.0 - fy) + bot * fy;
                 planes[c * H * w + oy * w + ox] = (v / 255.0 - 0.5) / 0.5;
             }
