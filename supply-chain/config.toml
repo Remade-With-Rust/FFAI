@@ -862,31 +862,35 @@ version = "0.5.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-codec]]
-version = "0.1.0"
+version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-core]]
-version = "0.1.1"
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format]]
-version = "0.1.0"
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-avi]]
-version = "0.1.0"
+version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-mkv]]
-version = "0.1.0"
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-mp4]]
-version = "0.1.0"
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-ts]]
-version = "0.1.0"
+version = "0.2.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.rff-subtitle]]
+version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ring]]
@@ -930,39 +934,39 @@ version = "0.3.1"
 criteria = "safe-to-run"
 
 [[exemptions.rusty_alloc]]
-version = "1.1.6"
+version = "2.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_alloc-api]]
-version = "1.1.6"
+version = "2.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_expressions]]
-version = "0.1.4"
+version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_h264]]
-version = "0.8.0"
+version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_h264-accel]]
-version = "0.8.0"
+version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_h264-common]]
-version = "0.8.0"
+version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_h264-decoder]]
-version = "0.8.0"
+version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_h264-encoder]]
-version = "0.8.0"
+version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_jpeg]]
-version = "0.3.2"
+version = "0.4.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_png]]
@@ -1090,11 +1094,11 @@ version = "1.12.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokenizers]]
-version = "0.22.2@git:cae193a2f70c56226786796ae6dbe85d2c2b5217"
+version = "0.22.2@git:8a9958ae789de276ee0e07e7c57353f45b81c415"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokenizers]]
-version = "0.23.2@git:ef352c7ce3dd00b546a09aa06ab9cdf882cd045d"
+version = "0.23.2@git:1330178166ef6d035481de0a2c7edcd81664ac97"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-retry]]

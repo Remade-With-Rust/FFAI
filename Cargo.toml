@@ -58,25 +58,24 @@ png = "0.17"
 # performance fork of image-rs/image-png; `rusty_jpeg` is baseline +
 # progressive DCT with AVX2 FDCT/quantize and a two-block AVX2 IDCT. Both
 # are consumed by version, so nothing downstream inherits a git dependency.
-rusty_png = "0.1"
-rusty_jpeg = "0.1"
+# NOTE: nothing consumes these through `workspace = true` today — `ffai-media`
+# declares its own. They are kept in step with what the tree actually resolves
+# so that wiring them up later cannot silently pull an older decoder.
+rusty_png = "0.3"
+rusty_jpeg = "0.4"
 
 # ---- remade_ffmpeg_rs: the rest of our ffmpeg (Principle 7) ----
-# STILL git, and the consequence is worth keeping written down rather than
-# rediscovered: `cargo publish` refuses a git dependency outright —
+# NO LONGER git, and the lesson stays because it cost this project a
+# publication chain once: `cargo publish` refuses a git dependency outright —
 #   "all dependencies must have a version requirement specified when publishing"
-# — so any FFai crate that depends on these cannot publish until rff does.
+# — so any FFai crate depending on one cannot publish until that dependency
+# does. That used to bind `ffai-media` and everything downstream.
 #
-# That used to bind `ffai-media`, and through it everything downstream. It
-# no longer does: the still-image decoders moved to the standalone crates
-# above and `cargo publish --dry-run -p ffai-media` passes. The constraint
-# returns when VIDEO lands, because demuxers and H.264/VP9 are things rff
-# provides that nothing else does — at which point the answer is to publish
-# rff or vendor it, not to give up the stack.
-rff-core = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
-rff-codec = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
-rff-codec-jpeg = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
-rff-codec-png = { git = "https://github.com/Remade-With-Rust/remade_ffmpeg_rs" }
+# rff now PUBLISHES. `ffai-media` consumes `rff-core`/`rff-format*`/`rff-codec`
+# from crates.io at 0.2, so the constraint is retired rather than deferred, and
+# the four git declarations that used to live here are gone — nothing consumed
+# them, and leaving them would let a future edit re-introduce the exact
+# unpublishable dependency this note warns about.
 
 [workspace.lints.rust]
 unsafe_code = "warn"

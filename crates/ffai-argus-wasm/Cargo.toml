@@ -36,7 +36,7 @@ wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two 
 # feeding an autoregressive decoder with a growing KV cache — so
 # `--no-default-features` keeps the dlmalloc arm buildable for whoever takes
 # that measurement.
-rusty_alloc-api = { version = "=1.1.6", optional = true }
+rusty_alloc-api = { version = "=2.2.0", optional = true }
 
 # The gemm SIMD A/B, off by default. `gemm` is already in the tree beneath
 # candle; this makes its runtime switch reachable so a browser can measure

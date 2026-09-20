@@ -3626,36 +3626,36 @@ dependencies = [
 
 [[package]]
 name = "rff-codec"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c45bd18755186d43fc9043d4c932caded73e8d9d8d982b0a59a3f78dda78f00e"
+checksum = "61677fc31588351aedd8f8c931aceb3df9c407fbf0f0b655d434bd65a5b84e09"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-core"
-version = "0.1.1"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88b8e956d2faeab56bd541a01e199f00076b95eeb965d03accf368d40cedbb9d"
+checksum = "14f1d6f3bcfc56f5220ed6ccf30e10fdd2de16cd2d1c2ec111d6bed6439b2120"
 dependencies = [
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "rff-format"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "755bb8dbda05dbfe1004eb7ef557d93a08a094a00fc102a60137e0a2b7d3c854"
+checksum = "3ede37b5f32c0d20416ca1ee8214483469388f3e76dbca38b76126d96851a4bd"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-format-avi"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32f491a8f477182e847fccf2aa013258038054669f3e5d507a34f31cd245d7e2"
+checksum = "95e9a5dfd75e53aca4ab0171714ed9807706b3e584b3d5269666038fd4f31f7b"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3663,19 +3663,20 @@ dependencies = [
 
 [[package]]
 name = "rff-format-mkv"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09833e51629110d55c72dee424656440ddac3d4549af136b174aabbf000ea1a8"
+checksum = "c9a1356e1385b32df3abb8741c9f86f94edce07f09c1c3f6fd43992b990a1ded"
 dependencies = [
  "rff-core",
  "rff-format",
+ "rff-subtitle",
 ]
 
 [[package]]
 name = "rff-format-mp4"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37d7b6217e17142e47d59229fd09904a8235f18327f1e1c4831363f8f3860403"
+checksum = "fd50c0332f1e700a19a244b76be86c3081e1f36f8b7b2ce19cf5f63fef430006"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3683,13 +3684,19 @@ dependencies = [
 
 [[package]]
 name = "rff-format-ts"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56aacaafcba0f26a585542b420deacb3ea2e5d058f493d54390089802134592a"
+checksum = "64991d97bb9e24008d5b906725030acb2f98abd11326c360687d20797f17c26b"
 dependencies = [
  "rff-core",
  "rff-format",
 ]
+
+[[package]]
+name = "rff-subtitle"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9735c92fade5b42e986d6d88562c5c0093c11ad7d6a8b36014f6d73ae2fb7759"
 
 [[package]]
 name = "ring"
@@ -3844,34 +3851,35 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
-version = "1.1.6"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c93620fee9935a120a50df2086fe48fa072f7d391f129a5e04bf20ea9b83097d"
+checksum = "f3689dec49611086f9a977596bbc1c8d7b2d1c21691438af506b793723ce16fa"
 dependencies = [
  "libc",
+ "portable-atomic",
  "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "rusty_alloc-api"
-version = "1.1.6"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05ce52d7f72842a590e4588013d70ea02d27edbf6b6af9bc193f6e1ac173845a"
+checksum = "6df579b05b731b70f98a73ec477aa889f7404be5f326da47691b32cdb94a8418"
 dependencies = [
  "rusty_alloc",
 ]
 
 [[package]]
 name = "rusty_expressions"
-version = "0.1.4"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94a120f95964673259579b109114ebc3438a488010e023993adb2cd31da521ef"
+checksum = "11138f233c555e7e28b812e9fe834feb2e579f3508f57c87620a4ae1dc824f46"
 
 [[package]]
 name = "rusty_h264"
-version = "0.8.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fbafa4757ced9c5c1d1185aa936bb040b00c456098874f209e04ed1c1c2d73b"
+checksum = "acc4385b919216f3148223bf790f47611676d3a4084083c0535eaa2d29478da8"
 dependencies = [
  "rusty_h264-common",
  "rusty_h264-decoder",
@@ -3880,39 +3888,37 @@ dependencies = [
 
 [[package]]
 name = "rusty_h264-accel"
-version = "0.8.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2094232cdd4a1048894111dd905bb756402d08436fa7e9513c39829fa21239a6"
-dependencies = [
- "cc",
-]
+checksum = "18110c8f692668ccf004393bee04e369d4f0f173dd0ea4b515080258e6f9c599"
 
 [[package]]
 name = "rusty_h264-common"
-version = "0.8.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "421e458fcfcb2580232f212f99451f9075a03d00752a934ee27be6148a6765e3"
+checksum = "aaf982ae23ecf8f13015ec1c5576fe2935f4e4296b097ebc4233b5872623af2a"
 dependencies = [
  "bytemuck",
+ "once_cell",
+ "portable-atomic",
  "rusty_h264-accel",
  "wide",
 ]
 
 [[package]]
 name = "rusty_h264-decoder"
-version = "0.8.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6316ecba57a77d530fff4fab7be9cc3e0e107e381360ac9d2ffa0895b5b0947a"
+checksum = "e0f4deb1a3a5e928cbaa1dff7db6bc46262c850aedeb75cb5aeab890494c18a5"
 dependencies = [
- "rusty_h264-accel",
  "rusty_h264-common",
 ]
 
 [[package]]
 name = "rusty_h264-encoder"
-version = "0.8.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4fb69d8977d1d067d6d603df0614678c4a35ac1201fff38783c8847e429c879"
+checksum = "e037f6341a02f54021f7077735bd12e2fd61a749e1ee7248eee00466ef5fa4ba"
 dependencies = [
  "rusty_h264-accel",
  "rusty_h264-common",
@@ -3920,9 +3926,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_jpeg"
-version = "0.3.2"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72162f7f238f1dc824cbc2d3b3ccac457682cce161b35e3dd8f1265498c5bc33"
+checksum = "04b834f51d522e52dc7ad26fd6e157865f565eaf7f224a7a1a6d75ca617dd793"
 
 [[package]]
 name = "rusty_json_turbo"
@@ -4540,7 +4546,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tokenizers"
 version = "0.22.2"
-source = "git+https://github.com/Remade-With-Rust/tokenizers?branch=v0.22-rusty-expressions#cae193a2f70c56226786796ae6dbe85d2c2b5217"
+source = "git+https://github.com/Remade-With-Rust/tokenizers?branch=v0.22-rusty-expressions#8a9958ae789de276ee0e07e7c57353f45b81c415"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -4572,7 +4578,7 @@ dependencies = [
 [[package]]
 name = "tokenizers"
 version = "0.23.2"
-source = "git+https://github.com/Remade-With-Rust/tokenizers?branch=rusty-expressions-deploy#ef352c7ce3dd00b546a09aa06ab9cdf882cd045d"
+source = "git+https://github.com/Remade-With-Rust/tokenizers?branch=rusty-expressions-deploy#1330178166ef6d035481de0a2c7edcd81664ac97"
 dependencies = [
  "ahash",
  "compact_str",

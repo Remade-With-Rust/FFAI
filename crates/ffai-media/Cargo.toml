@@ -31,7 +31,7 @@ hound = { workspace = true }
 # DEMUXERS and video codecs, where rff provides something nothing else does.
 # For a still-image decoder it bought an indirection and cost publication.
 rusty_png = "0.3"
-rusty_jpeg = "0.3"
+rusty_jpeg = "0.4"
 # VIDEO INGEST, from crates.io rather than the git workspace.
 #
 # `sample_frames` was a stub waiting on "the rff backend". The backend is
@@ -40,14 +40,24 @@ rusty_jpeg = "0.3"
 # the RELEASED crates keeps every FFai crate downstream publishable, which the
 # git dependency in the workspace root does not — that constraint cost this
 # project a publication chain once already.
-rff-core = "0.1"
-rff-format = "0.1"
-rff-format-mp4 = "0.1"
-rff-format-mkv = "0.1"
-rff-format-avi = "0.1"
-rff-format-ts = "0.1"
-rff-codec = "0.1"
-rusty_h264 = "0.8"
+rff-core = "0.2"
+rff-format = "0.2"
+rff-format-mp4 = "0.2"
+rff-format-mkv = "0.2"
+rff-format-avi = "0.2"
+rff-format-ts = "0.2"
+rff-codec = "0.2"
+# `default-features = false` is LOAD-BEARING, not tidying. rusty_h264 0.16
+# added a `global-alloc` feature, ON BY DEFAULT, which installs rusty_alloc as
+# `#[global_allocator]` from inside a LIBRARY. There is exactly one global
+# allocator per process, so it collides with the one `ffai-cli` installs and
+# the workspace stops building outright:
+#   error: the `#[global_allocator]` in this crate conflicts with global
+#          allocator in: rusty_h264_common
+# Choosing the allocator is the deliverable's call, never a library's - the
+# house rule, and the reason `ffai-cli` owns that decision. `std` and `asm`
+# are the two default features worth keeping, so they come back by name.
+rusty_h264 = { version = "0.16", default-features = false, features = ["std", "asm"] }
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.
