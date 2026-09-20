@@ -3,11 +3,12 @@
 **Status: 18 of 89 sites converted and gated; the other 71 have a recorded
 verdict. 2026-09-19.**
 
-**No speedup has been measured.** What is proven is that the change is *free of
-behaviour change* — byte-identical through every oracle in the tree, including
-three external references. The timing arm is the open half of this page (§7),
-and until it runs, "these should be faster" is a hypothesis with a mechanism,
-not a result.
+**The vectorisation premise is REFUTED for the resize loops, and the calls are
+genuinely gone.** §7 has the disassembly A/B. Half the mechanism delivered — two
+`callq floorf` per function became zero — and half did not: the loops did not
+widen, because `floor` was never what was stopping them. No timing has been
+taken, and on this evidence the expected effect is small. The finding that
+matters is next door, in §7.3.
 
 The first turbocharger campaign
 ([docs/finished/turbocharger.md](../finished/turbocharger.md)) is closed and it
@@ -154,36 +155,98 @@ changes output, so none can be gated byte-identically.
 
 ---
 
-## 6. What NOT to expect
+## 6. What NOT to expect — and what actually happened
 
-The first campaign's §7 applies unchanged, plus one specific to this class.
+The prediction written here before measuring was:
 
-**A `floor` is not an `exp`.** The activation campaign's headline was 32x
-because candle was doing a scalar `erf` per element. A `floor` at this baseline
-is a handful of instructions, not forty nanoseconds. The win here is **not the
-op's own cost — it is that the loop can finally widen**, and that is worth
-something only where the surrounding loop is otherwise vectorisable arithmetic.
-A1–A5 are (multiply, add, four loads, three FMA), which should widen. Anywhere
-the loop has a gather or a data-dependent branch, removing the `floor` will
-measure zero, and **that result should be recorded rather than retried**.
+> The win here is **not the op's own cost — it is that the loop can finally
+> widen** [...] Anywhere the loop has a gather or a data-dependent branch,
+> removing the `floor` will measure zero, and that result should be recorded
+> rather than retried.
+
+**The second sentence is the one that came true.** Recorded below rather than
+retried.
 
 ---
 
-## 7. The open half — the timing arm
+## 7. Measured: the disassembly A/B
 
-This is the next thing to do here, and nothing above should be quoted as a
-speed claim until it is done.
+Release build (`lto = "thin"`, `codegen-units = 1`), `--emit=asm`, the same
+symbol before (`656889e`) and after (`ce93d34`). Counts are over each
+function's own body.
 
-1. **Read the `.s` before the clock.** Per `codec-measurement`, the
-   deterministic counter comes first: disassemble `resize_bilinear` and
-   `bilinear2x_align_corners` before and after and **count packed ops**. If the
-   loop did not widen, the change bought nothing and the honest entry is a
-   recorded zero, not a retry.
-2. Only then time it: ABBA-interleaved, best-of-N, pinned, with a null arm.
-   Carmenta's per-page wall time and Diana's depth forward are the two arms
-   that should move if anything does.
-3. Log the result — win **or** zero — in this file and in
-   [`bench/ledger.jsonl`](../../bench/ledger.jsonl) if it clears the gate bar.
+### 7.1 The calls are gone — that part is real
+
+| function | body lines | `callq floorf` | ymm refs | packed arithmetic |
+|---|---:|---:|---:|---|
+| `carmenta resize_bilinear` | 446 → **395** | 2 → **0** | 0 → 0 | none → none |
+| `carmenta resize_bilinear_u8` | 415 → **398** | 2 → **0** | 0 → 0 | none → none |
+| `diana bilinear2x_align_corners` | 675 → **609** | 2 → **0** | 0 → 0 | none → none |
+
+`f32::floor` was lowering to a real `callq floorf` — confirming §1's baseline
+argument rather than assuming it. Six calls across the three functions are now
+zero, and each body lost 4–11 % of its instructions.
+
+### 7.2 But the loops did not widen — and `floor` was never why
+
+Zero `ymm` references before **and** after. The only "packed" mnemonics present
+are `movaps`/`movups`/`xorps` — register moves and zeroing, not arithmetic.
+Every float operation in these loops is still scalar: `addss`, `mulss`,
+`subss`, `divss`, `maxss`.
+
+Reading one layer down, the resize loop has **three** independent blockers and
+`floor` was not among them:
+
+1. **The tap loads are gathers.** `movss (%rdx,%r10,4)` and
+   `movss (%rdx,%r11,4)` — indexed by runtime registers holding the computed
+   `x0`/`x1`, not by the loop counter. A resampler reads where the arithmetic
+   says to; that is inherent to the operation, not an accident of how it is
+   written.
+2. **Six `js` branches from `usize as f32`.** u64→f32 has no single SSE2
+   instruction, so each `oy as f32` / `ox as f32` compiles to a sign test and
+   two paths.
+3. **Five `panic_bounds_check` calls** still in the loop.
+
+Removing the `floor` removed a call and left all three standing. **This is a
+recorded zero on the vectorisation claim**, not a step toward it, and the
+conversions are kept on the narrower ground that six libm calls left a
+per-pixel loop with byte-identical output.
+
+### 7.3 ★ The refutation does NOT transfer to `vocab_int8::cpu_fwd`
+
+This is the finding worth having, and it came out of the refutation rather
+than in spite of it. The quantiser's loop disassembles to:
+
+```asm
+.LBB2548_23:
+    cmpq    %r15, %rdi
+    je      .LBB2548_24
+    jbe     .LBB2548_52
+    movss   (%rbx,%r15,4), %xmm0      ; CONTIGUOUS load, indexed by the counter
+    divss   %xmm6, %xmm0
+    callq   roundf                    ; <- the only thing that cannot widen
+    movaps  %xmm7, %xmm1
+    maxss   %xmm0, %xmm1              ; clamp lo
+    movaps  %xmm8, %xmm0
+    minss   %xmm1, %xmm0              ; clamp hi
+    cvttss2si %xmm0, %eax
+    ...
+    movb    %al, (%r14,%r15)          ; CONTIGUOUS store
+```
+
+Unit-stride in, unit-stride out, and every operation in the body has a packed
+SSE2 twin — `divps`, `maxps`, `minps`, `cvttps2dq`. **`callq roundf` is the
+sole barrier**, which is exactly the shape the resize loops turned out not to
+have. Only two `roundf` calls exist in all of `ffai-mercury`, and they are
+these two sites.
+
+**And it may not need the WER gate after all.** §5 assumed the magic number,
+which is ties-to-even and therefore an output change. But `f32::round` is
+ties-away-from-zero, and ties-away has its own branchless packed-SSE2 form:
+`trunc(|x| + 0.5)` via `cvttps2dq`, with one compare-and-subtract correcting
+the single case where `|x| + 0.5` rounds up across the boundary (the classic
+`0.49999997` trap). If that lands exact, the gate is `cmp`, not a corpus run.
+That is the next experiment, and it is a better one than §5 described.
 
 ---
 
