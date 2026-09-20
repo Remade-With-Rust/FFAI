@@ -82,6 +82,12 @@ audit-as-crates-io = true
 [policy.ffai-wasm]
 audit-as-crates-io = true
 
+[policy.rusty_json_turbo]
+audit-as-crates-io = true
+
+[policy.rusty_json_turbo-accel]
+audit-as-crates-io = true
+
 [policy.tokenizers]
 audit-as-crates-io = true
 
@@ -967,6 +973,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rusty_jpeg]]
 version = "0.4.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.rusty_json_turbo]]
+version = "0.2.0@git:77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"
+criteria = "safe-to-deploy"
+
+[[exemptions.rusty_json_turbo-accel]]
+version = "0.2.0@git:77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_png]]
