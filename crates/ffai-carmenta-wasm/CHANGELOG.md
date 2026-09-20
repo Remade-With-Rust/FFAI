@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-wasm-v0.2.1...ffai-carmenta-wasm-v0.2.2) - 2026-09-20
+
+### Other
+
+- Merge remote-tracking branch 'origin/master' into docs/reconcile-claims
+- bring every Remade-With-Rust crate to its latest published version
+
 ## [0.2.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-wasm-v0.2.0...ffai-carmenta-wasm-v0.2.1) - 2026-08-29
 
 ### Other

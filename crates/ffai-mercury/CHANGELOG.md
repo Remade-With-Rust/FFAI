@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4](https://github.com/Remade-With-Rust/FFAI/compare/ffai-mercury-v1.0.3...ffai-mercury-v1.0.4) - 2026-09-20
+
+### Other
+
+- Merge remote-tracking branch 'origin/master' into docs/reconcile-claims
+- hoist the bounds checks out of six per-pixel loops, safely
+
 ## [1.0.3](https://github.com/Remade-With-Rust/FFAI/compare/ffai-mercury-v1.0.2...ffai-mercury-v1.0.3) - 2026-08-29
 
 ### Other

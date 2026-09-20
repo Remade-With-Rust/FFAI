@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5](https://github.com/Remade-With-Rust/FFAI/compare/ffai-models-v0.6.4...ffai-models-v0.6.5) - 2026-09-20
+
+### Other
+
+- updated the following local packages: ffai-core
+
 ## [0.6.4](https://github.com/Remade-With-Rust/FFAI/compare/ffai-models-v0.6.3...ffai-models-v0.6.4) - 2026-08-29
 
 ### Other
