@@ -101,4 +101,9 @@ allow-git = [
     # Our candle branch off the 0.11.0 tag — see the `[patch.crates-io]` note in
     # the root manifest. Four cfg gates; nothing else differs from the tag.
     "https://github.com/Remade-With-Rust/candle",
+    # The house serde_json fork, reached through `[patch.crates-io]` in the root
+    # manifest. It arrived with the JSON swap and its source was never added
+    # here, so `cargo deny check sources` failed the moment that swap reached
+    # master.
+    "https://github.com/Remade-With-Rust/rusty_json_turbo",
 ]

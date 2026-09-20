@@ -98,11 +98,11 @@ version = "0.7.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.aws-lc-rs]]
-version = "1.17.3"
+version = "1.18.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.aws-lc-sys]]
-version = "0.43.0"
+version = "0.45.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.base16ct]]
@@ -366,55 +366,55 @@ version = "2.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-argus]]
-version = "0.7.2"
+version = "0.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-argus-wasm]]
-version = "0.1.0"
+version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-bench]]
-version = "0.7.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-carmenta]]
-version = "0.10.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-carmenta-wasm]]
-version = "0.2.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-cli]]
-version = "0.6.7"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-core]]
-version = "0.7.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.ffai-diana]]
 version = "0.7.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.ffai-carmenta]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-carmenta-wasm]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-cli]]
+version = "0.6.8"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-core]]
+version = "0.7.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-diana]]
+version = "0.7.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.ffai-media]]
-version = "0.6.5"
+version = "0.6.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-mercury]]
-version = "1.0.2"
+version = "1.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-mercury-wasm]]
-version = "0.1.0"
+version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-models]]
-version = "0.6.3"
+version = "0.6.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-wasm]]
-version = "0.1.2"
+version = "0.1.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
@@ -906,7 +906,7 @@ version = "6.4.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]
-version = "0.23.42"
+version = "0.23.45"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-native-certs]]
@@ -926,7 +926,7 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-webpki]]
-version = "0.103.13"
+version = "0.103.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty-fork]]
