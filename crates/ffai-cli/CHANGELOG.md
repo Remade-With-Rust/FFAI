@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.9](https://github.com/Remade-With-Rust/FFAI/compare/ffai-cli-v0.6.8...ffai-cli-v0.6.9) - 2026-09-20
+
+### Other
+
+- Merge remote-tracking branch 'origin/master' into docs/reconcile-claims
+- bring every Remade-With-Rust crate to its latest published version
+
 ## [0.6.8](https://github.com/Remade-With-Rust/FFAI/compare/ffai-cli-v0.6.7...ffai-cli-v0.6.8) - 2026-08-29
 
 ### Other
