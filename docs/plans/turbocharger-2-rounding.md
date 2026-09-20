@@ -135,7 +135,11 @@ hoisted out of the pixel loop to O(nw) + O(3·nh) by an earlier campaign.
 
 ---
 
-## 5. The three GATED experiments, not yet run
+## 5. The three GATED experiments
+
+> **Updated after §7.4.** (1) and (2) were run and **reverted** — the exact
+> substitution works and the loop still does not widen, because the barrier
+> there is the saturating cast, not the rounding. (3) is untouched.
 
 These are the only remaining sites with real per-element frequency. Each
 changes output, so none can be gated byte-identically.
@@ -247,6 +251,65 @@ ties-away-from-zero, and ties-away has its own branchless packed-SSE2 form:
 the single case where `|x| + 0.5` rounds up across the boundary (the classic
 `0.49999997` trap). If that lands exact, the gate is `cmp`, not a corpus run.
 That is the next experiment, and it is a better one than §5 described.
+
+---
+
+### 7.4 `vocab_int8` — the call came out exactly, and it STILL did not widen
+
+§7.3's plan was run. The exact-ties-away primitive works; the conclusion it
+was built to support does not.
+
+**[`round_ties_away_i32`](../../crates/ffai-core/src/fastmath.rs) is exact.**
+`trunc(|x| + 0.5)` with one correction, swept against `f32::round` at
+one-ulp resolution around every half-boundary in +/-200, densely across the
+quantiser's range, and at the edges. Two real bugs surfaced while building
+it, and both are now pinned by tests:
+
+1. **The obvious correction cancels.** `(t as f32) - a > 0.5` looks right and
+   is wrong: at `a = 0.499_999_97` the true difference is `0.500_000_03`,
+   which is exactly halfway between two f32 and **rounds to 0.5** — so `> 0.5`
+   is false, the correction never fires, and the function returns 1 where
+   `round` returns 0. Reformulated as `(t as f32) - 0.5 > a`, which does not
+   subtract two nearly-equal quantities. This is the same shape as the
+   `1 - 2/(e^2x + 1)` trap in `rusty-fast-transcendentals` §4.
+2. **Negating the integer is wrong at the rail.** `-i32::MAX` is
+   `i32::MIN + 1`, but `(-inf).round() as i32` is `i32::MIN`. The sign is now
+   applied in float, before a single saturating cast.
+
+**Wired into both `vocab_int8` sites, 136 mercury tests pass and `callq
+roundf` across the whole crate goes 2 → 0.** So the barrier named in §7.3 was
+removed, exactly as intended.
+
+**And the loop still did not widen.**
+
+| `cpu_fwd` | before | after |
+|---|---:|---:|
+| body lines | 345 | **371** |
+| scalar float ops | 19 | **26** |
+| ymm refs | 0 | 0 |
+| packed arithmetic | none | none |
+| `callq roundf` (crate) | 2 | **0** |
+
+One layer down again, and it is a mechanism neither §7.3 nor the skill
+anticipated: **Rust's `as i32` on a float is *saturating*, and LLVM emits two
+data-dependent branches for it** — `ucomiss` + `ja` for the range rail and
+`ucomiss` + `jp` for NaN. The original had one such cast; the exact
+formulation needs **two**. So the change trades one libm call for ~26
+instructions and two extra branches, in a loop that vectorises neither way.
+
+**Reverted at the call sites.** "Revert if not faster" is the rule, and this
+is not demonstrably faster — it is a coin flip that adds instructions. The
+primitive stays in `fastmath`: it is proven, its tests document two traps that
+actually bit, and it becomes immediately useful the moment the cast question
+below is answered.
+
+**The real barrier, now named.** In this loop the blocker was never `round` —
+it is the saturating float→int cast. Removing it needs either
+`f32::to_int_unchecked` behind a proven range, or a clamp expressed so LLVM
+can prove the rails dead. The first is `unsafe`, and this workspace sets
+`unsafe_code = "warn"` at the root, so that is an owner's decision with a
+`SAFETY` invariant to write — not a drive-by. **That, not another rounding
+substitution, is the next experiment here.**
 
 ---
 

@@ -310,6 +310,148 @@ pub fn floor_frac_nonneg(x: f32) -> (u32, f32) {
     (i, x - i as f32)
 }
 
+/// `x.round() as i32` — ties **away from zero**, branchless, no libm call.
+///
+/// `f32::round` is the one rounding mode **no x86 instruction implements at
+/// any baseline**: `roundss`/`vroundps` are ties-to-even. So it lowers to a
+/// call, and in `vocab_int8`'s quantiser that call was the *only* thing in an
+/// otherwise unit-stride, pure-arithmetic loop that could not be widened.
+///
+/// The obvious substitute — the magic number of [`round_ties_even_fast`] — is
+/// a **different function**: on an exact `.5` it picks the even neighbour, so
+/// a quantiser swapping to it emits a different `i8` and needs a corpus gate.
+/// This one does not, because it reproduces ties-away exactly.
+///
+/// `trunc(|x| + 0.5)` is ties-away everywhere except the one case where
+/// `|x| + 0.5` rounds UP across an integer in f32 — classically
+/// `0.499_999_97 + 0.5 == 1.0`, which would answer 1 where `round` answers 0.
+/// The comparison catches exactly that case and takes the step back. Every op
+/// here (`andps` for `abs`, `addss`, `cvttss2si`, a compare, a conditional
+/// negate) has a packed SSE2 twin, so the loop can widen.
+#[inline(always)]
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+// The truncating cast IS the operation, and it saturates rather than wrapping,
+// so a value outside i32 clamps at the ends instead of becoming a plausible
+// wrong number. NaN casts to 0, which is what `NaN.round() as i32` also gives.
+pub fn round_ties_away_i32(x: f32) -> i32 {
+    let a = x.abs();
+    let t = (a + 0.5) as i32;
+    // Did adding 0.5 carry us past an integer `a` never actually reached?
+    //
+    // Tested as `t - 0.5 > a` and deliberately NOT as `t - a > 0.5`. The
+    // second form CANCELS: at a = 0.499_999_97 the true difference is
+    // 0.500_000_03, which is exactly halfway between two f32 and rounds to
+    // 0.5 — so `> 0.5` is false, the correction never fires, and the function
+    // silently returns 1 where `round` returns 0. That was the first draft of
+    // this line and `the_half_boundary_trap_is_corrected` caught it.
+    //
+    // `t as f32 - 0.5` is exact for every `t` reachable here, and `>` is
+    // strict so an exact tie (a == t - 0.5) keeps `t` — which is ties-AWAY.
+    let t = t - i32::from((t as f32) - 0.5 > a);
+    // Re-sign in FLOAT, not by negating the integer: `-i32::MAX` is
+    // `i32::MIN + 1`, but `(-inf).round() as i32` is `i32::MIN`. Doing it here
+    // leaves ONE saturating cast, and it saturates symmetrically.
+    (t as f32).copysign(x) as i32
+}
+
+#[cfg(test)]
+mod round_away_tests {
+    use super::*;
+
+    fn oracle(x: f32) -> i32 {
+        x.round() as i32
+    }
+
+    /// The trap this function exists for. `0.499_999_97 + 0.5` rounds to
+    /// exactly 1.0 in f32, so an uncorrected `trunc(|x| + 0.5)` answers 1.
+    #[test]
+    fn the_half_boundary_trap_is_corrected() {
+        let x = 0.499_999_97_f32;
+        assert_eq!(
+            (x + 0.5) as i32,
+            1,
+            "the uncorrected form really does say 1"
+        );
+        assert_eq!(oracle(x), 0);
+        assert_eq!(round_ties_away_i32(x), 0);
+        assert_eq!(round_ties_away_i32(-x), 0);
+    }
+
+    /// Ties go AWAY from zero, not to even — the property that makes this a
+    /// drop-in for `f32::round` and the magic number not one.
+    #[test]
+    fn ties_go_away_from_zero_not_to_even() {
+        for (x, want) in [
+            (0.5f32, 1),
+            (1.5, 2),
+            (2.5, 3),
+            (3.5, 4),
+            (-0.5, -1),
+            (-2.5, -3),
+        ] {
+            assert_eq!(round_ties_away_i32(x), want, "at {x}");
+            assert_eq!(oracle(x), want, "oracle disagrees at {x}");
+        }
+        // And it is genuinely different from ties-to-even at 2.5.
+        assert_eq!(
+            round_ties_even_fast(2.5),
+            2.0,
+            "magic number is ties-to-even"
+        );
+        assert_eq!(round_ties_away_i32(2.5), 3, "this one is ties-away");
+    }
+
+    /// Every integer boundary in the quantiser's range, from both sides, at
+    /// one-ulp resolution — where a rounding bug can only live.
+    #[test]
+    fn matches_libm_at_every_half_boundary() {
+        for n in -200i32..=200 {
+            for base in [n as f32, n as f32 + 0.5, n as f32 - 0.5] {
+                let mut v = base;
+                for _ in 0..3 {
+                    v = f32::from_bits(v.to_bits().wrapping_sub(1));
+                }
+                for _ in 0..7 {
+                    assert_eq!(
+                        round_ties_away_i32(v),
+                        oracle(v),
+                        "at {v:e} ({:#x})",
+                        v.to_bits()
+                    );
+                    v = f32::from_bits(v.to_bits().wrapping_add(1));
+                }
+            }
+        }
+    }
+
+    /// A dense sweep across the range `vocab_int8` actually produces
+    /// (`x / scale` lands in about +/-64) plus well outside it.
+    #[test]
+    fn matches_libm_across_the_quantiser_range() {
+        let mut x = -300.0f32;
+        while x < 300.0 {
+            assert_eq!(round_ties_away_i32(x), oracle(x), "at {x}");
+            x += 0.000_976_562_5; // exact in binary; the sweep does not drift
+        }
+    }
+
+    #[test]
+    fn edges_behave_as_the_oracle_does() {
+        for v in [
+            0.0f32,
+            -0.0,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            1e30,
+            -1e30,
+        ] {
+            assert_eq!(round_ties_away_i32(v), oracle(v), "at {v}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod floor_tests {
     use super::*;
