@@ -7,7 +7,7 @@ members = ["crates/*"]
 exclude = ["demo-ui"]
 
 [workspace.package]
-version = "0.7.4"
+version = "0.7.5"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -17,13 +17,13 @@ authors = ["Remade With Rust"]
 [workspace.dependencies]
 # ---- internal crates ----
 ffai-core = { path = "crates/ffai-core", version = "0.8.0" }
-ffai-media = { path = "crates/ffai-media", version = "0.6.7" }
-ffai-models = { path = "crates/ffai-models", version = "0.6.5" }
-ffai-mercury = { path = "crates/ffai-mercury", version = "1.0.4" }
+ffai-media = { path = "crates/ffai-media", version = "0.6.8" }
+ffai-models = { path = "crates/ffai-models", version = "0.6.6" }
+ffai-mercury = { path = "crates/ffai-mercury", version = "1.0.5" }
 ffai-carmenta = { path = "crates/ffai-carmenta", version = "0.11.0" }
-ffai-diana = { path = "crates/ffai-diana", version = "0.7.7" }
-ffai-argus = { path = "crates/ffai-argus", version = "0.7.4" }
-ffai-bench = { path = "crates/ffai-bench", version = "0.7.6" }
+ffai-diana = { path = "crates/ffai-diana", version = "0.7.8" }
+ffai-argus = { path = "crates/ffai-argus", version = "0.7.5" }
+ffai-bench = { path = "crates/ffai-bench", version = "0.7.7" }
 
 # ---- tensor spine ----
 # Candle is FFai's PyTorch: every engine shares its Tensor/Device types so

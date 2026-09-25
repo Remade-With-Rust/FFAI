@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.7.7...ffai-diana-v0.7.8) - 2026-09-25
+
+### Other
+
+- dependency bump only: ffai-core 0.8 / ffai-carmenta 0.11 / ffai-models 0.6.6 (see the workspace CHANGELOG)
+
+## [0.7.7](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.7.6...ffai-diana-v0.7.7) - 2026-09-20
+
+### Other
+
+- Merge remote-tracking branch 'origin/master' into docs/reconcile-claims
+- bring every Remade-With-Rust crate to its latest published version
+- hoist the bounds checks out of six per-pixel loops, safely
+- *(core,carmenta,diana)* take floor out of five per-pixel loops
+- reconcile the claim surface, and open the rounding census
+
 ## [0.7.6](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.7.5...ffai-diana-v0.7.6) - 2026-08-29
 
 ### Other

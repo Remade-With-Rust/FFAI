@@ -30,13 +30,18 @@ mechanics are in `.github/workflows/release.yml`.
 
 | crate | from | to | why |
 |---|---|---|---|
-| `ffai-core` | 0.7.1 | **0.8.0** | `OcrOptions` gains `charset`, `remove_rules`, `auto_orient`: new public fields break struct-literal construction |
-| `ffai-carmenta` | 0.10.1 | **0.11.0** | orientation, checkboxes, forms, lexicon, offline weights; follows core 0.8 |
-| `ffai-cli` | 0.6.8 | **0.7.0** | `ffai ocr` takes PDFs, `--charset`, `--remove-rules`, `--auto-orient`, `--checkboxes`; `ffai models --verify` |
-| `ffai-media` | 0.6.6 | 0.6.7 | `decode_image`, opt-in `pdf` feature (additive) |
-| `ffai-models` | 0.6.4 | 0.6.5 | `resolve_only_in`, `verify` (additive) |
-| `ffai-bench` | 0.7.5 | 0.7.6 | digit error rate in OCR notes |
-| `ffai-carmenta-wasm`, `ffai-diana`, `ffai-mercury`, `ffai-wasm`, `ffai-mercury-wasm`, `ffai-argus-wasm`, `ffai-py` | — | patch | dependency bumps only (core 0.8 / carmenta 0.11) |
+| `ffai-core` | 0.7.2 | **0.8.0** | `OcrOptions` gains `charset`, `remove_rules`, `auto_orient`: new public fields break struct-literal construction |
+| `ffai-carmenta` | 0.10.2 | **0.11.0** | orientation, checkboxes, forms, lexicon, offline weights; follows core 0.8 |
+| `ffai-cli` | 0.6.9 | **0.7.0** | `ffai ocr` takes PDFs, `--charset`, `--remove-rules`, `--auto-orient`, `--checkboxes`; `ffai models --verify` |
+| `ffai-media` | 0.6.7 | 0.6.8 | `decode_image`, opt-in `pdf` feature (additive) |
+| `ffai-models` | 0.6.5 | 0.6.6 | `resolve_only_in`, `verify` (additive) |
+| `ffai-bench` | 0.7.6 | 0.7.7 | digit error rate in OCR notes |
+| `ffai-argus` | 0.7.4 | 0.7.5 | dependency bumps only |
+| `ffai-diana` | 0.7.7 | 0.7.8 | dependency bumps only |
+| `ffai-mercury` | 1.0.4 | 1.0.5 | dependency bumps only |
+| `ffai-carmenta-wasm` | 0.2.2 | 0.2.3 | dependency bumps only |
+| `ffai-mercury-wasm`, `ffai-argus-wasm` | 0.1.2 | 0.1.3 | dependency bumps only |
+| `ffai-wasm` | 0.1.4 | 0.1.5 | dependency bumps only |
 
 A dependent that exposes `ffai-core` types in its own API takes a patch bump
 here, following release-plz's convention. Strictly, a type from core 0.8 is not

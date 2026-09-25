@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-wasm-v0.1.2...ffai-argus-wasm-v0.1.3) - 2026-09-25
+
+### Other
+
+- dependency bump only: ffai-core 0.8 / ffai-carmenta 0.11 / ffai-models 0.6.6 (see the workspace CHANGELOG)
+
+## [0.1.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-wasm-v0.1.1...ffai-argus-wasm-v0.1.2) - 2026-09-20
+
+### Other
+
+- Merge remote-tracking branch 'origin/master' into docs/reconcile-claims
+- bring every Remade-With-Rust crate to its latest published version
+
 ## [0.1.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-wasm-v0.1.0...ffai-argus-wasm-v0.1.1) - 2026-08-29
 
 ### Other

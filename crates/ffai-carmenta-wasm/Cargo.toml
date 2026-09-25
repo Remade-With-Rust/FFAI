@@ -5,7 +5,7 @@ description = "Carmenta in the browser — pure-Rust OCR compiled to WebAssembly
 # slice. The JS signature is unchanged — it is still a `Uint8Array` — but the
 # Rust signature is, so this is a breaking change for a Rust consumer even
 # though a browser sees nothing. Adds `setDetMaxShort` and `linearMemoryBytes`.
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

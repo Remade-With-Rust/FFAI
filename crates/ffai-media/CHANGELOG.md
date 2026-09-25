@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.6.7...ffai-media-v0.6.8) - 2026-09-25
+
+### Added
+
+- `decode_image(&[u8])`
+- opt-in `pdf` feature: pages composited as a viewer shows them, so redactions are painted in rather than read through; `redaction_risk` on text layers; allocations from untrusted PDF values are bounded
+
+## [0.6.7](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.6.6...ffai-media-v0.6.7) - 2026-09-20
+
+### Other
+
+- Merge remote-tracking branch 'origin/master' into docs/reconcile-claims
+- bring every Remade-With-Rust crate to its latest published version
+
 ## [0.6.6](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.6.5...ffai-media-v0.6.6) - 2026-08-29
 
 ### Other
