@@ -102,6 +102,16 @@ impl RecLang {
             Self::ChineseSimplified => "crnn-zh-sim-g2",
         }
     }
+
+    /// The files a loader opens for this variant: English's charset is
+    /// compiled in, Chinese reads `charset.txt` beside the weights.
+    #[must_use]
+    pub fn runtime_files(self) -> &'static [&'static str] {
+        match self {
+            Self::English => &["crnn.safetensors"],
+            Self::ChineseSimplified => &["crnn.safetensors", "charset.txt"],
+        }
+    }
 }
 
 /// The charset a variant decodes with.
@@ -173,6 +183,29 @@ impl Crnn {
     /// CTC greedy decode against THIS model's charset.
     pub fn decode(&self, logits: &Tensor) -> Result<(String, Option<f32>)> {
         ctc_greedy_with(logits, &self.charset)
+    }
+
+    /// CTC greedy decode restricted to the classes `mask` allows — see
+    /// [`ctc_greedy_masked`]. Build the mask with [`Self::class_mask`].
+    pub fn decode_masked(&self, logits: &Tensor, mask: &[bool]) -> Result<(String, Option<f32>)> {
+        ctc_greedy_masked(logits, &self.charset, mask)
+    }
+
+    /// Per-class allow mask for `allowed`: index 0 (blank) always true, class
+    /// `i` true when `charset[i - 1]` is in `allowed`. A requested character
+    /// this model cannot emit is an error naming it — silently dropping it
+    /// would make the constraint mean something other than what was asked.
+    pub fn class_mask(&self, allowed: &str) -> Result<Vec<bool>> {
+        let missing: String = allowed.chars().filter(|c| !self.charset.contains(c)).collect();
+        if !missing.is_empty() {
+            return Err(candle_core::Error::Msg(format!(
+                "charset constraint: this recognizer cannot emit {missing:?}"
+            )));
+        }
+        let mut mask = Vec::with_capacity(self.charset.len() + 1);
+        mask.push(true);
+        mask.extend(self.charset.iter().map(|c| allowed.contains(*c)));
+        Ok(mask)
     }
 
     /// How many characters this instance can emit — 96 for English, 6 718 for
@@ -247,17 +280,116 @@ pub fn ctc_greedy_with(logits: &Tensor, charset: &[char]) -> Result<(String, Opt
         }
         prev = id;
     }
-    let conf = if confs.is_empty() {
-        None
-    } else {
-        Some(confs.iter().sum::<f32>() / confs.len() as f32)
-    };
-    Ok((out, conf))
+    Ok((out, line_confidence(&confs)))
+}
+
+/// How a line's per-character probabilities become one confidence.
+///
+/// The shipped reduction is the MEAN. `FFAI_CONF_REDUCE=min` reports the
+/// weakest character instead — the calibration experiment of
+/// docs/plans/commercial-gaps.md gap 12: a line with one badly-read character
+/// averages out to a confident mean, and a caller gating on confidence keeps
+/// it. Experimental until the form bench says which separates right from
+/// wrong better.
+#[must_use]
+pub fn line_confidence(confs: &[f32]) -> Option<f32> {
+    static MIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if confs.is_empty() {
+        return None;
+    }
+    if *MIN.get_or_init(|| std::env::var("FFAI_CONF_REDUCE").is_ok_and(|v| v == "min")) {
+        return confs.iter().copied().reduce(f32::min);
+    }
+    Some(confs.iter().sum::<f32>() / confs.len() as f32)
+}
+
+/// [`ctc_greedy_with`], with the argmax at each step taken only over the
+/// classes `mask` allows (`mask[0]`, the blank, must be allowed).
+///
+/// The kept confidence is the step's softmax probability for the chosen class
+/// over the FULL distribution — deliberately not renormalised over the allowed
+/// set. Renormalising would report a forced digit with high confidence even
+/// where the model put nearly all its mass on a letter; unrenormalised, that
+/// line comes back with low confidence, which is the signal a caller gating on
+/// confidence needs.
+///
+/// With every class allowed this is `ctc_greedy_with`, character for
+/// character (`masked_decode_with_everything_allowed_is_the_free_decode`).
+pub fn ctc_greedy_masked(
+    logits: &Tensor,
+    charset: &[char],
+    mask: &[bool],
+) -> Result<(String, Option<f32>)> {
+    let probs = candle_nn::ops::softmax(logits, 1)?.to_vec2::<f32>()?;
+    if mask.len() != charset.len() + 1 || !mask[0] {
+        return Err(candle_core::Error::Msg(format!(
+            "class mask has {} entries with blank {}; the head has {} classes",
+            mask.len(),
+            if mask.first() == Some(&true) { "allowed" } else { "DISALLOWED" },
+            charset.len() + 1
+        )));
+    }
+    let mut out = String::new();
+    let mut confs = Vec::new();
+    let mut prev = 0usize;
+    for row in &probs {
+        // First maximum among allowed classes, matching argmax's tie rule.
+        let (id, p) = row
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| mask[*i])
+            .fold((0usize, f32::NEG_INFINITY), |best, (i, &p)| if p > best.1 { (i, p) } else { best });
+        if id != 0 && id != prev {
+            out.push(charset[id - 1]);
+            confs.push(p);
+        }
+        prev = id;
+    }
+    Ok((out, line_confidence(&confs)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Logits for a toy 3-char charset "abc": steps favour a, a, blank, c, b.
+    fn toy_logits() -> Tensor {
+        let rows: Vec<f32> = vec![
+            0.0, 5.0, 1.0, 0.0, // a
+            0.0, 5.0, 1.0, 0.0, // a (repeat, collapsed)
+            5.0, 0.0, 0.0, 0.0, // blank
+            0.0, 0.0, 1.0, 4.0, // c
+            0.0, 1.0, 3.0, 2.0, // b
+        ];
+        Tensor::from_vec(rows, (5, 4), &candle_core::Device::Cpu).unwrap()
+    }
+
+    #[test]
+    fn masked_decode_with_everything_allowed_is_the_free_decode() {
+        let cs = ['a', 'b', 'c'];
+        let free = ctc_greedy_with(&toy_logits(), &cs).unwrap();
+        let masked = ctc_greedy_masked(&toy_logits(), &cs, &[true; 4]).unwrap();
+        assert_eq!(free.0, "acb");
+        assert_eq!(free, masked);
+    }
+
+    /// Disallowing `a` must substitute the best ALLOWED class at those steps,
+    /// and the confidence must fall — the forced choice is reported honestly.
+    #[test]
+    fn masked_decode_substitutes_and_reports_the_lower_confidence() {
+        let cs = ['a', 'b', 'c'];
+        let free = ctc_greedy_with(&toy_logits(), &cs).unwrap();
+        let masked = ctc_greedy_masked(&toy_logits(), &cs, &[true, false, true, true]).unwrap();
+        assert_eq!(masked.0, "bcb");
+        assert!(masked.1.unwrap() < free.1.unwrap(), "{masked:?} vs {free:?}");
+    }
+
+    #[test]
+    fn a_mask_that_disallows_blank_or_mis_sizes_the_head_is_refused() {
+        let cs = ['a', 'b', 'c'];
+        assert!(ctc_greedy_masked(&toy_logits(), &cs, &[false, true, true, true]).is_err());
+        assert!(ctc_greedy_masked(&toy_logits(), &cs, &[true; 3]).is_err());
+    }
 
     /// The switch is OFF unless asked for, and only for the values documented.
     #[test]

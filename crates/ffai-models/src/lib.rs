@@ -179,15 +179,115 @@ impl ModelManifest {
             files,
         })
     }
+
+    /// Resolve every file from `root/<model name>/<file>` and nowhere else —
+    /// **no cache lookup, no network, ever.**
+    ///
+    /// This is the production form for a scheduled or offline job: the caller
+    /// states where weights live, a missing file is an error naming the exact
+    /// path that was expected, and nothing is fetched mid-job
+    /// (docs/plans/commercial-gaps.md, gap 7). Checksums are verified exactly
+    /// as [`Self::fetch`] verifies them.
+    pub fn resolve_in(&self, root: &Path) -> Result<ResolvedModel> {
+        let all: Vec<&str> = self.files.iter().map(|f| f.name.as_str()).collect();
+        self.resolve_only_in(root, &all)
+    }
+
+    /// [`Self::resolve_in`], for just the named files.
+    ///
+    /// A manifest documents provenance as well as runtime needs, so it can list
+    /// files no engine loads. `ppocrv5-mobile-det`, for example, lists its
+    /// training checkpoint, the source of the fused weights. An offline
+    /// deployment must not be made to ship those, so a loader asks for what it
+    /// will open. A name the manifest does not declare is an error, because it
+    /// has no checksum to verify against.
+    pub fn resolve_only_in(&self, root: &Path, needed: &[&str]) -> Result<ResolvedModel> {
+        let dir = root.join(&self.name);
+        let mut files = BTreeMap::new();
+        for name in needed {
+            if !self.files.iter().any(|f| f.name == *name) {
+                return Err(Error::Model(format!(
+                    "model `{}` declares no file `{name}` — it has no checksum to verify against",
+                    self.name
+                )));
+            }
+        }
+        for file in self
+            .files
+            .iter()
+            .filter(|f| needed.contains(&f.name.as_str()))
+        {
+            let path = dir.join(&file.name);
+            if !path.is_file() {
+                return Err(Error::Model(format!(
+                    "model `{}` needs `{}`, expected at {} — not present (offline resolution \
+                     never downloads)",
+                    self.name,
+                    file.name,
+                    path.display()
+                )));
+            }
+            verify_checksum(&path, file)?;
+            files.insert(file.name.clone(), path);
+        }
+        Ok(ResolvedModel {
+            name: self.name.clone(),
+            license: self.license.clone(),
+            files,
+        })
+    }
+
+    /// Check that every file is already present locally and matches its
+    /// checksum, **without downloading anything** — the `verify` half of
+    /// `prefetch`/`verify`. Resolves exactly where [`Self::fetch`] would look.
+    pub fn verify(&self) -> Result<ResolvedModel> {
+        let mut files = BTreeMap::new();
+        for file in &self.files {
+            let path = self.local_path(&file.name).ok_or_else(|| {
+                Error::Model(format!(
+                    "model `{}` is missing `{}` (looked under {}{})",
+                    self.name,
+                    file.name,
+                    self.cache_path().display(),
+                    if self.hf_repo.is_some() {
+                        " and the Hugging Face cache"
+                    } else {
+                        ""
+                    }
+                ))
+            })?;
+            verify_checksum(&path, file)?;
+            files.insert(file.name.clone(), path);
+        }
+        Ok(ResolvedModel {
+            name: self.name.clone(),
+            license: self.license.clone(),
+            files,
+        })
+    }
 }
 
 /// Load every `*.toml` manifest in a directory (typically `models/`).
+///
+/// A missing directory is an error that NAMES the directory. The bare i/o
+/// error ("The system cannot find the path specified") is what a crates.io
+/// user got when `models/` did not exist relative to their working directory,
+/// and it reads like missing weights rather than a missing manifest folder.
 pub fn load_dir(dir: &Path) -> Result<Vec<ModelManifest>> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        Error::Model(format!(
+            "cannot read model manifest directory {}: {e}",
+            dir.display()
+        ))
+    })?;
+    for entry in entries {
         let path = entry?.path();
         if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-            out.push(ModelManifest::load(&path)?);
+            out.push(
+                ModelManifest::load(&path)
+                    .map_err(|e| Error::Model(format!("{}: {e}", path.display())))?,
+            );
         }
     }
     out.sort_by(|a, b| a.task.cmp(&b.task).then_with(|| a.name.cmp(&b.name)));
@@ -226,5 +326,108 @@ mod tests {
         assert_eq!(m.license, "Apache-2.0");
         assert_eq!(m.files.len(), 1);
         assert!(!m.is_cached());
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ffai-models-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn manifest_for(sha: &str) -> ModelManifest {
+        ModelManifest::from_toml(&format!(
+            r#"
+            name = "tiny-test"
+            task = "ocr"
+            license = "MIT"
+
+            [[files]]
+            name = "w.bin"
+            sha256 = "{sha}"
+            "#
+        ))
+        .unwrap()
+    }
+
+    /// sha256("abc")
+    const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    #[test]
+    fn resolve_in_names_the_exact_missing_path_and_never_fetches() {
+        let root = scratch("missing");
+        let err = manifest_for(ABC).resolve_in(&root).unwrap_err().to_string();
+        let want = root.join("tiny-test").join("w.bin");
+        assert!(
+            err.contains(&want.display().to_string()),
+            "error must name {}: {err}",
+            want.display()
+        );
+        assert!(err.contains("never downloads"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_in_finds_and_checksums_a_placed_file() {
+        let root = scratch("present");
+        std::fs::create_dir_all(root.join("tiny-test")).unwrap();
+        std::fs::write(root.join("tiny-test").join("w.bin"), b"abc").unwrap();
+        let r = manifest_for(ABC).resolve_in(&root).unwrap();
+        assert_eq!(
+            r.file("w.bin").unwrap(),
+            root.join("tiny-test").join("w.bin")
+        );
+
+        // Same bytes, wrong declared checksum: an error, not a warning.
+        let bad = manifest_for(&"0".repeat(64))
+            .resolve_in(&root)
+            .unwrap_err()
+            .to_string();
+        assert!(bad.contains("checksum mismatch"), "{bad}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_dir_names_a_missing_directory() {
+        let missing = std::env::temp_dir().join("ffai-models-definitely-absent-dir");
+        let err = load_dir(&missing).unwrap_err().to_string();
+        assert!(err.contains(&missing.display().to_string()), "{err}");
+    }
+
+    /// Only the named files are required, so a provenance-only file (a
+    /// training checkpoint) need not be shipped; but an undeclared name is
+    /// refused, because there is no checksum to verify it against.
+    #[test]
+    fn resolve_only_in_needs_just_the_named_files_and_refuses_undeclared_ones() {
+        let root = scratch("subset");
+        std::fs::create_dir_all(root.join("tiny-test")).unwrap();
+        std::fs::write(root.join("tiny-test").join("w.bin"), b"abc").unwrap();
+        let m = ModelManifest::from_toml(&format!(
+            r#"
+            name = "tiny-test"
+            task = "ocr"
+            license = "MIT"
+
+            [[files]]
+            name = "w.bin"
+            sha256 = "{ABC}"
+
+            [[files]]
+            name = "train-only.bin"
+            "#
+        ))
+        .unwrap();
+        assert!(
+            m.resolve_in(&root).is_err(),
+            "the full set includes an absent file"
+        );
+        let r = m.resolve_only_in(&root, &["w.bin"]).unwrap();
+        assert_eq!(r.files.len(), 1);
+        let err = m
+            .resolve_only_in(&root, &["nope.bin"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("declares no file `nope.bin`"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

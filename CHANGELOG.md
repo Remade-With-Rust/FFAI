@@ -26,6 +26,154 @@ mechanics are in `.github/workflows/release.yml`.
 
 ## [Unreleased]
 
+### Versions
+
+| crate | from | to | why |
+|---|---|---|---|
+| `ffai-core` | 0.7.2 | **0.8.0** | `OcrOptions` gains `charset`, `remove_rules`, `auto_orient`: new public fields break struct-literal construction |
+| `ffai-carmenta` | 0.10.2 | **0.11.0** | orientation, checkboxes, forms, lexicon, offline weights; follows core 0.8 |
+| `ffai-cli` | 0.6.9 | **0.7.0** | `ffai ocr` takes PDFs, `--charset`, `--remove-rules`, `--auto-orient`, `--checkboxes`; `ffai models --verify` |
+| `ffai-media` | 0.6.7 | 0.6.8 | `decode_image`, opt-in `pdf` feature (additive) |
+| `ffai-models` | 0.6.5 | 0.6.6 | `resolve_only_in`, `verify` (additive) |
+| `ffai-bench` | 0.7.6 | 0.7.7 | digit error rate in OCR notes |
+| `ffai-argus` | 0.7.4 | 0.7.5 | dependency bumps only |
+| `ffai-diana` | 0.7.7 | 0.7.8 | dependency bumps only |
+| `ffai-mercury` | 1.0.4 | 1.0.5 | dependency bumps only |
+| `ffai-carmenta-wasm` | 0.2.2 | 0.2.3 | dependency bumps only |
+| `ffai-mercury-wasm`, `ffai-argus-wasm` | 0.1.2 | 0.1.3 | dependency bumps only |
+| `ffai-wasm` | 0.1.4 | 0.1.5 | dependency bumps only |
+
+A dependent that exposes `ffai-core` types in its own API takes a patch bump
+here, following release-plz's convention. Strictly, a type from core 0.8 is not
+the same type as one from core 0.7, so a caller that names both will see a
+mismatch until it moves to 0.8 as well.
+
+### Production gaps found by a real caller: batch 1
+
+`docs/plans/commercial-gaps.md` records what broke when `fraud-alert` used
+Carmenta on scanned financial-disclosure filings. This batch closes the gaps
+that needed no new model.
+
+- **`ffai-core` — BREAKING (a new public field).** `OcrOptions::charset:
+  Option<String>` restricts recognition to a character set, for example
+  `"0123456789$,.-"` for an amount field. Every in-repo construction already
+  used `..Default::default()`. A downstream struct literal that lists every
+  field will not compile until it adds the field or uses the default.
+- **`ffai-carmenta` — charset-constrained decoding** for the CRNN and SVTR
+  recognizers:
+  - The CTC argmax is taken only over blank plus the allowed classes.
+  - The reported confidence is the model's probability for the emitted
+    character over the full distribution, not renormalised. A line the model
+    wanted to read as letters comes back less confident, not as a confident
+    digit.
+  - PARSeq, and routing via `FFAI_ROUTE`, return an error when a charset is
+    set rather than ignoring it. So does a character the model cannot emit,
+    and the error names it.
+  - With every character allowed, the output equals the free decode (tested on
+    a real page).
+- **`ffai-carmenta` — no `models/` directory needed.** The six OCR manifests
+  are compiled in (`manifests::EMBEDDED`). A `models/` directory in the working
+  directory, or one passed to `with_manifest_dir` / `variant_in`, still
+  overrides them by model name. Before this, a crates.io user got
+  `i/o error: The system cannot find the path specified`.
+- **`ffai-carmenta` — `CraftCrnn::offline(rec, det, weights_root)`** for batch
+  and offline jobs:
+  - It uses the compiled-in manifests and reads weights only from
+    `weights_root/<model>/<file>`. It never touches the cache or the network.
+  - `preload()` loads eagerly, so a missing file stops the job before the first
+    page. The error names the exact expected path.
+- **`ffai-models`:**
+  - `ModelManifest::resolve_in(root)` does strict offline resolution with
+    checksums.
+  - `ModelManifest::verify()` checks presence and checksums without
+    downloading.
+  - `load_dir` names the directory when it cannot read it.
+- **`ffai-media` — `decode_image(&[u8])`** decodes bytes already in memory,
+  such as pages pulled from a PDF, with the same decoders and output contract
+  as `load_image`. Unrecognised bytes are an error that shows the leading
+  bytes.
+- **`ffai-cli`:**
+  - `ffai ocr --charset`.
+  - `ffai models --verify <name>` checks without downloading and exits
+    non-zero on failure.
+
+### Production gaps: batches 2 and 3
+
+- **`ffai-core` — two more `OcrOptions` fields, in the same breaking
+  release:**
+  - `remove_rules`: erase form rules before reading.
+  - `auto_orient`: detect which quarter turn is upright and read it that way.
+    Boxes stay in the input image's coordinates.
+
+  Engines that cannot honour either must return an error.
+- **`ffai-carmenta` — `rules`:** horizontal-rule removal. It keeps any pixel
+  whose vertical dark run is tall, so glyph strokes survive and filled boxes
+  (redactions) are never touched.
+  - On the new `carmenta-form-v1` corpus it takes `mobiledet-crnn` from 13-20 %
+    to 70 % exact on underlined values, matching its no-rule control.
+  - It is neutral on `mobiledet-svtr`, and worse on strikethroughs (77-87 % to
+    73 %). Opt-in.
+- **`ffai-carmenta` — `orient` and `CraftCrnn::detect_orientation`:**
+  - One detection pass decides the axis from box aspect.
+  - A dozen of the largest boxes are then read in both candidate turns; the
+    turn with higher recognition confidence wins.
+- **`ffai-carmenta` — `fold`:** full-width ASCII forms that SVTR emits into
+  Latin lines (`"$25，０00"`, `"12／31／2025"`) are folded to ASCII. Lines
+  containing any CJK character are left exactly as read. `FFAI_NO_FOLD`
+  disables it. This changes default output only on Latin lines that carried a
+  full-width form.
+- **`ffai-carmenta` — `FFAI_CONF_REDUCE=min`** (experimental): report a
+  line's weakest character probability instead of the mean. It is the
+  calibration experiment for callers that gate on confidence. The default is
+  unchanged and byte-identical.
+- **`ffai-media` — `pdf` feature, `pdf::pdf_pages(bytes)`:**
+  - Every page comes back as a viewer shows it: the scan composited with
+    filled paths, later images, form `XObjects`, and `Redact` / `Square` /
+    `Circle` / `Polygon` / `Stamp` annotations, then turned upright.
+  - A page that cannot be walked returns no image, never the raw scan.
+  - Decoders: DCT, CCITT G4 and G3-1D (via the pure-Rust `fax` crate), and
+    Flate/raw 1- and 8-bit samples in gray, RGB or CMYK, including stencil
+    masks.
+  - Depends on `lopdf` (default features off) and `fax`; both MIT.
+- **`ffai-cli`:** `ffai ocr -i file.pdf` reads PDFs page by page.
+  `--remove-rules` and `--auto-orient` are new.
+- **Corpora and benches:**
+  - `tools/carmenta_form_corpus.py` builds `carmenta-form-v1`: 240 clips of
+    invented form values, ground truth by construction.
+  - Three new examples in `ffai-carmenta`: `form_bench`, `orient_bench` and
+    `fold_census`.
+
+### Security
+
+- **`ffai-media::pdf` parses untrusted files and is bounded against them:**
+  - images are capped at 100 MP;
+  - image decompression is capped at the size the declared dimensions justify;
+  - form-content decompression is capped at 64 MiB;
+  - form nesting is capped at 8;
+  - ICC `/N`, bits per component and CCITT `/Columns` are validated before any
+    size arithmetic.
+
+  Two of these (the unbounded `/N` feeding the row-size arithmetic, and
+  uncapped form decompression) were found while writing the module and fixed
+  before it shipped. Numeric conversions are checked, or individually
+  justified, rather than silenced wholesale.
+- **Redactions:** the module exists to stop OCR reading through them. It
+  composites overlays in, and withholds a page it cannot walk. Its tests
+  include the reported incident (a white patch image over a scan must come out
+  black). They also caught `lopdf`'s annotation helper silently skipping inline
+  annotations, which would have read through an inline `Redact`.
+- No `unsafe` added. No change to what personal data is processed.
+
+### Security
+
+- **Changed:** `ModelManifest::resolve_in` and `CraftCrnn::offline` verify
+  every weight file against the checksum **compiled into the crate**, and never
+  download. For an offline deployment, what is trusted is now the release's
+  pinned hashes plus the caller's directory, not a cache a second process might
+  also write.
+- No `unsafe` added or changed. No change to what personal data is processed.
+  No advisory resolved or waived.
+
 ### `ffai-carmenta` 0.10.0 — the detector's short side gains a ceiling
 
 - **Changed** — `mobiledet_input` floored the short side at 736 and capped only

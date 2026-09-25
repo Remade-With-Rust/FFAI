@@ -9,6 +9,8 @@
 //! clear "pending rff integration" error rather than silently failing.
 
 pub mod annexb;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 
 use std::path::Path;
 
@@ -142,11 +144,8 @@ pub fn load_image(path: &Path) -> Result<ImageBuffer> {
     // decoder choice it was making. Reading once and passing the bytes down
     // costs nothing and removes a whole file read per image.
     let bytes = std::fs::read(path).map_err(|e| Error::Media(format!("open failed: {e}")))?;
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-        return decode_png(&bytes);
-    }
-    if bytes.starts_with(&[0xFF, 0xD8]) {
-        return decode_jpeg(bytes);
+    if let Some(decoded) = decode_by_magic(&bytes) {
+        return decoded;
     }
     let ext = path
         .extension()
@@ -155,12 +154,49 @@ pub fn load_image(path: &Path) -> Result<ImageBuffer> {
         .to_ascii_lowercase();
     match ext.as_str() {
         "png" => decode_png(&bytes),
-        "jpg" | "jpeg" => decode_jpeg(bytes),
+        "jpg" | "jpeg" => decode_jpeg(&bytes),
         other => Err(Error::Media(format!(
             "`.{other}` decode is not wired yet — PNG and JPEG are supported; WebP/AVIF \
              arrive with the rff image decoders. Convert with `ffmpeg -i in.{other} out.png`"
         ))),
     }
+}
+
+/// Decode a still image from bytes already in memory — the same decoders and
+/// the same output contract as [`load_image`], with no file involved.
+///
+/// This exists because a caller whose pages come out of a PDF, an archive or a
+/// network response holds BYTES, and `load_image` only took a path: the
+/// choices were a temporary file per page, or calling `rusty_jpeg` directly
+/// and re-implementing the grayscale/RGB handling this module already does
+/// (docs/plans/commercial-gaps.md, gap 9).
+///
+/// Dispatch is by magic bytes only — there is no filename to fall back on, so
+/// anything that is not PNG or JPEG is an error naming what was found.
+pub fn decode_image(bytes: &[u8]) -> Result<ImageBuffer> {
+    decode_by_magic(bytes).unwrap_or_else(|| {
+        let head: Vec<String> = bytes.iter().take(8).map(|b| format!("{b:02x}")).collect();
+        Err(Error::Media(format!(
+            "unrecognised image bytes (first bytes {}) — PNG and JPEG are supported",
+            if head.is_empty() {
+                "<empty>".to_string()
+            } else {
+                head.join(" ")
+            }
+        )))
+    })
+}
+
+/// The magic-byte half of both entry points. `None` means "not a format we
+/// recognise by content", so the path-based caller can still try the extension.
+fn decode_by_magic(bytes: &[u8]) -> Option<Result<ImageBuffer>> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Some(decode_png(bytes));
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        return Some(decode_jpeg(bytes));
+    }
+    None
 }
 
 /// JPEG, decoded by **`rusty_jpeg`** — ours, from crates.io.
@@ -177,7 +213,7 @@ pub fn load_image(path: &Path) -> Result<ImageBuffer> {
 /// OCR corpus is read through it, and changing an output FORMAT is a
 /// different decision from changing a decoder. Made separately, or not at
 /// all.
-fn decode_jpeg(data: Vec<u8>) -> Result<ImageBuffer> {
+fn decode_jpeg(data: &[u8]) -> Result<ImageBuffer> {
     use ffai_core::types::PixelFormat;
     use rusty_jpeg::{Decoder, PixelFormat as JpegFormat};
 
@@ -676,6 +712,43 @@ mod tests {
         let err = load_audio(Path::new("clip.mp3")).unwrap_err();
         assert!(err.to_string().contains("remade_ffmpeg_rs"));
     }
+
+    /// `decode_image` has no filename to fall back on, so unrecognised bytes
+    /// must be an error that shows what arrived — not a silent empty image.
+    #[test]
+    fn decode_image_refuses_unknown_bytes_and_says_what_it_saw() {
+        let err = decode_image(b"%PDF-1.7 not an image")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("25 50 44 46"),
+            "error should show the leading bytes: {err}"
+        );
+        let err = decode_image(&[]).unwrap_err().to_string();
+        assert!(err.contains("<empty>"), "empty input should say so: {err}");
+    }
+
+    /// A PNG built in memory decodes through `decode_image` with no file and
+    /// no corpus — the case a PDF-page caller is in.
+    #[test]
+    fn decode_image_reads_an_in_memory_png() {
+        let (w, h) = (5u32, 3u32);
+        let pixels: Vec<u8> = (0..w * h).map(|i| (i * 17) as u8).collect();
+        let mut bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut bytes, w, h);
+            enc.set_color(png::ColorType::Grayscale);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header()
+                .unwrap()
+                .write_image_data(&pixels)
+                .unwrap();
+        }
+        let img = decode_image(&bytes).unwrap();
+        assert_eq!((img.width, img.height), (w, h));
+        assert_eq!(img.format, ffai_core::types::PixelFormat::Gray8);
+        assert_eq!(img.data, pixels);
+    }
 }
 
 #[cfg(test)]
@@ -777,6 +850,24 @@ mod png_oracle {
         if n == 0 {
             eprintln!("SKIP jpeg/libjpeg twin check: corpus absent");
             return;
+        }
+        // The bytes entry point must be the path entry point with the file
+        // read removed: identical pixels for both formats.
+        for f in ["coco-000.src.jpg", "coco-000.png"] {
+            let p = root.join(f);
+            if p.exists() {
+                let by_path = load_image(&p).expect("path decode");
+                let by_bytes = decode_image(&std::fs::read(&p).unwrap()).expect("bytes decode");
+                assert_eq!(
+                    (by_path.width, by_path.height),
+                    (by_bytes.width, by_bytes.height)
+                );
+                assert_eq!(by_path.format, by_bytes.format, "{f}: format");
+                assert!(
+                    by_path.data == by_bytes.data,
+                    "{f}: decode_image differs from load_image"
+                );
+            }
         }
         assert!(
             worst <= 8,

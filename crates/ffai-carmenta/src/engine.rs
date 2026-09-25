@@ -97,11 +97,28 @@ struct Models {
     device: Device,
 }
 
+/// Where an engine's manifests and weights come from.
+#[derive(Clone)]
+enum Source {
+    /// `./models` when it exists — a repository checkout — overlaid on the
+    /// manifests compiled into the crate; otherwise the compiled-in ones alone.
+    /// Weights resolve through the cache and download when `fetch` is on.
+    Default,
+    /// A caller-named manifest directory, which MUST exist, overlaid on the
+    /// compiled-in manifests by model name. Weights as for `Default`.
+    ManifestDir(std::path::PathBuf),
+    /// The compiled-in manifests, and weights ONLY from `root/<model>/<file>`.
+    /// Never touches the cache or the network.
+    Offline(std::path::PathBuf),
+    /// Built by [`CraftCrnn::from_bytes`]; there is nothing to load.
+    Bytes,
+}
+
 pub struct CraftCrnn {
     /// Lazy: weights load on first `recognize`, matching Mercury's contract
     /// (the bench harness warms and records this separately).
     models: OnceLock<std::result::Result<Models, String>>,
-    manifest_dir: std::path::PathBuf,
+    source: Source,
     rec: RecStage,
     det: DetStage,
     /// §48: the three ONNX stages, loaded on first ROUTED page. Separate from
@@ -110,9 +127,12 @@ pub struct CraftCrnn {
 }
 
 impl CraftCrnn {
-    #[must_use] 
+    /// CRAFT + CRNN. Manifests come from `./models` when it exists and from
+    /// the copies compiled into this crate otherwise, so a crates.io user
+    /// needs no manifest directory at all — only the weights.
+    #[must_use]
     pub fn new() -> Self {
-        Self::with_manifest_dir(Path::new("models"))
+        Self::variant(RecStage::Crnn, DetStage::Craft)
     }
 
     /// The `craft-parseq` variant: same detection, PARSeq-tiny recognition.
@@ -135,24 +155,42 @@ impl CraftCrnn {
     }
 
     fn variant(rec: RecStage, det: DetStage) -> Self {
-        Self {
-            models: OnceLock::new(),
-            manifest_dir: Path::new("models").to_path_buf(),
-            rec,
-            det,
-            router: OnceLock::new(),
-        }
+        Self::with_source(rec, det, Source::Default)
     }
 
-    #[must_use] 
+    fn with_source(rec: RecStage, det: DetStage, source: Source) -> Self {
+        Self { models: OnceLock::new(), source, rec, det, router: OnceLock::new() }
+    }
+
+    /// CRAFT + CRNN with manifests read from `dir`, which must exist.
+    #[must_use]
     pub fn with_manifest_dir(dir: &Path) -> Self {
-        Self {
-            models: OnceLock::new(),
-            manifest_dir: dir.to_path_buf(),
-            rec: RecStage::Crnn,
-            det: DetStage::Craft,
-            router: OnceLock::new(),
-        }
+        Self::variant_in(RecStage::Crnn, DetStage::Craft, dir)
+    }
+
+    /// Any det/rec pair for an OFFLINE, scheduled or production job: the
+    /// manifests compiled into this crate, and weights read ONLY from
+    /// `weights_root/<model name>/<file>`.
+    ///
+    /// Nothing is looked up in the cache and nothing is downloaded, ever. A
+    /// missing or corrupt file is an error naming the exact path that was
+    /// expected and the checksum it failed (docs/plans/commercial-gaps.md,
+    /// gap 7). Call [`Self::preload`] at startup to fail before the first page
+    /// rather than on it.
+    ///
+    /// The layout under `weights_root` is the cache's own layout, so a
+    /// populated cache directory (`ffai models` prints its root) can be copied
+    /// or mounted as-is.
+    #[must_use]
+    pub fn offline(rec: RecStage, det: DetStage, weights_root: &Path) -> Self {
+        Self::with_source(rec, det, Source::Offline(weights_root.to_path_buf()))
+    }
+
+    /// Load every model now, returning the error instead of deferring it to
+    /// the first `recognize`. For a batch job, a missing weight file should
+    /// stop the job before page one, not after it has started writing output.
+    pub fn preload(&self) -> Result<()> {
+        self.models().map(|_| ())
     }
 
     /// Any det/rec pair, with manifests read from `dir`.
@@ -164,17 +202,11 @@ impl CraftCrnn {
     /// the other constructors assume does not resolve.
     #[must_use]
     pub fn variant_in(rec: RecStage, det: DetStage, dir: &Path) -> Self {
-        Self {
-            models: OnceLock::new(),
-            manifest_dir: dir.to_path_buf(),
-            rec,
-            det,
-            router: OnceLock::new(),
-        }
+        Self::with_source(rec, det, Source::ManifestDir(dir.to_path_buf()))
     }
 
     fn router(&self) -> Result<&crate::route::Router> {
-        match self.router.get_or_init(|| crate::route::Router::new().map_err(|e| e.to_string())) {
+        match self.router.get_or_init(|| crate::route::Router::new().map_err(cached_message)) {
             Ok(r) => Ok(r),
             Err(e) => Err(Error::Model(e.clone())),
         }
@@ -184,11 +216,21 @@ impl CraftCrnn {
         let (rec, det) = (self.rec, self.det);
         let loaded = self
             .models
-            .get_or_init(|| load_models(&self.manifest_dir, rec, det).map_err(|e| e.to_string()));
+            .get_or_init(|| load_models(&self.source, rec, det).map_err(cached_message));
         match loaded {
             Ok(m) => Ok(m),
             Err(e) => Err(Error::Model(e.clone())),
         }
+    }
+}
+
+/// The message a cached load failure is re-raised with as `Error::Model`.
+/// Taking `to_string()` of an `Error::Model` and wrapping it again printed
+/// "model error: model error: ..."; this keeps the prefix single.
+fn cached_message(e: Error) -> String {
+    match e {
+        Error::Model(msg) => msg,
+        other => other.to_string(),
     }
 }
 
@@ -244,7 +286,7 @@ impl CraftCrnn {
             },
             rec,
             det,
-            manifest_dir: std::path::PathBuf::new(),
+            source: Source::Bytes,
             // The routing stages are ONNX files read from disk, so a
             // from-bytes caller cannot have them. Left uninitialised: routing
             // is opt-in (`FFAI_ROUTE=1`) and a page that asks for it here gets
@@ -320,14 +362,55 @@ fn build_models(det: DetStage, rec: RecStage, w: WeightBytes) -> Result<Models> 
     Ok(Models { craft, mobiledet, crnn, parseq, svtr, device })
 }
 
-fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
+/// The manifests a [`Source`] sees, and where its weights resolve.
+///
+/// Disk manifests REPLACE compiled-in ones of the same name, so a repository
+/// checkout (or a caller's directory) still wins — which is what lets a model
+/// be re-converted and re-pinned without a release. Offline resolution uses
+/// only the compiled-in manifests: its point is that the checksums a job runs
+/// against are the ones this release was gated on.
+fn manifests_for(source: &Source) -> Result<(Vec<ffai_models::ModelManifest>, String)> {
+    let mut manifests = crate::manifests::embedded()?;
+    let overlay = |manifests: &mut Vec<ffai_models::ModelManifest>, dir: &Path| -> Result<()> {
+        for m in ffai_models::load_dir(dir)? {
+            manifests.retain(|e| e.name != m.name);
+            manifests.push(m);
+        }
+        Ok(())
+    };
+    let described = match source {
+        Source::Default => {
+            let dir = Path::new("models");
+            if dir.is_dir() {
+                overlay(&mut manifests, dir)?;
+                format!("{} and the manifests compiled into ffai-carmenta", dir.display())
+            } else {
+                "the manifests compiled into ffai-carmenta".to_string()
+            }
+        }
+        Source::ManifestDir(dir) => {
+            overlay(&mut manifests, dir)?;
+            format!("{} and the manifests compiled into ffai-carmenta", dir.display())
+        }
+        Source::Offline(_) => "the manifests compiled into ffai-carmenta".to_string(),
+        Source::Bytes => {
+            return Err(Error::Model(
+                "engine was built from bytes and has no manifest source to load from".into(),
+            ));
+        }
+    };
+    Ok((manifests, described))
+}
+
+fn load_models(source: &Source, rec: RecStage, det: DetStage) -> Result<Models> {
     let device = Device::Cpu;
-    let manifests = ffai_models::load_dir(dir)?;
-    let find = |name: &str| {
+    let (manifests, searched) = manifests_for(source)?;
+    let find = |name: &str| -> Result<Resolver<'_>> {
         manifests
             .iter()
             .find(|m| m.name == name)
-            .ok_or_else(|| Error::Model(format!("no model manifest named `{name}` in {}", dir.display())))
+            .map(|m| Resolver { manifest: m, source })
+            .ok_or_else(|| Error::Model(format!("no model manifest named `{name}` in {searched}")))
     };
     let load_vb = |file: std::path::PathBuf| {
         unsafe { VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device) }
@@ -335,13 +418,13 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
     };
     let (craft, mobiledet) = match det {
         DetStage::Craft => {
-            let f = find("craft-mlt")?.fetch()?;
+            let f = find("craft-mlt")?.fetch(&["craft.safetensors"])?;
             let m = Craft::new(load_vb(f.file("craft.safetensors")?.to_path_buf())?)
                 .map_err(image::candle_err)?;
             (Some(m), None)
         }
         DetStage::MobileDet => {
-            let f = find("ppocrv5-mobile-det")?.fetch()?;
+            let f = find("ppocrv5-mobile-det")?.fetch(&["det-fused.safetensors"])?;
             let m = crate::mobiledet::MobileDet::new(load_vb(
                 f.file("det-fused.safetensors")?.to_path_buf(),
             )?)
@@ -349,10 +432,10 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
             (None, Some(m))
         }
         DetStage::Composed => {
-            let cf = find("craft-mlt")?.fetch()?;
+            let cf = find("craft-mlt")?.fetch(&["craft.safetensors"])?;
             let c = Craft::new(load_vb(cf.file("craft.safetensors")?.to_path_buf())?)
                 .map_err(image::candle_err)?;
-            let df = find("ppocrv5-mobile-det")?.fetch()?;
+            let df = find("ppocrv5-mobile-det")?.fetch(&["det-fused.safetensors"])?;
             let d = crate::mobiledet::MobileDet::new(load_vb(
                 df.file("det-fused.safetensors")?.to_path_buf(),
             )?)
@@ -369,7 +452,7 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
             // otherwise, so the same code path runs both. English is the
             // default and remains the oracle.
             let lang = crate::crnn::RecLang::from_env();
-            let f = find(lang.model_name())?.fetch()?;
+            let f = find(lang.model_name())?.fetch(lang.runtime_files())?;
             let weights = f.file("crnn.safetensors")?.to_path_buf();
             let charset = crate::crnn::charset_for(lang, weights.parent())
                 .map_err(image::candle_err)?;
@@ -378,13 +461,13 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
             (Some(m), None)
         }
         RecStage::Parseq => {
-            let f = find("parseq-tiny")?.fetch()?;
+            let f = find("parseq-tiny")?.fetch(&["parseq-tiny.safetensors"])?;
             let m = crate::parseq::Parseq::new(load_vb(f.file("parseq-tiny.safetensors")?.to_path_buf())?)
                 .map_err(image::candle_err)?;
             (None, Some(m))
         }
         RecStage::Svtr => {
-            let f = find("ppocrv5-mobile-rec")?.fetch()?;
+            let f = find("ppocrv5-mobile-rec")?.fetch(&["rec.safetensors", "charset.txt"])?;
             let weights = f.file("rec.safetensors")?.to_path_buf();
             let charset = crate::svtr::load_charset(f.file("charset.txt")?)
                 .map_err(image::candle_err)?;
@@ -397,6 +480,223 @@ fn load_models(dir: &Path, rec: RecStage, det: DetStage) -> Result<Models> {
         }
     };
     Ok(Models { craft, mobiledet, crnn, parseq, svtr, device })
+}
+
+/// A manifest bound to the weight-resolution rule of its [`Source`].
+struct Resolver<'a> {
+    manifest: &'a ffai_models::ModelManifest,
+    source: &'a Source,
+}
+
+impl Resolver<'_> {
+    /// Resolve the files this loader will open. Offline resolution asks for
+    /// exactly those, so a deployment never has to ship files a manifest lists
+    /// only for provenance (a training checkpoint, say). The cache path keeps
+    /// its existing behaviour of resolving every declared file.
+    fn fetch(&self, needed: &[&str]) -> Result<ffai_models::ResolvedModel> {
+        match self.source {
+            Source::Offline(root) => self.manifest.resolve_only_in(root, needed),
+            _ => self.manifest.fetch(),
+        }
+    }
+}
+
+/// What [`CraftCrnn::detect_orientation`] decided, and the evidence for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Orientation {
+    /// Clockwise quarter turns to APPLY to the image to make it upright (0-3).
+    pub turns: u8,
+    /// Detected text area in boxes wider than tall (lines running across).
+    pub horizontal_area: f32,
+    /// Detected text area in boxes taller than wide (lines running down).
+    pub vertical_area: f32,
+    /// Mean recognition confidence of the sampled boxes at the chosen turn.
+    pub chosen_confidence: f32,
+    /// ...and at the other candidate on the same axis. The gap between the
+    /// two is how sure the decision is.
+    pub other_confidence: f32,
+    /// Boxes sampled for the confidence comparison.
+    pub sampled: usize,
+}
+
+/// How many of the largest boxes are read to decide which way up.
+const ORIENT_SAMPLES: usize = 12;
+/// Short side the page is decimated toward for the orientation axis vote.
+const ORIENT_DET_SHORT: usize = 640;
+/// A box counts toward an axis when its long side is this many times its
+/// short side; near-square boxes (single glyphs, logos) vote for neither.
+const ORIENT_ASPECT: f32 = 1.5;
+
+fn crop(img: &ImageBuffer, x0: usize, y0: usize, x1: usize, y1: usize) -> ImageBuffer {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let (x0, y0, x1, y1) = (x0.min(w), y0.min(h), x1.min(w), y1.min(h));
+    let bpp = img.format.bytes_per_pixel();
+    let (cw, ch) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+    let mut data = Vec::with_capacity(cw * ch * bpp);
+    for y in y0..y1 {
+        data.extend_from_slice(&img.data[(y * w + x0) * bpp..(y * w + x1) * bpp]);
+    }
+    ImageBuffer { width: cw as u32, height: ch as u32, format: img.format, data }
+}
+
+impl CraftCrnn {
+    /// Decide which clockwise quarter turn makes `img` upright.
+    ///
+    /// One detection pass decides the AXIS: text lines produce boxes wider
+    /// than tall when they run across the image and taller than wide when they
+    /// run down it. Then the largest boxes on that axis are read in both
+    /// candidate turns, and the turn with the higher mean recognition
+    /// confidence wins — an upside-down or mirrored-axis line reads with
+    /// clearly lower confidence. About one detection pass plus two dozen
+    /// small crop reads, against three or four full-page reads for trying
+    /// every turn.
+    ///
+    /// A page with no detected text returns `turns: 0` and `sampled: 0`.
+    pub fn detect_orientation(&self, img: &ImageBuffer) -> Result<Orientation> {
+        let m = self.models()?;
+        // The axis vote needs box SHAPES, not fine geometry: detect on a
+        // decimated page (short side near ORIENT_DET_SHORT) and scale the
+        // boxes back, so the crops read below still come from full-resolution
+        // pixels.
+        let short = img.width.min(img.height) as usize;
+        let f = (short / ORIENT_DET_SHORT).max(1);
+        let boxes: Vec<boxes::DetBox> = self
+            .raw_boxes(m, &crate::orient::decimate(img, f))?
+            .into_iter()
+            .map(|b| boxes::DetBox { x0: b.x0 * f, y0: b.y0 * f, x1: b.x1 * f, y1: b.y1 * f, score: b.score })
+            .collect();
+        let (mut horizontal_area, mut vertical_area) = (0f32, 0f32);
+        let mut across = Vec::new();
+        let mut down = Vec::new();
+        for b in boxes {
+            let (bw, bh) = ((b.x1 - b.x0) as f32, (b.y1 - b.y0) as f32);
+            if bw >= ORIENT_ASPECT * bh {
+                horizontal_area += bw * bh;
+                across.push(b);
+            } else if bh >= ORIENT_ASPECT * bw {
+                vertical_area += bw * bh;
+                down.push(b);
+            }
+        }
+        let (candidates, mut sample) = if vertical_area > horizontal_area {
+            ([1u8, 3u8], down)
+        } else {
+            ([0u8, 2u8], across)
+        };
+        sample.sort_by_key(|b| std::cmp::Reverse((b.x1 - b.x0) * (b.y1 - b.y0)));
+        sample.truncate(ORIENT_SAMPLES);
+        if sample.is_empty() {
+            return Ok(Orientation {
+                turns: 0,
+                horizontal_area,
+                vertical_area,
+                chosen_confidence: 0.0,
+                other_confidence: 0.0,
+                sampled: 0,
+            });
+        }
+        let mean_at = |turns: u8| -> Result<f32> {
+            use crate::par::prelude::*;
+            // The crops are independent reads: fan them across cores, the way
+            // `recognize` fans out lines.
+            let confs = sample
+                .par_iter()
+                .map(|b| {
+                    let c = crate::orient::rotate(&crop(img, b.x0, b.y0, b.x1, b.y1), turns);
+                    read_confidence(m, self.rec, &c).map(|c| c.unwrap_or(0.0))
+                })
+                .collect::<Result<Vec<f32>>>()?;
+            Ok(confs.iter().sum::<f32>() / sample.len() as f32)
+        };
+        let (a, b) = (mean_at(candidates[0])?, mean_at(candidates[1])?);
+        let (turns, chosen_confidence, other_confidence) =
+            if b > a { (candidates[1], b, a) } else { (candidates[0], a, b) };
+        Ok(Orientation {
+            turns,
+            horizontal_area,
+            vertical_area,
+            chosen_confidence,
+            other_confidence,
+            sampled: sample.len(),
+        })
+    }
+
+    /// Detection boxes in image coordinates, before any line grouping,
+    /// splitting or reading-order logic — the raw geometry the axis vote needs.
+    fn raw_boxes(&self, m: &Models, img: &ImageBuffer) -> Result<Vec<boxes::DetBox>> {
+        match self.det {
+            DetStage::MobileDet | DetStage::Composed => {
+                let (input, sx, sy) = image::mobiledet_input(img, mobiledet_min_side(), &m.device)?;
+                let det = m.mobiledet.as_ref().expect("mobiledet loaded for a mobile-det stage");
+                let prob = det.forward(&input).map_err(image::candle_err)?;
+                let (_, _, ph, pw) = image::ok(prob.dims4())?;
+                let flat = image::ok(prob.flatten_all()?.to_vec1::<f32>())?;
+                Ok(crate::mobiledet::boxes_from_probability(
+                    &flat,
+                    pw,
+                    ph,
+                    sx,
+                    sy,
+                    crate::mobiledet::UNCLIP_LINE,
+                ))
+            }
+            DetStage::Craft => {
+                let (input, scale) = image::craft_input_color(img, &m.device)?;
+                let craft = m.craft.as_ref().expect("craft loaded for DetStage::Craft");
+                let maps = craft.forward(&input).map_err(image::candle_err)?;
+                let (mh, mw, _) = image::ok(maps.dims3())?;
+                let flat = image::ok(maps.flatten_all()?.to_vec1::<f32>())?;
+                let region: Vec<f32> = flat.iter().step_by(2).copied().collect();
+                let affinity: Vec<f32> = flat.iter().skip(1).step_by(2).copied().collect();
+                let k = 2.0 / scale;
+                let to = |v: usize| (v as f32 * k).round() as usize;
+                Ok(boxes::extract_boxes(&region, &affinity, mw, mh)
+                    .into_iter()
+                    .map(|b| boxes::DetBox {
+                        x0: to(b.x0),
+                        y0: to(b.y0),
+                        x1: to(b.x1),
+                        y1: to(b.y1),
+                        score: b.score,
+                    })
+                    .collect())
+            }
+        }
+    }
+}
+
+/// Mean recognition confidence of a whole crop, read as one line by this
+/// engine's recognizer. `None` when nothing was read or the crop is degenerate.
+fn read_confidence(m: &Models, rec: RecStage, img: &ImageBuffer) -> Result<Option<f32>> {
+    let (w, h) = (img.width as usize, img.height as usize);
+    if w < 2 || h < 2 {
+        return Ok(None);
+    }
+    match rec {
+        RecStage::Svtr => {
+            let (svtr, charset) = m.svtr.as_ref().expect("svtr loaded for RecStage::Svtr");
+            let Ok(x) = crate::svtr::svtr_input(img, 0, 0, w, h, &m.device) else {
+                return Ok(None);
+            };
+            let probs = svtr.forward(&x).map_err(image::candle_err)?;
+            Ok(crate::svtr::ctc_greedy(&probs, charset).map_err(image::candle_err)?.1)
+        }
+        RecStage::Crnn => {
+            let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
+            let gray = image::to_gray_f32(img)?;
+            let Ok(x) = image::crnn_input(&gray, w, h, 0, 0, w, h, &m.device) else {
+                return Ok(None);
+            };
+            let logits = crnn.forward(&x).map_err(image::candle_err)?;
+            Ok(crnn.decode(&logits).map_err(image::candle_err)?.1)
+        }
+        RecStage::Parseq => {
+            let parseq = m.parseq.as_ref().expect("parseq loaded for RecStage::Parseq");
+            let gray = image::to_gray_f32(img)?;
+            let x = crate::parseq::parseq_input(&gray, w, h, &m.device).map_err(image::candle_err)?;
+            Ok(parseq.recognize(&x).map_err(image::candle_err)?.1)
+        }
+    }
 }
 
 impl OcrEngine for CraftCrnn {
@@ -444,7 +744,87 @@ impl OcrEngine for CraftCrnn {
     }
 
     fn recognize(&self, img: &ImageBuffer, opts: &OcrOptions) -> Result<OcrOutput> {
+        // Orientation first: rule removal and everything after it assume the
+        // lines run across the image. The inner call reads the upright page;
+        // its boxes are mapped back so the caller's coordinates never change
+        // meaning underneath them.
+        if opts.auto_orient {
+            let o = self.detect_orientation(img)?;
+            let inner = OcrOptions { auto_orient: false, ..opts.clone() };
+            if o.turns == 0 {
+                return self.recognize(img, &inner);
+            }
+            let upright = crate::orient::rotate(img, o.turns);
+            let mut out = self.recognize(&upright, &inner)?;
+            let (w, h) = (img.width as f32, img.height as f32);
+            for line in out.blocks.iter_mut().flat_map(|b| b.lines.iter_mut()) {
+                if let Some(b) = line.bbox {
+                    line.bbox = Some(crate::orient::unrotate_box(b, o.turns, w, h));
+                }
+                for word in &mut line.words {
+                    if let Some(b) = word.bbox {
+                        word.bbox = Some(crate::orient::unrotate_box(b, o.turns, w, h));
+                    }
+                }
+            }
+            for block in &mut out.blocks {
+                if let Some(b) = block.bbox {
+                    block.bbox = Some(crate::orient::unrotate_box(b, o.turns, w, h));
+                }
+            }
+            return Ok(out);
+        }
         let m = self.models()?;
+
+        // Form rules come out BEFORE detection as well as recognition: a rule
+        // joins the boxes DBNet draws, and the crop the recognizer reads is cut
+        // from the same pixels. Boxes are unaffected in coordinates — the image
+        // keeps its size.
+        let cleaned;
+        let img = if opts.remove_rules {
+            let params = crate::rules::RuleParams::for_width(img.width as usize);
+            cleaned = crate::rules::remove_horizontal_rules(img, params).0;
+            &cleaned
+        } else {
+            img
+        };
+
+        // Charset constraint (`OcrOptions::charset`): one allow-mask per call,
+        // over the recognizer's own classes. An engine that cannot honour it
+        // refuses — reading freely while the caller believes the output is
+        // constrained is the failure this option exists to prevent.
+        let mask: Option<Vec<bool>> = match (opts.charset.as_deref(), self.rec) {
+            (None, _) => None,
+            (Some(_), RecStage::Parseq) => {
+                return Err(Error::Other(
+                    "charset constraint is not supported by the PARSeq recognizer (its \
+                     autoregressive decoder is not masked); use a CRNN or SVTR engine"
+                        .into(),
+                ));
+            }
+            (Some(_), _) if crate::route::enabled() => {
+                return Err(Error::Other(
+                    "charset constraint cannot be combined with region routing (FFAI_ROUTE): \
+                     routed regions are rendered by other models"
+                        .into(),
+                ));
+            }
+            (Some(cs), RecStage::Crnn) => Some(
+                m.crnn
+                    .as_ref()
+                    .expect("crnn loaded for RecStage::Crnn")
+                    .class_mask(cs)
+                    .map_err(image::candle_err)?,
+            ),
+            (Some(cs), RecStage::Svtr) => {
+                let (_, charset) = m.svtr.as_ref().expect("svtr loaded for RecStage::Svtr");
+                Some(crate::svtr::class_mask(charset, cs).map_err(image::candle_err)?)
+            }
+        };
+        let crnn_decode = |crnn: &Crnn, logits: &candle_core::Tensor| match &mask {
+            Some(mk) => crnn.decode_masked(logits, mk),
+            None => crnn.decode(logits),
+        };
 
         let (w, h) = (img.width as usize, img.height as usize);
 
@@ -471,8 +851,9 @@ impl OcrEngine for CraftCrnn {
             })?;
             let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
                 .map_err(image::candle_err)?;
-            let (text, confidence) = crate::profile::timed(|p| &p.decode, || crnn.decode(&logits))
-                .map_err(image::candle_err)?;
+            let (text, confidence) =
+                crate::profile::timed(|p| &p.decode, || crnn_decode(crnn, &logits))
+                    .map_err(image::candle_err)?;
             let mut lines = Vec::new();
             if !text.is_empty() {
                 lines.push(OcrLine {
@@ -725,10 +1106,15 @@ impl OcrEngine for CraftCrnn {
                         };
                         let probs = crate::profile::timed(|p| &p.rec_fwd, || svtr.forward(&crop))
                             .map_err(image::candle_err)?;
-                        crate::profile::timed(|p| &p.decode, || {
-                            crate::svtr::ctc_greedy(&probs, charset)
+                        let (mut text, conf) = crate::profile::timed(|p| &p.decode, || match &mask {
+                            Some(mk) => crate::svtr::ctc_greedy_masked(&probs, charset, mk),
+                            None => crate::svtr::ctc_greedy(&probs, charset),
                         })
-                        .map_err(image::candle_err)?
+                        .map_err(image::candle_err)?;
+                        // SVTR's multilingual charset can put a full-width
+                        // `０` or `，` into a Latin line; see `fold`.
+                        crate::fold::apply(&mut text);
+                        (text, conf)
                     }
                     RecStage::Crnn => {
                         let crnn = m.crnn.as_ref().expect("crnn loaded for RecStage::Crnn");
@@ -740,7 +1126,7 @@ impl OcrEngine for CraftCrnn {
                         };
                         let logits = crate::profile::timed(|p| &p.rec_fwd, || crnn.forward(&crop))
                             .map_err(image::candle_err)?;
-                        crate::profile::timed(|p| &p.decode, || crnn.decode(&logits))
+                        crate::profile::timed(|p| &p.decode, || crnn_decode(crnn, &logits))
                             .map_err(image::candle_err)?
                     }
                     RecStage::Parseq => {
