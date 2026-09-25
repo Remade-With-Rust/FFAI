@@ -34,7 +34,7 @@ cargo add ffai-diana ffai-core ffai-media
 ```toml
 [dependencies]
 ffai-diana = "0.7"
-ffai-core = "0.6"
+ffai-core = "0.8"
 ffai-media = "0.6"
 ```
 

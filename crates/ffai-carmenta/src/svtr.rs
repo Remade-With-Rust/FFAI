@@ -486,7 +486,7 @@ pub fn ctc_greedy(probs: &Tensor, charset: &[String]) -> Result<(String, Option<
     let best = probs.argmax(D::Minus1)?.flatten_all()?.to_vec1::<u32>()?;
     let conf = probs.max(D::Minus1)?.flatten_all()?.to_vec1::<f32>()?;
     let mut out = String::new();
-    let (mut sum, mut kept) = (0f32, 0usize);
+    let mut kept = Vec::new();
     let mut prev = u32::MAX;
     for i in 0..t {
         let k = best[i];
@@ -495,13 +495,73 @@ pub fn ctc_greedy(probs: &Tensor, charset: &[String]) -> Result<(String, Option<
             if let Some(s) = charset.get(k as usize - 1) {
                 out.push_str(s);
             }
-            sum += conf[i];
-            kept += 1;
+            kept.push(conf[i]);
         }
         prev = k;
     }
     let _ = n;
-    Ok((out, if kept == 0 { None } else { Some(sum / kept as f32) }))
+    Ok((out, crate::crnn::line_confidence(&kept)))
+}
+
+/// Per-class allow mask for SVTR's head: index 0 (blank) always true, class
+/// `k` true when charset entry `k - 1` is non-empty and every character in it
+/// is in `allowed`. Entries can be multi-character, so an entry is allowed
+/// only when ALL of it is. A requested character no single-character entry
+/// covers is an error naming it.
+pub fn class_mask(charset: &[String], allowed: &str) -> Result<Vec<bool>> {
+    let missing: String = allowed
+        .chars()
+        .filter(|c| !charset.iter().any(|e| e.chars().eq(std::iter::once(*c))))
+        .collect();
+    if !missing.is_empty() {
+        return Err(candle_core::Error::Msg(format!(
+            "charset constraint: this recognizer cannot emit {missing:?}"
+        )));
+    }
+    let mut mask = Vec::with_capacity(charset.len() + 1);
+    mask.push(true);
+    mask.extend(
+        charset.iter().map(|e| !e.is_empty() && e.chars().all(|c| allowed.contains(c))),
+    );
+    Ok(mask)
+}
+
+/// [`ctc_greedy`] restricted to the classes `mask` allows. As in the CRNN
+/// twin, the kept confidence is the class's probability over the full
+/// distribution, not renormalised, so a forced character reads as uncertain.
+/// With every class allowed it equals `ctc_greedy`.
+pub fn ctc_greedy_masked(
+    probs: &Tensor,
+    charset: &[String],
+    mask: &[bool],
+) -> Result<(String, Option<f32>)> {
+    let (_, t, n) = probs.dims3()?;
+    if mask.len() != n || !mask[0] {
+        return Err(candle_core::Error::Msg(format!(
+            "class mask has {} entries; the head has {n} classes and the blank must be allowed",
+            mask.len()
+        )));
+    }
+    let flat = probs.flatten_all()?.to_vec1::<f32>()?;
+    let mut out = String::new();
+    let mut kept = Vec::new();
+    let mut prev = usize::MAX;
+    for i in 0..t {
+        let row = &flat[i * n..(i + 1) * n];
+        let (k, p) = row
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| mask[*j])
+            .fold((0usize, f32::NEG_INFINITY), |best, (j, &p)| if p > best.1 { (j, p) } else { best });
+        if k != 0 && k != prev {
+            if let Some(s) = charset.get(k - 1) {
+                out.push_str(s);
+            }
+            kept.push(p);
+        }
+        prev = k;
+    }
+    Ok((out, crate::crnn::line_confidence(&kept)))
 }
 
 /// One emitted run of characters, with WHERE ON THE LINE it came from.

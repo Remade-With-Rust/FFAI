@@ -1,0 +1,2163 @@
+name = "carmenta-form"
+version = 1
+task = "ocr"
+
+[[clips]]
+id = "form-00-none-gray"
+path = "clips/carmenta-form/form-00-none-gray.png"
+ground_truth = "clips/carmenta-form/form-00-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f1cfe6d5c8fe968c2492e528a4af212e6624701bd934c84d8bf623cce0c3e0de"
+
+[[clips]]
+id = "form-00-none-bw"
+path = "clips/carmenta-form/form-00-none-bw.png"
+ground_truth = "clips/carmenta-form/form-00-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "dcba52d9e53fecb2736ac42f01e8390dc21e408b624f069e511689c6707cd6d8"
+
+[[clips]]
+id = "form-00-under-gray"
+path = "clips/carmenta-form/form-00-under-gray.png"
+ground_truth = "clips/carmenta-form/form-00-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "bb609c6cc2577058edb0a62b131c0748c66c29a7a5b847d6a8c1d8d622fbeb89"
+
+[[clips]]
+id = "form-00-under-bw"
+path = "clips/carmenta-form/form-00-under-bw.png"
+ground_truth = "clips/carmenta-form/form-00-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5296f4725d322ec50944b48d414eef1c1c349799c3a9c90c93be659a9f4715e3"
+
+[[clips]]
+id = "form-00-desc-gray"
+path = "clips/carmenta-form/form-00-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-00-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8306079208d451036b4a00e855dcd5e70dae2cca03bf603debbd8132b6a9f5d1"
+
+[[clips]]
+id = "form-00-desc-bw"
+path = "clips/carmenta-form/form-00-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-00-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "57dc0734b04932d30f150ab4e65f24ad3425a6cb364db91c9a8158357c704b5c"
+
+[[clips]]
+id = "form-00-strike-gray"
+path = "clips/carmenta-form/form-00-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-00-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f36db11e532108a11517b7c54a30c1cce261916bf68ca30ed24f889d92560282"
+
+[[clips]]
+id = "form-00-strike-bw"
+path = "clips/carmenta-form/form-00-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-00-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b438603d32bc3e196ee16bde967f15c5f0899d5eb18d9a84b44985d341ba7f46"
+
+[[clips]]
+id = "form-01-none-gray"
+path = "clips/carmenta-form/form-01-none-gray.png"
+ground_truth = "clips/carmenta-form/form-01-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f6e499bc98b08d1d650c245e45c62fb9e4f2f6c7c86453bac80166eb51053051"
+
+[[clips]]
+id = "form-01-none-bw"
+path = "clips/carmenta-form/form-01-none-bw.png"
+ground_truth = "clips/carmenta-form/form-01-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3eae9b05439a1d5970e44255e0b23cef9fe6259368e4e33cce3a5ffd4ce41d1c"
+
+[[clips]]
+id = "form-01-under-gray"
+path = "clips/carmenta-form/form-01-under-gray.png"
+ground_truth = "clips/carmenta-form/form-01-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a91d7e318985ffc8b5eb8efac24c3da315235511a40faf8a60d67b23fad959e5"
+
+[[clips]]
+id = "form-01-under-bw"
+path = "clips/carmenta-form/form-01-under-bw.png"
+ground_truth = "clips/carmenta-form/form-01-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5fc3f17ec540d7190684f4734b58271f67c45306b2c6c299eaf319bd27f95c34"
+
+[[clips]]
+id = "form-01-desc-gray"
+path = "clips/carmenta-form/form-01-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-01-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "509532c3c6f3311b8ed803c4687d04c7a70f3f5b0688b4fdaeb8b245f29fbae5"
+
+[[clips]]
+id = "form-01-desc-bw"
+path = "clips/carmenta-form/form-01-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-01-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b639c00eb6ae964deeb54035f800cd4291187edb24062ead18cb37dca753be6f"
+
+[[clips]]
+id = "form-01-strike-gray"
+path = "clips/carmenta-form/form-01-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-01-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7556729e85e5282b40dfc7d79141df1c1b3bc0cbb6920ef13307bf9e45964a39"
+
+[[clips]]
+id = "form-01-strike-bw"
+path = "clips/carmenta-form/form-01-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-01-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ada1143e4e968edf3708faac0d2847e73f3689d2b69f125a90b43244c1d0e8e2"
+
+[[clips]]
+id = "form-02-none-gray"
+path = "clips/carmenta-form/form-02-none-gray.png"
+ground_truth = "clips/carmenta-form/form-02-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ec013fd0ad79f3a7d62dde0c2d556fd7882948667106021196c7713a601bc444"
+
+[[clips]]
+id = "form-02-none-bw"
+path = "clips/carmenta-form/form-02-none-bw.png"
+ground_truth = "clips/carmenta-form/form-02-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8b7fe9bbc700b87f37b0649be377df5544e5607fb718d902c37a912db86cc2ac"
+
+[[clips]]
+id = "form-02-under-gray"
+path = "clips/carmenta-form/form-02-under-gray.png"
+ground_truth = "clips/carmenta-form/form-02-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3faa61d501f329dcd65805c74beb6f97c2e19e335be8086492bc95dcf85c11ac"
+
+[[clips]]
+id = "form-02-under-bw"
+path = "clips/carmenta-form/form-02-under-bw.png"
+ground_truth = "clips/carmenta-form/form-02-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "74c158a5446f5498d74e47fb54dfa960faa492ba4c0a790c3a1c9771988fc39d"
+
+[[clips]]
+id = "form-02-desc-gray"
+path = "clips/carmenta-form/form-02-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-02-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0bcab3f7569f9c8c987c6a89eb3afe89986438fcfd1cefec36c2f68d2113af40"
+
+[[clips]]
+id = "form-02-desc-bw"
+path = "clips/carmenta-form/form-02-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-02-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "4c92deeb6338dba28035ce7806c528a5f8b2876955156195bb465930c87de334"
+
+[[clips]]
+id = "form-02-strike-gray"
+path = "clips/carmenta-form/form-02-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-02-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8e1765dd0c7a0ed7cb3cb2010fe1efbcf736d62a8d429c1b474b532dc5dd6a1b"
+
+[[clips]]
+id = "form-02-strike-bw"
+path = "clips/carmenta-form/form-02-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-02-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f2f6dab74b1cf653d36acc8efd5a3888a89869e3e4756c8756916a040436dc9d"
+
+[[clips]]
+id = "form-03-none-gray"
+path = "clips/carmenta-form/form-03-none-gray.png"
+ground_truth = "clips/carmenta-form/form-03-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c4dcbc81551d0519d28d02492bf4963269cbcab3e4a40c98cf48bc94735bb88f"
+
+[[clips]]
+id = "form-03-none-bw"
+path = "clips/carmenta-form/form-03-none-bw.png"
+ground_truth = "clips/carmenta-form/form-03-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "68a1cd2b3bec3ee80e4ac657c342a19657648befb63aa66578802aacbb957081"
+
+[[clips]]
+id = "form-03-under-gray"
+path = "clips/carmenta-form/form-03-under-gray.png"
+ground_truth = "clips/carmenta-form/form-03-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "21a099628b796164eefdd5d9a4884ecddb3ed1a235d08d0e2b3f541b09c897e2"
+
+[[clips]]
+id = "form-03-under-bw"
+path = "clips/carmenta-form/form-03-under-bw.png"
+ground_truth = "clips/carmenta-form/form-03-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a43911929a2d0e0d253e4c978420ab780f506637bbfca3badff8930ff8200227"
+
+[[clips]]
+id = "form-03-desc-gray"
+path = "clips/carmenta-form/form-03-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-03-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2ef11cebc68d5b343a32e8f2b09cd78f70e9311cf9cdf79969a08b46cf484b99"
+
+[[clips]]
+id = "form-03-desc-bw"
+path = "clips/carmenta-form/form-03-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-03-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b5f5693762331ece24311df096ba195176f41c40ccde20eeb50e131d6b9f3c97"
+
+[[clips]]
+id = "form-03-strike-gray"
+path = "clips/carmenta-form/form-03-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-03-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "9b934f11e89314b4ba7613397cf3a085a42d7dacb3aefb10f38cf8195a279728"
+
+[[clips]]
+id = "form-03-strike-bw"
+path = "clips/carmenta-form/form-03-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-03-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "cb1b5f2d31e86e82d6423c1b6f6e5adedf5726e4a42dab95cc9a3293160b29e2"
+
+[[clips]]
+id = "form-04-none-gray"
+path = "clips/carmenta-form/form-04-none-gray.png"
+ground_truth = "clips/carmenta-form/form-04-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "507ee0bdf21bff5f8cbc93591869cb209cf5e64ec506dc94491859615f29f8e7"
+
+[[clips]]
+id = "form-04-none-bw"
+path = "clips/carmenta-form/form-04-none-bw.png"
+ground_truth = "clips/carmenta-form/form-04-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "fc95944eaa999e8f252dd2298f1a2a3247976058aa00156dae0ec715eace178a"
+
+[[clips]]
+id = "form-04-under-gray"
+path = "clips/carmenta-form/form-04-under-gray.png"
+ground_truth = "clips/carmenta-form/form-04-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7780cdd04d8f2c17ca26778ca31bc672042e680a38a58aabd7e02650f89ae269"
+
+[[clips]]
+id = "form-04-under-bw"
+path = "clips/carmenta-form/form-04-under-bw.png"
+ground_truth = "clips/carmenta-form/form-04-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "1cd48fa515dab7bfd2007d9453486a60dfffec95b181756f1e436cb55ba28696"
+
+[[clips]]
+id = "form-04-desc-gray"
+path = "clips/carmenta-form/form-04-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-04-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "603d5511a42fda216bb76fa1b1e5695c1c0119a2e30de11513d01c9140ee40fa"
+
+[[clips]]
+id = "form-04-desc-bw"
+path = "clips/carmenta-form/form-04-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-04-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "fa3535bfe559fe22069dd553ceab9c4ac7eecaa713a64a17462fcc76ddaf809d"
+
+[[clips]]
+id = "form-04-strike-gray"
+path = "clips/carmenta-form/form-04-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-04-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "990b56f1518384805a067df40ba8f6390e4418ee61f339486219b3526b5409fa"
+
+[[clips]]
+id = "form-04-strike-bw"
+path = "clips/carmenta-form/form-04-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-04-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "697f6dc9c09e054459a4264694237bb705371adec281233e8f4e87d9bd60dd34"
+
+[[clips]]
+id = "form-05-none-gray"
+path = "clips/carmenta-form/form-05-none-gray.png"
+ground_truth = "clips/carmenta-form/form-05-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "47b7d5f56c4bb69440cc34c5885ad77282fe197e20e4a58dbee98aa29ca9d68b"
+
+[[clips]]
+id = "form-05-none-bw"
+path = "clips/carmenta-form/form-05-none-bw.png"
+ground_truth = "clips/carmenta-form/form-05-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a763c167c78b7fd54da941046d528c3a9d59d80f70896a67f9da630493ac9080"
+
+[[clips]]
+id = "form-05-under-gray"
+path = "clips/carmenta-form/form-05-under-gray.png"
+ground_truth = "clips/carmenta-form/form-05-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5149c416220ad9839e7eda7839cbd7d2fe64b23105528224e791e4d3050c0cdf"
+
+[[clips]]
+id = "form-05-under-bw"
+path = "clips/carmenta-form/form-05-under-bw.png"
+ground_truth = "clips/carmenta-form/form-05-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "4f8273c09a606fd42e78b36b21aa3f1317359d6df336a68c768733cf456802c2"
+
+[[clips]]
+id = "form-05-desc-gray"
+path = "clips/carmenta-form/form-05-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-05-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "9e6927ec6637dd6fb9e679cee3072ae640adcedd1b30eeb9eacbfc54f4252c41"
+
+[[clips]]
+id = "form-05-desc-bw"
+path = "clips/carmenta-form/form-05-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-05-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "1295b8d4169a848019d70bf56e67321fc77c83dd91037ef347324fb8a58b648d"
+
+[[clips]]
+id = "form-05-strike-gray"
+path = "clips/carmenta-form/form-05-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-05-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "d2acef581204b7de92060a9533e59d8506b9d95e9979c3eca47a79b62f11c504"
+
+[[clips]]
+id = "form-05-strike-bw"
+path = "clips/carmenta-form/form-05-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-05-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "1d3c96518445325a561acc6c84f4c873775e917e475c834b4f8cc80a8f9a5a2c"
+
+[[clips]]
+id = "form-06-none-gray"
+path = "clips/carmenta-form/form-06-none-gray.png"
+ground_truth = "clips/carmenta-form/form-06-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7b170241f6b9858e1b6aa25014f3e6e026bf0c414d40098256df465082b23113"
+
+[[clips]]
+id = "form-06-none-bw"
+path = "clips/carmenta-form/form-06-none-bw.png"
+ground_truth = "clips/carmenta-form/form-06-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c35735818b1a33e64fd4ecc70d6ef8d16781e6a5253d83df30a1b9ce9d93726e"
+
+[[clips]]
+id = "form-06-under-gray"
+path = "clips/carmenta-form/form-06-under-gray.png"
+ground_truth = "clips/carmenta-form/form-06-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5a71e5a1aaf890d5688bb9a4015184a454e1f92528504c915bc37d6a5cc45085"
+
+[[clips]]
+id = "form-06-under-bw"
+path = "clips/carmenta-form/form-06-under-bw.png"
+ground_truth = "clips/carmenta-form/form-06-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "121ee8781e4ea7712a6bf65e09263d9147b559b3c1031526e3a3a4c4eb68c2e8"
+
+[[clips]]
+id = "form-06-desc-gray"
+path = "clips/carmenta-form/form-06-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-06-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3bdfb25a6115368b54d2316b919283909cabd258da8a8280eb51fba1d2fb33d1"
+
+[[clips]]
+id = "form-06-desc-bw"
+path = "clips/carmenta-form/form-06-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-06-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5ab87b7eb85d76d8b227f12d4279ad2a0264d7eee4ceb6fbc146a9cd424a8c30"
+
+[[clips]]
+id = "form-06-strike-gray"
+path = "clips/carmenta-form/form-06-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-06-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "153fba47ae0c3c26c04608312aa40127425a1bfbfb3c5d62da98ec352d9dc0ab"
+
+[[clips]]
+id = "form-06-strike-bw"
+path = "clips/carmenta-form/form-06-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-06-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "560ff4f6830b129e44f504e31521d8ee8fc8a7b7a96db1f041070d65ab5b4495"
+
+[[clips]]
+id = "form-07-none-gray"
+path = "clips/carmenta-form/form-07-none-gray.png"
+ground_truth = "clips/carmenta-form/form-07-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3baedb59c91188646e75c14b8a77351b4d696db39a4907e49843b37cc07c59d3"
+
+[[clips]]
+id = "form-07-none-bw"
+path = "clips/carmenta-form/form-07-none-bw.png"
+ground_truth = "clips/carmenta-form/form-07-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "893211aa7351c62d63bbb3b8d58b48c1067c98d3f9c18b0c58a010607e7a7392"
+
+[[clips]]
+id = "form-07-under-gray"
+path = "clips/carmenta-form/form-07-under-gray.png"
+ground_truth = "clips/carmenta-form/form-07-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c5e3023f0e4ca23198e538cd4ead61ab6194fca005a1d068ae5da7c2fcb03b46"
+
+[[clips]]
+id = "form-07-under-bw"
+path = "clips/carmenta-form/form-07-under-bw.png"
+ground_truth = "clips/carmenta-form/form-07-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "65be5a7c337d95950829a5582ea664f2bb014a68cbec496a7cfc10cd2b89882e"
+
+[[clips]]
+id = "form-07-desc-gray"
+path = "clips/carmenta-form/form-07-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-07-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "991465b6ed9af0bbfb7cfe32d33dbc765b69140d0c8e285136e2bc8b368e8d82"
+
+[[clips]]
+id = "form-07-desc-bw"
+path = "clips/carmenta-form/form-07-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-07-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f7614f819fc8adb7fac098bcbf7a3dd47322da8cccb37e69bc922ccc48f59382"
+
+[[clips]]
+id = "form-07-strike-gray"
+path = "clips/carmenta-form/form-07-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-07-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "e72e02d165928f83c7e77ba80ddf71d31fc7f4065dc687b78a6e835837c5e646"
+
+[[clips]]
+id = "form-07-strike-bw"
+path = "clips/carmenta-form/form-07-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-07-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "dc404dd41ca20987d5030422121c10ff9f45fac772108a76cf9ec9ef4fda5251"
+
+[[clips]]
+id = "form-08-none-gray"
+path = "clips/carmenta-form/form-08-none-gray.png"
+ground_truth = "clips/carmenta-form/form-08-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7f38eea8986499f582e7ae34285dca2ef124fa0f6ce6ba7971e6cb411264aa10"
+
+[[clips]]
+id = "form-08-none-bw"
+path = "clips/carmenta-form/form-08-none-bw.png"
+ground_truth = "clips/carmenta-form/form-08-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "69d597cc5b655cf577c7473e8993608cdb31cf445653a191ca88fb0065804c16"
+
+[[clips]]
+id = "form-08-under-gray"
+path = "clips/carmenta-form/form-08-under-gray.png"
+ground_truth = "clips/carmenta-form/form-08-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "147a4f56c58e069138a0a16022c113b4144f0ca46584cd8a33c190a6211993af"
+
+[[clips]]
+id = "form-08-under-bw"
+path = "clips/carmenta-form/form-08-under-bw.png"
+ground_truth = "clips/carmenta-form/form-08-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "d50d5367318c9faa232b838a0f2c94ff02d53f525a0521f3745bd8b9e7e3790b"
+
+[[clips]]
+id = "form-08-desc-gray"
+path = "clips/carmenta-form/form-08-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-08-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "67bd48dd0b39ea11c834690776f6adab7a322afc12cc124adf8b05b0e0ee9b90"
+
+[[clips]]
+id = "form-08-desc-bw"
+path = "clips/carmenta-form/form-08-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-08-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a7ed5f1980379445d130cf899c389bf965b8fe8529eed7c31487e1275a0f851c"
+
+[[clips]]
+id = "form-08-strike-gray"
+path = "clips/carmenta-form/form-08-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-08-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "fab798701befebd454cc4c4b176751493615ee734d3fe1f5562eec2254144d07"
+
+[[clips]]
+id = "form-08-strike-bw"
+path = "clips/carmenta-form/form-08-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-08-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "fdd746f9e1ed81d0ddbb8548d2c26add15124eedbb0877ce1242fb38a6ee5b92"
+
+[[clips]]
+id = "form-09-none-gray"
+path = "clips/carmenta-form/form-09-none-gray.png"
+ground_truth = "clips/carmenta-form/form-09-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6d4ef7501f89c1e98a9a3d2aa4e12680d56eb78ec498e983d69f37b4653d84e2"
+
+[[clips]]
+id = "form-09-none-bw"
+path = "clips/carmenta-form/form-09-none-bw.png"
+ground_truth = "clips/carmenta-form/form-09-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "44d29eb526efc0c09d339bf80e085879a1cb142d022721771e07234f1e9f8660"
+
+[[clips]]
+id = "form-09-under-gray"
+path = "clips/carmenta-form/form-09-under-gray.png"
+ground_truth = "clips/carmenta-form/form-09-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f3417cbed6bb496d7ae13a26789bb463e0021b032b67cbc423b36cf248cb330f"
+
+[[clips]]
+id = "form-09-under-bw"
+path = "clips/carmenta-form/form-09-under-bw.png"
+ground_truth = "clips/carmenta-form/form-09-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7194f10412f19d2179d695663ab89af4283076a18cd6d7270b3a6a1ce672d93f"
+
+[[clips]]
+id = "form-09-desc-gray"
+path = "clips/carmenta-form/form-09-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-09-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ad91be5e77c5bf70ae6e5b478ef644a1f19d432800cb352d2539a5cecc0a0537"
+
+[[clips]]
+id = "form-09-desc-bw"
+path = "clips/carmenta-form/form-09-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-09-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "670f7420c6e972acb13da87ac54bce4737770c7c739f2924821208add4dec4b9"
+
+[[clips]]
+id = "form-09-strike-gray"
+path = "clips/carmenta-form/form-09-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-09-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f2f0c66dc674c0d0a0d845e3162c0515232f1bc4b5e3098ecd7b70ea76180cef"
+
+[[clips]]
+id = "form-09-strike-bw"
+path = "clips/carmenta-form/form-09-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-09-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7b53b91988021a9c015d90df6150e342a655bedfcc0f05acb805230605e61488"
+
+[[clips]]
+id = "form-10-none-gray"
+path = "clips/carmenta-form/form-10-none-gray.png"
+ground_truth = "clips/carmenta-form/form-10-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "792543e8d7f35b1c96941bee2b18f7bcdcfd30b7462a3568c64a3c77a9ee98e1"
+
+[[clips]]
+id = "form-10-none-bw"
+path = "clips/carmenta-form/form-10-none-bw.png"
+ground_truth = "clips/carmenta-form/form-10-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "71e7af8e79a23feec6dd8d234621bf4c805b1cd9822cb9da2f6737080e9ea010"
+
+[[clips]]
+id = "form-10-under-gray"
+path = "clips/carmenta-form/form-10-under-gray.png"
+ground_truth = "clips/carmenta-form/form-10-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8208d7f0f9918440c49b7c126fede111dd1147061a371f55fae3aabe47e49f21"
+
+[[clips]]
+id = "form-10-under-bw"
+path = "clips/carmenta-form/form-10-under-bw.png"
+ground_truth = "clips/carmenta-form/form-10-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "83ca7f8b0410566ca8c9485dc4bc8b55e684f944a210f79f353600108e795cb6"
+
+[[clips]]
+id = "form-10-desc-gray"
+path = "clips/carmenta-form/form-10-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-10-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "569219073da19b9f1fed2cbb95765be8ebbe432f5fd5f5ab257faf332e1265be"
+
+[[clips]]
+id = "form-10-desc-bw"
+path = "clips/carmenta-form/form-10-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-10-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b255cf841fffe35d1371ce04c715d759196c594b76f9abc264663689b0d7562a"
+
+[[clips]]
+id = "form-10-strike-gray"
+path = "clips/carmenta-form/form-10-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-10-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ff52403beba0a02805b8bd2cea86aa91297b0d1b1a85cf2af33cbd083d6bb8a1"
+
+[[clips]]
+id = "form-10-strike-bw"
+path = "clips/carmenta-form/form-10-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-10-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "128a2ad5c9864c70fa164a3b17e97da5bbb89c51316c7d3dd2c1a8f8b82a5de7"
+
+[[clips]]
+id = "form-11-none-gray"
+path = "clips/carmenta-form/form-11-none-gray.png"
+ground_truth = "clips/carmenta-form/form-11-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3b3e50b6652150a0753b2e2358195c5ea71f0cb709496229a356399cdff97cb4"
+
+[[clips]]
+id = "form-11-none-bw"
+path = "clips/carmenta-form/form-11-none-bw.png"
+ground_truth = "clips/carmenta-form/form-11-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "bc855262f48c0c31a476725bc577306849c1b47e5157a9967130c03835ca8c91"
+
+[[clips]]
+id = "form-11-under-gray"
+path = "clips/carmenta-form/form-11-under-gray.png"
+ground_truth = "clips/carmenta-form/form-11-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6868c2e6ed3a68c7e7fcbcd35e6e8df07d137f6ddccf4960a1387c93b2621fc5"
+
+[[clips]]
+id = "form-11-under-bw"
+path = "clips/carmenta-form/form-11-under-bw.png"
+ground_truth = "clips/carmenta-form/form-11-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "020b62f772e4d8bea6cb7e3668c6491ac78d1f7ee87f46b2e5351e2104e8b9e6"
+
+[[clips]]
+id = "form-11-desc-gray"
+path = "clips/carmenta-form/form-11-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-11-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "14b889185210b7f2f43efa73bc37cb1e106a398ab43d71d264c9935d68a5d2db"
+
+[[clips]]
+id = "form-11-desc-bw"
+path = "clips/carmenta-form/form-11-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-11-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "9554a2a8f6f6b9b991e50a006b49f924dda803ac58d6f1dfd157d42bbb6972d5"
+
+[[clips]]
+id = "form-11-strike-gray"
+path = "clips/carmenta-form/form-11-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-11-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "77dca60cc62c2e7e78053d5090be3a2658ad2c3c96f934bbe462dfb903d91aed"
+
+[[clips]]
+id = "form-11-strike-bw"
+path = "clips/carmenta-form/form-11-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-11-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ebfc15daec70f869af59ca2ac63a41d4cfc1ee13c166375ac5fe1dd289911170"
+
+[[clips]]
+id = "form-12-none-gray"
+path = "clips/carmenta-form/form-12-none-gray.png"
+ground_truth = "clips/carmenta-form/form-12-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2dc345f8ce2c5dc4d58f9fc7c53578f2100094f5df2a99dff52577acef0fac19"
+
+[[clips]]
+id = "form-12-none-bw"
+path = "clips/carmenta-form/form-12-none-bw.png"
+ground_truth = "clips/carmenta-form/form-12-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c9a8779c14eb4a9c3f75a429f9f4d9cfa44d6853b38130f981d800a7ecd7cffe"
+
+[[clips]]
+id = "form-12-under-gray"
+path = "clips/carmenta-form/form-12-under-gray.png"
+ground_truth = "clips/carmenta-form/form-12-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b4c0043e48bbe99f1c72d553619b4baac52516e9f58524f07ccb7ee12bb327e7"
+
+[[clips]]
+id = "form-12-under-bw"
+path = "clips/carmenta-form/form-12-under-bw.png"
+ground_truth = "clips/carmenta-form/form-12-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "e19f431461530471e58a09d340fd253f8d728e9cbc55da63a9fdb80f2e9f41b8"
+
+[[clips]]
+id = "form-12-desc-gray"
+path = "clips/carmenta-form/form-12-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-12-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "22606226bcd3acebfd1eacbab6c00581e8748fe54ccdce37ff36159bb4b8f213"
+
+[[clips]]
+id = "form-12-desc-bw"
+path = "clips/carmenta-form/form-12-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-12-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "031bf7b9612624344fad4eec24cf8ac98a35896759a9c5ea33c6ab793d8fa7fc"
+
+[[clips]]
+id = "form-12-strike-gray"
+path = "clips/carmenta-form/form-12-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-12-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5619607db3d36828ce0b87821030618c886a81f43a8974978dacc55884ffc2eb"
+
+[[clips]]
+id = "form-12-strike-bw"
+path = "clips/carmenta-form/form-12-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-12-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "483681e3cb00acc00ff52ba73acfb63fb37d5d43c34cc74752494f96137c72ff"
+
+[[clips]]
+id = "form-13-none-gray"
+path = "clips/carmenta-form/form-13-none-gray.png"
+ground_truth = "clips/carmenta-form/form-13-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "199e761f055919568a1b2dc3b64d22cd045bc5c004267a14a5c8010eead857ec"
+
+[[clips]]
+id = "form-13-none-bw"
+path = "clips/carmenta-form/form-13-none-bw.png"
+ground_truth = "clips/carmenta-form/form-13-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ee0da72a51b2aa303c3001630706b67643a3aece70b999fe6572cfb94e23717d"
+
+[[clips]]
+id = "form-13-under-gray"
+path = "clips/carmenta-form/form-13-under-gray.png"
+ground_truth = "clips/carmenta-form/form-13-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0ac5579d8550ab82374535f0e85835b90178d1d6bb713b3487be2b6bc3a57f20"
+
+[[clips]]
+id = "form-13-under-bw"
+path = "clips/carmenta-form/form-13-under-bw.png"
+ground_truth = "clips/carmenta-form/form-13-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b46deb332d1707447145aed7114b4180911be42045b70c2eee065b0cc8f9ac67"
+
+[[clips]]
+id = "form-13-desc-gray"
+path = "clips/carmenta-form/form-13-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-13-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2c66f834a3d1f7cc0a93685adf462edca41200fffe70c7a25a39843ff3e3c7f5"
+
+[[clips]]
+id = "form-13-desc-bw"
+path = "clips/carmenta-form/form-13-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-13-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "031f3f74f2511836b1141818e9e3df06e8e208a6c3e2561616aef4c868e19b87"
+
+[[clips]]
+id = "form-13-strike-gray"
+path = "clips/carmenta-form/form-13-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-13-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ddceb86a1f208da7d7e8d1b359ac6f8381545c4dd15365e98895dd49d57b7846"
+
+[[clips]]
+id = "form-13-strike-bw"
+path = "clips/carmenta-form/form-13-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-13-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a1aa9028a140d46f995542f8ac0fcc92e15ebadc28d128e5642cda7f2b653bf6"
+
+[[clips]]
+id = "form-14-none-gray"
+path = "clips/carmenta-form/form-14-none-gray.png"
+ground_truth = "clips/carmenta-form/form-14-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3a88a882c733539a3a7ef531f4e09980176385c6e50569083a595f2b14a6a2e4"
+
+[[clips]]
+id = "form-14-none-bw"
+path = "clips/carmenta-form/form-14-none-bw.png"
+ground_truth = "clips/carmenta-form/form-14-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5526e84c1edde9238836dce81e53276828681522a0bc99baab82fed7fc461eb9"
+
+[[clips]]
+id = "form-14-under-gray"
+path = "clips/carmenta-form/form-14-under-gray.png"
+ground_truth = "clips/carmenta-form/form-14-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7d7e45056dd0c92200706faa6c8c2486fd23f65b18dd4685e17aeec8c0ec020f"
+
+[[clips]]
+id = "form-14-under-bw"
+path = "clips/carmenta-form/form-14-under-bw.png"
+ground_truth = "clips/carmenta-form/form-14-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "75cb808c7df785d1ea8768998396a5e9a7ed3b8f48aaeb3e996fa95402976a88"
+
+[[clips]]
+id = "form-14-desc-gray"
+path = "clips/carmenta-form/form-14-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-14-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "72e0b23e25583b58a0022c63aa430f405ba766b9fb452ad6f38e77980c642a73"
+
+[[clips]]
+id = "form-14-desc-bw"
+path = "clips/carmenta-form/form-14-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-14-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "741b9a6bde7ec841e531382f2737bdff2ebc25ae1e7ebcbed612236df16c43a3"
+
+[[clips]]
+id = "form-14-strike-gray"
+path = "clips/carmenta-form/form-14-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-14-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "200cff7279541255d987c4fbfdfa65dfd503b6245e8005f20084103e48ba0798"
+
+[[clips]]
+id = "form-14-strike-bw"
+path = "clips/carmenta-form/form-14-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-14-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "991c236aab477b61a1d46afff660cdd30e1a3fa13b51f56e1d236f5cae65d4fa"
+
+[[clips]]
+id = "form-15-none-gray"
+path = "clips/carmenta-form/form-15-none-gray.png"
+ground_truth = "clips/carmenta-form/form-15-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "676d17818b474d7981b92bd060ba611772c9fd06db2b0e1b7ae2c622db393c86"
+
+[[clips]]
+id = "form-15-none-bw"
+path = "clips/carmenta-form/form-15-none-bw.png"
+ground_truth = "clips/carmenta-form/form-15-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "9b1ab4ffb3e38c69818d936ece15bb82d29aecf34e3378d1e08380bfd975c99f"
+
+[[clips]]
+id = "form-15-under-gray"
+path = "clips/carmenta-form/form-15-under-gray.png"
+ground_truth = "clips/carmenta-form/form-15-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "e3b0cf90d9f10be44551024b01890fd0725d2909d67f0cad2ec1b7ff981d0114"
+
+[[clips]]
+id = "form-15-under-bw"
+path = "clips/carmenta-form/form-15-under-bw.png"
+ground_truth = "clips/carmenta-form/form-15-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "35c1456b610ed4e21529875def322ab24c659d753db836164d12c7d22f073883"
+
+[[clips]]
+id = "form-15-desc-gray"
+path = "clips/carmenta-form/form-15-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-15-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0d3b2670ad2f926cb948b2fc61790fa9c7243295dacd9fc83c683483b8a4c6cf"
+
+[[clips]]
+id = "form-15-desc-bw"
+path = "clips/carmenta-form/form-15-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-15-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f1e00177acd3c71d75cb494099a2bb664023d56b48313615a3d6e03fe477f3d9"
+
+[[clips]]
+id = "form-15-strike-gray"
+path = "clips/carmenta-form/form-15-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-15-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "57e3dd079dd182b4f1a3d56b3797589f3912aaf20fbc65a54b56683ef015c3de"
+
+[[clips]]
+id = "form-15-strike-bw"
+path = "clips/carmenta-form/form-15-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-15-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "edc04e79734c5721aca3f62d030df1dbafa7e5fd8d7c6dc5b32797157b762939"
+
+[[clips]]
+id = "form-16-none-gray"
+path = "clips/carmenta-form/form-16-none-gray.png"
+ground_truth = "clips/carmenta-form/form-16-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2a8a393a857d21c1e54d8313446e706f261be6a0bb5bb4dff2b3f7b246b22576"
+
+[[clips]]
+id = "form-16-none-bw"
+path = "clips/carmenta-form/form-16-none-bw.png"
+ground_truth = "clips/carmenta-form/form-16-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8da6eba2dd75b8f022213fa43cceb6648de395f1647032dc50cd9b875cf3c35a"
+
+[[clips]]
+id = "form-16-under-gray"
+path = "clips/carmenta-form/form-16-under-gray.png"
+ground_truth = "clips/carmenta-form/form-16-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "76f6f09d90b35893373b139725e81dc02f32b7a361ba56f9599ad7d1e9a98de2"
+
+[[clips]]
+id = "form-16-under-bw"
+path = "clips/carmenta-form/form-16-under-bw.png"
+ground_truth = "clips/carmenta-form/form-16-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b286550c657afea8d2b36b6f0e75c1bfdc42383cacac50185e30a3ccab066a78"
+
+[[clips]]
+id = "form-16-desc-gray"
+path = "clips/carmenta-form/form-16-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-16-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "d93ae8f97216839bc471abaf1fa0244e2fb3204f0df642bf2c0613c77aa83bf9"
+
+[[clips]]
+id = "form-16-desc-bw"
+path = "clips/carmenta-form/form-16-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-16-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "301356832e8e19089c8721442d3e3ad9d6b4e670481107b922de7a734d02b9c4"
+
+[[clips]]
+id = "form-16-strike-gray"
+path = "clips/carmenta-form/form-16-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-16-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3bea1f0b8c74faa30e1e82437421bacf488a66b3b64e87ed6211e2d779e7b6e2"
+
+[[clips]]
+id = "form-16-strike-bw"
+path = "clips/carmenta-form/form-16-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-16-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2d8e520c6abdbe5798a7719dfc08e7d3896466e12620536234cfb5a30cea3812"
+
+[[clips]]
+id = "form-17-none-gray"
+path = "clips/carmenta-form/form-17-none-gray.png"
+ground_truth = "clips/carmenta-form/form-17-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b64cd97b91e7adc4b9a6a3cde29ff674a6a1c495adba8edf003853c304875e55"
+
+[[clips]]
+id = "form-17-none-bw"
+path = "clips/carmenta-form/form-17-none-bw.png"
+ground_truth = "clips/carmenta-form/form-17-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "698b3ee03c5a077064835294b43c1d92fbde9c4227c2e19ddc1b1b700621ecf9"
+
+[[clips]]
+id = "form-17-under-gray"
+path = "clips/carmenta-form/form-17-under-gray.png"
+ground_truth = "clips/carmenta-form/form-17-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0ed0b59f7c464025179717fc0d8a9dae057f201c5ab1d71b6a7c87f457b14e80"
+
+[[clips]]
+id = "form-17-under-bw"
+path = "clips/carmenta-form/form-17-under-bw.png"
+ground_truth = "clips/carmenta-form/form-17-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8f8e65f0e1f94bdd7a52bacbdeffa5efecd99476669cd0ae5e110d3fc24f7ed4"
+
+[[clips]]
+id = "form-17-desc-gray"
+path = "clips/carmenta-form/form-17-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-17-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "48067b24991a5a58f1470a2e9b2bc92d14ed9b033b0e61d27c05b5ffdb869e5a"
+
+[[clips]]
+id = "form-17-desc-bw"
+path = "clips/carmenta-form/form-17-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-17-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2db261ad05abb5b9d5c3fa6046571ce1026f3fea07441c4b15fe5fbb669988ea"
+
+[[clips]]
+id = "form-17-strike-gray"
+path = "clips/carmenta-form/form-17-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-17-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "650416e514ec77d9298fab01549dc67a094a175e30dc0ac506f17c28627d28cb"
+
+[[clips]]
+id = "form-17-strike-bw"
+path = "clips/carmenta-form/form-17-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-17-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5dc43dcf05b5416984deb68e9cfd7ffa21402e83df1327ed7fd34c0f85bf99c3"
+
+[[clips]]
+id = "form-18-none-gray"
+path = "clips/carmenta-form/form-18-none-gray.png"
+ground_truth = "clips/carmenta-form/form-18-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "59dbea96d74e979c1454fa6bc034eab24b1f1325d74257250505a0e6e027634e"
+
+[[clips]]
+id = "form-18-none-bw"
+path = "clips/carmenta-form/form-18-none-bw.png"
+ground_truth = "clips/carmenta-form/form-18-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5dc3be80479d74da4ba5318954656d9bb953b72a20f38498abce16748670fe4b"
+
+[[clips]]
+id = "form-18-under-gray"
+path = "clips/carmenta-form/form-18-under-gray.png"
+ground_truth = "clips/carmenta-form/form-18-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "4674b487114f422bc92db515d4e81d0a7887d6cb81a7a8ed11776a5a64c36f54"
+
+[[clips]]
+id = "form-18-under-bw"
+path = "clips/carmenta-form/form-18-under-bw.png"
+ground_truth = "clips/carmenta-form/form-18-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "784a5fe4467782929dfcf5a723182dcf81128c69f870ed7164583b07b04d37cf"
+
+[[clips]]
+id = "form-18-desc-gray"
+path = "clips/carmenta-form/form-18-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-18-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0219b1f0757ca717e6236ce138afd77ce42fb7e0c5db2410c5cd9c1a202839ae"
+
+[[clips]]
+id = "form-18-desc-bw"
+path = "clips/carmenta-form/form-18-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-18-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "9bb20618046c666fbbb96b72b0e359fb16c34ce563cbbdb82aa307e1f6a498dc"
+
+[[clips]]
+id = "form-18-strike-gray"
+path = "clips/carmenta-form/form-18-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-18-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "1222b174adf84657c328bc672595950d21ca743e7de20059bf0491771d7e5c47"
+
+[[clips]]
+id = "form-18-strike-bw"
+path = "clips/carmenta-form/form-18-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-18-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "89ef2922617e7c5732a51b993a8815242d16d09ab4d58cbad2e37567f51d7d09"
+
+[[clips]]
+id = "form-19-none-gray"
+path = "clips/carmenta-form/form-19-none-gray.png"
+ground_truth = "clips/carmenta-form/form-19-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a91e637ab820e4fc997d32c90539d5d78e558f6392e4ed8ef54460d9f58dc2e9"
+
+[[clips]]
+id = "form-19-none-bw"
+path = "clips/carmenta-form/form-19-none-bw.png"
+ground_truth = "clips/carmenta-form/form-19-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3fc8b6d3b61a1a05c0f792181eec43da44892f2b03388db2afdcca86ac0b73fb"
+
+[[clips]]
+id = "form-19-under-gray"
+path = "clips/carmenta-form/form-19-under-gray.png"
+ground_truth = "clips/carmenta-form/form-19-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "fce69861fce2560653b00aaf7fdbd04c88e64600df485ac0dd0493c3eeb01d55"
+
+[[clips]]
+id = "form-19-under-bw"
+path = "clips/carmenta-form/form-19-under-bw.png"
+ground_truth = "clips/carmenta-form/form-19-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5f80e8c99ae914bb620927544b6b5e2ec1a63615ebedab9430815e3430e87f49"
+
+[[clips]]
+id = "form-19-desc-gray"
+path = "clips/carmenta-form/form-19-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-19-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "624bcfeffe9ce4ae5d8fdd37f437e2b7833db900ab5b3853baebcf8e908d26c4"
+
+[[clips]]
+id = "form-19-desc-bw"
+path = "clips/carmenta-form/form-19-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-19-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8e703a461e08620a7474530ce2d57c68254bbab3a49379be77ad4ddd2a4c87e9"
+
+[[clips]]
+id = "form-19-strike-gray"
+path = "clips/carmenta-form/form-19-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-19-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "f225c32b7818cfe711f0e348d60db3fea66e06ae095945d2de21e24f82b402a0"
+
+[[clips]]
+id = "form-19-strike-bw"
+path = "clips/carmenta-form/form-19-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-19-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6c80a9515705930308c23c5c02a33d9634fee7ce0fcf1b449f201c35a94f1775"
+
+[[clips]]
+id = "form-20-none-gray"
+path = "clips/carmenta-form/form-20-none-gray.png"
+ground_truth = "clips/carmenta-form/form-20-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c0e88f6c174ff853e4f7a12d42d97fe989649dec96717eb484edfa6a319ecb74"
+
+[[clips]]
+id = "form-20-none-bw"
+path = "clips/carmenta-form/form-20-none-bw.png"
+ground_truth = "clips/carmenta-form/form-20-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7abc9a705e6a17351d6626f50e73dd7ae201b5360b4ebbe4a3c82d9a4799fe41"
+
+[[clips]]
+id = "form-20-under-gray"
+path = "clips/carmenta-form/form-20-under-gray.png"
+ground_truth = "clips/carmenta-form/form-20-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "40fd4f08d1855a040c56de6083fbd26f09315ead19055cb5335197507f80b3f7"
+
+[[clips]]
+id = "form-20-under-bw"
+path = "clips/carmenta-form/form-20-under-bw.png"
+ground_truth = "clips/carmenta-form/form-20-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "df3f80590dda431011d5c7791f19810a0ab1f8c8854bd05f98513d5d59b995aa"
+
+[[clips]]
+id = "form-20-desc-gray"
+path = "clips/carmenta-form/form-20-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-20-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b138706101c669ad54c54a727cc6864d9d491724a916084f6398a96d6274f100"
+
+[[clips]]
+id = "form-20-desc-bw"
+path = "clips/carmenta-form/form-20-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-20-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0c714da55c5d35323f5cdaa4422b8f50dddf3955e883199d43fcb89dcfeacf8a"
+
+[[clips]]
+id = "form-20-strike-gray"
+path = "clips/carmenta-form/form-20-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-20-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5e1169f47aff1097f4291efee0576745d55297364a30528a986b053d8831030f"
+
+[[clips]]
+id = "form-20-strike-bw"
+path = "clips/carmenta-form/form-20-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-20-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8dc6e09e5b5d49b59102013a4e303c4db945ee278c8dfcc0253be85e3a9757e5"
+
+[[clips]]
+id = "form-21-none-gray"
+path = "clips/carmenta-form/form-21-none-gray.png"
+ground_truth = "clips/carmenta-form/form-21-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5b9d19266f7d1f59580cba3a4435fa34a77e20390ca085d98ffb03b5298c2433"
+
+[[clips]]
+id = "form-21-none-bw"
+path = "clips/carmenta-form/form-21-none-bw.png"
+ground_truth = "clips/carmenta-form/form-21-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b3adab76985123acd1f9a8aaea43a1229fff99470ff73d322919d9a8fdc2bdb0"
+
+[[clips]]
+id = "form-21-under-gray"
+path = "clips/carmenta-form/form-21-under-gray.png"
+ground_truth = "clips/carmenta-form/form-21-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a20c6f59c67a34234ef05e25736718e02af0e3cb92828cb9a951a5c4c17b4477"
+
+[[clips]]
+id = "form-21-under-bw"
+path = "clips/carmenta-form/form-21-under-bw.png"
+ground_truth = "clips/carmenta-form/form-21-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "02f0cac1bc5a89d8c6dc456fb2250c3f77254615de2ac41f9abab5904e65cc13"
+
+[[clips]]
+id = "form-21-desc-gray"
+path = "clips/carmenta-form/form-21-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-21-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "367218771d15e01d8fce6547fe322184839b8039c5ee05b2a091fe6fae778817"
+
+[[clips]]
+id = "form-21-desc-bw"
+path = "clips/carmenta-form/form-21-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-21-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "15cf246c173c9f2d41f1c8e6bf8e68762b33e6909ec19692183e5f5b202cdd9e"
+
+[[clips]]
+id = "form-21-strike-gray"
+path = "clips/carmenta-form/form-21-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-21-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "da5ce17c2338c38d206741bace5e3f45262ec4073c1e8eb84d37e5de6e4850cb"
+
+[[clips]]
+id = "form-21-strike-bw"
+path = "clips/carmenta-form/form-21-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-21-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3cd575563a10c8248a706d50d8d9dcef438f50e2c099d3a2ef86abffd4fbf12e"
+
+[[clips]]
+id = "form-22-none-gray"
+path = "clips/carmenta-form/form-22-none-gray.png"
+ground_truth = "clips/carmenta-form/form-22-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "943dd80668ec8803ede89b5b91fad7adc31fd7c567958eaae7f3a3ed7e8b25b1"
+
+[[clips]]
+id = "form-22-none-bw"
+path = "clips/carmenta-form/form-22-none-bw.png"
+ground_truth = "clips/carmenta-form/form-22-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "37f4f277b8dd11976750f1dc9ae9eda80e0d1e93ddd570fa12d8f94a3e6a7208"
+
+[[clips]]
+id = "form-22-under-gray"
+path = "clips/carmenta-form/form-22-under-gray.png"
+ground_truth = "clips/carmenta-form/form-22-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5f935ee2a9142520a8d20fda02d3088b9a822fea268d2701004512571bbe22b1"
+
+[[clips]]
+id = "form-22-under-bw"
+path = "clips/carmenta-form/form-22-under-bw.png"
+ground_truth = "clips/carmenta-form/form-22-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6d11d5c503748a8dbd67c2bda7cc4506d08c0de31e46591b3beab173c79d3053"
+
+[[clips]]
+id = "form-22-desc-gray"
+path = "clips/carmenta-form/form-22-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-22-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "89cc20436da9e0ecc064db9f0dbdb2eafb0eef0cb9ba17a36aac0bcced277d83"
+
+[[clips]]
+id = "form-22-desc-bw"
+path = "clips/carmenta-form/form-22-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-22-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5faea46b0757090b7d63e6a9d1dac1106d1c3c1bb228ffc1c6f416400df16ffa"
+
+[[clips]]
+id = "form-22-strike-gray"
+path = "clips/carmenta-form/form-22-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-22-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6a2e03a95d16357d2560c90cd314927bb2a7d61dbb081dc9ace5fa0919cf62e4"
+
+[[clips]]
+id = "form-22-strike-bw"
+path = "clips/carmenta-form/form-22-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-22-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "79e335a3b52962f6eb0d32892801815a641b88de4c4e5ed431cd208691eef38c"
+
+[[clips]]
+id = "form-23-none-gray"
+path = "clips/carmenta-form/form-23-none-gray.png"
+ground_truth = "clips/carmenta-form/form-23-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0d54db555fc398784ddb53a3807c5d355dc69d5a3712f60338d1cb6c725cf5ed"
+
+[[clips]]
+id = "form-23-none-bw"
+path = "clips/carmenta-form/form-23-none-bw.png"
+ground_truth = "clips/carmenta-form/form-23-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "ce8709f3ff42467e8dec4309ea366c43aaedc1f14bee7540557d8f34c4689cdd"
+
+[[clips]]
+id = "form-23-under-gray"
+path = "clips/carmenta-form/form-23-under-gray.png"
+ground_truth = "clips/carmenta-form/form-23-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "52c0049a50416c34124a1e39ceefad8b3ac19698d522250fad62926ce9f4d78f"
+
+[[clips]]
+id = "form-23-under-bw"
+path = "clips/carmenta-form/form-23-under-bw.png"
+ground_truth = "clips/carmenta-form/form-23-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "d4916aad4d0d1937138aef4b240d70fb41893ae7162008fa0793af4b3cb812c6"
+
+[[clips]]
+id = "form-23-desc-gray"
+path = "clips/carmenta-form/form-23-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-23-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "1e695f67e5f57d9bb784d5a4c8f439ce7fb3fba88acd22f5777746d4fa87062f"
+
+[[clips]]
+id = "form-23-desc-bw"
+path = "clips/carmenta-form/form-23-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-23-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "34e7992d9b94b270e6a0cb0a6c29773a2f07d66a8778fc4aee5ed4f7222d52a2"
+
+[[clips]]
+id = "form-23-strike-gray"
+path = "clips/carmenta-form/form-23-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-23-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5974865a3128eca523c373d47f67781db2733e858b79c231c5917bbc55b89ff3"
+
+[[clips]]
+id = "form-23-strike-bw"
+path = "clips/carmenta-form/form-23-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-23-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "580fdd9c93e4327c21a291f87ee0112e1cd0471d75018b14e652eb10f9730732"
+
+[[clips]]
+id = "form-24-none-gray"
+path = "clips/carmenta-form/form-24-none-gray.png"
+ground_truth = "clips/carmenta-form/form-24-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "73ff94b56fa25ac1b6f5157fc60585e0797ea729363ea59c3f227e7825c30749"
+
+[[clips]]
+id = "form-24-none-bw"
+path = "clips/carmenta-form/form-24-none-bw.png"
+ground_truth = "clips/carmenta-form/form-24-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "de8c64f2f6eddaeb6b3c2618dc788ce68f2e3cf1fa3ebdd8af26acbf7985a0b9"
+
+[[clips]]
+id = "form-24-under-gray"
+path = "clips/carmenta-form/form-24-under-gray.png"
+ground_truth = "clips/carmenta-form/form-24-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "a144f02e45844baca8a8e2c2d903fc7c7000bbb407136a1cbe62df7ba85caa0c"
+
+[[clips]]
+id = "form-24-under-bw"
+path = "clips/carmenta-form/form-24-under-bw.png"
+ground_truth = "clips/carmenta-form/form-24-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c5914164a705b5c6546ced3242ec7c402c9835724ac46de810680e138f0c286e"
+
+[[clips]]
+id = "form-24-desc-gray"
+path = "clips/carmenta-form/form-24-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-24-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "d34d3532fc421f3f97b827740256055bd2e18e900d38fe320d0a65850e92cf95"
+
+[[clips]]
+id = "form-24-desc-bw"
+path = "clips/carmenta-form/form-24-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-24-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c41c1e8fe187da958b7431359a2da928e058f7cacc71fb21f845bfc6179005d1"
+
+[[clips]]
+id = "form-24-strike-gray"
+path = "clips/carmenta-form/form-24-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-24-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "65f587e36ba0e9c7d4635d376363c95de52abe263a4965d5be524326a269638d"
+
+[[clips]]
+id = "form-24-strike-bw"
+path = "clips/carmenta-form/form-24-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-24-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "367bb5cc38f6651bbca414bf7d747cda4fb71af9367a6b8c8af9ab0c43093436"
+
+[[clips]]
+id = "form-25-none-gray"
+path = "clips/carmenta-form/form-25-none-gray.png"
+ground_truth = "clips/carmenta-form/form-25-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "54b635acb75e28a08bcf7daa55b473d1a17b27d8c54b5ee061f31dbf7c944385"
+
+[[clips]]
+id = "form-25-none-bw"
+path = "clips/carmenta-form/form-25-none-bw.png"
+ground_truth = "clips/carmenta-form/form-25-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "5457c18c080f604871b03dc4316081aecac222bf159b5188a79a234b33ed2379"
+
+[[clips]]
+id = "form-25-under-gray"
+path = "clips/carmenta-form/form-25-under-gray.png"
+ground_truth = "clips/carmenta-form/form-25-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "32d3a3ec0bd40c3474a145515080987166ab87e8179f55f7f17060fcc3785612"
+
+[[clips]]
+id = "form-25-under-bw"
+path = "clips/carmenta-form/form-25-under-bw.png"
+ground_truth = "clips/carmenta-form/form-25-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8f1c83554432d373257a4ef3068443256a22652acd00fcf22fa070112f89877b"
+
+[[clips]]
+id = "form-25-desc-gray"
+path = "clips/carmenta-form/form-25-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-25-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7a7aeaa62e5afed1098a11875be3102f9096904e117cb9d3cfbf74c852e0d65e"
+
+[[clips]]
+id = "form-25-desc-bw"
+path = "clips/carmenta-form/form-25-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-25-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "661f94a110baeb2f0ba0adff0f9d382e1c06eb4b3286054a138ff601a32640ec"
+
+[[clips]]
+id = "form-25-strike-gray"
+path = "clips/carmenta-form/form-25-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-25-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6a3ce7c70adc47fc0c5b3ac4245f46bc9f5e8b03bb025627558ed5d902d5a9f0"
+
+[[clips]]
+id = "form-25-strike-bw"
+path = "clips/carmenta-form/form-25-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-25-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6805eb859d4e02ef55e7d3e2e0797485ad170e8594730fea1d5d0ded1ef2d856"
+
+[[clips]]
+id = "form-26-none-gray"
+path = "clips/carmenta-form/form-26-none-gray.png"
+ground_truth = "clips/carmenta-form/form-26-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8e64ade86a10f50c64054214a50f10b7d9582d996b83254e22be3b342e01a4bb"
+
+[[clips]]
+id = "form-26-none-bw"
+path = "clips/carmenta-form/form-26-none-bw.png"
+ground_truth = "clips/carmenta-form/form-26-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "60a4256591be67ce04a5cc7a12f23ab2d3ec8899a9d27f9c98edc272141c5018"
+
+[[clips]]
+id = "form-26-under-gray"
+path = "clips/carmenta-form/form-26-under-gray.png"
+ground_truth = "clips/carmenta-form/form-26-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b3354da2acce672e879387a7334ec2305c3bae1b6a4f0f1f915dfb3e11cc826c"
+
+[[clips]]
+id = "form-26-under-bw"
+path = "clips/carmenta-form/form-26-under-bw.png"
+ground_truth = "clips/carmenta-form/form-26-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "0bdca2432f084244656a73a553b659dc98c82c85b9c3efc5573218bd9978b9fc"
+
+[[clips]]
+id = "form-26-desc-gray"
+path = "clips/carmenta-form/form-26-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-26-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "e00d2aea3918e00c893fc59361a749d7ec2e895e405ad402276162801a8e5ef7"
+
+[[clips]]
+id = "form-26-desc-bw"
+path = "clips/carmenta-form/form-26-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-26-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "9733cd31a99241b43a45c0010e95284bf416db18ca5b9510910b8473e09775be"
+
+[[clips]]
+id = "form-26-strike-gray"
+path = "clips/carmenta-form/form-26-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-26-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "470c060da3442d1c1217fcb562087c4f35e41b2c72ee5f8bc514528c21f472f1"
+
+[[clips]]
+id = "form-26-strike-bw"
+path = "clips/carmenta-form/form-26-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-26-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "48b8996b3943587f0086b14e168a4aa86be36e957e4c7e65005655be906e99a8"
+
+[[clips]]
+id = "form-27-none-gray"
+path = "clips/carmenta-form/form-27-none-gray.png"
+ground_truth = "clips/carmenta-form/form-27-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "795d614efd70fc48374592cd815bace7d2de82ab1105fe53b5da085b331e3f21"
+
+[[clips]]
+id = "form-27-none-bw"
+path = "clips/carmenta-form/form-27-none-bw.png"
+ground_truth = "clips/carmenta-form/form-27-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "86fee0090e8d4baf12805a9e6e07bd9fe6e3a01a12d2a3e97f29abd3a845f53b"
+
+[[clips]]
+id = "form-27-under-gray"
+path = "clips/carmenta-form/form-27-under-gray.png"
+ground_truth = "clips/carmenta-form/form-27-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c3b1f096130d20df9384c0bcd5faced8289d59159a4c1fa831887aa26448e1d8"
+
+[[clips]]
+id = "form-27-under-bw"
+path = "clips/carmenta-form/form-27-under-bw.png"
+ground_truth = "clips/carmenta-form/form-27-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "1568903e7d49d26acfbca34383d867455d85e214ec72a7509b7cb1200cba1754"
+
+[[clips]]
+id = "form-27-desc-gray"
+path = "clips/carmenta-form/form-27-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-27-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "55b70fb58e205da86d5cb6426393ce4e157d754d1c00966f8b11bc105b3f885a"
+
+[[clips]]
+id = "form-27-desc-bw"
+path = "clips/carmenta-form/form-27-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-27-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "21ff3b923c4c8b787654957da283b1af907e54b9c75da7ee0c099364de35e405"
+
+[[clips]]
+id = "form-27-strike-gray"
+path = "clips/carmenta-form/form-27-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-27-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "09f6fbbf5eb6b3673b75a70b6136382ff011c247154da0700471f9a02e411b8f"
+
+[[clips]]
+id = "form-27-strike-bw"
+path = "clips/carmenta-form/form-27-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-27-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "99374ecc609edafa7aa84537644d3fdea0aa8caadcfcfebc05ed67d17b44a0ae"
+
+[[clips]]
+id = "form-28-none-gray"
+path = "clips/carmenta-form/form-28-none-gray.png"
+ground_truth = "clips/carmenta-form/form-28-none-gray.txt"
+class = "form-none-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "56fcd87d11fa19f2dfadc342c5a059a90cc9636b032039c5c47f9f93584c4695"
+
+[[clips]]
+id = "form-28-none-bw"
+path = "clips/carmenta-form/form-28-none-bw.png"
+ground_truth = "clips/carmenta-form/form-28-none-bw.txt"
+class = "form-none-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "3660f17fa63d1afe483a2dd4aad02a91d8a36a041918d2b85c5039220cce3493"
+
+[[clips]]
+id = "form-28-under-gray"
+path = "clips/carmenta-form/form-28-under-gray.png"
+ground_truth = "clips/carmenta-form/form-28-under-gray.txt"
+class = "form-under-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "56f10ded930ee02ae7d0ed62443a00ffc20cfb0921c71ec93a06359b7021c5d8"
+
+[[clips]]
+id = "form-28-under-bw"
+path = "clips/carmenta-form/form-28-under-bw.png"
+ground_truth = "clips/carmenta-form/form-28-under-bw.txt"
+class = "form-under-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7a9b905d206cc25448f56a55250c57e959597fd6e2e11737c8a82646a2366e3a"
+
+[[clips]]
+id = "form-28-desc-gray"
+path = "clips/carmenta-form/form-28-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-28-desc-gray.txt"
+class = "form-desc-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "aaaec9b418956017252c72a5464a7b6f9832955d08f29670815726b98d56452e"
+
+[[clips]]
+id = "form-28-desc-bw"
+path = "clips/carmenta-form/form-28-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-28-desc-bw.txt"
+class = "form-desc-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "8fa24ab367524be9e28ae3fd67781a0d5cd8807f1522cac97e0aa8b26c6b7d8e"
+
+[[clips]]
+id = "form-28-strike-gray"
+path = "clips/carmenta-form/form-28-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-28-strike-gray.txt"
+class = "form-strike-gray"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6be93d4d8aab3666d5427628e7893f3844c07bbbe974e2a58ea01072090fd39a"
+
+[[clips]]
+id = "form-28-strike-bw"
+path = "clips/carmenta-form/form-28-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-28-strike-bw.txt"
+class = "form-strike-bw"
+split = "train"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2ea54c62d508614e8817c60d560dba094a8053a6ac37deeaea9cee0c9b64592f"
+
+[[clips]]
+id = "form-29-none-gray"
+path = "clips/carmenta-form/form-29-none-gray.png"
+ground_truth = "clips/carmenta-form/form-29-none-gray.txt"
+class = "form-none-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "b791dd456ec3e95f5018e01d7272f19f7ad8feda2407474dd1b5470bb3cc0ef3"
+
+[[clips]]
+id = "form-29-none-bw"
+path = "clips/carmenta-form/form-29-none-bw.png"
+ground_truth = "clips/carmenta-form/form-29-none-bw.txt"
+class = "form-none-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "6232c2c9d6283fa7f3808a9c54e9ff8a23f5ad4400f14d3ae3a02e8b3c7df478"
+
+[[clips]]
+id = "form-29-under-gray"
+path = "clips/carmenta-form/form-29-under-gray.png"
+ground_truth = "clips/carmenta-form/form-29-under-gray.txt"
+class = "form-under-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "2b866455828fe71842e9be47bbb90ae3d58a164f61420a4bff4b364a6504bd2c"
+
+[[clips]]
+id = "form-29-under-bw"
+path = "clips/carmenta-form/form-29-under-bw.png"
+ground_truth = "clips/carmenta-form/form-29-under-bw.txt"
+class = "form-under-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "7bf3e896601ef35de7c764830ce210eddb0a2931e5bccd485fffe2c16cdcfb80"
+
+[[clips]]
+id = "form-29-desc-gray"
+path = "clips/carmenta-form/form-29-desc-gray.png"
+ground_truth = "clips/carmenta-form/form-29-desc-gray.txt"
+class = "form-desc-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "df30da2458af8b7a1d125b3189c9c2c08d9b8334ea440c07d133ad7e4b9def90"
+
+[[clips]]
+id = "form-29-desc-bw"
+path = "clips/carmenta-form/form-29-desc-bw.png"
+ground_truth = "clips/carmenta-form/form-29-desc-bw.txt"
+class = "form-desc-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c8f3321d4393c9f0850f91d7f4f1cb2ed5cb5d19b9b5178b5324b8ed5508e6d4"
+
+[[clips]]
+id = "form-29-strike-gray"
+path = "clips/carmenta-form/form-29-strike-gray.png"
+ground_truth = "clips/carmenta-form/form-29-strike-gray.txt"
+class = "form-strike-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "609e84d1f8e0009fc22eedfaefb94d16d2ac698cecac9b355ed67754a11137d8"
+
+[[clips]]
+id = "form-29-strike-bw"
+path = "clips/carmenta-form/form-29-strike-bw.png"
+ground_truth = "clips/carmenta-form/form-29-strike-bw.txt"
+class = "form-strike-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented values in Windows system fonts)"
+sha256 = "c3d1e8239b5330a2e4a4c79363e041970ebb9cabef38b80373169997f66d05c4"

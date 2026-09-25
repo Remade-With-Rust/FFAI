@@ -46,6 +46,63 @@ pub fn cer_with(reference: &str, hypothesis: &str, mode: Mode) -> f64 {
     error_rate(&r, &h)
 }
 
+/// Digit errors and reference digits, for a DIGIT ERROR RATE — the number a
+/// financial-forms buyer asks for first (docs/plans/commercial-gaps.md,
+/// gap 3). A page CER of 5 % says nothing about whether "$150,000" came back
+/// right, and one wrong digit makes the value worthless.
+///
+/// Both strings are normalized under `mode` and aligned by a minimal-edit
+/// Levenshtein alignment. Counted as digit errors:
+/// * a substitution where EITHER side is a digit — a digit misread
+///   (`1` -> `T`) and a phantom digit (`$` -> `8`, which turns "$10,000"
+///   into "810,000") both corrupt the number;
+/// * a reference digit deleted;
+/// * a hypothesis digit inserted where the reference had nothing.
+///
+/// Returns `(errors, reference_digits)`, so a corpus total is summed
+/// (micro-averaged) rather than a mean of per-page rates dominated by pages
+/// with two digits.
+#[must_use]
+pub fn digit_errors_with(reference: &str, hypothesis: &str, mode: Mode) -> (usize, usize) {
+    let truth: Vec<char> = normalize(reference, mode).chars().collect();
+    let read: Vec<char> = normalize(hypothesis, mode).chars().collect();
+    let digits = truth.iter().filter(|c| c.is_ascii_digit()).count();
+    // Full DP table, then walk back one minimal alignment.
+    let mut table = vec![vec![0usize; read.len() + 1]; truth.len() + 1];
+    for (row_idx, row) in table.iter_mut().enumerate() {
+        row[0] = row_idx;
+    }
+    for (col_idx, cell) in table[0].iter_mut().enumerate() {
+        *cell = col_idx;
+    }
+    for ti in 1..=truth.len() {
+        for ri in 1..=read.len() {
+            table[ti][ri] = (table[ti - 1][ri - 1] + usize::from(truth[ti - 1] != read[ri - 1]))
+                .min(table[ti - 1][ri] + 1)
+                .min(table[ti][ri - 1] + 1);
+        }
+    }
+    let (mut ti, mut ri, mut errors) = (truth.len(), read.len(), 0usize);
+    while ti > 0 || ri > 0 {
+        let diagonal = ti > 0
+            && ri > 0
+            && table[ti][ri] == table[ti - 1][ri - 1] + usize::from(truth[ti - 1] != read[ri - 1]);
+        if diagonal {
+            let (t, r) = (truth[ti - 1], read[ri - 1]);
+            errors += usize::from(t != r && (t.is_ascii_digit() || r.is_ascii_digit()));
+            ti -= 1;
+            ri -= 1;
+        } else if ti > 0 && table[ti][ri] == table[ti - 1][ri] + 1 {
+            errors += usize::from(truth[ti - 1].is_ascii_digit()); // deleted
+            ti -= 1;
+        } else {
+            errors += usize::from(read[ri - 1].is_ascii_digit()); // inserted
+            ri -= 1;
+        }
+    }
+    (errors, digits)
+}
+
 /// Levenshtein distance / reference length. Empty reference: 0.0 if the
 /// hypothesis is empty too, else 1.0 per hypothesis token (capped at 1.0 by
 /// convention would hide gross over-generation, so we don't cap).
@@ -106,6 +163,35 @@ mod tests {
     fn cer_on_close_strings_is_small() {
         let c = cer("kitten", "sitten");
         assert!((c - 1.0 / 6.0).abs() < 1e-12);
+    }
+
+    /// The field misreads that motivated the metric: every one is a digit
+    /// error, and letter errors elsewhere on the line are not.
+    #[test]
+    fn digit_errors_count_only_digits() {
+        let m = Mode::Ocr;
+        assert_eq!(
+            digit_errors_with("$10,000", "810,000", m),
+            (1, 5),
+            "$ -> 8 invents a digit"
+        );
+        assert_eq!(digit_errors_with("1117 Oak", "TTT7 Oak", m), (3, 4));
+        assert_eq!(
+            digit_errors_with("#305 Main", "#30S Mian", m),
+            (1, 3),
+            "a letter swap is not counted"
+        );
+        assert_eq!(
+            digit_errors_with("Unit 7", "Unit 77", m),
+            (1, 1),
+            "an invented digit counts"
+        );
+        assert_eq!(
+            digit_errors_with("Total 42", "Total", m),
+            (2, 2),
+            "dropped digits count"
+        );
+        assert_eq!(digit_errors_with("no digits", "n0 digits", m), (1, 0));
     }
 
     #[test]

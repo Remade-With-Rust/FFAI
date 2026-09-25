@@ -97,7 +97,7 @@ ffai models         # list model manifests, licenses, cache status
 | Component | Crate | Task | Namesake | Compare |
 |---|---|---|---|---|
 | **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On the full **OmniDocBench** holdout: **20.3 % CER, 236/236 correctness**, reading order computed by projection rather than learned — and **89 % of the remaining gap to PP-StructureV3 is sequence, not characters** (order-free CER within 1.40 pp). Against Baidu Unlimited-OCR: 25.9 % vs 15.5 % on a matched 43-page subset, at **17x the throughput on CPU** from 4.7 MB of detector weights against 6.4 GB. Photo accuracy still trails PaddleOCR, causes diagnosed ([Status](#status)) |
+| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On all **1 651 OmniDocBench pages, scored by its own evaluator**: text edit distance **0.116**, reading order **0.204**, with reading order computed rather than learned. Clearly behind Baidu's Unlimited-OCR (0.041 vs 0.108 text on a 236-page subset), at roughly **9× its throughput on CPU**. Earlier figures from our own scorer are withdrawn: it was 2.8× biased in our favour. **New in 0.11, for forms and scanned PDFs:** quarter-turn orientation (144/144), checkboxes, label → value pairing, and PDF pages read as a viewer shows them, redactions included ([Status](#status)). Photo accuracy still trails PaddleOCR |
 | **Diana** | `ffai-diana` | Object detection | Roman goddess of the hunt — fast, precise detection | **Detection, tracking, and the browser.** YOLO26 on candle from official Ultralytics `.pt` — all five tiers from one tier-agnostic graph, no ONNX. **Every detection identical to PyTorch at n, m, l and x**, at **1.6–5.6× less memory** and up to **10× faster load**. **3.71× less CPU per frame than Ultralytics**, and **1.92× faster under load** — Diana is a ~2.4-core workload against their ~7.9. **ByteTrack** with no appearance model and no second weight file: IDF1 35.93 / MOTA 24.91 against 36.92 / 27.38 on identical weights and frames, with **218 ID switches to their 800**. **Runs in a browser** — [`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles the whole graph to WebAssembly with no ONNX runtime, agreeing with native to display precision. One failing gate, stated: **2.89× slower than ONNX Runtime**, which Diana beats on accuracy (0.7014 vs 0.6865). ([Status](#status)) |
 | **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | **VLM live.** `SmolVLM-256M-Instruct` on candle — `SigLIP` tower, pixel-shuffle connector, Llama decoder, ported tensor by tensor, plus **our own `SmolLM2` text tower** and our own `SigLIP` encoder. The gate is the strong form: from a **raw image file** through our resize, tiling, tower, prompt assembly and decode loop, the caption is **byte-identical** to the reference — **32/32 tokens**, six stages each gated in isolation. Scored **525/1000 on OCRBench** through VLMEvalKit against the checkpoint's **published 526**. **1.20x off PyTorch end to end** (10 918 vs 9 106 ms, same image, idle box, both arms repeated), with the deficit concentrated in the vision tower — down from **2.4x** across three optimization rounds: prefill **3.07x**, generate **2.05x**, the connector's `broadcast_matmul` **14.1x**, the patch embedding as a matmul **2.6x**. A fourth round then took the **vision tower itself 1.199x (16.6 %)**: `candle_nn::Linear`'s bias is a *separate single-threaded pass* that evicted every GEMM's working set, and folding the four biases into ops that already touch every element restored the projections from **288-347 to 500-563 GF/s**; softmax's normalising divide moved past `attn.v` (786 K divides instead of 12.6 M), and the connector's two-permute pixel shuffle became one bit-identical pass. Eight counter-attempts were refuted, including a hand-written GEMM at **0.11x** — candle's GEMM rewards large batched calls, and every trade of call size for locality lost. A fifth round then found a **quadratic in the KV cache**: `Tensor::cat` recopied the whole history every step (**52.7 MB per token**, growing with position), which a preallocated in-place append took to **46 KB — decode 53.9 -> 42.6 ms/token, 1.27x**, worth ~900 ms at the reference 64-token budget and more for video. Decode now sits at **78-92 % of its memory floor** (591 MB read per token), so what remains there is a dtype decision, not an optimisation. Footprint **0.71x** PyTorch's — **contradicted by the two most recent gate runs, which measure 1.29x and 1.54x the reference's memory; see [Status](#status)**. Video captions to `.srt`/`.vtt`/`.json` at constant memory per window; **no video quality claim is made** — the checkpoint is an image model with no published video row ([Status](#status)) |
 
@@ -472,14 +472,15 @@ above traces to a line in [`bench/ledger.jsonl`](bench/ledger.jsonl).
 
 ### Carmenta OCR: live, measured against PaddleOCR — the honest split
 
-Four engines run today, from two detector lineages crossed with two
+Five engines run today, from two detector lineages crossed with three
 recognizers, all oracle-matched against their references. The EasyOCR
 lineage on candle (detection maps to <5e-3, recognition to the exact
-per-step argmax) gives `craft-crnn` (line-level CTC, the default) and
+per-step argmax) gives `craft-crnn` (line-level CTC, the LIVE default) and
 `craft-parseq` (word-level AR with the refinement pass). Swapping in a
 PP-OCRv5 mobile detector — DBNet on PP-LCNetV3, 4.7 MB, reproducing
 paddle's own exported program to **zero binarised disagreement** across a
-pinned page — gives `mobiledet-crnn` and `mobiledet-parseq`.
+pinned page — gives `mobiledet-crnn` and `mobiledet-parseq`, and with
+PP-OCRv5's own SVTR recognizer `mobiledet-svtr`, the **document default**.
 
 The two detector lineages trade against each other rather than ranking, and
 the measurement says so plainly. On real-photo receipts mobile-det is **3×
@@ -504,21 +505,54 @@ corpus class, not by leaderboard.
   pipeline on pages** (0.73 % vs 3.65 %) — line-level composition dodges its
   word-segmentation errors.
 
-**Documents, against the best in class.** On 43 pages of
-[OmniDocBench](https://github.com/opendatalab/OmniDocBench) (Apache-2.0 — the
-benchmark Baidu's Unlimited-OCR states its record on), identical pixels, every
-number a ledger line:
+**Documents, scored by the benchmark's own evaluator.** Every document number
+on this page comes from
+[OmniDocBench](https://github.com/opendatalab/OmniDocBench)'s official harness.
+An earlier edition of this section quoted CER from our own
+concatenate-then-edit-distance scorer (23.76 % against Unlimited-OCR's 15.51 %
+on 43 pages). Run beside the official evaluator, that scorer inflated
+Carmenta's error 1.58× and Unlimited-OCR's 4.37×, a 2.8× bias in our favour
+(`docs/Carmenta-mission-plan.md` §8.173). Every competitive claim made with it
+is withdrawn.
 
-| 43 real document pages | CER | pages/s | memory |
-|---|---:|---:|---:|
-| Unlimited-OCR (Baidu, 3B MoE, **GPU**) | **15.51 %** | 0.01 | 8745 MiB peak |
-| PP-StructureV3 | 19.14 % | 0.02 | 1481 MiB steady |
-| **`mobiledet-crnn` (ours, CPU)** | **23.76 %** | **0.15** | **425 MiB steady** |
+| all 1 651 pages of v1.6, official metric (lower is better) | `mobiledet-svtr`, CPU | published range |
+|---|---:|---|
+| Text edit distance | **0.116** | 0.033 (PaddleOCR-VL) – 0.157 (Marker) |
+| Reading-order edit distance | **0.204** | 0.116 – 0.243 |
 
-**10.4 points behind the model that holds the record, at 17× its throughput on
-a machine with no GPU**, from 4.7 MB of detector weights against 6.4 GB —
-`correctness PASS · quality FAIL · speed PASS · footprint PASS`. Not parity.
-The same order of magnitude, in a deployment class neither reference can enter.
+Head to head with Baidu's Unlimited-OCR (a 3B MoE on a GPU), on the 236-page
+English subset without tables or formulas:
+
+| | Text | Reading order |
+|---|---:|---:|
+| Unlimited-OCR | **0.041** | **0.052** |
+| Carmenta | 0.108 | 0.175 |
+| gap, 95 % CI | +0.068 [+0.049, +0.088] | +0.123 [+0.096, +0.151] |
+
+Clearly behind the model that holds the record. The remaining loss is mostly
+content Carmenta does not emit yet (inline math is 36 % of it) and recognition
+substitutions, measured block by block in `docs/plans/benching-history-made.md`
+§57. Carmenta does it on a CPU at roughly **9× that model's measured
+throughput** on the same machine, from megabytes of weights against 6.4 GB.
+The full-corpus row includes the opt-in table/formula routing
+(`FFAI_ROUTE=1`); the crate README says what that needs.
+
+**Forms, scanned filings and PDFs (0.11).** Built after a real caller got
+confident wrong values back from scanned disclosure forms. These are measured
+on synthetic corpora with ground truth by construction, not yet on real
+filings. Details and caveats are in the
+[`ffai-carmenta` README](crates/ffai-carmenta/README.md) and
+[`docs/plans/commercial-gaps.md`](docs/plans/commercial-gaps.md).
+
+- On typed values sitting on a form's underline, `mobiledet-svtr` reads
+  **93 %** exactly where `mobiledet-crnn` reads 13-20 %.
+- `--auto-orient` undid **144 / 144** quarter turns, at 48 % of a page read.
+- Checkboxes: **100 %** found and **100 %** marked/empty state on 960
+  synthetic boxes.
+- Label → value pairing: **220 / 221** correctly-read values paired.
+- `ffai ocr -i file.pdf` reads each page as a viewer shows it: redaction
+  patches are painted in, never read through, and a born-digital text layer
+  with something drawn over it is withheld rather than printed.
 
 Full campaign history:
 [docs/Carmenta-mission-plan.md](docs/Carmenta-mission-plan.md) §8; every

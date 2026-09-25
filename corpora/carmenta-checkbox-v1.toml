@@ -1,0 +1,643 @@
+name = "carmenta-checkbox"
+version = 1
+task = "ocr"
+
+[[clips]]
+id = "cb-00-gray"
+path = "clips/carmenta-checkbox/cb-00-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "451039ef160ae93318e583f69f6efd8ac0f3151936360137fb9b29a1e6d1c642"
+
+[[clips]]
+id = "cb-00-bw"
+path = "clips/carmenta-checkbox/cb-00-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "232587e9fee23238776ecd9203a21313cc59707ff2f29c6a5e1dcecb628c47fa"
+
+[[clips]]
+id = "cb-01-gray"
+path = "clips/carmenta-checkbox/cb-01-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "4cf3a42d18627c1551809d2dcbfb519a38a644d014881004ef567d57ea3e68f6"
+
+[[clips]]
+id = "cb-01-bw"
+path = "clips/carmenta-checkbox/cb-01-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "f8bf2f2043b9c513b009b29d151066416cda8e8bffd7bb3a8a1cd820759566aa"
+
+[[clips]]
+id = "cb-02-gray"
+path = "clips/carmenta-checkbox/cb-02-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "8f7382e76bc8f3d4b4aeb843ec7fe289f2fbacd09ef6ae9f4ae002dc2fdce05a"
+
+[[clips]]
+id = "cb-02-bw"
+path = "clips/carmenta-checkbox/cb-02-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "f47e907d0c9e81ac1b09bb76ca124db3fc6454539a6ee6d2ec179f22295802ba"
+
+[[clips]]
+id = "cb-03-gray"
+path = "clips/carmenta-checkbox/cb-03-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "10b4230c9a9c1c0607266c890107db0fe7e4c2444545723fb26947c5d18a7a4f"
+
+[[clips]]
+id = "cb-03-bw"
+path = "clips/carmenta-checkbox/cb-03-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "0be72a7c169605ba7d38bb0cb0bae7640607beb47198745d427c8cb702aaff84"
+
+[[clips]]
+id = "cb-04-gray"
+path = "clips/carmenta-checkbox/cb-04-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "2cdf65049e533e6a635d8a051795f17f03d7b8fec27bdc637c239c7eed07bfdd"
+
+[[clips]]
+id = "cb-04-bw"
+path = "clips/carmenta-checkbox/cb-04-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "65169f25a4ba24bc0cce3f6a6c86e10797ead1a11fe0ead1685b8fe12158bd14"
+
+[[clips]]
+id = "cb-05-gray"
+path = "clips/carmenta-checkbox/cb-05-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "54daa33d9e893035fb3d85c52c05d124f029919dcfa6f2e499b97da94f30019a"
+
+[[clips]]
+id = "cb-05-bw"
+path = "clips/carmenta-checkbox/cb-05-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "6da2defcbc07a68301be911ee692ebad7485f8b0975971d8c4e75d501ce5aa4c"
+
+[[clips]]
+id = "cb-06-gray"
+path = "clips/carmenta-checkbox/cb-06-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "79a34dd46d91e801d2ee1622646b54f000ea4ce55567a85347ef573c70eadb8c"
+
+[[clips]]
+id = "cb-06-bw"
+path = "clips/carmenta-checkbox/cb-06-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "7b002a592ec0a30c615b9059cbd67597be50602b5f4a3876b40fd7d80998b350"
+
+[[clips]]
+id = "cb-07-gray"
+path = "clips/carmenta-checkbox/cb-07-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "3992dcce69810971d1afb78402c0a14edbf044c4736a32411e9b6fad6adf209b"
+
+[[clips]]
+id = "cb-07-bw"
+path = "clips/carmenta-checkbox/cb-07-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "d77e4a4744ebf1d5bce370982a6e3f489b36b6c7feb9b16fa585823b5ca29782"
+
+[[clips]]
+id = "cb-08-gray"
+path = "clips/carmenta-checkbox/cb-08-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "5f5ec221353f3a9d62b78e9afba90da965c3c974e2d1ab5a50fadec5365d2ee2"
+
+[[clips]]
+id = "cb-08-bw"
+path = "clips/carmenta-checkbox/cb-08-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "1638d44ec653ce368fcd48ec735216dffe1fecde4144b6ca98b568dabb0f4bac"
+
+[[clips]]
+id = "cb-09-gray"
+path = "clips/carmenta-checkbox/cb-09-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "ca7e71a5b8dc0ef9c19218de846020b7c647d6d414b2fefa2cd8dde964cbee8a"
+
+[[clips]]
+id = "cb-09-bw"
+path = "clips/carmenta-checkbox/cb-09-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "4b3b6d22b4785eb32401375f286d532d680f4526b9c64a21ae756ee89f4032d4"
+
+[[clips]]
+id = "cb-10-gray"
+path = "clips/carmenta-checkbox/cb-10-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "041eb618d7675a3e3a5a94531939848cc08287425abf496c89155b5008617daa"
+
+[[clips]]
+id = "cb-10-bw"
+path = "clips/carmenta-checkbox/cb-10-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "34f8af83f7caac32fc8e3f9d0b8fca4cb54b57e9adaf531c47ae17fd67c5c9be"
+
+[[clips]]
+id = "cb-11-gray"
+path = "clips/carmenta-checkbox/cb-11-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "5ae818f594eee2c3885ad067d49a20c7abe75a4aba09b5ba4412617dde2b981f"
+
+[[clips]]
+id = "cb-11-bw"
+path = "clips/carmenta-checkbox/cb-11-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "fbc5b28246c89b685a0dfb476f0633377fd730c7f588aab684fd5116ca8fd167"
+
+[[clips]]
+id = "cb-12-gray"
+path = "clips/carmenta-checkbox/cb-12-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "c7b1ba4078ebaecac750688d3af1aa4e4a90c2ca1de2526e529d0eeac2f16a3a"
+
+[[clips]]
+id = "cb-12-bw"
+path = "clips/carmenta-checkbox/cb-12-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "6ac5ed530cc36c3a83f384002742c079f8bdfa48290f64ea386125c7d234e9a5"
+
+[[clips]]
+id = "cb-13-gray"
+path = "clips/carmenta-checkbox/cb-13-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "694d143f6940ccd06c931b626acb4888562961e4d483845a00d8f9a3db743fb1"
+
+[[clips]]
+id = "cb-13-bw"
+path = "clips/carmenta-checkbox/cb-13-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "c61ccea6996bb0b5d89c262f7bc5329ee19d9b9035936e26e3bee567c36572e2"
+
+[[clips]]
+id = "cb-14-gray"
+path = "clips/carmenta-checkbox/cb-14-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "43058e393be4f107a725e201afb156218b2df2512387c7ae0adf3cd5003bbfcb"
+
+[[clips]]
+id = "cb-14-bw"
+path = "clips/carmenta-checkbox/cb-14-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "51ec211ad0677c2168096fae1a57adba576e201bde637f694a84e1c17e387519"
+
+[[clips]]
+id = "cb-15-gray"
+path = "clips/carmenta-checkbox/cb-15-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "9e7c13f7f121fd07c76cd7cd26304f1be1a9971aded5be510163de04768216dc"
+
+[[clips]]
+id = "cb-15-bw"
+path = "clips/carmenta-checkbox/cb-15-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "534582559780d6b1e6b1e3105f99e01ff079bbbdd2e876e31d20cc0681f48029"
+
+[[clips]]
+id = "cb-16-gray"
+path = "clips/carmenta-checkbox/cb-16-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "ef3a27f194fa6c2bbe2d0d6f15fb96c4594e7d695bd559f8d7ce4bc6f84224a7"
+
+[[clips]]
+id = "cb-16-bw"
+path = "clips/carmenta-checkbox/cb-16-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "47598597fcffd344014b30e0c84434b42818a101debdf81cd71fde4d73f1b476"
+
+[[clips]]
+id = "cb-17-gray"
+path = "clips/carmenta-checkbox/cb-17-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "f9b581813b2d8c1037da65910691673f05119d3d4997275fac4599c7577dd1a3"
+
+[[clips]]
+id = "cb-17-bw"
+path = "clips/carmenta-checkbox/cb-17-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "5380d8cd674854a83809cdb738a11f4989e49d80692cc085336d67ad8d3f6d67"
+
+[[clips]]
+id = "cb-18-gray"
+path = "clips/carmenta-checkbox/cb-18-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "16f48b1d8a23146a83bc681187eabf8a9d414f1e6ffb3b32d71a0babcd9b8612"
+
+[[clips]]
+id = "cb-18-bw"
+path = "clips/carmenta-checkbox/cb-18-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "aea5a2793864b4ee712d313abd50f868c0219f1b0977151d1275052da51a4149"
+
+[[clips]]
+id = "cb-19-gray"
+path = "clips/carmenta-checkbox/cb-19-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "d5f483a3d24a75717fd3d00a15033398e559aaaec3ec4d1243476ed5ad7ea7eb"
+
+[[clips]]
+id = "cb-19-bw"
+path = "clips/carmenta-checkbox/cb-19-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "df581cacee04c8923da67786811ccfada36714328c4ca38691a2690fb6988d99"
+
+[[clips]]
+id = "cb-20-gray"
+path = "clips/carmenta-checkbox/cb-20-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "da33f2d52d1ae1b3aee1083b8d7b0bc26a13914e5835c682b0b876543abefdaa"
+
+[[clips]]
+id = "cb-20-bw"
+path = "clips/carmenta-checkbox/cb-20-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "14eae0cf69b760e56c6d025d28510e0ab81b0db4f47eb7a02fd523e7c3d618ec"
+
+[[clips]]
+id = "cb-21-gray"
+path = "clips/carmenta-checkbox/cb-21-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "9a1bb6f5ee51155ed5f8b8b8f40f533be95f8287d0a6dfeb22c5850a636675b1"
+
+[[clips]]
+id = "cb-21-bw"
+path = "clips/carmenta-checkbox/cb-21-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "a76fc93a343a78d10de4cf2abd713acc9fb5b59ef9f3e3e3a793003b9f3d787c"
+
+[[clips]]
+id = "cb-22-gray"
+path = "clips/carmenta-checkbox/cb-22-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "03f18f676ff2a344c61c9d1284fb46382bbb103c36a48d53fe3aecf707cb2993"
+
+[[clips]]
+id = "cb-22-bw"
+path = "clips/carmenta-checkbox/cb-22-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "c581b8e1b31b9698531d5433acede69bd334f8072679dd2d1e73ed8e6b8a1060"
+
+[[clips]]
+id = "cb-23-gray"
+path = "clips/carmenta-checkbox/cb-23-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "e7946830db55b8d61bde4e56c0320a100f54ea25d62481f2bd69687c55f864a2"
+
+[[clips]]
+id = "cb-23-bw"
+path = "clips/carmenta-checkbox/cb-23-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "f7dc7373821e0907c4aac01ab6c0bf9a80e37813635921a0ec20105ad8816ba5"
+
+[[clips]]
+id = "cb-24-gray"
+path = "clips/carmenta-checkbox/cb-24-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "264aabd0715125e8cb6d436b4171715d987cefba958765f54d47b52f2e738131"
+
+[[clips]]
+id = "cb-24-bw"
+path = "clips/carmenta-checkbox/cb-24-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "bff1587a46e7c19bef52f9cbf6d3f04619de306cebbc6b17c73da31115afd891"
+
+[[clips]]
+id = "cb-25-gray"
+path = "clips/carmenta-checkbox/cb-25-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "cd78d4037f78a591f591687831cb85ef9a28363143dd2ddaa624c108be3c73e1"
+
+[[clips]]
+id = "cb-25-bw"
+path = "clips/carmenta-checkbox/cb-25-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "565e7a2ddb40173c09151f55d1ad4299e2dca39834205fb41451483121a1df18"
+
+[[clips]]
+id = "cb-26-gray"
+path = "clips/carmenta-checkbox/cb-26-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "e78cfafc9a1d6ec111d27601559be3b7014cea364447bac9c4b9ecb69fb2be4b"
+
+[[clips]]
+id = "cb-26-bw"
+path = "clips/carmenta-checkbox/cb-26-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "3230332d5b5aac98061aaac082ef463bc372a6c327ca03ca3b50712619b42b69"
+
+[[clips]]
+id = "cb-27-gray"
+path = "clips/carmenta-checkbox/cb-27-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "7e10b2b7fe177b11ed726ae7e6507ae2a007b56dc801616c61b791522f180a09"
+
+[[clips]]
+id = "cb-27-bw"
+path = "clips/carmenta-checkbox/cb-27-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "c48da6967ca664a30716f79293864e5a8af1b407fd85c2290e5d8c644a7e5fab"
+
+[[clips]]
+id = "cb-28-gray"
+path = "clips/carmenta-checkbox/cb-28-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "5bb331811fed063fc9bfe608bbaac67d8cf97e977dd26a30ea3368dc671d63b1"
+
+[[clips]]
+id = "cb-28-bw"
+path = "clips/carmenta-checkbox/cb-28-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "6e4ed0cbc4b9c5a8c82c094dfd4e53fff65584949a912154d4548cca2f056d90"
+
+[[clips]]
+id = "cb-29-gray"
+path = "clips/carmenta-checkbox/cb-29-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "03a7df0ceb270f2c49bf16db7ce7059d756c0fd9c94db75101a7f904d0e1dd9a"
+
+[[clips]]
+id = "cb-29-bw"
+path = "clips/carmenta-checkbox/cb-29-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "80fa7d203f9cb73ae3698d61933c156fdce7e319f63a755294e39121c5783255"
+
+[[clips]]
+id = "cb-30-gray"
+path = "clips/carmenta-checkbox/cb-30-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "7752a3964aae8ceca61c85a26851e26f6826d60f3253887d7211bca32ac0afe3"
+
+[[clips]]
+id = "cb-30-bw"
+path = "clips/carmenta-checkbox/cb-30-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "437e10cb8c3628f663df1b6b76bccf460262af997adbf7010a3bbd5a50c4d97f"
+
+[[clips]]
+id = "cb-31-gray"
+path = "clips/carmenta-checkbox/cb-31-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "da83630e72fbe31476820973f3b3702eb8b418fcf35f1d1f19cc965f5fcd2dca"
+
+[[clips]]
+id = "cb-31-bw"
+path = "clips/carmenta-checkbox/cb-31-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "9a6d8ba08aa5e338ff2453fe3a59c131b133f5e21f967c0a3c6717d44d42068a"
+
+[[clips]]
+id = "cb-32-gray"
+path = "clips/carmenta-checkbox/cb-32-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "33d3b911084df647924bcbb7c94fe4fe0059f6e85bc8588937c2d986afcb6863"
+
+[[clips]]
+id = "cb-32-bw"
+path = "clips/carmenta-checkbox/cb-32-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "de21e38682c218c1af39701aa468072770ad02bdc717743a93794a46981912db"
+
+[[clips]]
+id = "cb-33-gray"
+path = "clips/carmenta-checkbox/cb-33-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "7d71f57cf87a8ca7c80eae35ce868f4e97f437a17aeebe2809f7769a3b9253cc"
+
+[[clips]]
+id = "cb-33-bw"
+path = "clips/carmenta-checkbox/cb-33-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "02c00f16cfebaeecd02d0f30c2899c5b322144654997f99bc9b1f4598fe2210e"
+
+[[clips]]
+id = "cb-34-gray"
+path = "clips/carmenta-checkbox/cb-34-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "999ccb9d6ded0c0fff3c73378901f2cf2a55eb75f42117548309be9041d3ac2e"
+
+[[clips]]
+id = "cb-34-bw"
+path = "clips/carmenta-checkbox/cb-34-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "7d67572e6445fc24210a91e61a89e21ce5825d74bad9d2b8af6f7fe0aa1a1b8f"
+
+[[clips]]
+id = "cb-35-gray"
+path = "clips/carmenta-checkbox/cb-35-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "85fed12fe13b72f8da03d748a6fa446684feabb25aeced9aa5887b53f9deb0f0"
+
+[[clips]]
+id = "cb-35-bw"
+path = "clips/carmenta-checkbox/cb-35-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "b5e703dbb3625ec010e26e7e7306fc84b8252b719bdbac5b51478396c06903b0"
+
+[[clips]]
+id = "cb-36-gray"
+path = "clips/carmenta-checkbox/cb-36-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "fc259587c05aae5c4c24931da0cd566d7eb9d02c87f0737beeacbb4d459097ed"
+
+[[clips]]
+id = "cb-36-bw"
+path = "clips/carmenta-checkbox/cb-36-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "a7a4fedfc2af23ae0d3449738d19e0c1944f4d5f9c00dcb56fa4befacb8843ae"
+
+[[clips]]
+id = "cb-37-gray"
+path = "clips/carmenta-checkbox/cb-37-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "31db9d562fd4e31d7b8fd997fd3a5db966122d0e30a238cc6abeabf870f78939"
+
+[[clips]]
+id = "cb-37-bw"
+path = "clips/carmenta-checkbox/cb-37-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "dc1c231c3f547853edc973b8936a7f4a1213f73c7d351e04b349a0bf1f820bfa"
+
+[[clips]]
+id = "cb-38-gray"
+path = "clips/carmenta-checkbox/cb-38-gray.png"
+class = "checkbox-gray"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "5f94c1c8b5510d6ec4a4f3136054430fa3e68cee3195efcdd76de67a6d774926"
+
+[[clips]]
+id = "cb-38-bw"
+path = "clips/carmenta-checkbox/cb-38-bw.png"
+class = "checkbox-bw"
+split = "train"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "e71f95b3637a0939e03f617474c80e404bf79f467d0dbb09e43f1bc618f76bf3"
+
+[[clips]]
+id = "cb-39-gray"
+path = "clips/carmenta-checkbox/cb-39-gray.png"
+class = "checkbox-gray"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "c3b900d877fb62e479d710e6b0b524d9a5361be595ec4bc6ae79344c190a2d1b"
+
+[[clips]]
+id = "cb-39-bw"
+path = "clips/carmenta-checkbox/cb-39-bw.png"
+class = "checkbox-bw"
+split = "holdout"
+license = "CC0-1.0 (render of invented form rows)"
+sha256 = "93656fad98f211163c16992cf0292cc845f1638dde26c01235ef09bd4575a753"
