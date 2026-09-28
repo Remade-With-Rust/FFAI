@@ -39,8 +39,8 @@ cargo add ffai-carmenta ffai-core ffai-media
 
 ```toml
 [dependencies]
-ffai-carmenta = "0.9"
-ffai-core = "0.6"
+ffai-carmenta = "0.11"
+ffai-core = "0.8"
 ffai-media = "0.6"
 ```
 
@@ -101,12 +101,21 @@ which is the one thing between a default install and the number above.
 Everything else in it is on by default as of 0.9.0.
 
 Ahead of published pipelines on reading order's worst rows, well behind the
-VLM leaders on text — and the gap is *characterised*, not guessed. On the
-236-page English holdout with no tables or formulas (content the pipeline
-fully represents) Carmenta reads **0.041**, between PaddleOCR-VL's 0.033
-(a 3B-class model on GPU) and PP-StructureV3's 0.079 (the full Paddle
-pipeline). Where the rest of the loss lives is measured block by block from
-the evaluator's own match records, and it reconstructs the headline exactly:
+VLM leaders on text — and the gap is *characterised*, not guessed.
+
+**Correction, 2026-09-25.** Earlier versions of this page said that on the
+236-page English holdout with no tables or formulas, Carmenta reads **0.041**,
+between PaddleOCR-VL's 0.033 and PP-StructureV3's 0.079. **That was wrong: 0.041
+is Unlimited-OCR's score on that holdout**, misattributed to Carmenta in the
+campaign log (§44). Carmenta's measured score on the same 236 pages was
+**0.108 text / 0.175 reading order**. That was measured through the official
+evaluator (§8.173), before the later campaign wins that took the full corpus
+from 0.128 to 0.116. The subset has not been re-scored since, so no newer
+number is claimed for it. The "near the VLM leader on content we can represent"
+reading that followed from the wrong number is withdrawn with it.
+
+Where the remaining loss lives is measured block by block from the evaluator's
+own match records, and it reconstructs the full-corpus headline exactly:
 
 | remaining loss | share |
 |---|---:|
@@ -116,12 +125,60 @@ the evaluator's own match records, and it reconstructs the headline exactly:
 | recognition substitutions | 20 % |
 | detection misses · sequence errors · harness | 10 % |
 
-So this is a **coverage and character** problem, not a layout one — the
+So the remaining loss is mostly **coverage and characters**, not layout: the
 reading-order and detection stages this crate spent its campaign on are down
 to a combined 4 % of remaining error.
 
 All of this on CPU at ~9–17 s/page — roughly 9× the reference VLM's measured
 throughput on the same machine, from megabytes of weights against gigabytes.
+
+## Forms, scanned filings and PDFs (0.11)
+
+Built after a real caller read state financial-disclosure filings and got
+confident wrong values back. The full record, including what did not work, is
+[`docs/plans/commercial-gaps.md`](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/plans/commercial-gaps.md).
+**Every number below is on synthetic corpora with ground truth by
+construction** (`tools/carmenta_form_corpus.py`,
+`tools/carmenta_checkbox_corpus.py`), or on OmniDocBench. None is yet a claim
+about real filings.
+
+**Use `mobiledet-svtr` for forms.** 240 invented form values, rendered with no
+rule and with three kinds of form rule, share read exactly:
+
+| condition | `mobiledet-crnn` | `mobiledet-svtr` |
+|---|---:|---:|
+| no rule | 70 % | 93 % |
+| value on an underline | 13-20 % | **93 %** |
+| rule through the descenders | 47-50 % | **97 %** |
+| struck through | 7-10 % | **83-87 %** |
+| values read wrong, of 240 | 154 | **19** |
+| ...of which still passed a 0.85 confidence gate | 128 | 19 |
+
+What else 0.11 adds, each measured:
+
+| capability | API | measured |
+|---|---|---|
+| orientation, 0/90/180/270 | `OcrOptions::auto_orient`, `detect_orientation` | **144 / 144** turns undone on document pages and single form lines; a decision costs **48 %** of one page read |
+| checkboxes, frame + marked/empty | `checkbox::find` | **100 %** recall and **100 %** state on 960 synthetic boxes (stroked and glyph boxes; X, overflowing tick, fill). Known false positives: the square ideograph `口`, and small square plot markers |
+| label → value pairs | `forms::pair_fields` | **220 / 221** correctly-read values paired with their label |
+| restrict a field's characters | `OcrOptions::charset` | forced characters show in the confidence: a prose page read as digits drops from 0.918 to 0.781 mean |
+| snap to known values | `lexicon::Lexicon` | every recorded field misread snaps to its entry ("Trish HTlI" → Irish Hill); ties are reported, not guessed |
+| erase form rules | `OcrOptions::remove_rules` | CRNN on underlined values: 13-20 % → **70 %**. **Not for SVTR**: on strikethroughs it goes 77-87 % → 73 %. Opt-in |
+| full-width → ASCII on Latin lines | on by default (`FFAI_NO_FOLD=1` disables) | OmniDocBench, 316 pages: fires on 35 of 34 852 lines; **5 pages better, 1 worse** (a full-width comma in the ground truth itself) |
+| offline weights, fail fast | `CraftCrnn::offline(rec, det, dir)`, `preload()` | no cache, no network; a missing file names its exact path |
+
+Two measured non-results, recorded so nobody has to re-run them:
+
+- **Carmenta's output is deterministic.** The same 120-line page, read three
+  times across two engine instances, gives identical text and boxes and a
+  confidence drift of **0**.
+- **Reporting a line's weakest character instead of its mean confidence is
+  not a better gate.** AUROC goes 0.746 → 0.764 on SVTR and 0.873 → 0.828 on
+  CRNN; the sign flips by engine. The mean stays.
+
+PDFs are read by [`ffai-media`](https://crates.io/crates/ffai-media)'s `pdf`
+feature, which returns each page **as a viewer shows it**: redaction patches
+and boxes drawn over a scan are painted in, never read through.
 
 ## LIVE: point it at a screen
 
@@ -190,7 +247,8 @@ turns it off.
 **Real photographs remain the open front.** On photographed receipts the full
 pipeline still trails PaddleOCR (20.9 % vs 15.6 % CER) even though our
 recognition stage beats theirs on identical crops — the diagnosed cause is
-tilt-sensitive line grouping, with deskew as the named fix.
+tilt-sensitive line grouping, with deskew as the named fix. `auto_orient`
+handles quarter turns, not small tilt: deskew is still open.
 
 ## Status: `experimental`, honestly
 

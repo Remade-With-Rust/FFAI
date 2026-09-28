@@ -33,6 +33,13 @@ pub mod content;
 pub mod craft;
 pub mod crnn;
 pub mod engine;
+pub mod manifests;
+pub mod checkbox;
+pub mod fold;
+pub mod forms;
+pub mod lexicon;
+pub mod orient;
+pub mod rules;
 /// Great Gate feature tap (plan §11 W1). Off unless `FFAI_GATE_HARVEST` is set;
 /// offline analysis only, never consulted by the engine's own decisions.
 pub mod harvest;

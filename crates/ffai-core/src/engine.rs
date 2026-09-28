@@ -243,6 +243,36 @@ pub struct OcrOptions {
     /// detection becomes async maintenance, recognition the only
     /// synchronous work.
     pub single_line: bool,
+    /// Restrict recognition to exactly these characters — `"0123456789$,.-"`
+    /// for an amount field, `"0123456789/"` for a date. `None` reads freely.
+    ///
+    /// For a field whose content class is known this removes a whole class of
+    /// look-alike errors (`1`→`T`, `0`→`O`, `5`→`S`) instead of leaving them
+    /// for the caller to guess at. The reported confidence is the model's own
+    /// probability for the character it was allowed to emit, NOT renormalised
+    /// over the allowed set, so a line the model wanted to read as letters
+    /// comes back with LOW confidence rather than as a confident digit.
+    ///
+    /// An engine that cannot constrain its decoder must return an error when
+    /// this is set — never read freely and ignore it. A character the model
+    /// cannot emit at all is also an error, naming the character.
+    pub charset: Option<String>,
+    /// Erase horizontal form rules (field lines, strike-throughs, table
+    /// rules) before reading. A typed value sitting on a field line fuses with
+    /// it — `1` reads as `T`, `0` as `U` — and the recognizer is confident
+    /// about the result. Off by default: it changes what every ruled page
+    /// reads, so it is asked for per call, by callers reading forms.
+    ///
+    /// Engines that do not implement it must return an error when it is set.
+    pub remove_rules: bool,
+    /// Detect which quarter turn makes the page upright, and read it that
+    /// way. Scanners store portrait forms sideways and phones photograph in
+    /// any orientation; read sideways, a page silently comes back as a few
+    /// low-confidence lines. Returned boxes stay in the INPUT image's
+    /// coordinates. Off by default: it costs an extra detection pass.
+    ///
+    /// Engines that do not implement it must return an error when it is set.
+    pub auto_orient: bool,
 }
 
 /// Detection options (Diana).

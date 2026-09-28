@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-core-v0.7.2...ffai-core-v0.8.0) - 2026-09-25
+
+### Changed
+
+- **BREAKING:** `OcrOptions` gains `charset`, `remove_rules` and `auto_orient`, which breaks construction by struct literal
+
 ## [0.7.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-core-v0.7.1...ffai-core-v0.7.2) - 2026-09-20
 
 ### Other

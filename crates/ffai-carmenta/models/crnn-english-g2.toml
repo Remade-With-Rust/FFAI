@@ -1,0 +1,17 @@
+# EasyOCR generation-2 English recognizer (`english_g2`): VGG feature
+# extractor + 2x bidirectional LSTM + CTC head, 96-char mixed-case charset
+# (digits, punctuation, upper AND lower case — the property that put it in
+# this seat; see the M-C1 log's trocr pivot).
+#
+# License: Apache-2.0 (JaidedAI/EasyOCR); weights fetch ungated from the
+# EasyOCR GitHub releases. Converted locally from english_g2.pth by
+# `tools/carmenta_crnn_prepare.py`, strict-load verified. Hosted safetensors
+# mirror tracked for M-C6, as with craft-mlt.
+name = "crnn-english-g2"
+task = "ocr"
+description = "CRNN recognizer english_g2 (VGG + BiLSTM + CTC, 96-char mixed-case) — EasyOCR lineage"
+license = "Apache-2.0"
+
+[[files]]
+name = "crnn.safetensors"
+sha256 = "577ff8c53d62ee03a99ded316d45140b84cacad182f1dbbd9fd72eb965278a0b"

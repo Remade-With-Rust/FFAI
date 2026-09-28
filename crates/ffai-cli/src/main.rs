@@ -149,6 +149,11 @@ enum Cmd {
         /// measurement (see docs/benchmarking.md).
         #[arg(long)]
         fetch: Option<String>,
+        /// Check that this model's files are present and match their
+        /// checksums, WITHOUT downloading anything. Repeatable. Exits non-zero
+        /// on the first model that fails, so a batch job can gate on it.
+        #[arg(long)]
+        verify: Vec<String>,
     },
     /// Transcribe speech to text (Mercury)
     Asr {
@@ -226,6 +231,25 @@ enum Cmd {
         /// Language hints, repeatable
         #[arg(long)]
         language: Vec<String>,
+        /// Restrict recognition to exactly these characters, e.g.
+        /// `--charset '0123456789$,.-'` for an amount field. Confidence then
+        /// reports how much the model wanted a character it was not allowed.
+        #[arg(long)]
+        charset: Option<String>,
+        /// Erase horizontal form rules (field lines, strike-throughs) before
+        /// reading. Helps the CRNN engines on ruled forms; the SVTR document
+        /// default reads underlines well without it.
+        #[arg(long)]
+        remove_rules: bool,
+        /// Detect which way up the page is (0/90/180/270) and read it upright.
+        /// For scans stored sideways and phone photos.
+        #[arg(long)]
+        auto_orient: bool,
+        /// Also report checkboxes: each box's frame and whether it is marked
+        /// (`checkbox x y w h checked|empty`), from the pixels rather than as
+        /// the characters a text reader would make of them.
+        #[arg(long)]
+        checkboxes: bool,
         /// LIVE mode: treat the input as a frame sequence and emit a timed
         /// text track (mission plan §4.1)
         #[arg(long)]
@@ -625,6 +649,23 @@ fn match_candle_threads(cmd: &Cmd) {
     }
 }
 
+/// `ffai ocr --checkboxes`: one line per box, frame then state.
+fn print_checkboxes(image: &ffai_core::types::ImageBuffer) {
+    for b in
+        ffai_carmenta::checkbox::find(image, ffai_carmenta::checkbox::CheckboxParams::default())
+    {
+        println!(
+            "checkbox {:.0} {:.0} {:.0} {:.0} {} (fill {:.3})",
+            b.bbox.x,
+            b.bbox.y,
+            b.bbox.width,
+            b.bbox.height,
+            if b.checked { "checked" } else { "empty" },
+            b.fill
+        );
+    }
+}
+
 fn main() -> Result<()> {
     // Parse FIRST: the thread cap is per-command now, so it needs to know
     // which command. Clap spawns no threads, so the `set_var` inside is still
@@ -656,9 +697,28 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::Models { dir, fetch } => {
+        Cmd::Models { dir, fetch, verify } => {
             let manifests = ffai_models::load_dir(&dir)
                 .with_context(|| format!("reading manifests from {}", dir.display()))?;
+            if !verify.is_empty() {
+                for name in &verify {
+                    let manifest =
+                        manifests
+                            .iter()
+                            .find(|m| &m.name == name)
+                            .with_context(|| {
+                                format!("no model manifest named `{name}` in {}", dir.display())
+                            })?;
+                    let resolved = manifest
+                        .verify()
+                        .with_context(|| format!("verifying `{name}` (no download attempted)"))?;
+                    println!(
+                        "ok  {name} ({} files, checksums match)",
+                        resolved.files.len()
+                    );
+                }
+                return Ok(());
+            }
             if let Some(name) = fetch {
                 let manifest = manifests.iter().find(|m| m.name == name).with_context(|| {
                     format!("no model manifest named `{name}` in {}", dir.display())
@@ -811,6 +871,10 @@ fn main() -> Result<()> {
             input,
             engine,
             language,
+            charset,
+            remove_rules,
+            auto_orient,
+            checkboxes,
             live,
             fps,
             change_fraction,
@@ -820,6 +884,9 @@ fn main() -> Result<()> {
         } => {
             let opts = OcrOptions {
                 languages: language,
+                charset,
+                remove_rules,
+                auto_orient,
                 ..Default::default()
             };
             // §8.171: the DOCUMENT default is SVTR (+1.521 pp macro on the
@@ -918,10 +985,46 @@ fn main() -> Result<()> {
                     }
                     None => print!("{body}"),
                 }
+            } else if std::fs::read(&input).is_ok_and(|b| b.starts_with(b"%PDF-")) {
+                // A PDF: every page as a viewer shows it (redactions and
+                // overlays painted in, turned upright), never the raw scan.
+                let pages = ffai_media::pdf::pdf_pages(&std::fs::read(&input)?)?;
+                for page in &pages {
+                    println!("--- page {} ---", page.index + 1);
+                    match &page.image {
+                        Some(image) => {
+                            println!("{}", eng.recognize(image, &opts)?.text());
+                            if checkboxes {
+                                print_checkboxes(image);
+                            }
+                        }
+                        None if page.has_text_layer && page.redaction_risk => {
+                            // Text under a black box is still in the text
+                            // layer; printing it would read through the
+                            // redaction. Withheld, loudly.
+                            eprintln!(
+                                "page {}: text layer WITHHELD: something drawn over it may be \
+                                 hiding text a viewer does not show (redaction risk)",
+                                page.index + 1
+                            );
+                        }
+                        None if page.has_text_layer => {
+                            println!("{}", page.text.as_deref().unwrap_or_default());
+                        }
+                        None => eprintln!(
+                            "page {}: not read: {}",
+                            page.index + 1,
+                            page.note.as_deref().unwrap_or("no image")
+                        ),
+                    }
+                }
             } else {
                 let image = ffai_media::load_image(&input)?;
                 let out = eng.recognize(&image, &opts)?;
                 println!("{}", out.text());
+                if checkboxes {
+                    print_checkboxes(&image);
+                }
             }
             if ffai_carmenta::profile::is_enabled() {
                 eprint!("{}", ffai_carmenta::profile::profile().report());

@@ -1,0 +1,16 @@
+# PARSeq-tiny (baudm/parseq, Apache-2.0): the audit-cleared successor
+# recognition lineage (plan §7.1) — 94-char mixed-case charset, 24 MB,
+# fetched ungated from the parseq GitHub v1.0.0 release.
+#
+# Status: weights converted and shape-mapped (tools/carmenta_parseq_prepare.py,
+# corpora/refs/fixtures/parseq_tiny_shapes.json); the candle port + forward
+# oracle are the open M-C1 quality-gate brick. Until the port lands, this
+# manifest documents provenance for the weights already in the cache.
+name = "parseq-tiny"
+task = "ocr"
+description = "PARSeq-tiny scene-text recognizer (ViT + AR decoder, 94-char mixed-case) — quality-gate successor to crnn-english-g2"
+license = "Apache-2.0"
+
+[[files]]
+name = "parseq-tiny.safetensors"
+sha256 = "72d6f2dbc0716af1967cb62d6ad2e01e4525c521a59e3e5b7cb7a413d73c6701"

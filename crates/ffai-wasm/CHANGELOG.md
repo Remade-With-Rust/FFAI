@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/Remade-With-Rust/FFAI/compare/ffai-wasm-v0.1.4...ffai-wasm-v0.1.5) - 2026-09-25
+
+### Other
+
+- dependency bump only: ffai-core 0.8 / ffai-carmenta 0.11 / ffai-models 0.6.6 (see the workspace CHANGELOG)
+
 ## [0.1.4](https://github.com/Remade-With-Rust/FFAI/compare/ffai-wasm-v0.1.3...ffai-wasm-v0.1.4) - 2026-09-20
 
 ### Other

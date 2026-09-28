@@ -4,7 +4,7 @@ description = "FFai media ingest/egress — demux, decode, resample (rff-backed)
 # rusty_jpeg 0.1 -> 0.2 picks up the progressive-JPEG fix. A dependency
 # change with no API change, so a patch bump -- but a load-bearing one:
 # 0.6.1 cannot decode 35 of OmniDocBench's 236 pages.
-version = "0.6.7"
+version = "0.6.8"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -58,6 +58,12 @@ rff-codec = "0.2"
 # house rule, and the reason `ffai-cli` owns that decision. `std` and `asm`
 # are the two default features worth keeping, so they come back by name.
 rusty_h264 = { version = "0.16", default-features = false, features = ["std", "asm"] }
+# PDF pages for OCR (`pdf` feature; docs/plans/commercial-gaps.md gaps 1, 2,
+# 11). Both pure Rust, MIT. lopdf's defaults (chrono, jiff, rayon, time) are
+# date handling and parallel parsing this module never uses. `fax` is the
+# CCITT Group 3/4 decoder; a house `rusty_ccitt` would replace it.
+lopdf = { version = "0.44", default-features = false, optional = true }
+fax = { version = "0.3", optional = true }
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.
@@ -83,6 +89,10 @@ rusty_h264 = { version = "0.16", default-features = false, features = ["std", "a
 # decoder cannot: demux and video codecs. Still a distribution question, no
 # longer a blocker for still images.
 remade-ffmpeg = []
+# Read PDF pages as a viewer shows them — scan composited with redactions and
+# overlays, turned upright — for OCR. Off by default: it adds a PDF parser to
+# a crate most users take for images and audio.
+pdf = ["dep:lopdf", "dep:fax"]
 
 # wasm32 needs getrandom's browser backend selected explicitly. BOTH halves are
 # required and the crate errors if either is missing: this feature, plus

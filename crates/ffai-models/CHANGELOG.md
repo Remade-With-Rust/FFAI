@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6](https://github.com/Remade-With-Rust/FFAI/compare/ffai-models-v0.6.5...ffai-models-v0.6.6) - 2026-09-25
+
+### Added
+
+- `resolve_only_in` and `verify`
+- `load_dir` names the missing directory
+
 ## [0.6.5](https://github.com/Remade-With-Rust/FFAI/compare/ffai-models-v0.6.4...ffai-models-v0.6.5) - 2026-09-20
 
 ### Other

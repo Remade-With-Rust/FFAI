@@ -1,0 +1,40 @@
+# EasyOCR generation-2 Simplified-Chinese recognizer (`zh_sim_g2`): the SAME
+# network as `crnn-english-g2` — VGG feature extractor + 2x bidirectional LSTM
+# + CTC head, 44 tensors under identical names — differing in exactly one place:
+#
+#   Prediction.weight    en (97, 256)  ->  zh (6719, 256)
+#   Prediction.bias      en (97,)      ->  zh (6719,)
+#
+# So `crnn.rs` runs it unchanged; what differs is the head width and the
+# charset. That charset is 6 718 characters — 95 ASCII, 6 614 CJK, 9 other —
+# and INCLUDES the full Latin range, so this model reads English pages too.
+#
+# OPT-IN, NOT THE DEFAULT. `FFAI_REC_LANG=zh` selects it; unset stays English.
+# §8.142 measured 11 holdout pages of 236 as 51 % of the competitive gap against
+# Unlimited-OCR purely because they contain Chinese and a 96-class CTC head
+# cannot emit a character it has no class for. But a 6 719-class head is
+# normally weaker on Latin than a 97-class specialist, and trading English CER
+# for CJK coverage is a bad bargain until measured — so English remains the
+# default AND the oracle, the shape `--features mimalloc` already uses.
+#
+# License: Apache-2.0 (JaidedAI/EasyOCR); weights fetch ungated from the EasyOCR
+# v1.3 release (`zh_sim_g2.zip`). Converted locally by
+# `tools/carmenta_crnn_zh_prepare.py`, strict-load verified, and the charset is
+# read from the installed easyocr package rather than retyped — an off-by-one
+# there shifts EVERY decoded character, which is §8.113's failure in a form far
+# harder to spot, so the tool refuses unless charset+1 == head classes.
+name = "crnn-zh-sim-g2"
+task = "ocr"
+description = "CRNN recognizer zh_sim_g2 (VGG + BiLSTM + CTC, 6718-char ASCII+CJK) — EasyOCR lineage, opt-in via FFAI_REC_LANG=zh"
+license = "Apache-2.0"
+
+[[files]]
+name = "crnn.safetensors"
+sha256 = "4644161d0c78fb76ceadf0658f8020779b20a007dbf19afee93e120975f83dd2"
+
+# The charset ships beside the weights rather than compiled in: 6 718 characters
+# is 20 KB of UTF-8, and a generated `const` that large is a merge hazard for no
+# benefit. `charset_for` reads it and the loader sizes the head from its length.
+[[files]]
+name = "charset.txt"
+sha256 = "ea93e357dff635633aea8e467194b5f73abd2fd302366657d4ec45f909d4343a"

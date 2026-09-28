@@ -19,7 +19,19 @@ use ffai_core::registry::EngineRegistry;
 use crate::corpus::{ClipEntry, Manifest};
 use crate::gate::{GateKind, GateOutcome, GateReport, GateResult};
 use crate::ledger::{BenchRecord, Environment, LEDGER_SCHEMA, RunSummary, append};
-use crate::metrics::{cer_with, wer_with};
+use crate::metrics::{cer_with, digit_errors_with, wer_with};
+
+/// The digit error rate as a ledger note, micro-averaged over the corpus
+/// (docs/plans/commercial-gaps.md gap 3). `None` for a corpus with no digits
+/// in its ground truth, where the rate is undefined rather than zero.
+fn digit_note(errors: usize, digits: usize) -> Option<String> {
+    (digits > 0).then(|| {
+        format!(
+            "digit error rate {:.2} % over {digits} reference digits",
+            100.0 * errors as f64 / digits as f64
+        )
+    })
+}
 use crate::normalize::Mode;
 use crate::reference::ReferenceSpec;
 use crate::speed::{best_of_n, real_time_factor};
@@ -997,16 +1009,23 @@ fn run_ocr_engine(
                 stats.best_secs + summary.load_secs.unwrap_or(0.0),
             ));
             let (mut wers, mut cers) = (Vec::new(), Vec::new());
+            let (mut digit_errors, mut digits) = (0usize, 0usize);
             for (id, text) in &texts {
                 if let Some(clip) = holdout.iter().find(|c| &c.id == id)
                     && let Some(truth) = manifest.ground_truth(clip)?
                 {
                     wers.push(wer_with(&truth, text, Mode::Ocr));
                     cers.push(cer_with(&truth, text, Mode::Ocr));
+                    let (e, n) = digit_errors_with(&truth, text, Mode::Ocr);
+                    digit_errors += e;
+                    digits += n;
                 }
             }
             summary.wer = mean(&wers);
             summary.cer = mean(&cers);
+            if let Some(note) = digit_note(digit_errors, digits) {
+                summary.notes.push(note);
+            }
         }
         // FRONT, not back. The correctness gate reports `notes.first()` as the
         // "first failure", and by this point `notes` already holds
@@ -1100,6 +1119,7 @@ fn run_reference(
     };
 
     let (mut wers, mut cers) = (Vec::new(), Vec::new());
+    let (mut digit_errors, mut digits) = (0usize, 0usize);
     for (clip, path) in holdout.iter().zip(paths) {
         match batch.text_for(path) {
             Some(hypothesis) => {
@@ -1107,6 +1127,9 @@ fn run_reference(
                 if let Some(truth) = manifest.ground_truth(clip)? {
                     wers.push(wer_with(&truth, hypothesis, mode));
                     cers.push(cer_with(&truth, hypothesis, mode));
+                    let (e, n) = digit_errors_with(&truth, hypothesis, mode);
+                    digit_errors += e;
+                    digits += n;
                 }
             }
             None => summary
@@ -1117,6 +1140,13 @@ fn run_reference(
 
     summary.wer = mean(&wers);
     summary.cer = mean(&cers);
+    // OCR only: the reference arm scores digits exactly as the engine arm does,
+    // so the two digit rates are comparable. ASR ledger lines stay unchanged.
+    if matches!(mode, Mode::Ocr)
+        && let Some(note) = digit_note(digit_errors, digits)
+    {
+        summary.notes.push(note);
+    }
 
     if let Some(unit) = per_item_unit {
         let mut times: Vec<f64> = batch

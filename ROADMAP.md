@@ -1,6 +1,6 @@
 # FFai Roadmap
 
-> **Reconciled against the README and `bench/ledger.jsonl` on 2026-09-19.**
+> **Reconciled against the README and `bench/ledger.jsonl` on 2026-09-25.**
 > Every ✅ below traces to a claim the README evidences; every ⬜ is open
 > work. If this line is old, distrust the boxes — the README is the source of
 > truth for what is measured.
@@ -98,7 +98,16 @@ participates only as an out-of-process test oracle; nothing GPL ships.
 - ✅ Oracle gate on public ground truth: **OmniDocBench v1.6 scored by their
   own evaluator**, all 1 651 pages — Text^Edit 0.1157, ReadOrder^Edit 0.2039
   ([docs/plans/restarting-carmenta-doc.md](docs/finished/restarting-carmenta-doc.md)).
+- ✅ Forms and scanned filings (0.11, [docs/plans/commercial-gaps.md](docs/plans/commercial-gaps.md)):
+  quarter-turn orientation (144/144 on turned pages), checkbox detection,
+  label → value pairing, charset and lexicon constraints, form-rule removal,
+  offline weights, and PDF input that composites redactions rather than
+  reading through them. Measured on synthetic corpora with ground truth by
+  construction; not yet on real filings.
+- ⬜ JBIG2 and CCITT Group 3 2-D decoding; tables and free-hand ticks in the
+  OCR output; hosted converted weights so manifests have a download source.
 - ⬜ Photo accuracy still trails PaddleOCR; causes are diagnosed, not fixed.
+  Small-angle deskew is still open (`auto_orient` handles quarter turns only).
 - ⬜ Evaluate pure-Rust `ocrs` as a zero-setup baseline engine.
 - ⬜ rff image decoders (PNG/JPEG/WebP).
 
@@ -124,14 +133,17 @@ Remaining:
   It needs a video-capable checkpoint first.
 - **Speed.** Now **1.20x** off the PyTorch reference end to end (10 918 vs
   9 106 ms, same image, idle box), down from 2.4x across five optimization
-  rounds; quality is an exact tie and footprint is 0.71x. The deficit is
+  rounds. The deficit is
   concentrated in the vision tower, which is 75 % of a caption and 77 % matmul
   — the elementwise phase is spent. Blocked attention has been refuted five
   times, the last with candle's own GEMM.
-- **Re-run the `ffai bench vlm` gate.** Its recorded row still reads
-  `speed FAIL` at 2.4x and is stale. Re-running is blocked by a harness defect,
-  not an engine one: the engine arm segfaults on the second `describe_image` in
-  one process, and the crash reproduces with the optimizations reverted.
+- **Re-measure the `ffai bench vlm` gate on a quiet box.** It has been re-run
+  (ledger `bench-vlm-1789863219`, `-1789866779`; the old segfault no longer
+  reproduces). Speed now PASSes and footprint FAILs (1.29x, 1.54x the
+  reference's memory, contradicting the older 0.71x claim), but the two runs
+  disagree on magnitude. Quality is SKIPPED until VLMEvalKit is reinstalled in
+  `.venv-argus`. It needs an interleaved harness and an idle machine before a
+  number is claimed.
 - `mistralrs` behind the reserved `mistralrs-backend` feature, for the serving
   concerns it owns: quantized weights and grammar-constrained JSON decoding.
   Blocked on a crates.io release that can load `SmolVLM` — the working version

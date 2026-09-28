@@ -2101,6 +2101,19 @@ remaining points are.**
 
 ## §44 — the three missing stages, and why the headline is a COVERAGE gap
 
+> **CORRECTION, 2026-09-25.** This section attributes **0.0406 text / 0.0522
+> order** to Carmenta on the 236-page `unlimited_holdout` subset. Those are
+> **Unlimited-OCR's** numbers on that subset (§1, and
+> `docs/Carmenta-mission-plan.md` §8.173). Carmenta's measured score there is
+> **0.1084 / 0.1749**. The table row "Carmenta, formula/table-free English
+> 0.0406", and the conclusion drawn from it ("we already beat PP-StructureV3
+> and sit near the VLM leader"), are therefore **withdrawn**. The section's
+> other point, that the full-corpus loss is dominated by content classes
+> Carmenta does not emit (§57's ledger measures this independently), does not
+> depend on the wrong number and stands. The claim had reached the published
+> `ffai-carmenta` README, and was corrected there the same day. The text below
+> is left as written, per this log's append-only rule.
+
 **The reframing, from evidence already on disk.** `configs/unlimited_holdout.yaml`
 scores Carmenta on a 236-page holdout: **English only, ZERO LaTeX-bearing text
 blocks, ZERO table regions, ZERO isolated equations** (verified by counting the
