@@ -23,4 +23,6 @@ jobs:
   check:
     uses: Remade-With-Rust/.github/.github/workflows/portfolio-test.yml@main
     with:
-      command: test
+      # FFAI's full test suite outruns the shared workflow's 60-minute limit;
+      # its own CI runs the tests. The portfolio gate is the cheap `check`.
+      command: check
