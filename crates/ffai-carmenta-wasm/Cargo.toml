@@ -5,7 +5,7 @@ description = "Carmenta in the browser — pure-Rust OCR compiled to WebAssembly
 # slice. The JS signature is unchanged — it is still a `Uint8Array` — but the
 # Rust signature is, so this is a breaking change for a Rust consumer even
 # though a browser sees nothing. Adds `setDetMaxShort` and `linearMemoryBytes`.
-version = "0.2.3"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -26,7 +26,7 @@ ffai-core = { workspace = true }
 # release calls `reqwest::blocking` — a module that does not exist on wasm32.
 # Nothing in a browser can fetch weights through the model cache anyway: the
 # caller supplies bytes.
-ffai-carmenta = { path = "../ffai-carmenta", version = "0.11.0", default-features = false }
+ffai-carmenta = { path = "../ffai-carmenta", version = "0.12.0", default-features = false }
 wasm-bindgen = "=0.2.121"   # pinned to the installed wasm-bindgen-cli; the two must match exactly
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,13 +37,13 @@ serde-wasm-bindgen = "0.6"
 # rusty_alloc at parity with dlmalloc on Diana's workload. Carmenta's
 # allocation pattern is different (many small line crops rather than one big
 # tensor chain), so the answer here is its own open measurement.
-rusty_alloc-api = { version = "=2.2.0", optional = true }
+rusty_alloc-api = { version = "=2.2.5", optional = true }
 # The allocator CORE, for `arena::reserve_os_memory_ex`. `rusty_alloc-api` is
 # the mi_*-compatible surface and does not re-export the arena module, but on
 # wasm the arena is the ONLY layer that recycles a freed segment — `prim::free`
 # is a no-op there because linear memory cannot shrink. Same version as the
 # api crate, so this adds no second copy of the allocator.
-rusty_alloc = { version = "=2.2.0", optional = true }
+rusty_alloc = { version = "=2.2.5", optional = true }
 
 [features]
 # **`rusty_alloc`, and the "open measurement" this comment used to ask for has
