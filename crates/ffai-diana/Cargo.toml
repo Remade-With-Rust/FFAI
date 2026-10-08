@@ -3,7 +3,7 @@ name = "ffai-diana"
 description = "Diana — FFai's detection component (YOLO26 on candle, pure Rust)"
 # 0.7.3 is a documentation-only republish: README restructured to the shared
 # Remade With Rust page layout. No code, API or output change.
-version = "0.7.8"
+version = "0.8.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -66,10 +66,10 @@ libmimalloc-sys = { version = "0.1", default-features = false }
 # margin the largest single effect in the Diana latency campaign (1.64x), so
 # it is simultaneously the dependency we most want to drop and the one that
 # costs the most to drop wrongly.
-rusty_alloc-api = "=2.2.0"
+rusty_alloc-api = "=2.2.5"
 # The core, for `alloc::collect` — the reclaim `examples/scaling.rs` drives.
 # `rusty_alloc-api` deliberately exposes collect only per-`Heap`.
-rusty_alloc = "=2.2.0"
+rusty_alloc = "=2.2.5"
 ffai-media = { path = "../ffai-media" }
 ffai-bench = { path = "../ffai-bench" }
 

@@ -38,7 +38,7 @@ description = "Carmenta — pure-Rust OCR: documents, screens, and a change-gate
 # (cord +0.0033 with a +0.1928 clip, doc +0.0395 with a +0.2920 clip) — the same
 # failure the 544x960 arm produced, smaller. 1280 is the only arm that improves
 # both with no badly-regressing clip. The table lives on `DET_MAX_SHORT_DEFAULT`.
-version = "0.11.0"
+version = "0.12.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -84,7 +84,7 @@ tokenizers = { version = "0.23", default-features = false, features = ["unstable
 mimalloc = { version = "0.1", default-features = false }
 # Superseded as the default by the pure-Rust remake; see the allocator
 # doc comment in `ffai-cli/src/main.rs` for the measurement.
-rusty_alloc-api = "=2.2.0"
+rusty_alloc-api = "=2.2.5"
 ffai-media = { path = "../ffai-media" }
 ffai-bench = { path = "../ffai-bench" }
 

@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus-wasm"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "ffai-argus",
  "ffai-core",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta-wasm"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "ffai-carmenta",
  "ffai-core",
@@ -1310,7 +1310,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-demo"
-version = "0.7.5"
+version = "0.8.0"
 dependencies = [
  "ffai-argus",
  "ffai-bench",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.7.8"
+version = "0.8.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1412,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury-wasm"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "ffai-core",
  "ffai-mercury",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-wasm"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "ffai-core",
  "ffai-diana",
@@ -3974,9 +3974,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
-version = "2.2.0"
+version = "2.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3689dec49611086f9a977596bbc1c8d7b2d1c21691438af506b793723ce16fa"
+checksum = "c12ed1752127ac2fabc5bc5aed934055f4be5f093885d830a66686bff4cd7668"
 dependencies = [
  "libc",
  "portable-atomic",
@@ -3985,9 +3985,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc-api"
-version = "2.2.0"
+version = "2.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6df579b05b731b70f98a73ec477aa889f7404be5f326da47691b32cdb94a8418"
+checksum = "a68d299fc4818e1b26164556504f28240de294ea709c519ec465add9238f30f7"
 dependencies = [
  "rusty_alloc",
 ]

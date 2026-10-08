@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-v0.11.0...ffai-carmenta-v0.12.0) - 2026-10-08
+
+### Changed
+
+- rusty_alloc and rusty_alloc-api `=2.2.0` -> `=2.2.5`: builds on MSVC with LTO and unwinding, frees model memory stranded by exited loader threads, purges freed huge blocks, and fails cleanly when Windows refuses a re-commit. The pin is exact, so a consumer that pins rusty_alloc itself must move to 2.2.5 too
+
 ## [0.11.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-v0.10.2...ffai-carmenta-v0.11.0) - 2026-09-25
 
 ### Added

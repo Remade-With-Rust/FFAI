@@ -2,7 +2,7 @@
 name = "ffai-cli"
 description = "The ffai binary — a thin shell over the FFai library crates"
 # follows its dependencies.
-version = "0.7.0"
+version = "0.8.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -64,10 +64,10 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 # It reproduced in the CLI (which declares this allocator) and never in an
 # example (which declared none and got the system one), and that difference is
 # what finally identified it.
-rusty_alloc-api = "=2.2.0"
+rusty_alloc-api = "=2.2.5"
 # The core, for `alloc::collect` — see `spawn_page_trimmer` in main.rs.
 # Without it rusty_alloc's RSS does not bound on a rayon pool.
-rusty_alloc = "=2.2.0"
+rusty_alloc = "=2.2.5"
 clap = { workspace = true }
 
 [features]

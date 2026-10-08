@@ -26,6 +26,42 @@ mechanics are in `.github/workflows/release.yml`.
 
 ## [Unreleased]
 
+### rusty_alloc 2.2.0 → 2.2.5
+
+Every crate that installs or calls the allocator moves to the exact pin
+`=2.2.5`. Because the pin is exact, a consumer that pins rusty_alloc itself
+has to move with it, so each crate takes a minor bump:
+
+| crate | from | to |
+|---|---|---|
+| `ffai-argus` (workspace version) | 0.7.5 | **0.8.0** |
+| `ffai-argus-wasm` | 0.1.3 | **0.2.0** |
+| `ffai-carmenta` | 0.11.0 | **0.12.0** |
+| `ffai-carmenta-wasm` | 0.2.3 | **0.3.0** |
+| `ffai-cli` | 0.7.0 | **0.8.0** |
+| `ffai-diana` | 0.7.8 | **0.8.0** |
+| `ffai-mercury-wasm` | 0.1.3 | **0.2.0** |
+| `ffai-wasm` | 0.1.5 | **0.2.0** |
+
+What the allocator fixes, as it affects FFai:
+
+- **2.2.5:** builds on MSVC with LTO and `panic = "unwind"`. That is our own
+  release profile (`lto = "thin"`, default panic), so 2.2.1 to 2.2.4 were
+  never an option on Windows.
+- **2.2.4:** freed model memory is no longer stranded after a loader thread
+  exits, and a freed huge block (over 32 MiB; Whisper-small's embedding is
+  152 MiB) is purged when purging is on.
+- **2.2.3:** on Windows with purging on, a failed re-commit is now an
+  allocation failure rather than an access violation.
+- **2.2.1:** `realloc` of a huge block copies the request, not the whole
+  reservation; process start-up makes 12 allocations instead of 263; a
+  cross-thread double free aborts instead of hanging.
+
+2.2.4 added public fields to `rusty_alloc::heap::Heap`. FFai never builds one
+with a struct literal, so nothing here changes.
+
+## [2026-09-28] — commercial gaps: core 0.8, carmenta 0.11, cli 0.7
+
 ### Versions
 
 | crate | from | to | why |
