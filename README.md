@@ -1,4 +1,4 @@
-### In The Wild with 312,265 Active Installs
+### In The Wild with 365,057 Active Installs
 > **In the wild** — [RAG Converter](https://ragconverter.com) uses `FFAI` for all three of its AI engines.
 > It makes personal and work files AI-readable without them leaving the machine:
 > the whole conversion runs as WebAssembly in the browser tab, with nothing
