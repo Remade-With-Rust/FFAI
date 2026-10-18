@@ -156,11 +156,11 @@ version = "1.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-core]]
-version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
+version = "0.11.0@git:8fe731857d67f5fe83ee6fa717e0d549ec6827d3"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-kernels]]
-version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
+version = "0.11.0@git:8fe731857d67f5fe83ee6fa717e0d549ec6827d3"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-metal-kernels]]
@@ -168,7 +168,7 @@ version = "0.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-metal-kernels]]
-version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
+version = "0.11.0@git:8fe731857d67f5fe83ee6fa717e0d549ec6827d3"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-nn]]
@@ -180,7 +180,7 @@ version = "0.11.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.candle-ug]]
-version = "0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"
+version = "0.11.0@git:8fe731857d67f5fe83ee6fa717e0d549ec6827d3"
 criteria = "safe-to-deploy"
 
 [[exemptions.castaway]]
@@ -731,6 +731,10 @@ criteria = "safe-to-deploy"
 version = "0.16.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.nix]]
+version = "0.31.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.nom]]
 version = "8.0.0"
 criteria = "safe-to-deploy"
@@ -852,7 +856,7 @@ version = "0.11.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.quinn-proto]]
-version = "0.11.16"
+version = "0.11.19"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
@@ -908,35 +912,35 @@ version = "0.5.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-codec]]
-version = "0.2.0"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-core]]
-version = "0.2.1"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format]]
-version = "0.2.1"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-avi]]
-version = "0.2.0"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-mkv]]
-version = "0.2.1"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-mp4]]
-version = "0.2.1"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-ts]]
-version = "0.2.1"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-subtitle]]
-version = "0.2.0"
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.ring]]
@@ -980,11 +984,11 @@ version = "0.3.1"
 criteria = "safe-to-run"
 
 [[exemptions.rusty_alloc]]
-version = "2.2.5"
+version = "2.2.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_alloc-api]]
-version = "2.2.5"
+version = "2.2.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_expressions]]
@@ -1012,7 +1016,7 @@ version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_jpeg]]
-version = "0.4.1"
+version = "0.4.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_json_turbo]]
@@ -1368,7 +1372,7 @@ version = "1.9.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zip]]
-version = "8.6.0"
+version = "9.0.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.zlib-rs]]
