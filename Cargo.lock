@@ -380,7 +380,7 @@ dependencies = [
  "rand_distr",
  "rayon",
  "safetensors 0.8.0",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokenizers 0.22.2",
  "yoke 0.8.3",
  "zerocopy",
@@ -407,7 +407,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-metal",
  "once_cell",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -422,7 +422,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-metal",
  "once_cell",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -442,7 +442,7 @@ dependencies = [
  "rayon",
  "safetensors 0.8.0",
  "serde",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -558,9 +558,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -568,9 +568,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "ec0797fb7aeb1406c84efac526901f7ec3ead2124f946b494e72879d4b54704d"
 dependencies = [
  "anstream",
  "anstyle",
@@ -580,9 +580,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.6.4"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d012d2b9d65aca7f18f4d9878a045bc17899bba951561ba5ec3c2ba1eed9a061"
+checksum = "f9c751b79415d4e559e3d1fcf128e09e720eb673a06d26cf6f392d37d75b66e0"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -864,7 +864,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "walkdir",
  "which",
 ]
@@ -1333,7 +1333,7 @@ version = "0.8.0"
 dependencies = [
  "candle-core",
  "rayon",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2112,7 +2112,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-retry",
  "tokio-util",
@@ -2134,7 +2134,7 @@ dependencies = [
  "more-asserts",
  "serde",
  "serde_json",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tokio_with_wasm",
@@ -2481,7 +2481,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -2665,7 +2665,7 @@ dependencies = [
  "rangemap",
  "sha2 0.11.0",
  "stringprep",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "weezl",
 ]
 
@@ -3432,7 +3432,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -3455,7 +3455,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -3656,7 +3656,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.17",
  "libredox",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3743,42 +3743,42 @@ dependencies = [
  "async-trait",
  "http",
  "reqwest",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tower-service",
 ]
 
 [[package]]
 name = "rff-codec"
-version = "0.2.0"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61677fc31588351aedd8f8c931aceb3df9c407fbf0f0b655d434bd65a5b84e09"
+checksum = "c57041b4663b1daa8c75465a3711acfc539993b650bbea7497b5b53f841142a0"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-core"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14f1d6f3bcfc56f5220ed6ccf30e10fdd2de16cd2d1c2ec111d6bed6439b2120"
+checksum = "58a05d95a4ea0d82d4efc95583b0dc45ad0401843faf3fdde68336343540c021"
 dependencies = [
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "rff-format"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ede37b5f32c0d20416ca1ee8214483469388f3e76dbca38b76126d96851a4bd"
+checksum = "e51ec3609c5c2b2dad46104ef80c57810b11531f56e21e3a79c3792ba6cd2529"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-format-avi"
-version = "0.2.0"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95e9a5dfd75e53aca4ab0171714ed9807706b3e584b3d5269666038fd4f31f7b"
+checksum = "66334e9d326f81b522120d8e2b0ce80ed961198cda420335ff58b5e52f76b640"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3786,9 +3786,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-mkv"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9a1356e1385b32df3abb8741c9f86f94edce07f09c1c3f6fd43992b990a1ded"
+checksum = "6176628199a4ccf65246fe1df778c85695952d352d0772472523680bacbfc582"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3797,9 +3797,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-mp4"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd50c0332f1e700a19a244b76be86c3081e1f36f8b7b2ce19cf5f63fef430006"
+checksum = "8b584e6af216840d49eb32069e4f23db31e8682c0e57d28e0d2a92c50bc0f723"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3807,9 +3807,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-ts"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64991d97bb9e24008d5b906725030acb2f98abd11326c360687d20797f17c26b"
+checksum = "1b97f9ff8f34031652c2ebdb0547e542744e7f3aae21839c5ff19715b31a5f90"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3817,9 +3817,9 @@ dependencies = [
 
 [[package]]
 name = "rff-subtitle"
-version = "0.2.0"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9735c92fade5b42e986d6d88562c5c0093c11ad7d6a8b36014f6d73ae2fb7759"
+checksum = "75e215a66ac3f6aed735699eac72b811097b568d8b477b6540f17f5790610903"
 
 [[package]]
 name = "ring"
@@ -3974,9 +3974,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
-version = "2.2.5"
+version = "2.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c12ed1752127ac2fabc5bc5aed934055f4be5f093885d830a66686bff4cd7668"
+checksum = "318c1ca44267aa30e631ed57f8c1db3e25991374bdadc35d97db11b65faba496"
 dependencies = [
  "libc",
  "portable-atomic",
@@ -4049,9 +4049,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_jpeg"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04b834f51d522e52dc7ad26fd6e157865f565eaf7f224a7a1a6d75ca617dd793"
+checksum = "c0ac65a6bf2e785d2bf39029cfafff14560094db87bb331fbfc70c3e9552e59d"
 
 [[package]]
 name = "rusty_json_turbo"
@@ -4584,11 +4584,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.19"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.19",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -4604,9 +4604,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.19"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4703,7 +4703,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spm_precompiled",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "unicode-normalization-alignments",
  "unicode-segmentation",
  "unicode_categories",
@@ -4736,7 +4736,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spm_precompiled",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "unicode-normalization-alignments",
  "unicode-segmentation",
  "unicode_categories",
@@ -4932,7 +4932,7 @@ checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
 dependencies = [
  "crossbeam-channel",
  "symlink",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "time",
  "tracing-subscriber",
 ]
@@ -5886,7 +5886,7 @@ dependencies = [
  "serde_repr",
  "statrs",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-retry",
  "tokio_with_wasm",
@@ -5922,7 +5922,7 @@ dependencies = [
  "safe-transmute",
  "serde",
  "static_assertions",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tracing",
@@ -5950,7 +5950,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tempfile",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tokio_with_wasm",
@@ -5991,7 +5991,7 @@ dependencies = [
  "serde_json",
  "shellexpand",
  "sysinfo",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tokio_with_wasm",
