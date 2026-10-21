@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - name: Verify the tag carries a signature
         run: |
@@ -63,7 +63,7 @@ jobs:
     name: SBOM (CycloneDX)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-cyclonedx --locked
@@ -94,7 +94,7 @@ jobs:
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
           - { os: macos-latest,   target: aarch64-apple-darwin }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
       - uses: Swatinem/rust-cache@v2
@@ -163,7 +163,7 @@ jobs:
       id-token: write        # OIDC, for provenance signing
       attestations: write    # record the attestation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with: { path: dist }
       - run: find dist -type f | sort
