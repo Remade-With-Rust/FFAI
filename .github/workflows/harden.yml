@@ -260,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.x" }
       # Clippy checks Rust; this checks FFai. Every rule exists because an audit
       # found the thing it prevents - see tools/lint_invariants.py --list.
@@ -271,7 +271,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.x" }
       # The README blocks are GENERATED from each crate's plan file. This fails the build
       # when a plan file was edited without re-rendering, which is the only thing keeping
