@@ -310,7 +310,7 @@ pub fn cache_dir() -> PathBuf {
 ///
 /// Written out rather than taken from `dirs`, whose `dirs-sys` pulls
 /// `option-ext`, an MPL-2.0 crate: one call site was enough to turn a
-/// permissive-only `cargo deny` policy red for every consumer (PdfCraft,
+/// permissive-only `cargo deny` policy red for every consumer (`PdfCraft`,
 /// 2026-10-30).
 fn os_cache_dir() -> Option<PathBuf> {
     let abs = |v: std::ffi::OsString| Some(PathBuf::from(v)).filter(|p| p.is_absolute());

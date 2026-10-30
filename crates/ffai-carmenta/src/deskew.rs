@@ -135,7 +135,7 @@ fn paper_colour(img: &ImageBuffer) -> [u8; 4] {
         return out;
     }
     let mut idx: Vec<usize> = Vec::with_capacity(2 * (w + h));
-    idx.extend((0..w).map(|x| x));
+    idx.extend(0..w);
     idx.extend((0..w).map(|x| (h - 1) * w + x));
     idx.extend((0..h).map(|y| y * w));
     idx.extend((0..h).map(|y| y * w + w - 1));

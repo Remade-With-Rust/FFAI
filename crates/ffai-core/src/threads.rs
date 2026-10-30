@@ -6,7 +6,7 @@
 //! gemm `Parallelism::Rayon(physical cores)` on every matmul, so a process
 //! pinned to one core ran two dozen threads on it.
 //!
-//! PdfCraft measured what sizing the pool to the mask is worth (ABBA, output
+//! `PdfCraft` measured what sizing the pool to the mask is worth (ABBA, output
 //! identical): on 8 cores, 0.927x the time (10/10 rounds) and peak memory
 //! 1 959 -> 1 240 MB; on 1 core, time neutral and memory 1 285 -> 747 MB. It
 //! could not do it itself, because reading the mask is an FFI call and it

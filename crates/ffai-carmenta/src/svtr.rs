@@ -762,10 +762,11 @@ pub fn ctc_greedy_emits(
                 open = true;
             }
             kept.push(conf[i]);
-        } else if k != 0 && open {
-            if let Some(e) = emits.last_mut() {
-                e.t1 = i;
-            }
+        } else if k != 0
+            && open
+            && let Some(e) = emits.last_mut()
+        {
+            e.t1 = i;
         }
         prev = k;
     }
