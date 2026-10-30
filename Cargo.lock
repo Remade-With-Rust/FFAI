@@ -1320,6 +1320,7 @@ dependencies = [
  "candle-core",
  "rayon",
  "thiserror 2.0.19",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

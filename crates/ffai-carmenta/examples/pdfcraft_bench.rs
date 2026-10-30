@@ -39,6 +39,16 @@ fn esc(s: &str) -> String {
 }
 
 fn main() {
+    eprintln!("available_threads {}", ffai_core::threads::available_threads());
+    if std::env::var("BENCH_POOL").is_ok_and(|v| v == "1") {
+        let pool = ffai_core::threads::affinity_pool().expect("thread pool");
+        pool.install(run);
+    } else {
+        run();
+    }
+}
+
+fn run() {
     let mut args = std::env::args().skip(1);
     let root = args.next().expect("usage: pdfcraft_bench <weights_root> <page.png>...");
     let pages: Vec<String> = args.collect();

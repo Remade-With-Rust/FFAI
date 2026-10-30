@@ -19,6 +19,7 @@ pub mod error;
 pub mod fastmath;
 pub mod fastops;
 pub mod registry;
+pub mod threads;
 pub mod types;
 
 /// The shared tensor framework (Hugging Face candle).
