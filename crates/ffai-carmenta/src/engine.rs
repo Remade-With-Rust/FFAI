@@ -1411,6 +1411,25 @@ impl OcrEngine for CraftCrnn {
         };
         let out_lines =
             crate::suppress::probe_reorder(out_lines, &probe_stats, lowconf, w as f32, h as f32);
+        // Table bands read across their rows, on the finished order.
+        let out_lines = {
+            let bbs: Vec<boxes::DetBox> = out_lines
+                .iter()
+                .map(|l| {
+                    let b = l.bbox.unwrap_or(BoundingBox { x: 0.0, y: 0.0, width: 0.0, height: 0.0 });
+                    boxes::DetBox {
+                        x0: b.x.max(0.0) as usize,
+                        y0: b.y.max(0.0) as usize,
+                        x1: (b.x + b.width).max(0.0) as usize,
+                        y1: (b.y + b.height).max(0.0) as usize,
+                        score: 1.0,
+                    }
+                })
+                .collect();
+            let perm = boxes::grid_order(&bbs);
+            let mut slots: Vec<Option<OcrLine>> = out_lines.into_iter().map(Some).collect();
+            perm.into_iter().filter_map(|i| slots[i].take()).collect::<Vec<_>>()
+        };
 
         // §48: REGION ROUTING. Runs last, on the finished sequence, so the
         // reading order §29–§43 earned is spliced into rather than rebuilt.

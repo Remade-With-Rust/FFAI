@@ -138,8 +138,12 @@ So the remaining loss is mostly **coverage and characters**, not layout: the
 reading-order and detection stages this crate spent its campaign on are down
 to a combined 4 % of remaining error.
 
-All of this on CPU at ~9–17 s/page — roughly 9× the reference VLM's measured
-throughput on the same machine, from megabytes of weights against gigabytes.
+All of this on CPU, from megabytes of weights against gigabytes. It was
+measured at ~9–17 s/page, roughly 9× the reference VLM's throughput on the
+same machine; since the depthwise-convolution and fused-epilogue work
+(2026-10-30; recognizer bit-identical, text and boxes identical on PdfCraft's
+42-page corpus) the same 315 OmniDocBench pages read at a
+**1.4 s median, 2.7 s p90** per page on a 24-thread i7-14650HX.
 
 ## Forms, scanned filings and PDFs (0.11)
 
