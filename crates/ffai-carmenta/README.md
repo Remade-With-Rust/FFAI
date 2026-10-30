@@ -158,7 +158,9 @@ What else 0.11 adds, each measured:
 
 | capability | API | measured |
 |---|---|---|
-| orientation, 0/90/180/270 | `OcrOptions::auto_orient`, `detect_orientation` | **144 / 144** turns undone on document pages and single form lines; a decision costs **48 %** of one page read |
+| orientation, 0/90/180/270 | `OcrOptions::auto_orient`, `detect_orientation` | **144 / 144** turns undone on document pages and single form lines. The page is read as given first and the decision runs only when that read's confidence is below 0.7: **1.004x** on upright pages (ABBA, 3/6), where the unconditional decision cost 2.2x (PdfCraft); turned pages 91 % → 0 % CER |
+| deskew, small tilt | `OcrOptions::deskew`, `OcrOutput::skew_degrees` | angle from the detector's own text regions; pages 0.5-5° off read **0.10 %** CER (48.3 % without), a 1.5°-tilted phone photo **0.11 %** (61 %); square pages untouched (PdfCraft's corpus) |
+| word boxes | `OcrLine::words` (mobiledet-svtr) | from the CTC frames, snapped to ink: **96 %** of ground-truth words at IoU ≥ 0.5 with the right text (PdfCraft's corpus) |
 | checkboxes, frame + marked/empty | `checkbox::find` | **100 %** recall and **100 %** state on 960 synthetic boxes (stroked and glyph boxes; X, overflowing tick, fill). Known false positives: the square ideograph `口`, and small square plot markers |
 | label → value pairs | `forms::pair_fields` | **220 / 221** correctly-read values paired with their label |
 | restrict a field's characters | `OcrOptions::charset` | forced characters show in the confidence: a prose page read as digits drops from 0.918 to 0.781 mean |
@@ -248,7 +250,8 @@ turns it off.
 pipeline still trails PaddleOCR (20.9 % vs 15.6 % CER) even though our
 recognition stage beats theirs on identical crops — the diagnosed cause is
 tilt-sensitive line grouping, with deskew as the named fix. `auto_orient`
-handles quarter turns, not small tilt: deskew is still open.
+handles quarter turns and `deskew` small tilt (measured on rendered and
+synthetic-photo pages; not yet re-run on the receipt corpus).
 
 ## Status: `experimental`, honestly
 

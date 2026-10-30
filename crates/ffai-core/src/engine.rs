@@ -269,7 +269,9 @@ pub struct OcrOptions {
     /// way. Scanners store portrait forms sideways and phones photograph in
     /// any orientation; read sideways, a page silently comes back as a few
     /// low-confidence lines. Returned boxes stay in the INPUT image's
-    /// coordinates. Off by default: it costs an extra detection pass.
+    /// coordinates. Off by default. An engine may read the page as given
+    /// first and decide orientation only when that read is unconvincing, so
+    /// on an upright page it can cost nothing beyond the read itself.
     ///
     /// Engines that do not implement it must return an error when it is set.
     pub auto_orient: bool,

@@ -53,6 +53,26 @@ pub enum DetStage {
     Composed,
 }
 
+/// A page read at or above this confidence is taken as upright and
+/// `auto_orient` does not run its orientation decision on it. Between the
+/// lowest upright page PdfCraft measured (0.806, all capitals) and the highest
+/// turned one (0.474, upside down).
+const ORIENT_TRUST_ABOVE: f32 = 0.7;
+
+/// A page's recognition confidence: the line confidences weighted by their
+/// characters. `None` when no line has text and a confidence.
+fn page_confidence(out: &OcrOutput) -> Option<f32> {
+    let (mut sum, mut n) = (0f64, 0usize);
+    for line in out.lines() {
+        if let Some(c) = line.confidence {
+            let k = line.text.chars().filter(|c| !c.is_whitespace()).count();
+            sum += f64::from(c) * k as f64;
+            n += k;
+        }
+    }
+    (n > 0).then(|| (sum / n as f64) as f32)
+}
+
 /// Minimum short side the mobile-det input is scaled UP to; larger images pass
 /// through untouched (capped at `FFAI_DET_MAX_SIDE`). See
 /// `image::mobiledet_input` for why this is a floor and not a ceiling — the
@@ -775,10 +795,22 @@ impl OcrEngine for CraftCrnn {
         // its boxes are mapped back so the caller's coordinates never change
         // meaning underneath them.
         if opts.auto_orient {
-            let o = self.detect_orientation(img)?;
             let inner = OcrOptions { auto_orient: false, ..opts.clone() };
+            // Read the page as given FIRST, and decide orientation only when
+            // that read is unconvincing. PdfCraft measured the unconditional
+            // decision at 2.2-2.3x the time of every page, upright ones
+            // included (the decision is a detection pass plus two dozen crop
+            // reads, and an upright page was then read in full anyway), while
+            // the page's own confidence already separates the cases: upright
+            // pages 0.967-0.997 (0.806 for a page of capitals), pages turned
+            // 90 / 180 / 270 degrees 0.000 / 0.474 / 0.267, a blank page none.
+            let first = self.recognize(img, &inner)?;
+            if page_confidence(&first).is_some_and(|c| c >= ORIENT_TRUST_ABOVE) {
+                return Ok(first);
+            }
+            let o = self.detect_orientation(img)?;
             if o.turns == 0 {
-                return self.recognize(img, &inner);
+                return Ok(first);
             }
             let upright = crate::orient::rotate(img, o.turns);
             let mut out = self.recognize(&upright, &inner)?;
