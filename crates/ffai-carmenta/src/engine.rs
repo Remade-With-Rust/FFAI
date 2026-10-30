@@ -1295,6 +1295,16 @@ impl OcrEngine for CraftCrnn {
             // z = +1.50 over 16 ABBA-paired rounds, INSIDE a 17-27 % noise
             // floor. Reverted per revert-if-unproven; §8.100 carries the
             // numbers so it is not rebuilt.
+            //
+            // Re-measured 2026-10-30 after the depthwise/epilogue work removed
+            // the per-channel conv overhead, with a thread-local "inner ops
+            // serial" flag and SVTR's matmuls calling gemm with
+            // `Parallelism::None` inside this fan-out (bit-identical output):
+            // SLOWER, 1.066x at 24 threads (0/6 ABBA wins) and 1.040x at 8
+            // (1/6), on 10 of PdfCraft's pages. Lines are uneven, and the
+            // inner fan-out is what lets the long ones finish with the rest.
+            // Serialising the LINES instead is worse still (55.6 s against
+            // 40.3 s on the 42-page corpus). Both refuted; keep this shape.
             lines.par_iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
         } else {
             lines.iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
