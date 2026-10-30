@@ -20,7 +20,6 @@ categories = ["caching", "filesystem"]
 ffai-core = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
-dirs = { workspace = true }
 # Optional: the Hugging Face downloader.
 #
 # It is 226 crates — reqwest, hyper, rustls, aws-lc-sys — and a consumer that

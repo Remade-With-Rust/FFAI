@@ -299,9 +299,30 @@ pub fn cache_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("FFAI_CACHE") {
         return PathBuf::from(dir);
     }
-    dirs::cache_dir()
+    os_cache_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("ffai")
+}
+
+/// The platform's per-user cache directory, by the rules `dirs::cache_dir`
+/// applies: `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS,
+/// `$XDG_CACHE_HOME` (when absolute) or `~/.cache` elsewhere.
+///
+/// Written out rather than taken from `dirs`, whose `dirs-sys` pulls
+/// `option-ext`, an MPL-2.0 crate: one call site was enough to turn a
+/// permissive-only `cargo deny` policy red for every consumer (PdfCraft,
+/// 2026-10-30).
+fn os_cache_dir() -> Option<PathBuf> {
+    let abs = |v: std::ffi::OsString| Some(PathBuf::from(v)).filter(|p| p.is_absolute());
+    if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").and_then(abs)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").and_then(abs).map(|h| h.join("Library/Caches"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .and_then(abs)
+            .or_else(|| std::env::var_os("HOME").and_then(abs).map(|h| h.join(".cache")))
+    }
 }
 
 #[cfg(test)]

@@ -454,7 +454,7 @@ dependencies = [
  "byteorder",
  "candle-core",
  "candle-nn",
- "fancy-regex 0.18.0",
+ "fancy-regex",
  "num-traits",
  "rand 0.9.5",
  "rayon",
@@ -1183,17 +1183,6 @@ checksum = "d817e038c30374a4bcb22f94d0a8a0e216958d4c3dcde369b1439fec4bdda6e6"
 
 [[package]]
 name = "fancy-regex"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
-dependencies = [
- "bit-set",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
-name = "fancy-regex"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
@@ -1278,19 +1267,16 @@ version = "0.12.0"
 dependencies = [
  "candle-core",
  "candle-nn",
- "candle-transformers",
  "ffai-bench",
  "ffai-core",
  "ffai-media",
  "ffai-models",
- "getrandom 0.3.4",
  "mimalloc",
  "png",
  "rayon",
  "rusty_alloc-api",
  "serde",
  "serde_json",
- "tokenizers 0.23.2",
 ]
 
 [[package]]
@@ -1425,7 +1411,6 @@ dependencies = [
 name = "ffai-models"
 version = "0.6.6"
 dependencies = [
- "dirs",
  "ffai-core",
  "hf-hub",
  "serde",
@@ -4720,7 +4705,6 @@ dependencies = [
  "dary_heap",
  "derive_builder",
  "esaxx-rs",
- "fancy-regex 0.17.0",
  "getrandom 0.3.4",
  "itertools",
  "log",
