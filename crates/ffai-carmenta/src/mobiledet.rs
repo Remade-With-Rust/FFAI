@@ -109,11 +109,176 @@ impl RepConv {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = self.conv.forward(x)?;
-        match self.act {
-            Some((s, b)) => hardswish(&x)?.affine(s, b),
-            None => Ok(x),
+        let cfg = self.conv.config();
+        let w = self.conv.weight();
+        let y = if crate::dwconv::applies(x, w, cfg.groups) {
+            // The 14 `dw_conv`s: candle runs a grouped conv as one
+            // convolution per channel (see `dwconv`).
+            let p = cfg.padding;
+            crate::dwconv::depthwise(x, w, (cfg.stride, cfg.stride), (p, p))?
+        } else if fast() && is_pointwise(w, cfg) {
+            pointwise(x, w)?
+        } else {
+            let y = self.conv.forward(x)?;
+            return match self.act {
+                Some((s, b)) => hardswish(&y)?.affine(s, b),
+                None => Ok(y),
+            };
+        };
+        if !fast() {
+            let y = match self.conv.bias() {
+                Some(b) => y.broadcast_add(&b.reshape((1, b.elem_count(), 1, 1))?)?,
+                None => y,
+            };
+            return match self.act {
+                Some((s, b)) => hardswish(&y)?.affine(s, b),
+                None => Ok(y),
+            };
         }
+        let bias = match self.conv.bias() {
+            Some(b) => b.to_vec1::<f32>()?,
+            None => Vec::new(),
+        };
+        y.contiguous()?.apply_op1_no_bwd(&RepEpilogue { bias, act: self.act })
+    }
+}
+
+/// `FFAI_MDET_FAST=0` sends the detector back through candle's own ops — 1x1
+/// convs, 3x3 convs, transposed convs and the unfused activation chain — so
+/// every fast path below stays one variable away from its oracle.
+fn fast() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("FFAI_MDET_FAST").as_deref() != Ok("0"))
+}
+
+fn is_pointwise(w: &Tensor, cfg: &Conv2dConfig) -> bool {
+    w.dims4().is_ok_and(|(_, _, kh, kw)| (kh, kw) == (1, 1))
+        && cfg.stride == 1
+        && cfg.padding == 0
+        && cfg.groups == 1
+        && cfg.dilation == 1
+}
+
+/// A 1x1 conv in NCHW is `(oc, ic) x (ic, h*w)`: no im2col copy and no layout
+/// permute, both of which candle's conv path builds. No bias.
+fn pointwise(x: &Tensor, w: &Tensor) -> Result<Tensor> {
+    let (oc, ic, _, _) = w.dims4()?;
+    let (n, _, h, wd) = x.dims4()?;
+    w.reshape((oc, ic))?
+        .broadcast_matmul(&x.reshape((n, ic, h * wd))?)?
+        .reshape((n, oc, h, wd))
+}
+
+/// A conv layer through the fastest path that applies: 1x1 as a matmul, 3x3
+/// through `conv3x3`'s register-tiled kernel (which falls back to candle for
+/// any shape it does not cover).
+fn conv_fast(conv: &Conv2d, x: &Tensor) -> Result<Tensor> {
+    if !fast() {
+        return conv.forward(x);
+    }
+    if is_pointwise(conv.weight(), conv.config()) {
+        let y = pointwise(x, conv.weight())?;
+        return match conv.bias() {
+            Some(b) => y.broadcast_add(&b.reshape((1, b.elem_count(), 1, 1))?),
+            None => Ok(y),
+        };
+    }
+    crate::conv3x3::apply(x, conv)
+}
+
+/// A transposed conv whose kernel equals its stride (DBHead's two, k = s = 2)
+/// tiles its output without overlap: each input pixel writes its own
+/// `kh x kw` block. That is one matmul, `(oc*kh*kw, ic) x (ic, h*w)`, and an
+/// interleave, where candle's conv-transpose walks every tap with a dot
+/// product per output pixel.
+fn conv_transpose_fast(conv: &ConvTranspose2d, x: &Tensor) -> Result<Tensor> {
+    let cfg = conv.config();
+    let w = conv.weight();
+    let (ic, oc, kh, kw) = w.dims4()?;
+    let tiles = cfg.padding == 0
+        && cfg.output_padding == 0
+        && cfg.dilation == 1
+        && kh == cfg.stride
+        && kw == cfg.stride;
+    if !fast() || !tiles {
+        return conv.forward(x);
+    }
+    let (n, _, h, wd) = x.dims4()?;
+    let wt = w.permute((1, 2, 3, 0))?.reshape((oc * kh * kw, ic))?;
+    let y = wt.broadcast_matmul(&x.reshape((n, ic, h * wd))?)?; // (n, oc*kh*kw, h*w)
+    let y = y
+        .reshape((n, oc, kh, kw, h, wd))?
+        .permute((0, 1, 4, 2, 5, 3))? // (n, oc, h, kh, w, kw)
+        .reshape((n, oc, h * kh, wd * kw))?;
+    match conv.bias() {
+        Some(b) => y.broadcast_add(&b.reshape((1, oc, 1, 1))?),
+        None => Ok(y),
+    }
+}
+
+/// Bias, then (when the layer has one) hardswish and the scalar affine, in one
+/// pass where candle's chain is up to seven full passes over the activation.
+/// The arithmetic is candle's, operation for operation (`affine(m, a)` is
+/// `v * m + a` with both cast to f32, `clamp` is maximum-then-minimum), so the
+/// result is bit-identical.
+struct RepEpilogue {
+    bias: Vec<f32>,
+    act: Option<(f64, f64)>,
+}
+
+impl candle_core::CustomOp1 for RepEpilogue {
+    fn name(&self) -> &'static str {
+        "ffai-mobiledet-epilogue"
+    }
+
+    fn cpu_fwd(
+        &self,
+        st: &candle_core::CpuStorage,
+        l: &candle_core::Layout,
+    ) -> Result<(candle_core::CpuStorage, candle_core::Shape)> {
+        use crate::par::prelude::*;
+        let candle_core::CpuStorage::F32(inp) = st else {
+            candle_core::bail!("ffai-mobiledet-epilogue: f32 only")
+        };
+        let Some((o0, o1)) = l.contiguous_offsets() else {
+            candle_core::bail!("ffai-mobiledet-epilogue: non-contiguous input")
+        };
+        let inp = &inp[o0..o1];
+        let (_, c, h, w) = l.shape().dims4()?;
+        if !self.bias.is_empty() && self.bias.len() != c {
+            candle_core::bail!("ffai-mobiledet-epilogue: bias length {} for {c} channels", self.bias.len())
+        }
+        let sixth = (1.0f64 / 6.0) as f32;
+        let mut out = vec![0f32; inp.len()];
+        let plane = (h * w).max(1);
+        out.par_chunks_mut(plane).zip(inp.par_chunks(plane)).enumerate().for_each(
+            |(i, (o, x))| {
+                let bias = self.bias.get(i % c).copied();
+                match (bias, self.act) {
+                    (b, Some((s, a))) => {
+                        let (s, a) = (s as f32, a as f32);
+                        for (o, &x) in o.iter_mut().zip(x) {
+                            let v = match b {
+                                Some(b) => x + b,
+                                None => x,
+                            };
+                            let t = v * 1.0 + 3.0;
+                            let t = if t < 0.0 { 0.0 } else { t };
+                            let t = if t > 6.0 { 6.0 } else { t };
+                            let hs = v * (t * sixth + 0.0);
+                            *o = hs * s + a;
+                        }
+                    }
+                    (Some(b), None) => {
+                        for (o, &x) in o.iter_mut().zip(x) {
+                            *o = x + b;
+                        }
+                    }
+                    (None, None) => o.copy_from_slice(x),
+                }
+            },
+        );
+        Ok((candle_core::CpuStorage::F32(out), l.shape().clone()))
     }
 }
 
@@ -138,7 +303,7 @@ impl Se {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let w = x.mean_keepdim(D::Minus1)?.mean_keepdim(D::Minus2)?;
-        let w = self.conv2.forward(&self.conv1.forward(&w)?.relu()?)?;
+        let w = conv_fast(&self.conv2, &conv_fast(&self.conv1, &w)?.relu()?)?;
         x.broadcast_mul(&hardsigmoid(&w, self.slope)?)
     }
 }
@@ -167,7 +332,7 @@ impl RseLayer {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = self.conv.forward(x)?;
+        let x = conv_fast(&self.conv, x)?;
         &x + self.se.forward(&x)?
     }
 }
@@ -249,7 +414,7 @@ impl MobileDet {
             }
             cur = blk.pw.forward(&cur)?;
             if let Some(t) = TAPS.iter().position(|&(n, _, _)| n == BLOCKS[i].0) {
-                feats.push(self.taps[t].forward(&cur)?);
+                feats.push(conv_fast(&self.taps[t], &cur)?);
             }
         }
 
@@ -279,9 +444,9 @@ impl MobileDet {
             1,
         )?;
 
-        let y = self.head1.forward(&fused)?.relu()?;
-        let y = self.head2.forward(&y)?.relu()?;
-        candle_nn::ops::sigmoid(&self.head3.forward(&y)?)
+        let y = conv_fast(&self.head1, &fused)?.relu()?;
+        let y = conv_transpose_fast(&self.head2, &y)?.relu()?;
+        candle_nn::ops::sigmoid(&conv_transpose_fast(&self.head3, &y)?)
     }
 }
 
