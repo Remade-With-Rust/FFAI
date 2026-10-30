@@ -355,6 +355,16 @@ pub struct OcrBlock {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OcrOutput {
     pub blocks: Vec<OcrBlock>,
+    /// The angle the page's text ran at, in degrees clockwise on screen
+    /// (y down), when the engine straightened it before reading
+    /// (`OcrOptions::deskew`); `None` when the page was read as given.
+    ///
+    /// Boxes are always in the INPUT image's coordinates. On a straightened
+    /// page each line and word box is the axis-aligned bounds of its
+    /// rectangle turned by this angle, so the rectangle itself — what a text
+    /// layer drawn along the page's slope wants — is recoverable from the box
+    /// and the angle (`ffai_carmenta::deskew::rotated_corners`).
+    pub skew_degrees: Option<f32>,
 }
 
 impl OcrOutput {
@@ -388,6 +398,7 @@ impl OcrOutput {
                     .collect(),
                 bbox: None,
             }],
+            skew_degrees: None,
         }
     }
 

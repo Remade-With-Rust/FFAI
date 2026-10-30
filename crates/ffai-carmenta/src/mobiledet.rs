@@ -680,14 +680,115 @@ fn box_score_fast(prob: &[f32], w: usize, h: usize, quad: &[(f32, f32); 4]) -> f
     }
 }
 
+/// The page's text skew in degrees, read from the probability map's own text
+/// regions: positive when lines fall to the right (clockwise on screen, y
+/// down). `None` when the map holds too little line-shaped text to say.
+///
+/// Each 8-connected region above the binarisation threshold gets the same
+/// minimum-area rectangle [`boxes_from_probability`] fits. A region at least
+/// [`SKEW_MIN_ASPECT`] times longer than it is tall is a text line (or a long
+/// word), and its long axis is the direction the text runs; the estimate is
+/// the median of those directions weighted by length, so a page's long lines
+/// outvote its stray marks. It is reported only when [`SKEW_AGREE`] of that
+/// weight sits within a degree of the median: a page whose regions disagree
+/// (a collage, a rotated table beside upright prose) is left as it is.
+///
+/// This is the measurement §8.8 did not need: on its corpora deskew moved CER
+/// by 0.1 pp. PdfCraft's rendered pages measured 93.3 % CER at 2 degrees and
+/// 98.8 % at 5, because an axis-aligned crop of a long tilted line takes in
+/// the lines above and below it.
+#[must_use]
+///
+/// `sx` and `sy` are the map's scale against the image per axis (the same
+/// pair [`boxes_from_probability`] takes): the detector input is rounded to
+/// multiples of 32, so the two can differ slightly, and an angle is measured
+/// in IMAGE pixels.
+pub fn skew_degrees(prob: &[f32], w: usize, h: usize, sx: f32, sy: f32) -> Option<f32> {
+    let bin_thr = env_f32("FFAI_DB_BIN", BIN_THRESHOLD);
+    let mut mask: Vec<bool> = prob.iter().map(|&p| p > bin_thr).collect();
+    let mut stack = Vec::new();
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    // (angle in degrees, weight = long side in map pixels)
+    let mut votes: Vec<(f32, f32)> = Vec::new();
+    for start in 0..w * h {
+        if !mask[start] {
+            continue;
+        }
+        pts.clear();
+        stack.push(start);
+        mask[start] = false;
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % w, i / w);
+            pts.push((x as f32, y as f32));
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                    if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                        continue;
+                    }
+                    let j = ny as usize * w + nx as usize;
+                    if mask[j] {
+                        mask[j] = false;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        let Some(rect) = min_area_rect(&convex_hull(pts.clone())) else { continue };
+        let (rw, rh) = rect.dims();
+        let (long, short) = (rw.max(rh), rw.min(rh));
+        if short < MIN_SIDE || long < SKEW_MIN_ASPECT * short {
+            continue;
+        }
+        // Direction of the long side, folded into (-90, 90] degrees.
+        let (ux, uy) = rect.u;
+        let (dx, dy) = if rw >= rh { (ux, uy) } else { (-uy, ux) };
+        let (dx, dy) = (dx / sx, dy / sy);
+        let mut a = dy.atan2(dx).to_degrees();
+        if a > 90.0 {
+            a -= 180.0;
+        } else if a <= -90.0 {
+            a += 180.0;
+        }
+        // Text running vertically is the orientation stage's business.
+        if a.abs() <= SKEW_MAX_DEGREES {
+            votes.push((a, long));
+        }
+    }
+    let total: f32 = votes.iter().map(|v| v.1).sum();
+    if votes.len() < 3 || total <= 0.0 {
+        return None;
+    }
+    votes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut acc = 0.0;
+    let median = votes
+        .iter()
+        .find(|v| {
+            acc += v.1;
+            acc >= total / 2.0
+        })
+        .map_or(0.0, |v| v.0);
+    let agree: f32 = votes.iter().filter(|v| (v.0 - median).abs() <= 1.0).map(|v| v.1).sum();
+    (agree >= SKEW_AGREE * total).then_some(median)
+}
+
+/// A region this many times longer than tall votes on the skew.
+const SKEW_MIN_ASPECT: f32 = 4.0;
+/// Share of the vote weight that must agree with the median to within a degree.
+const SKEW_AGREE: f32 = 0.6;
+/// Widest skew [`skew_degrees`] looks for, either way.
+pub const SKEW_MAX_DEGREES: f32 = 20.0;
+
 /// Probability map -> word boxes in SOURCE image coordinates.
 ///
 /// This is `PaddleOCR`'s `DBPostProcess`, with one deliberate deviation recorded
 /// rather than hidden: the reference emits rotated quadrilaterals and we emit
 /// their axis-aligned bounds, because everything downstream — line grouping and
-/// crop extraction — is axis-aligned. §8.8 measured deskew at 0.1 pp on these
-/// corpora, so the rotation is not currently worth the cascade. The rotated
-/// rect is still computed, because its area and perimeter drive the unclip.
+/// crop extraction — is axis-aligned. §8.8 measured deskew at 0.1 pp on its
+/// corpora; a skewed page is now straightened BEFORE this runs instead (see
+/// [`skew_degrees`] and `OcrOptions::deskew`), so the boxes stay axis-aligned.
+/// The rotated rect is still computed, because its area and perimeter drive
+/// the unclip.
 ///
 /// The unclip is not optional. DB is trained against *shrunk* polygons, so a
 /// raw thresholded region is systematically tighter than the text it covers —

@@ -45,6 +45,7 @@ pub mod rules;
 pub mod harvest;
 pub mod image;
 pub mod conv3x3;
+pub mod deskew;
 pub mod dwconv;
 /// The LIVE frame reader — **native only.**
 ///

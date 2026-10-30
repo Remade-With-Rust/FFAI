@@ -10,7 +10,8 @@
 //!
 //! Usage: `pdfcraft_bench <weights_root> <page.png>...`
 //! Env: `BENCH_REC=crnn` for mobiledet-crnn, `BENCH_ORIENT=1` for
-//! `auto_orient`, `BENCH_LANG=en,fr` for `languages`.
+//! `auto_orient`, `BENCH_DESKEW=1` for `deskew`, `BENCH_LANG=en,fr` for
+//! `languages`.
 
 #[global_allocator]
 static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
@@ -51,6 +52,7 @@ fn main() {
     eprintln!("load {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
     let opts = OcrOptions {
         auto_orient: std::env::var("BENCH_ORIENT").is_ok_and(|v| v == "1"),
+        deskew: std::env::var("BENCH_DESKEW").is_ok_and(|v| v == "1"),
         languages: std::env::var("BENCH_LANG")
             .map(|v| v.split(',').map(str::to_string).collect())
             .unwrap_or_default(),

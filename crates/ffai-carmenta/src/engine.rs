@@ -186,6 +186,32 @@ impl CraftCrnn {
         Self::with_source(rec, det, Source::Offline(weights_root.to_path_buf()))
     }
 
+    /// Read `img` rotated back by `degrees` (see `crate::deskew`) and map the
+    /// result onto `img`'s own coordinates.
+    fn recognize_straightened(&self, img: &ImageBuffer, opts: &OcrOptions, degrees: f32) -> Result<OcrOutput> {
+        let (straight, sk) = crate::deskew::straighten(img, degrees);
+        let inner = OcrOptions { deskew: false, ..opts.clone() };
+        let mut out = self.recognize(&straight, &inner)?;
+        let (w, h) = (img.width as f32, img.height as f32);
+        for block in &mut out.blocks {
+            if let Some(b) = block.bbox {
+                block.bbox = Some(sk.back_box(b, w, h));
+            }
+            for line in &mut block.lines {
+                if let Some(b) = line.bbox {
+                    line.bbox = Some(sk.back_box(b, w, h));
+                }
+                for word in &mut line.words {
+                    if let Some(b) = word.bbox {
+                        word.bbox = Some(sk.back_box(b, w, h));
+                    }
+                }
+            }
+        }
+        out.skew_degrees = Some(degrees);
+        Ok(out)
+    }
+
     /// Load every model now, returning the error instead of deferring it to
     /// the first `recognize`. For a batch job, a missing weight file should
     /// stop the job before page one, not after it has started writing output.
@@ -774,7 +800,17 @@ impl OcrEngine for CraftCrnn {
             }
             return Ok(out);
         }
+        if opts.deskew && self.det != DetStage::MobileDet {
+            return Err(Error::Other(
+                "deskew is measured from the mobile detector's text regions; use a mobiledet-* \
+                 engine"
+                    .into(),
+            ));
+        }
         let m = self.models()?;
+        // The caller's image, before rule removal: a page found skewed is
+        // straightened from THIS and read again from the top.
+        let caller_img = img;
 
         // Form rules come out BEFORE detection as well as recognition: a rule
         // joins the boxes DBNet draws, and the crop the recognizer reads is cut
@@ -863,7 +899,7 @@ impl OcrEngine for CraftCrnn {
                     confidence,
                 });
             }
-            return Ok(OcrOutput { blocks: vec![OcrBlock { lines, bbox: None }] });
+            return Ok(OcrOutput { blocks: vec![OcrBlock { lines, bbox: None }], skew_degrees: None });
         }
 
         // ---- detect ----
@@ -872,6 +908,8 @@ impl OcrEngine for CraftCrnn {
         // `scale` is carried so the crop stage can map detector coordinates
         // back to image pixels via `to_img` below; mobile-det already emits
         // image coordinates, which is why its scale is the identity 2.0.
+        // Set by the mobile-det arm when `opts.deskew` asks for it.
+        let mut skew: Option<f32> = None;
         let (lines, region, affinity, mw, scale) = match self.det {
             DetStage::Craft => {
                 // Detection sees COLOR (chroma contrast is real signal on
@@ -936,6 +974,9 @@ impl OcrEngine for CraftCrnn {
                                 out.push_str(&format!("{v:.3} "));
                             }
                             let _ = std::fs::write(format!("{dir}/{tag}.prob"), out);
+                        }
+                        if opts.deskew {
+                            skew = crate::mobiledet::skew_degrees(&flat, pw, ph, sx, sy);
                         }
                         let mut b = crate::mobiledet::boxes_from_probability(
                             &flat, pw, ph, sx, sy, unclip,
@@ -1071,6 +1112,12 @@ impl OcrEngine for CraftCrnn {
         // pool contention with candle's internal rayon: measured, a 1-line
         // band strip pays 177 ms/line under par_iter vs 82 ms serial, while
         // a 7-line frame wins 2.07s -> 1.65s. Threshold 3 splits the cases.
+        // A page found skewed is straightened and read again from the top,
+        // its boxes mapped back onto the caller's image. Only skewed pages pay
+        // the second detection pass; a square one carries on with these boxes.
+        if let Some(deg) = skew.filter(|d| d.abs() >= crate::deskew::MIN_DEGREES) {
+            return self.recognize_straightened(caller_img, opts, deg);
+        }
         let recognize_line = |line: &Vec<boxes::DetBox>| -> Result<Option<OcrLine>> {
                 let lb = boxes::line_bbox(line);
                 let line_h = to_img(lb.y1) - to_img(lb.y0);
@@ -1382,7 +1429,7 @@ impl OcrEngine for CraftCrnn {
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.
-        Ok(OcrOutput { blocks: vec![OcrBlock { lines: out_lines, bbox: None }] })
+        Ok(OcrOutput { blocks: vec![OcrBlock { lines: out_lines, bbox: None }], skew_degrees: None })
     }
 }
 

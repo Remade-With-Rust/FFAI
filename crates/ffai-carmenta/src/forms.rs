@@ -153,6 +153,7 @@ mod tests {
     fn page(lines: Vec<OcrLine>) -> OcrOutput {
         OcrOutput {
             blocks: vec![OcrBlock { lines, bbox: None }],
+            skew_degrees: None,
         }
     }
 

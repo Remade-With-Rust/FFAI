@@ -273,6 +273,16 @@ pub struct OcrOptions {
     ///
     /// Engines that do not implement it must return an error when it is set.
     pub auto_orient: bool,
+    /// Measure how far the page's text runs off horizontal and, when it is
+    /// skewed, straighten the page before reading it. A scan a couple of
+    /// degrees off square otherwise reads as noise: an axis-aligned crop of a
+    /// long tilted line takes in the lines above and below it. A square page
+    /// is read exactly as without it. Boxes stay in the INPUT image's
+    /// coordinates; `OcrOutput::skew_degrees` reports the angle when the page
+    /// was straightened.
+    ///
+    /// Engines that do not implement it must return an error when it is set.
+    pub deskew: bool,
 }
 
 /// Detection options (Diana).

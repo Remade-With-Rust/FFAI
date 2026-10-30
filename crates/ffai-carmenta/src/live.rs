@@ -434,7 +434,10 @@ impl LiveSession {
             for (k, blocks) in fresh {
                 self.bands[k].cached = blocks;
             }
-            OcrOutput { blocks: self.bands.iter().flat_map(|b| b.cached.clone()).collect() }
+            OcrOutput {
+                blocks: self.bands.iter().flat_map(|b| b.cached.clone()).collect(),
+                skew_degrees: None,
+            }
         } else {
             let full = self.engine.recognize(img, &self.opts)?;
             self.bands = calibrate_bands(&full, img.height as usize);
