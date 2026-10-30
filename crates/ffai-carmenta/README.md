@@ -85,6 +85,15 @@ additionally be routed to dedicated structure models (`FFAI_ROUTE=1`,
 experimental: pure-Rust ports of PP-DocLayout-S, SLANet-plus and
 PP-FormulaNet-S, each matched against its reference runtime).
 
+**Latin beyond English is partial, and the gap is in the charset, not the
+model's skill.** On rendered pages lowercase French reads 1.9 % CER, German
+0.9 %, Spanish 0.1 % (PdfCraft's corpus). But the head's 18 383 characters do
+not include `À Â Ê Ë Ì Î Ï Ñ Ò Ô Õ Ø Ù Ú Û Ý`, `î ï ÿ œ` or `« » ¿ ¡ ‘ ™ ‰`, so
+those can never be emitted: a page of accented capitals read 24 % CER
+(`ESPAÑA` → `EsPAnA`). `OcrOptions::charset` restricts decoding to what a
+caller can store, and is how to keep a sideways or capitals-heavy page from
+emitting CJK look-alikes.
+
 Measured by [OmniDocBench](https://github.com/opendatalab/OmniDocBench)'s
 **own evaluator** — the benchmark PaddleOCR-VL and Baidu's Unlimited-OCR state
 their records on — over all 1 651 pages of v1.6, English and Chinese, zero
