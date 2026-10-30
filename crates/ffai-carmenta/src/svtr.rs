@@ -708,6 +708,70 @@ pub fn ctc_greedy_masked(
     Ok((out, crate::crnn::line_confidence(&kept)))
 }
 
+/// [`ctc_greedy`] (or [`ctc_greedy_masked`] when `mask` is given) that also
+/// returns every emission with the frames it spans, for word geometry.
+///
+/// The per-frame choice is made exactly as in those two — the tensor argmax
+/// and max unmasked, the same masked fold otherwise — and the string and
+/// confidence are built by the same loop, so both are byte-identical to theirs.
+/// Returns `(text, confidence, emissions, timesteps)`.
+pub fn ctc_greedy_emits(
+    probs: &Tensor,
+    charset: &[String],
+    mask: Option<&[bool]>,
+) -> Result<(String, Option<f32>, Vec<crate::words::Emit>, usize)> {
+    let (_, t, n) = probs.dims3()?;
+    let (best, conf): (Vec<usize>, Vec<f32>) = match mask {
+        None => {
+            let best = probs.argmax(D::Minus1)?.flatten_all()?.to_vec1::<u32>()?;
+            let conf = probs.max(D::Minus1)?.flatten_all()?.to_vec1::<f32>()?;
+            (best.into_iter().map(|k| k as usize).collect(), conf)
+        }
+        Some(mask) => {
+            if mask.len() != n || !mask[0] {
+                return Err(candle_core::Error::Msg(format!(
+                    "class mask has {} entries; the head has {n} classes and the blank must be allowed",
+                    mask.len()
+                )));
+            }
+            let flat = probs.flatten_all()?.to_vec1::<f32>()?;
+            (0..t)
+                .map(|i| {
+                    flat[i * n..(i + 1) * n]
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| mask[*j])
+                        .fold((0usize, f32::NEG_INFINITY), |b, (j, &p)| if p > b.1 { (j, p) } else { b })
+                })
+                .unzip()
+        }
+    };
+    let mut out = String::new();
+    let mut kept = Vec::new();
+    let mut emits: Vec<crate::words::Emit> = Vec::new();
+    let mut prev = usize::MAX;
+    // Whether the run `prev` belongs to was pushed as an emission.
+    let mut open = false;
+    for i in 0..t {
+        let k = best[i];
+        if k != 0 && k != prev {
+            open = false;
+            if let Some(s) = charset.get(k - 1) {
+                out.push_str(s);
+                emits.push(crate::words::Emit { text: s.clone(), t0: i, t1: i, p: conf[i] });
+                open = true;
+            }
+            kept.push(conf[i]);
+        } else if k != 0 && open {
+            if let Some(e) = emits.last_mut() {
+                e.t1 = i;
+            }
+        }
+        prev = k;
+    }
+    Ok((out, crate::crnn::line_confidence(&kept), emits, t))
+}
+
 /// One emitted run of characters, with WHERE ON THE LINE it came from.
 #[derive(Debug, Clone)]
 pub struct CharSpan {

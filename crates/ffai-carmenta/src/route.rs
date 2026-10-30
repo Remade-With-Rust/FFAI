@@ -451,6 +451,9 @@ pub fn apply(
                     );
                 }
                 out[hi].text = t;
+                // The splice changes the text, so the decoder's word boxes no
+                // longer describe it.
+                out[hi].words.clear();
                 spliced.push(g as *const Region);
             }
         }
@@ -609,6 +612,9 @@ pub fn apply(
                     );
                 }
                 out[hi].text = t;
+                // The splice changes the text, so the decoder's word boxes no
+                // longer describe it.
+                out[hi].words.clear();
             }
             if dbg {
                 eprintln!(

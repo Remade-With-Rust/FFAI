@@ -1108,16 +1108,16 @@ impl OcrEngine for CraftCrnn {
         // components, so the photographic per-word path has nothing to iterate;
         // the ink-gap splitter supplies word boundaries inside each line.
         let det_is_line_level = self.det == DetStage::MobileDet;
-        // Parallel across lines ONLY when there are enough to amortize the
-        // pool contention with candle's internal rayon: measured, a 1-line
-        // band strip pays 177 ms/line under par_iter vs 82 ms serial, while
-        // a 7-line frame wins 2.07s -> 1.65s. Threshold 3 splits the cases.
         // A page found skewed is straightened and read again from the top,
         // its boxes mapped back onto the caller's image. Only skewed pages pay
         // the second detection pass; a square one carries on with these boxes.
         if let Some(deg) = skew.filter(|d| d.abs() >= crate::deskew::MIN_DEGREES) {
             return self.recognize_straightened(caller_img, opts, deg);
         }
+        // Parallel across lines ONLY when there are enough to amortize the
+        // pool contention with candle's internal rayon: measured, a 1-line
+        // band strip pays 177 ms/line under par_iter vs 82 ms serial, while
+        // a 7-line frame wins 2.07s -> 1.65s. Threshold 3 splits the cases.
         let recognize_line = |line: &Vec<boxes::DetBox>| -> Result<Option<OcrLine>> {
                 let lb = boxes::line_bbox(line);
                 let line_h = to_img(lb.y1) - to_img(lb.y0);
@@ -1141,6 +1141,8 @@ impl OcrEngine for CraftCrnn {
                 let x1 = (to_img(lb.x1) + px) as usize;
                 let y1 = (to_img(lb.y1) + py) as usize;
 
+                // Word geometry, where the recognizer can give it (SVTR).
+                let mut words: Vec<ffai_core::types::OcrWord> = Vec::new();
                 let (text, confidence) = match self.rec {
                     RecStage::Svtr => {
                         let (svtr, charset) =
@@ -1153,14 +1155,16 @@ impl OcrEngine for CraftCrnn {
                         };
                         let probs = crate::profile::timed(|p| &p.rec_fwd, || svtr.forward(&crop))
                             .map_err(image::candle_err)?;
-                        let (mut text, conf) = crate::profile::timed(|p| &p.decode, || match &mask {
-                            Some(mk) => crate::svtr::ctc_greedy_masked(&probs, charset, mk),
-                            None => crate::svtr::ctc_greedy(&probs, charset),
+                        let (mut text, conf, emits, steps) = crate::profile::timed(|p| &p.decode, || {
+                            crate::svtr::ctc_greedy_emits(&probs, charset, mask.as_deref())
                         })
                         .map_err(image::candle_err)?;
                         // SVTR's multilingual charset can put a full-width
                         // `０` or `，` into a Latin line; see `fold`.
                         crate::fold::apply(&mut text);
+                        // The crop exactly as `svtr_input` clamped it.
+                        let crop = (x0, y0, x1.min(w), y1.min(h));
+                        words = crate::words::boxes(&emits, steps, &gray, w, crop, crate::fold::apply);
                         (text, conf)
                     }
                     RecStage::Crnn => {
@@ -1314,7 +1318,8 @@ impl OcrEngine for CraftCrnn {
                     }
                 Ok(Some(OcrLine {
                     text,
-                    words: Vec::new(), // line-level recognition; word detail is open work
+                    // Empty for CRNN and the PARSeq path; see `crate::words`.
+                    words,
                     bbox: Some(BoundingBox {
                         x: x0 as f32,
                         y: y0 as f32,

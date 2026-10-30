@@ -63,6 +63,7 @@ pub mod live;
 pub mod par;
 pub mod suppress;
 pub mod svtr;
+pub mod words;
 pub mod mobiledet;
 pub mod onnx_graph;
 pub mod doclayout;
