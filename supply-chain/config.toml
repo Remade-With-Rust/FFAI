@@ -88,6 +88,9 @@ audit-as-crates-io = true
 [policy.rusty_json_turbo-accel]
 audit-as-crates-io = true
 
+[policy."serde_json:1.0.151@git:77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"]
+audit-as-crates-io = false
+
 [policy.tokenizers]
 audit-as-crates-io = true
 
