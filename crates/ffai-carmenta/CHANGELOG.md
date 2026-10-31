@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-v0.12.0...ffai-carmenta-v0.13.0) - 2026-10-31
+
+### Added
+
+- `OcrOptions::deskew` for the mobile detector: the angle comes from the detector's own text regions, and a page at least 0.3 degrees off is rotated once and read
+- Word boxes for `mobiledet-svtr`, from the CTC emission frames snapped to ink
+- `auto_orient` reports the turn it applied in `OcrOutput::turns`
+- Ruled table bands are read row-major (`boxes::grid_order`)
+- Hosted weights: the ppocrv5 manifests name `remade-with-rust/carmenta-ppocrv5-mobile`, so `fetch` downloads them sha256-pinned
+
+### Changed
+
+- **BREAKING:** `deskew::rotated_corners` takes the page's `turns`; requires `ffai-core` 0.9
+- 4.6-6.0x faster than 0.12 on a clean 300 dpi page (measured independently by PdfCraft): a direct depthwise conv, fused epilogues, and 1x1 and transposed convs as matmuls, with output bit-identical to candle where gated
+- `auto_orient` reads the page first and decides orientation only when the read is unconvincing, and keeps the turned read only when it is more confident
+- The detector's floor upscale is capped at 4x
+- Drops the unused `candle-transformers` and `tokenizers` dependencies
+
+### Fixed
+
+- An inline formula spliced into a line keeps the word boxes it does not touch
+
 ## [0.12.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-v0.11.0...ffai-carmenta-v0.12.0) - 2026-10-08
 
 ### Changed

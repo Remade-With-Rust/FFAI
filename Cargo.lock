@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ffai-argus",
  "ffai-core",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-bench"
-version = "0.7.7"
+version = "0.8.0"
 dependencies = [
  "clap",
  "csv",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta-wasm"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-carmenta",
  "ffai-core",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "candle-core",
  "rayon",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-demo"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ffai-argus",
  "ffai-bench",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-media"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "fax",
  "ffai-core",
@@ -1380,7 +1380,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury"
-version = "1.0.5"
+version = "1.1.0"
 dependencies = [
  "candle-nn",
  "candle-transformers",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ffai-core",
  "ffai-mercury",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-models"
-version = "0.6.6"
+version = "0.7.0"
 dependencies = [
  "ffai-core",
  "hf-hub",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ffai-core",
  "ffai-diana",

@@ -39,9 +39,9 @@ cargo add ffai-carmenta ffai-core ffai-media
 
 ```toml
 [dependencies]
-ffai-carmenta = "0.11"
-ffai-core = "0.8"
-ffai-media = "0.6"
+ffai-carmenta = "0.13"
+ffai-core = "0.9"
+ffai-media = "0.7"
 ```
 
 ## Recognize
