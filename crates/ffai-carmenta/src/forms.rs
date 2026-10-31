@@ -154,6 +154,7 @@ mod tests {
         OcrOutput {
             blocks: vec![OcrBlock { lines, bbox: None }],
             skew_degrees: None,
+            turns: 0,
         }
     }
 

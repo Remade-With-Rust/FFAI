@@ -364,7 +364,18 @@ pub struct OcrOutput {
     /// rectangle turned by this angle, so the rectangle itself — what a text
     /// layer drawn along the page's slope wants — is recoverable from the box
     /// and the angle (`ffai_carmenta::deskew::rotated_corners`).
+    ///
+    /// On a page also turned upright (`turns` non-zero) the angle is measured
+    /// on the upright page, not on the input.
     pub skew_degrees: Option<f32>,
+    /// Clockwise quarter turns (0-3) the engine applied to the input to read
+    /// it upright (`OcrOptions::auto_orient`); 0 when it was read as given.
+    ///
+    /// Boxes stay in the INPUT image's coordinates either way, so this is
+    /// what gives each box its reading direction: at 1 turn the text in a box
+    /// runs bottom to top, at 2 right to left upside down, at 3 top to
+    /// bottom. A 90-degree and a 270-degree page give the same boxes.
+    pub turns: u8,
 }
 
 impl OcrOutput {
@@ -399,6 +410,7 @@ impl OcrOutput {
                 bbox: None,
             }],
             skew_degrees: None,
+            turns: 0,
         }
     }
 

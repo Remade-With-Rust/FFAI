@@ -824,6 +824,13 @@ impl OcrEngine for CraftCrnn {
             }
             let upright = crate::orient::rotate(img, o.turns);
             let mut out = self.recognize(&upright, &inner)?;
+            // The decision samples two dozen crops; the two full reads are the
+            // better witness. A low-confidence upright page the sample misjudged
+            // keeps its own read. (`None`, no text, orders below any `Some`.)
+            if page_confidence(&out) <= page_confidence(&first) {
+                return Ok(first);
+            }
+            out.turns = o.turns;
             let (w, h) = (img.width as f32, img.height as f32);
             for line in out.blocks.iter_mut().flat_map(|b| b.lines.iter_mut()) {
                 if let Some(b) = line.bbox {
@@ -941,7 +948,7 @@ impl OcrEngine for CraftCrnn {
                     confidence,
                 });
             }
-            return Ok(OcrOutput { blocks: vec![OcrBlock { lines, bbox: None }], skew_degrees: None });
+            return Ok(OcrOutput { blocks: vec![OcrBlock { lines, bbox: None }], skew_degrees: None, turns: 0 });
         }
 
         // ---- detect ----
@@ -1495,7 +1502,7 @@ impl OcrEngine for CraftCrnn {
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.
-        Ok(OcrOutput { blocks: vec![OcrBlock { lines: out_lines, bbox: None }], skew_degrees: None })
+        Ok(OcrOutput { blocks: vec![OcrBlock { lines: out_lines, bbox: None }], skew_degrees: None, turns: 0 })
     }
 }
 

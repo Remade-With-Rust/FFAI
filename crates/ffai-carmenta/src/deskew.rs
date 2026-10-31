@@ -19,7 +19,8 @@
 //! turned by the skew, and the reported box is its axis-aligned bounds.
 //! `OcrOutput::skew_degrees` carries the angle, and [`rotated_corners`]
 //! recovers the turned rectangle from a reported box, which is what a text
-//! layer drawn along the page's slope needs.
+//! layer drawn along the page's slope needs. With `auto_orient` the skew is
+//! measured on the upright page, so it also takes `OcrOutput::turns`.
 
 use ffai_core::types::{BoundingBox, ImageBuffer};
 
@@ -148,16 +149,20 @@ fn paper_colour(img: &ImageBuffer) -> [u8; 4] {
 }
 
 /// The four corners, on the input page, of the turned rectangle whose
-/// axis-aligned bounds are `b`, for a page skewed `degrees` (as
-/// `OcrOutput::skew_degrees` reports it). In order: top-left, top-right,
-/// bottom-right, bottom-left of the straightened rectangle.
+/// axis-aligned bounds are `b`, for a page skewed `degrees` and turned
+/// upright by `turns` (as `OcrOutput::skew_degrees` and `OcrOutput::turns`
+/// report them). In order: top-left, top-right, bottom-right, bottom-left of
+/// the rectangle as it reads upright.
 ///
 /// A `W x H` rectangle turned by `a` has bounds `w = W|cos a| + H|sin a|` and
 /// `h = W|sin a| + H|cos a|`, which this solves for `W` and `H`; the centre is
-/// shared. Exact up to the clamping at the page edge.
+/// shared. Exact up to the clamping at the page edge. On the input page the
+/// upright rectangle runs at `degrees - 90 * turns`: the skew is measured on
+/// the upright page, and the input is that page turned back counterclockwise.
 #[must_use]
-pub fn rotated_corners(b: BoundingBox, degrees: f32) -> [(f32, f32); 4] {
-    let (s, c) = degrees.to_radians().sin_cos();
+pub fn rotated_corners(b: BoundingBox, degrees: f32, turns: u8) -> [(f32, f32); 4] {
+    let a = degrees - 90.0 * f32::from(turns % 4);
+    let (s, c) = a.to_radians().sin_cos();
     let (sa, ca) = (s.abs(), c.abs());
     let det = ca * ca - sa * sa;
     let (cx, cy) = (b.x + b.width / 2.0, b.y + b.height / 2.0);
@@ -186,7 +191,7 @@ mod tests {
         // A line on the straightened page, mapped back and recovered.
         let line = BoundingBox { x: 400.0, y: 900.0, width: 1200.0, height: 40.0 };
         let on_input = skew.back_box(line, 2000.0, 3000.0);
-        let corners = rotated_corners(on_input, 2.0);
+        let corners = rotated_corners(on_input, 2.0, 0);
         let want = [
             (line.x, line.y),
             (line.x + line.width, line.y),
@@ -196,6 +201,44 @@ mod tests {
         .map(|p| skew.back(p));
         for (g, w) in corners.iter().zip(&want) {
             assert!((g.0 - w.0).abs() < 0.05 && (g.1 - w.1).abs() < 0.05, "{g:?} vs {w:?}");
+        }
+    }
+
+    /// `auto_orient` and `deskew` together: the page is turned upright,
+    /// straightened there, and its boxes reach the caller unrotated (tall, for
+    /// an odd turn) while the angle stays the upright page's. Without `turns`
+    /// the solve met a tall box with a near-horizontal angle and clamped the
+    /// line's width to 0.
+    #[test]
+    fn rotated_corners_follows_a_turned_page() {
+        let (w, h) = (800u32, 1200u32);
+        let img = ImageBuffer { width: w, height: h, format: PixelFormat::Gray8, data: vec![255; (w * h) as usize] };
+        let (wf, hf) = (w as f32, h as f32);
+        for turns in 1..4u8 {
+            let upright = crate::orient::rotate(&img, turns);
+            let (uw, uh) = (upright.width as f32, upright.height as f32);
+            let (straight, skew) = straighten(&upright, 2.0);
+            let (sw, sh) = (straight.width as f32, straight.height as f32);
+            let line = BoundingBox { x: 0.15 * sw, y: 0.4 * sh, width: 0.6 * sw, height: 30.0 };
+            // A point of the straightened page, on the input: a zero-size box
+            // maps exactly, boxes being edge coordinates.
+            let to_input = |p: (f32, f32)| {
+                let (x, y) = skew.back(p);
+                let b = crate::orient::unrotate_box(BoundingBox { x, y, width: 0.0, height: 0.0 }, turns, wf, hf);
+                (b.x, b.y)
+            };
+            let on_input = crate::orient::unrotate_box(skew.back_box(line, uw, uh), turns, wf, hf);
+            let corners = rotated_corners(on_input, 2.0, turns);
+            let want = [
+                (line.x, line.y),
+                (line.x + line.width, line.y),
+                (line.x + line.width, line.y + line.height),
+                (line.x, line.y + line.height),
+            ]
+            .map(to_input);
+            for (g, w) in corners.iter().zip(&want) {
+                assert!((g.0 - w.0).abs() < 0.05 && (g.1 - w.1).abs() < 0.05, "turns {turns}: {g:?} vs {w:?}");
+            }
         }
     }
 

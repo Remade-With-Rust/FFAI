@@ -437,6 +437,7 @@ impl LiveSession {
             OcrOutput {
                 blocks: self.bands.iter().flat_map(|b| b.cached.clone()).collect(),
                 skew_degrees: None,
+                turns: 0,
             }
         } else {
             let full = self.engine.recognize(img, &self.opts)?;
