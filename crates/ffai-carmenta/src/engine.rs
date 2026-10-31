@@ -88,6 +88,13 @@ fn mobiledet_min_side() -> usize {
 /// Crop pads for the mobile-det path, as fractions of line height. Zero by
 /// default because DB's unclip has already expanded the box; sweepable because
 /// "already expanded" is a claim a gate should get to test.
+///
+/// Tested 2026-10-30 and refuted: `FFAI_MDET_PAD_Y=0.3` made PdfCraft's
+/// blocky 5x7 "HELLO WORLD" read its `D` correctly instead of as `O`, and wrecked
+/// everything else — PdfCraft's 42 pages 0.25 % -> 9.93 % CER (its ruled table
+/// 0 -> 55 %), `carmenta-form` 0.41 -> 2.53 % (73 of 240 worse), `carmenta-doc`
+/// 30.1 -> 48.5 % (all 32 worse). The extra rows are the neighbouring lines.
+/// The 5x7 `D` stays a known misread of a blocky font.
 fn mobiledet_pads() -> (f32, f32) {
     static V: OnceLock<(f32, f32)> = OnceLock::new();
     *V.get_or_init(|| {
