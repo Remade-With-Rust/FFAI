@@ -7,6 +7,9 @@ name = "ppocrv5-mobile-det"
 task = "ocr"
 description = "PP-OCRv5 mobile det (DBNet/PP-LCNetV3) — staged detector lineage"
 license = "Apache-2.0"
+# Published 2026-10-30 (first commit 637f0fc); every file is still verified
+# against the sha256 below, so the host is a convenience, not a trust root.
+hf_repo = "remade-with-rust/carmenta-ppocrv5-mobile"
 
 [[files]]
 name = "det.safetensors"

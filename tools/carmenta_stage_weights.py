@@ -12,7 +12,7 @@ a staging directory and prints the two commands that finish the job.
 
 OUT_DIR gets exactly the files the engine loads, each verified against the
 crate's embedded manifest, plus a model card and the upstream licence notice.
-HF_REPO (default `Remade-With-Rust/carmenta-ppocrv5-mobile`) is only used in the
+HF_REPO (default `remade-with-rust/carmenta-ppocrv5-mobile`) is only used in the
 printed commands and manifest lines.
 
 The weights are PaddlePaddle's PP-OCRv5 mobile detector and recognizer
@@ -82,7 +82,7 @@ def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     out = Path(sys.argv[1])
-    repo = sys.argv[2] if len(sys.argv) > 2 else "Remade-With-Rust/carmenta-ppocrv5-mobile"
+    repo = sys.argv[2] if len(sys.argv) > 2 else "remade-with-rust/carmenta-ppocrv5-mobile"
     out.mkdir(parents=True, exist_ok=True)
     rows = []
     for model, files in FILES.items():

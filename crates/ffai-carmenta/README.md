@@ -181,6 +181,7 @@ What else 0.11 adds, each measured:
 | erase form rules | `OcrOptions::remove_rules` | CRNN on underlined values: 13-20 % → **70 %**. **Not for SVTR**: on strikethroughs it goes 77-87 % → 73 %. Opt-in |
 | full-width → ASCII on Latin lines | on by default (`FFAI_NO_FOLD=1` disables) | OmniDocBench, 316 pages: fires on 35 of 34 852 lines; **5 pages better, 1 worse** (a full-width comma in the ground truth itself) |
 | offline weights, fail fast | `CraftCrnn::offline(rec, det, dir)`, `preload()` | no cache, no network; a missing file names its exact path |
+| document-engine weights, hosted | `fetch` feature, or download for `offline` | [`remade-with-rust/carmenta-ppocrv5-mobile`](https://huggingface.co/remade-with-rust/carmenta-ppocrv5-mobile): the three files `mobiledet-svtr` loads, each verified against the sha256 pinned in its manifest |
 
 Two measured non-results, recorded so nobody has to re-run them:
 
