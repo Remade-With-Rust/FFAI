@@ -62,6 +62,30 @@ pub mod serial {
         }
     }
 
+    /// The `par_chunks` of `rayon::prelude`, serially.
+    pub trait ParallelSliceChunks<T> {
+        fn par_chunks(&self, n: usize) -> core::slice::Chunks<'_, T>;
+    }
+
+    impl<T> ParallelSliceChunks<T> for [T] {
+        #[inline]
+        fn par_chunks(&self, n: usize) -> core::slice::Chunks<'_, T> {
+            self.chunks(n)
+        }
+    }
+
+    /// The `par_chunks_mut` of `rayon::prelude`, serially.
+    pub trait ParallelSliceMut<T> {
+        fn par_chunks_mut(&mut self, n: usize) -> core::slice::ChunksMut<'_, T>;
+    }
+
+    impl<T> ParallelSliceMut<T> for [T] {
+        #[inline]
+        fn par_chunks_mut(&mut self, n: usize) -> core::slice::ChunksMut<'_, T> {
+            self.chunks_mut(n)
+        }
+    }
+
     /// `(0..n).into_par_iter()`, serially.
     pub trait IntoParallelIterator {
         type Iter;

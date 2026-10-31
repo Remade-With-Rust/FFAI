@@ -85,8 +85,11 @@ mod tests {
         for (name, toml) in EMBEDDED {
             let on_disk = std::fs::read_to_string(repo.join(format!("{name}.toml")))
                 .unwrap_or_else(|e| panic!("repository models/{name}.toml: {e}"));
+            // Line endings normalised: with `core.autocrlf` a Windows checkout
+            // can hold the two copies with different endings while git
+            // considers both clean, and that is not drift.
             assert!(
-                on_disk == *toml,
+                on_disk.replace("\r\n", "\n") == toml.replace("\r\n", "\n"),
                 "crates/ffai-carmenta/models/{name}.toml has drifted from models/{name}.toml — \
                  copy the repository file over the crate's"
             );

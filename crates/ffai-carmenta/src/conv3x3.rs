@@ -112,6 +112,7 @@ pub(crate) fn conv3x3_scalar(
 /// tail. Requires AVX2 + FMA, checked by the caller.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
 pub(crate) unsafe fn conv3x3_avx2(
     in_p: &[f32],
     w: &[f32],
@@ -239,6 +240,7 @@ fn force_scalar() -> bool {
 /// gives: "differs from candle" says nothing about which is right.
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128")]
+#[allow(unsafe_code)]
 pub(crate) unsafe fn conv3x3_simd128(
     in_p: &[f32],
     w: &[f32],
@@ -354,6 +356,7 @@ impl CustomOp2 for Conv3x3Op {
             // SAFETY: `in_p` is `pad`'s output for exactly these dims, `wt` has
             // `c_out*c_in*9` elements (the dims4 above plus the caller's 3x3
             // guard), and `out` has `c_out*h*w`.
+            #[allow(unsafe_code)]
             unsafe { conv3x3_avx2(&in_p, wt, c_in, c_out, h, w, &mut out) };
             return Ok((CpuStorage::F32(out), (1, c_out, h, w).into()));
         }
@@ -371,6 +374,7 @@ impl CustomOp2 for Conv3x3Op {
             // SAFETY: identical contract to the AVX2 twin — `in_p` is `pad`'s
             // output for exactly these dims, `wt` has `c_out*c_in*9` elements,
             // and `out` has `c_out*h*wd`.
+            #[allow(unsafe_code)]
             unsafe { conv3x3_simd128(&in_p, wt, c_in, c_out, h, w, &mut out) };
             return Ok((CpuStorage::F32(out), (1, c_out, h, w).into()));
         }
@@ -473,6 +477,7 @@ mod tests {
                 let mut b = vec![0f32; co * h * w];
                 conv3x3_scalar(&in_p, &wt, ci, co, h, w, &mut a);
                 // SAFETY: shapes match `pad`'s output exactly.
+                #[allow(unsafe_code)]
                 unsafe { conv3x3_avx2(&in_p, &wt, ci, co, h, w, &mut b) };
                 let scale = a.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-9);
                 let err = a.iter().zip(&b).fold(0f32, |m, (x, y)| m.max((x - y).abs())) / scale;

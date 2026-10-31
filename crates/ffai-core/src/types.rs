@@ -355,6 +355,27 @@ pub struct OcrBlock {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OcrOutput {
     pub blocks: Vec<OcrBlock>,
+    /// The angle the page's text ran at, in degrees clockwise on screen
+    /// (y down), when the engine straightened it before reading
+    /// (`OcrOptions::deskew`); `None` when the page was read as given.
+    ///
+    /// Boxes are always in the INPUT image's coordinates. On a straightened
+    /// page each line and word box is the axis-aligned bounds of its
+    /// rectangle turned by this angle, so the rectangle itself — what a text
+    /// layer drawn along the page's slope wants — is recoverable from the box
+    /// and the angle (`ffai_carmenta::deskew::rotated_corners`).
+    ///
+    /// On a page also turned upright (`turns` non-zero) the angle is measured
+    /// on the upright page, not on the input.
+    pub skew_degrees: Option<f32>,
+    /// Clockwise quarter turns (0-3) the engine applied to the input to read
+    /// it upright (`OcrOptions::auto_orient`); 0 when it was read as given.
+    ///
+    /// Boxes stay in the INPUT image's coordinates either way, so this is
+    /// what gives each box its reading direction: at 1 turn the text in a box
+    /// runs bottom to top, at 2 right to left upside down, at 3 top to
+    /// bottom. A 90-degree and a 270-degree page give the same boxes.
+    pub turns: u8,
 }
 
 impl OcrOutput {
@@ -388,6 +409,8 @@ impl OcrOutput {
                     .collect(),
                 bbox: None,
             }],
+            skew_degrees: None,
+            turns: 0,
         }
     }
 

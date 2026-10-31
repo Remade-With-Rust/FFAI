@@ -6,7 +6,7 @@ description = "FFai model weight management — manifests, cache, licensing surf
 # excludes the 0.7.0 every other crate in this release now needs. Left at
 # 0.6.2 it would put TWO ffai-core versions in every downstream tree and the
 # shared `ffai_core` types would stop being the same types.
-version = "0.6.6"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,7 +20,6 @@ categories = ["caching", "filesystem"]
 ffai-core = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
-dirs = { workspace = true }
 # Optional: the Hugging Face downloader.
 #
 # It is 226 crates — reqwest, hyper, rustls, aws-lc-sys — and a consumer that

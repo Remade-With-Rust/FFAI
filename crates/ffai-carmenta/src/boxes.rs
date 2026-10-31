@@ -178,6 +178,34 @@ pub fn line_bbox(line: &[DetBox]) -> DetBox {
 mod tests {
     use super::*;
 
+    fn db(x0: usize, y0: usize, x1: usize, y1: usize) -> Vec<DetBox> {
+        vec![DetBox { x0, y0, x1, y1, score: 1.0 }]
+    }
+
+    /// A 3-column, 4-row table emitted column by column comes back row by
+    /// row; two columns of prose emitted column by column stay as they are.
+    #[test]
+    fn tables_read_across_and_prose_columns_do_not() {
+        let mut table = Vec::new();
+        for col in [100usize, 800, 1400] {
+            for row in 0..4 {
+                table.push(db(col, 300 + row * 80, col + 100, 330 + row * 80));
+            }
+        }
+        let bbs: Vec<DetBox> = table.iter().map(|l| l[0]).collect();
+        let xs: Vec<usize> = grid_order(&bbs).iter().map(|&i| bbs[i].x0).collect();
+        assert_eq!(&xs[..6], &[100, 800, 1400, 100, 800, 1400]);
+
+        let mut prose = Vec::new();
+        for col in [100usize, 1160] {
+            for row in 0..6 {
+                prose.push(db(col, 300 + row * 50, col + 1000, 330 + row * 50));
+            }
+        }
+        let bbs: Vec<DetBox> = prose.iter().map(|l| l[0]).collect();
+        assert_eq!(grid_order(&bbs), (0..bbs.len()).collect::<Vec<_>>());
+    }
+
     #[test]
     fn two_words_one_line_group_and_order() {
         // Two boxes on one row (out of x order), one on a lower row.
@@ -455,15 +483,153 @@ pub fn order_reading(lines: Vec<Vec<DetBox>>, page_w: usize) -> Vec<Vec<DetBox>>
             // (§8.119, the metric `ffai-bench` reports), and the two losses are
             // a CJK page we cannot read either way and a 344-character contents
             // page where +3.5 pp is twelve characters.
-            if std::env::var("FFAI_ORDER_GATE").as_deref() != Ok("0")
+            let out = if std::env::var("FFAI_ORDER_GATE").as_deref() != Ok("0")
                 && sparse_scatter(&out) > env_f32("FFAI_ORDER_GATE_T", ORDER_GATE_T)
             {
-                return xy_cut(out, page_w, 0);
-            }
+                xy_cut(out, page_w, 0)
+            } else {
+                out
+            };
+            // Table bands are re-read across their rows at the END of the
+            // pipeline, after every reorder (`grid_order`).
             out
         }
     }
 }
+
+/// Lines sharing a row: y-centres within half the median line height.
+/// Each row is a list of indices into `lines`, sorted left to right; rows are
+/// top to bottom.
+fn rows_of(bbs: &[DetBox]) -> Vec<Vec<usize>> {
+    let mut hs: Vec<usize> = bbs.iter().map(|b| b.y1.saturating_sub(b.y0)).collect();
+    hs.sort_unstable();
+    let tol = hs.get(hs.len() / 2).copied().unwrap_or(0) as f32 * 0.5;
+    let cy = |i: usize| (bbs[i].y0 + bbs[i].y1) as f32 / 2.0;
+    let mut order: Vec<usize> = (0..bbs.len()).collect();
+    order.sort_by(|&a, &b| cy(a).total_cmp(&cy(b)));
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    for i in order {
+        match rows.last_mut() {
+            Some(r) if (cy(i) - cy(r[0])).abs() <= tol => r.push(i),
+            _ => rows.push(vec![i]),
+        }
+    }
+    for r in &mut rows {
+        r.sort_by_key(|&i| bbs[i].x0);
+    }
+    rows
+}
+
+/// Read a TABLE row by row, leaving everything else where the cut put it.
+///
+/// The recursive cut reads a ruled table as columns: its gutters are the
+/// widest gaps on the page, so it splits there first. PdfCraft's 13-row table
+/// came back with every word right and 77 % CER in row order (ocrs, reading
+/// rows, 7 %). A column of PROSE beside another lines up row for row as well,
+/// so alignment alone cannot be the test. Width can: a table's gutters are
+/// wide against the cells either side of them (the 13-row table: cells about
+/// 100 px, gutters 260-700 px), while a prose gutter is a sliver of the lines
+/// it separates (60 px against 1000).
+///
+/// So a GRID ROW is one of two or more cells where every gap between
+/// neighbours is at least [`GRID_GAP_3`] times the wider of the two
+/// ([`GRID_GAP_2`] for a row of just two), and [`GRID_MIN_ROWS`] or more
+/// consecutive grid rows whose cells line up as columns, and are short
+/// ([`GRID_MAX_ASPECT`]), form a table band. The
+/// band's lines are re-emitted row-major INTO THE SLOTS they already held in
+/// the order, so nothing outside a band moves. It runs on the FINISHED line
+/// order — after the cut, the sparse-page gate and the §8.157 probe reorder,
+/// any of which would otherwise scatter the rows again.
+///
+/// `bbs` are the lines' boxes in reading order; the result is the new order as
+/// indices into them (the identity when there is no table).
+/// `FFAI_ORDER_GRID=0` disables.
+#[must_use]
+pub fn grid_order(bbs: &[DetBox]) -> Vec<usize> {
+    let identity: Vec<usize> = (0..bbs.len()).collect();
+    if bbs.len() < 2 * GRID_MIN_ROWS || std::env::var("FFAI_ORDER_GRID").as_deref() == Ok("0") {
+        return identity;
+    }
+    let rows = rows_of(bbs);
+    let is_grid = |r: &Vec<usize>| {
+        // Two cells need the wider margin: a short last line of one prose
+        // column beside a full line of the next has a gap about one line
+        // wide.
+        let k = if r.len() >= 3 { GRID_GAP_3 } else { GRID_GAP_2 };
+        r.len() >= 2
+            && r.windows(2).all(|p| {
+                let (a, b) = (&bbs[p[0]], &bbs[p[1]]);
+                let gap = b.x0.saturating_sub(a.x1) as f32;
+                let wider = (a.x1 - a.x0).max(b.x1 - b.x0) as f32;
+                gap >= k * wider
+            })
+    };
+    // Bands: maximal runs of consecutive grid rows that also form COLUMNS —
+    // the same number of cells in every row, and each row's cell `j`
+    // overlapping the previous row's cell `j` horizontally. Prose fails this
+    // even where a few rows pass the gap test (OmniDocBench's three-column
+    // newspaper pages, whose justified lines the detector splits into
+    // fragments with wide gaps between them).
+    let continues = |prev: &Vec<usize>, r: &Vec<usize>| {
+        prev.len() == r.len()
+            && prev.iter().zip(r).all(|(&a, &b)| bbs[a].x0 < bbs[b].x1 && bbs[b].x0 < bbs[a].x1)
+    };
+    // Table cells are SHORT: the median cell is at most [`GRID_MAX_ASPECT`]
+    // times wider than tall (the 13-row table: about 3.3). Two prose columns
+    // with a photograph between them pass every test above — wide gap,
+    // consistent columns (OmniDocBench omni-0124..0152, newspaper pages) —
+    // but their cells are whole lines, about 15 times wider than tall.
+    let short_cells = |band: &[Vec<usize>]| {
+        let mut aspects: Vec<f32> = band
+            .iter()
+            .flatten()
+            .map(|&k| (bbs[k].x1 - bbs[k].x0) as f32 / (bbs[k].y1 - bbs[k].y0).max(1) as f32)
+            .collect();
+        aspects.sort_by(f32::total_cmp);
+        aspects.get(aspects.len() / 2).is_some_and(|&a| a <= GRID_MAX_ASPECT)
+    };
+    let mut bands: Vec<&[Vec<usize>]> = Vec::new();
+    let mut start: Option<usize> = None;
+    for i in 0..=rows.len() {
+        let extends = i < rows.len()
+            && is_grid(&rows[i])
+            && start.is_some_and(|s| i > s && continues(&rows[i - 1], &rows[i]));
+        if extends {
+            continue;
+        }
+        if let Some(s) = start.take()
+            && i - s >= GRID_MIN_ROWS
+            && short_cells(&rows[s..i])
+        {
+            bands.push(&rows[s..i]);
+        }
+        if i < rows.len() && is_grid(&rows[i]) {
+            start = Some(i);
+        }
+    }
+    if bands.is_empty() {
+        return identity;
+    }
+    let mut perm = identity;
+    for band in bands {
+        let row_major: Vec<usize> = band.iter().flatten().copied().collect();
+        let mut slots = row_major.clone();
+        slots.sort_unstable(); // the positions the band's lines held
+        for (slot, line) in slots.into_iter().zip(row_major) {
+            perm[slot] = line;
+        }
+    }
+    perm
+}
+
+/// A gap at least this many times the wider neighbouring cell is a table
+/// gutter, in a row of two cells and in a row of three or more.
+const GRID_GAP_2: f32 = 1.5;
+const GRID_GAP_3: f32 = 1.0;
+/// Consecutive grid rows that make a table band.
+const GRID_MIN_ROWS: usize = 4;
+/// Median width/height of a table band's cells, at most.
+const GRID_MAX_ASPECT: f32 = 8.0;
 
 /// Mean vertical step between consecutive emitted lines, over the ink extent.
 ///

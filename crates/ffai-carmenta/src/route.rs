@@ -30,7 +30,7 @@ use crate::doclayout::{DocLayout, Region};
 use crate::formula::FormulaModel;
 use crate::table::TableModel;
 use ffai_core::error::Result;
-use ffai_core::types::{BoundingBox, ImageBuffer, OcrLine};
+use ffai_core::types::{BoundingBox, ImageBuffer, OcrLine, OcrWord};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -189,6 +189,47 @@ fn crop(img: &ImageBuffer, x0: usize, y0: usize, x1: usize, y1: usize) -> ImageB
         data[y * cw * bpp..(y + 1) * cw * bpp].copy_from_slice(&img.data[s..s + cw * bpp]);
     }
     ImageBuffer { width: cw as u32, height: ch as u32, format: img.format, data }
+}
+
+/// A line's word boxes after its `text[b0..b1]` was spliced into `new_text`.
+/// Words wholly outside the splice keep their boxes; the words it touches
+/// become one word holding the spliced token, boxed by their union. Empty when
+/// the words cannot be found in `text` in order, or none touches the splice:
+/// a box that no longer matches its text is worse than no box.
+fn splice_words(words: &[OcrWord], text: &str, b0: usize, b1: usize, new_text: &str) -> Vec<OcrWord> {
+    let (mut kept, mut touched) = (Vec::with_capacity(words.len()), Vec::new());
+    let mut merged_at = None;
+    let (mut s, mut e, mut cursor) = (b0, b1, 0);
+    for w in words {
+        let Some(at) = text.get(cursor..).and_then(|t| t.find(&w.text)) else {
+            return Vec::new();
+        };
+        let (w0, w1) = (cursor + at, cursor + at + w.text.len());
+        cursor = w1;
+        if w1 <= b0 || w0 >= b1 {
+            kept.push(w.clone());
+        } else {
+            merged_at.get_or_insert(kept.len());
+            (s, e) = (s.min(w0), e.max(w1));
+            touched.push(w);
+        }
+    }
+    let Some(i) = merged_at else {
+        return Vec::new();
+    };
+    // `e` is an offset into `text`; the splice moved everything after `b1`.
+    let end = (e + new_text.len()).checked_sub(text.len());
+    let Some(token) = end.and_then(|end| new_text.get(s..end)) else {
+        return Vec::new();
+    };
+    let bbox = touched.iter().filter_map(|w| w.bbox).reduce(|a, b| {
+        let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+        let (x1, y1) = ((a.x + a.width).max(b.x + b.width), (a.y + a.height).max(b.y + b.height));
+        BoundingBox { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+    });
+    let confidence = touched.iter().filter_map(|w| w.confidence).reduce(f32::min);
+    kept.insert(i, OcrWord { text: token.to_string(), bbox, confidence });
+    kept
 }
 
 /// Fraction of `l` that lies inside `r`.
@@ -450,6 +491,8 @@ pub fn apply(
                         g.score, g.x0, g.y0, rw, rh, latex.len()
                     );
                 }
+                // Only the words the splice touched lose their own boxes.
+                out[hi].words = splice_words(&out[hi].words, &out[hi].text, b0, b1, &t);
                 out[hi].text = t;
                 spliced.push(g as *const Region);
             }
@@ -608,6 +651,8 @@ pub fn apply(
                         latex.len()
                     );
                 }
+                // Only the words the splice touched lose their own boxes.
+                out[hi].words = splice_words(&out[hi].words, &out[hi].text, b0, b1, &t);
                 out[hi].text = t;
             }
             if dbg {
@@ -706,4 +751,52 @@ fn bind_cells(
             .collect();
     }
     texts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn word(text: &str, x: f32) -> OcrWord {
+        OcrWord {
+            text: text.into(),
+            bbox: Some(BoundingBox { x, y: 10.0, width: 20.0, height: 12.0 }),
+            confidence: Some(0.9),
+        }
+    }
+
+    #[test]
+    fn splice_keeps_the_words_it_does_not_touch() {
+        let text = "area x2+y2 of the disc";
+        let words = [word("area", 0.0), word("x2+y2", 30.0), word("of", 60.0), word("the", 90.0), word("disc", 120.0)];
+        // "2+y" (bytes 6..9) becomes LaTeX, inside the second word.
+        let mut t = text.to_string();
+        t.replace_range(6..9, "$2+y$");
+        let got = splice_words(&words, text, 6, 9, &t);
+        let texts: Vec<&str> = got.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["area", "x$2+y$2", "of", "the", "disc"]);
+        assert_eq!(got[0], words[0]);
+        assert_eq!(got[4], words[4]);
+        assert_eq!(got[1].bbox, words[1].bbox);
+    }
+
+    #[test]
+    fn splice_over_several_words_merges_their_boxes() {
+        let text = "so a + b = c holds";
+        let words = [word("so", 0.0), word("a", 30.0), word("+", 60.0), word("b", 90.0), word("=", 120.0), word("c", 150.0), word("holds", 180.0)];
+        let mut t = text.to_string();
+        t.replace_range(3..12, "$a+b=c$");
+        let got = splice_words(&words, text, 3, 12, &t);
+        let texts: Vec<&str> = got.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["so", "$a+b=c$", "holds"]);
+        let b = got[1].bbox.unwrap();
+        assert!((b.x - 30.0).abs() < 1e-6 && (b.width - 140.0).abs() < 1e-6, "{b:?}");
+    }
+
+    #[test]
+    fn splice_clears_words_that_do_not_match_the_text() {
+        let text = "alpha beta";
+        let words = [word("alpha", 0.0), word("gamma", 30.0)];
+        assert!(splice_words(&words, text, 0, 3, "$al$pha beta").is_empty());
+    }
 }

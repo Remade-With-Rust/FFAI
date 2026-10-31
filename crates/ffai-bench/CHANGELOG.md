@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-bench-v0.7.7...ffai-bench-v0.8.0) - 2026-10-31
+
+### Changed
+
+- Requires `ffai-core` 0.9: `OcrOptions` gained `deskew` and `OcrOutput` gained `skew_degrees` and `turns`, so the core types this crate exposes changed.
+
 ## [0.7.7](https://github.com/Remade-With-Rust/FFAI/compare/ffai-bench-v0.7.6...ffai-bench-v0.7.7) - 2026-09-25
 
 ### Added

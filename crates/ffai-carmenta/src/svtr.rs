@@ -136,6 +136,72 @@ fn swish(x: &Tensor) -> Result<Tensor> {
     x * candle_nn::ops::sigmoid(x)?
 }
 
+/// `FFAI_SVTR_FUSED=0` sends the backbone through the unfused candle chain
+/// and candle's conv for 1x1s, so the fast path stays one variable from its
+/// oracle.
+fn fused() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("FFAI_SVTR_FUSED").as_deref() != Ok("0"))
+}
+
+/// See [`Svtr::block_epilogue`]. Each parameter is per channel, or one value
+/// broadcast to every channel.
+struct Epilogue {
+    bias: Vec<f32>,
+    s1: Vec<f32>,
+    b1: Vec<f32>,
+    s2: Vec<f32>,
+    b2: Vec<f32>,
+}
+
+impl candle_core::CustomOp1 for Epilogue {
+    fn name(&self) -> &'static str {
+        "ffai-svtr-epilogue"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s: &candle_core::CpuStorage,
+        l: &candle_core::Layout,
+    ) -> Result<(candle_core::CpuStorage, candle_core::Shape)> {
+        use crate::par::prelude::*;
+        let candle_core::CpuStorage::F32(inp) = s else {
+            candle_core::bail!("ffai-svtr-epilogue: f32 only")
+        };
+        let Some((o0, o1)) = l.contiguous_offsets() else {
+            candle_core::bail!("ffai-svtr-epilogue: non-contiguous input")
+        };
+        let inp = &inp[o0..o1];
+        let (_, c, h, w) = l.shape().dims4()?;
+        let ok = |p: &[f32]| p.len() == 1 || p.len() == c;
+        if !(ok(&self.bias) && ok(&self.s1) && ok(&self.b1) && ok(&self.s2) && ok(&self.b2)) {
+            candle_core::bail!("ffai-svtr-epilogue: parameter length is neither 1 nor {c}")
+        }
+        let at = |p: &[f32], ch: usize| if p.len() == 1 { p[0] } else { p[ch] };
+        // Candle's `/ 6.0` is an affine with this multiplier.
+        let sixth = (1.0f64 / 6.0) as f32;
+        let mut out = vec![0f32; inp.len()];
+        let plane = (h * w).max(1);
+        out.par_chunks_mut(plane).zip(inp.par_chunks(plane)).enumerate().for_each(
+            |(i, (o, x))| {
+                let ch = i % c;
+                let (bias, s1, b1) = (at(&self.bias, ch), at(&self.s1, ch), at(&self.b1, ch));
+                let (s2, b2) = (at(&self.s2, ch), at(&self.b2, ch));
+                for (o, &x) in o.iter_mut().zip(x) {
+                    let v = x + bias;
+                    let v = v * s1 + b1;
+                    let t = v * 1.0 + 3.0;
+                    let t = if t < 0.0 { 0.0 } else { t };
+                    let t = if t > 6.0 { 6.0 } else { t };
+                    let v = (t * v) * sixth + 0.0;
+                    *o = v * s2 + b2;
+                }
+            },
+        );
+        Ok((candle_core::CpuStorage::F32(out), l.shape().clone()))
+    }
+}
+
 impl Svtr {
     pub fn new(vb: VarBuilder<'static>, n_class: usize) -> Result<Self> {
         Ok(Self { vb, n_class, cache: RwLock::new(HashMap::new()) })
@@ -185,15 +251,53 @@ impl Svtr {
         bias: bool,
     ) -> Result<Tensor> {
         let w = self.fetch(&format!("{name}.w_0"))?;
+        let y = if crate::dwconv::applies(x, &w, groups) {
+            // 14 of the 30 backbone convs. Candle splits a grouped conv into
+            // one convolution per channel (see `dwconv`), and the kernel takes
+            // the asymmetric stride directly instead of computing a stride-1
+            // output and keeping every other row of it.
+            crate::dwconv::depthwise(x, &w, stride, pad)?
+        } else {
+            self.dense(x, w, stride, pad, groups)?
+        };
+        if bias {
+            let b = self.fetch(&format!("{name}.b_0"))?;
+            y.broadcast_add(&b.reshape((1, b.elem_count(), 1, 1))?)
+        } else {
+            Ok(y)
+        }
+    }
+
+    /// Candle's conv for everything that is not depthwise: the stem and the
+    /// pointwise and head convs.
+    fn dense(
+        &self,
+        x: &Tensor,
+        w: Tensor,
+        stride: (usize, usize),
+        pad: (usize, usize),
+        groups: usize,
+    ) -> Result<Tensor> {
         let (oc, icg, kh, kw) = w.dims4()?;
-        let _ = (oc, icg, kh, kw);
+        if fused() && (kh, kw) == (1, 1) && stride == (1, 1) && pad == (0, 0) && groups == 1 {
+            // A 1x1 conv in NCHW IS a matmul — `(oc, ic) x (ic, h*w)` — with
+            // no im2col copy and no layout permute on either side. Candle's
+            // conv path builds both; 16 of the 30 backbone convs are 1x1.
+            let (n, _, h, wd) = x.dims4()?;
+            let y = w.reshape((oc, icg))?.broadcast_matmul(&x.reshape((n, icg, h * wd))?)?;
+            return y.reshape((n, oc, h, wd));
+        }
         // candle's conv2d takes ONE stride and ONE padding; the recorded model
         // uses asymmetric values (e.g. (2,1) to collapse height faster than
-        // width). Emulate by padding manually and striding per axis.
+        // width). Emulate by padding manually and striding per axis. A
+        // symmetric stride (the (2,2) stem) is candle's own, so it computes a
+        // quarter of the outputs rather than all of them.
         let x = x.pad_with_zeros(2, pad.0, pad.0)?.pad_with_zeros(3, pad.1, pad.1)?;
-        let cfg = candle_nn::Conv2dConfig { padding: 0, stride: 1, dilation: 1, groups,
+        let native = if stride.0 == stride.1 { stride.0 } else { 1 };
+        let cfg = candle_nn::Conv2dConfig { padding: 0, stride: native, dilation: 1, groups,
             ..Default::default() };
         let y = candle_nn::Conv2d::new(w, None, cfg).forward(&x)?;
+        let stride = if native > 1 { (1, 1) } else { stride };
         let y = if stride.0 > 1 {
             let n = y.dim(2)?.div_ceil(stride.0);
             y.index_select(
@@ -220,12 +324,7 @@ impl Svtr {
         } else {
             y
         };
-        if bias {
-            let b = self.fetch(&format!("{name}.b_0"))?;
-            y.broadcast_add(&b.reshape((1, b.elem_count(), 1, 1))?)
-        } else {
-            Ok(y)
-        }
+        Ok(y)
     }
 
     fn bn(&self, x: &Tensor, name: &str) -> Result<Tensor> {
@@ -238,6 +337,28 @@ impl Svtr {
         let c = s.elem_count();
         x.broadcast_mul(&s.reshape((1, c, 1, 1))?)?
             .broadcast_add(&shift.reshape((1, c, 1, 1))?)
+    }
+
+    /// `lab(hardswish(lab(conv + bias)))` in ONE pass over the activation.
+    ///
+    /// The unfused form is eight candle ops — bias add, two affine blocks of
+    /// two ops each, and hardswish's add, clamp, multiply and divide — each a
+    /// full read, write and allocation of the block's output. PdfCraft's page
+    /// profile put those passes at a third of the backbone. The arithmetic
+    /// below is candle's own, operation for operation (`+ 3.0` is
+    /// `v * 1 + 3`, `clamp` is maximum-then-minimum, `/ 6.0` is
+    /// `v * (1/6) + 0`), and Rust never contracts a multiply-add on its own, so
+    /// the result is bit-identical to the unfused chain. `FFAI_SVTR_FUSED=0`
+    /// restores that chain for an A/B.
+    fn block_epilogue(&self, x: &Tensor, conv: &str, i: &mut usize) -> Result<Tensor> {
+        let v = |t: Tensor| t.flatten_all().and_then(|t| t.to_vec1::<f32>());
+        let bias = v(self.fetch(&format!("{conv}.b_0"))?)?;
+        let s1 = v(self.fetch(&format!("learnable_affine_block_{i}.w_0"))?)?;
+        let b1 = v(self.fetch(&format!("learnable_affine_block_{i}.w_1"))?)?;
+        let s2 = v(self.fetch(&format!("learnable_affine_block_{}.w_0", *i + 1))?)?;
+        let b2 = v(self.fetch(&format!("learnable_affine_block_{}.w_1", *i + 1))?)?;
+        *i += 2;
+        x.contiguous()?.apply_op1_no_bwd(&Epilogue { bias, s1, b1, s2, b2 })
     }
 
     /// Learnable affine block: per-channel scale then shift, consumed in order.
@@ -337,15 +458,28 @@ impl Svtr {
 
     /// (1, 3, 48, W) normalised to [-1, 1] -> (1, T, n_class) probabilities.
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        // Three stages on the profile's `rec_*` rows, so `FFAI_PROFILE=1`
+        // says WHERE a recognizer forward goes rather than one opaque number.
+        let x = crate::profile::timed(|p| &p.rec_cnn, || self.backbone(x))?;
+        let (x, shortcut) = crate::profile::timed(|p| &p.rec_rnn, || self.encoder(&x))?;
+        crate::profile::timed(|p| &p.rec_head, || self.head(&x, &shortcut))
+    }
+
+    fn backbone(&self, x: &Tensor) -> Result<Tensor> {
         let mut x = self.bn(&self.conv(x, "conv2d_0", (2, 2), (1, 1), 1, false)?, "batch_norm2d_0")?;
         let mut lab = 0usize;
         for st in backbone_spec() {
             match st {
                 Stage::Blk(Blk(name, groups, stride, pad)) => {
-                    x = self.conv(&x, name, stride, pad, groups, true)?;
-                    x = self.lab(&x, &mut lab)?;
-                    x = hardswish(&x)?;
-                    x = self.lab(&x, &mut lab)?;
+                    if fused() {
+                        x = self.conv(&x, name, stride, pad, groups, false)?;
+                        x = self.block_epilogue(&x, name, &mut lab)?;
+                    } else {
+                        x = self.conv(&x, name, stride, pad, groups, true)?;
+                        x = self.lab(&x, &mut lab)?;
+                        x = hardswish(&x)?;
+                        x = self.lab(&x, &mut lab)?;
+                    }
                 }
                 Stage::Se(Se(reduce, expand)) => {
                     let s = x.mean_keepdim(2)?.mean_keepdim(3)?;
@@ -355,6 +489,12 @@ impl Svtr {
                 }
             }
         }
+        Ok(x)
+    }
+
+    /// Neck pool, the two SVTR blocks and the final norm. Returns the encoder
+    /// output and the pooled SHORTCUT the head concatenates with it.
+    fn encoder(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
         // Neck pool k=(3,2) s=(3,2): H 3->1, W 80->40 (the timesteps).
         let (_, _, h, w) = x.dims4()?;
         let x = x.avg_pool2d_with_stride((3, 2), (3, 2))?;
@@ -369,11 +509,15 @@ impl Svtr {
         let x = self.enc_block(&x, "layer_norm_0", "linear_0", "linear_1", "layer_norm_1", "linear_2", "linear_3")?;
         let x = self.enc_block(&x, "layer_norm_2", "linear_4", "linear_5", "layer_norm_3", "linear_6", "linear_7")?;
         let x = self.ln(&x, "layer_norm_4", LN_EPS_FINAL)?;
+        Ok((x, shortcut))
+    }
+
+    fn head(&self, x: &Tensor, shortcut: &Tensor) -> Result<Tensor> {
         // Head: (B,N,C) -> (B,C,1,N) -> conv133 -> cat(shortcut) -> conv134 -> conv135
         let (b, n, c) = x.dims3()?;
         let hd = x.reshape((b, 1, n, c))?.permute((0, 3, 1, 2))?.contiguous()?;
         let hd = swish(&self.bn(&self.conv(&hd, "conv2d_133", (1, 1), (0, 0), 1, false)?, "batch_norm2d_148")?)?;
-        let hd = Tensor::cat(&[&shortcut, &hd], 1)?;
+        let hd = Tensor::cat(&[shortcut, &hd], 1)?;
         let hd = swish(&self.bn(&self.conv(&hd, "conv2d_134", (1, 1), (0, 1), 1, false)?, "batch_norm2d_149")?)?;
         let hd = swish(&self.bn(&self.conv(&hd, "conv2d_135", (1, 1), (0, 0), 1, false)?, "batch_norm2d_150")?)?;
         let x = hd.squeeze(2)?.transpose(1, 2)?.contiguous()?;
@@ -564,6 +708,71 @@ pub fn ctc_greedy_masked(
     Ok((out, crate::crnn::line_confidence(&kept)))
 }
 
+/// [`ctc_greedy`] (or [`ctc_greedy_masked`] when `mask` is given) that also
+/// returns every emission with the frames it spans, for word geometry.
+///
+/// The per-frame choice is made exactly as in those two — the tensor argmax
+/// and max unmasked, the same masked fold otherwise — and the string and
+/// confidence are built by the same loop, so both are byte-identical to theirs.
+/// Returns `(text, confidence, emissions, timesteps)`.
+pub fn ctc_greedy_emits(
+    probs: &Tensor,
+    charset: &[String],
+    mask: Option<&[bool]>,
+) -> Result<(String, Option<f32>, Vec<crate::words::Emit>, usize)> {
+    let (_, t, n) = probs.dims3()?;
+    let (best, conf): (Vec<usize>, Vec<f32>) = match mask {
+        None => {
+            let best = probs.argmax(D::Minus1)?.flatten_all()?.to_vec1::<u32>()?;
+            let conf = probs.max(D::Minus1)?.flatten_all()?.to_vec1::<f32>()?;
+            (best.into_iter().map(|k| k as usize).collect(), conf)
+        }
+        Some(mask) => {
+            if mask.len() != n || !mask[0] {
+                return Err(candle_core::Error::Msg(format!(
+                    "class mask has {} entries; the head has {n} classes and the blank must be allowed",
+                    mask.len()
+                )));
+            }
+            let flat = probs.flatten_all()?.to_vec1::<f32>()?;
+            (0..t)
+                .map(|i| {
+                    flat[i * n..(i + 1) * n]
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| mask[*j])
+                        .fold((0usize, f32::NEG_INFINITY), |b, (j, &p)| if p > b.1 { (j, p) } else { b })
+                })
+                .unzip()
+        }
+    };
+    let mut out = String::new();
+    let mut kept = Vec::new();
+    let mut emits: Vec<crate::words::Emit> = Vec::new();
+    let mut prev = usize::MAX;
+    // Whether the run `prev` belongs to was pushed as an emission.
+    let mut open = false;
+    for i in 0..t {
+        let k = best[i];
+        if k != 0 && k != prev {
+            open = false;
+            if let Some(s) = charset.get(k - 1) {
+                out.push_str(s);
+                emits.push(crate::words::Emit { text: s.clone(), t0: i, t1: i, p: conf[i] });
+                open = true;
+            }
+            kept.push(conf[i]);
+        } else if k != 0
+            && open
+            && let Some(e) = emits.last_mut()
+        {
+            e.t1 = i;
+        }
+        prev = k;
+    }
+    Ok((out, crate::crnn::line_confidence(&kept), emits, t))
+}
+
 /// One emitted run of characters, with WHERE ON THE LINE it came from.
 #[derive(Debug, Clone)]
 pub struct CharSpan {
@@ -643,6 +852,7 @@ use std::sync::{PoisonError, RwLock};
 
 /// Load from a safetensors file produced by `tools/carmenta_svtr_prepare.py`.
 pub fn load(path: &std::path::Path, device: &Device, n_class: usize) -> Result<Svtr> {
+    #[allow(unsafe_code)]
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, device)? };
     Svtr::new(vb, n_class)
 }

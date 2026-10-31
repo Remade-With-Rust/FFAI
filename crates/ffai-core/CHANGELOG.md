@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-core-v0.8.0...ffai-core-v0.9.0) - 2026-10-31
+
+### Added
+
+- `OcrOptions::deskew`, and `OcrOutput::skew_degrees` reporting the angle a straightened page ran at
+- `OcrOutput::turns`: the clockwise quarter turns `auto_orient` applied, which gives each box its reading direction
+- `threads::available_threads` and `threads::affinity_pool`, which honour the process affinity mask on Windows
+
+### Changed
+
+- **BREAKING:** `OcrOptions` gains `deskew` and `OcrOutput` gains `skew_degrees` and `turns`, which breaks construction by struct literal and exhaustive destructuring
+- `unsafe_code` is allowed at each site, so path and git dependents build without warnings
+
 ## [0.8.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-core-v0.7.2...ffai-core-v0.8.0) - 2026-09-25
 
 ### Changed

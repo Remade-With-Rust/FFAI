@@ -23,7 +23,7 @@ Both dispatch on the bytes' magic, not the file name: 169 of OmniDocBench's Engl
 ## PDF pages as a viewer shows them (`pdf` feature)
 
 ```toml
-ffai-media = { version = "0.6", features = ["pdf"] }
+ffai-media = { version = "0.7", features = ["pdf"] }
 ```
 
 ```rust

@@ -38,7 +38,7 @@ description = "Carmenta — pure-Rust OCR: documents, screens, and a change-gate
 # (cord +0.0033 with a +0.1928 clip, doc +0.0395 with a +0.2920 clip) — the same
 # failure the 544x960 arm produced, smaller. 1280 is the only arm that improves
 # both with no badly-regressing clip. The table lives on `DET_MAX_SHORT_DEFAULT`.
-version = "0.12.0"
+version = "0.13.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -50,10 +50,9 @@ categories = ["computer-vision", "multimedia::images", "science"]
 
 [dependencies]
 ffai-core = { workspace = true }
-ffai-models = { path = "../ffai-models", version = "0.6.6", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
+ffai-models = { path = "../ffai-models", version = "0.7.0", default-features = false }  # not `workspace = true`: cargo forbids overriding default-features on an inherited dep
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
-candle-transformers = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 png = { workspace = true }
@@ -64,17 +63,14 @@ png = { workspace = true }
 # panicking in someone's browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
-tokenizers = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# getrandom 0.3 needs its `wasm_js` FEATURE in addition to the
-# `--cfg getrandom_backend` that .cargo/config.toml supplies; it errors if
-# either half is missing. Arrives here through tokenizers -> ahash.
-getrandom = { version = "0.3", features = ["wasm_js"] }
-# `onig` is Oniguruma, a C regex engine: there is no `cc` for wasm32, and a C
-# dependency is not something this house ships anyway. `unstable_wasm` swaps it
-# for fancy-regex, which is pure Rust.
-tokenizers = { version = "0.23", default-features = false, features = ["unstable_wasm"] }
+# `candle-transformers` and `tokenizers` used to be listed here and nothing in
+# this crate used either (PdfCraft, 2026-10-30): an OCR-only consumer compiled
+# all of candle-transformers, and `tokenizers` with Oniguruma, a C library, for
+# nothing. candle-core 0.11 still pulls `tokenizers` + onig on native targets on
+# its own (its `quantized::tokenizer`); in this workspace the root
+# `[patch.crates-io]` points that at the onig-free fork, a crates.io consumer
+# gets onig until candle makes it optional.
 
 [dev-dependencies]
 # Examples only, never the library. `ffai-cli` sets mimalloc as its global
