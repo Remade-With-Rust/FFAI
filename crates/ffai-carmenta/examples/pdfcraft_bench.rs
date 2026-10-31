@@ -2,8 +2,8 @@
 //! write one JSON line per page in the shape PdfCraft's `score.py` reads:
 //! `{"page", "ms", "lines": [[[text, [l, t, r, b]], ...], ...]}`.
 //!
-//! It exists so a caller's corpus (artcraft's pdfcraft-ocr pages, rendered
-//! with ground truth by construction) can be scored against THIS tree, not
+//! It exists so a caller's corpus — PdfCraft's 49 rendered pages, 42 of them
+//! with ground truth by construction — can be scored against THIS tree, not
 //! only against the release on crates.io. A line with word geometry emits one
 //! entry per word; a line without it emits the whole line as one entry with
 //! the line box, which the scorer's CER is indifferent to.
@@ -11,7 +11,7 @@
 //! Usage: `pdfcraft_bench <weights_root> <page.png>...`
 //! Env: `BENCH_REC=crnn` for mobiledet-crnn, `BENCH_ORIENT=1` for
 //! `auto_orient`, `BENCH_DESKEW=1` for `deskew`, `BENCH_LANG=en,fr` for
-//! `languages`.
+//! `languages`, `BENCH_POOL=1` to run inside `ffai_core::threads::affinity_pool`.
 
 #[global_allocator]
 static GLOBAL: rusty_alloc_api::RustyAlloc = rusty_alloc_api::RustyAlloc;
