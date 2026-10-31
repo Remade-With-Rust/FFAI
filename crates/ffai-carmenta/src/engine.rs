@@ -542,14 +542,16 @@ struct Resolver<'a> {
 }
 
 impl Resolver<'_> {
-    /// Resolve the files this loader will open. Offline resolution asks for
-    /// exactly those, so a deployment never has to ship files a manifest lists
-    /// only for provenance (a training checkpoint, say). The cache path keeps
-    /// its existing behaviour of resolving every declared file.
+    /// Resolve the files this loader will open, and only those, whichever the
+    /// source: a deployment never has to ship, and a hosted repo never has to
+    /// carry, files a manifest lists only for provenance (a training
+    /// checkpoint, say). The cache path used to resolve every declared file,
+    /// and the first download from the published PP-OCRv5 repo failed on
+    /// `det.safetensors`, which no engine opens.
     fn fetch(&self, needed: &[&str]) -> Result<ffai_models::ResolvedModel> {
         match self.source {
             Source::Offline(root) => self.manifest.resolve_only_in(root, needed),
-            _ => self.manifest.fetch(),
+            _ => self.manifest.fetch_only(needed),
         }
     }
 }

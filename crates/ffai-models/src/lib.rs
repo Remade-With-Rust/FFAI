@@ -154,8 +154,29 @@ impl ModelManifest {
     /// still network I/O the first time, which is why benchmarks warm the
     /// cache outside any timed region (see docs/benchmarking.md).
     pub fn fetch(&self) -> Result<ResolvedModel> {
+        let all: Vec<&str> = self.files.iter().map(|f| f.name.as_str()).collect();
+        self.fetch_only(&all)
+    }
+
+    /// [`Self::fetch`], for just the named files — the cache-and-download twin
+    /// of [`Self::resolve_only_in`].
+    ///
+    /// A manifest can list files no engine loads (`ppocrv5-mobile-det` lists
+    /// its training checkpoint, the source of the fused weights), and a hosted
+    /// repo need not carry them. Fetching every declared file made the first
+    /// download of the document engine fail on a file it never opens. A name
+    /// the manifest does not declare is an error: it has no checksum.
+    pub fn fetch_only(&self, needed: &[&str]) -> Result<ResolvedModel> {
+        for name in needed {
+            if !self.files.iter().any(|f| f.name == *name) {
+                return Err(Error::Model(format!(
+                    "model `{}` declares no file `{name}` — it has no checksum to verify against",
+                    self.name
+                )));
+            }
+        }
         let mut files = BTreeMap::new();
-        for file in &self.files {
+        for file in self.files.iter().filter(|f| needed.contains(&f.name.as_str())) {
             if let Some(path) = self.local_path(&file.name) {
                 verify_checksum(&path, file)?;
                 files.insert(file.name.clone(), path);
@@ -450,5 +471,25 @@ mod tests {
             .to_string();
         assert!(err.contains("declares no file `nope.bin`"), "{err}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The download path refuses an undeclared name before touching the
+    /// network or the cache, exactly as the offline path does.
+    #[test]
+    fn fetch_only_refuses_undeclared_names_before_any_lookup() {
+        let m = ModelManifest::from_toml(
+            r#"
+            name = "tiny-test"
+            task = "ocr"
+            license = "MIT"
+            hf_repo = "example/does-not-matter"
+
+            [[files]]
+            name = "w.bin"
+            "#,
+        )
+        .unwrap();
+        let err = m.fetch_only(&["nope.bin"]).unwrap_err().to_string();
+        assert!(err.contains("declares no file `nope.bin`"), "{err}");
     }
 }
