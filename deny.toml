@@ -25,6 +25,15 @@ ignore = [
     # Not present in any shipped crate's normal dependency graph.
     # Review 2026-11-15. Replacement candidate: skrifa.
     "RUSTSEC-2026-0192",
+    # zip 8.6.0 - three extraction advisories: SUID/SGID bits preserved, symlink
+    # targets outside the destination, permissions applied through symlinks. Fixed
+    # only in zip 9, and candle-core 0.11 pins `^8.6` (npy/pickle). All three are in
+    # `ZipArchive::extract` / `ZipStreamReader::extract`; candle opens archives and
+    # reads entries by name and never extracts, and no crate here depends on zip
+    # directly. Added 2026-10-31. Review 2026-11-15, or when candle moves to zip 9.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
     # RESOLVED 2026-08-19, ignores REMOVED rather than left to rot. pyo3 went
     # 0.23.5 -> 0.29.2, so RUSTSEC-2025-0020 (PyString::from_object buffer
     # overflow) and RUSTSEC-2026-0177 (missing Sync bound on

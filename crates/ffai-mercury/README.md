@@ -11,9 +11,9 @@ Mercury is [FFai](https://github.com/Remade-With-Rust/FFAI)'s voice component. S
 
 ```toml
 [dependencies]
-ffai-mercury = "0.7"
-ffai-core = "0.8"
-ffai-media = "0.6"
+ffai-mercury = "1.1"
+ffai-core = "0.9"
+ffai-media = "0.7"
 ```
 
 ## Transcribe
@@ -258,7 +258,7 @@ MIT OR Apache-2.0. Model weights carry their own licenses, surfaced at selection
 first use. It is also the single largest thing in the dependency graph:
 
 ```toml
-ffai-mercury = { version = "0.7", default-features = false }   # ship your own weights
+ffai-mercury = { version = "1.1", default-features = false }   # ship your own weights
 ```
 
 | build | dependencies | C crypto |

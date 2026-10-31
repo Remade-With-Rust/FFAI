@@ -39,9 +39,9 @@ cargo add ffai-carmenta ffai-core ffai-media
 
 ```toml
 [dependencies]
-ffai-carmenta = "0.11"
-ffai-core = "0.8"
-ffai-media = "0.6"
+ffai-carmenta = "0.13"
+ffai-core = "0.9"
+ffai-media = "0.7"
 ```
 
 ## Recognize
@@ -84,6 +84,15 @@ is kept — no layout model required. Tables and isolated formulas can
 additionally be routed to dedicated structure models (`FFAI_ROUTE=1`,
 experimental: pure-Rust ports of PP-DocLayout-S, SLANet-plus and
 PP-FormulaNet-S, each matched against its reference runtime).
+
+**Latin beyond English is partial, and the gap is in the charset, not the
+model's skill.** On rendered pages lowercase French reads 1.9 % CER, German
+0.9 %, Spanish 0.1 % (PdfCraft's corpus). But the head's 18 383 characters do
+not include `À Â Ê Ë Ì Î Ï Ñ Ò Ô Õ Ø Ù Ú Û Ý`, `î ï ÿ œ` or `« » ¿ ¡ ‘ ™ ‰`, so
+those can never be emitted: a page of accented capitals read 24 % CER
+(`ESPAÑA` → `EsPAnA`). `OcrOptions::charset` restricts decoding to what a
+caller can store, and is how to keep a sideways or capitals-heavy page from
+emitting CJK look-alikes.
 
 Measured by [OmniDocBench](https://github.com/opendatalab/OmniDocBench)'s
 **own evaluator** — the benchmark PaddleOCR-VL and Baidu's Unlimited-OCR state
@@ -129,8 +138,12 @@ So the remaining loss is mostly **coverage and characters**, not layout: the
 reading-order and detection stages this crate spent its campaign on are down
 to a combined 4 % of remaining error.
 
-All of this on CPU at ~9–17 s/page — roughly 9× the reference VLM's measured
-throughput on the same machine, from megabytes of weights against gigabytes.
+All of this on CPU, from megabytes of weights against gigabytes. It was
+measured at ~9–17 s/page, roughly 9× the reference VLM's throughput on the
+same machine; since the depthwise-convolution and fused-epilogue work
+(2026-10-30; recognizer bit-identical, text and boxes identical on PdfCraft's
+42-page corpus) the same 315 OmniDocBench pages read at a
+**1.4 s median, 2.7 s p90** per page on a 24-thread i7-14650HX.
 
 ## Forms, scanned filings and PDFs (0.11)
 
@@ -158,7 +171,9 @@ What else 0.11 adds, each measured:
 
 | capability | API | measured |
 |---|---|---|
-| orientation, 0/90/180/270 | `OcrOptions::auto_orient`, `detect_orientation` | **144 / 144** turns undone on document pages and single form lines; a decision costs **48 %** of one page read |
+| orientation, 0/90/180/270 | `OcrOptions::auto_orient`, `detect_orientation` | **144 / 144** turns undone on document pages and single form lines. The page is read as given first and the decision runs only when that read's confidence is below 0.7: **1.004x** on upright pages (ABBA, 3/6), where the unconditional decision cost 2.2x (PdfCraft); turned pages 91 % → 0 % CER |
+| deskew, small tilt | `OcrOptions::deskew`, `OcrOutput::skew_degrees` | angle from the detector's own text regions; pages 0.5-5° off read **0.10 %** CER (48.3 % without), a 1.5°-tilted phone photo **0.11 %** (61 %); square pages untouched (PdfCraft's corpus) |
+| word boxes | `OcrLine::words` (mobiledet-svtr) | from the CTC frames, snapped to ink: **96 %** of ground-truth words at IoU ≥ 0.5 with the right text (PdfCraft's corpus) |
 | checkboxes, frame + marked/empty | `checkbox::find` | **100 %** recall and **100 %** state on 960 synthetic boxes (stroked and glyph boxes; X, overflowing tick, fill). Known false positives: the square ideograph `口`, and small square plot markers |
 | label → value pairs | `forms::pair_fields` | **220 / 221** correctly-read values paired with their label |
 | restrict a field's characters | `OcrOptions::charset` | forced characters show in the confidence: a prose page read as digits drops from 0.918 to 0.781 mean |
@@ -166,6 +181,7 @@ What else 0.11 adds, each measured:
 | erase form rules | `OcrOptions::remove_rules` | CRNN on underlined values: 13-20 % → **70 %**. **Not for SVTR**: on strikethroughs it goes 77-87 % → 73 %. Opt-in |
 | full-width → ASCII on Latin lines | on by default (`FFAI_NO_FOLD=1` disables) | OmniDocBench, 316 pages: fires on 35 of 34 852 lines; **5 pages better, 1 worse** (a full-width comma in the ground truth itself) |
 | offline weights, fail fast | `CraftCrnn::offline(rec, det, dir)`, `preload()` | no cache, no network; a missing file names its exact path |
+| document-engine weights, hosted | `fetch` feature, or download for `offline` | [`remade-with-rust/carmenta-ppocrv5-mobile`](https://huggingface.co/remade-with-rust/carmenta-ppocrv5-mobile): the three files `mobiledet-svtr` loads, each verified against the sha256 pinned in its manifest |
 
 Two measured non-results, recorded so nobody has to re-run them:
 
@@ -248,7 +264,8 @@ turns it off.
 pipeline still trails PaddleOCR (20.9 % vs 15.6 % CER) even though our
 recognition stage beats theirs on identical crops — the diagnosed cause is
 tilt-sensitive line grouping, with deskew as the named fix. `auto_orient`
-handles quarter turns, not small tilt: deskew is still open.
+handles quarter turns and `deskew` small tilt (measured on rendered and
+synthetic-photo pages; not yet re-run on the receipt corpus).
 
 ## Status: `experimental`, honestly
 

@@ -654,7 +654,57 @@ fn det_max_short() -> usize {
 /// `carmenta-capture` is unaffected by construction: all 108 clips are 620x200,
 /// short side 200, so the FLOOR fires and the ceiling never can. The LIVE record
 /// is untouched.
+///
+/// # A cap by page type: refuted (2026-10-30)
+///
+/// After the depthwise work made detection cheap enough that the cap matters
+/// again (one 300 dpi page, one thread: detection 0.88 s at 1280, 0.47 s at
+/// 960, 0.28 s at 736), PdfCraft asked for a lower cap on RENDERED pages,
+/// where 736 had looked neutral (0.15 -> 0.18 % CER). Measured with
+/// mobiledet-svtr, 1280 vs 736:
+///
+/// * the page-type signal does not exist: `content::classify` puts all 32
+///   `carmenta-doc` scans in `Rendered`, beside 40 of PdfCraft's 42 rendered
+///   pages — and on those scans 736 is worse on 14 of 32, better on none, by
+///   up to +18.4 pp (doc-007);
+/// * on rendered pages it is not neutral either: PdfCraft's ruled table
+///   0.00 -> 32.70 %, its capitals page 24.1 -> 31.0 %; OmniDocBench is a wash
+///   (65 pages worse, 67 better);
+/// * text size does not rescue it: with the median word height scaled to the
+///   736 input as the signal, the scan regressions sit at 9.1-11.9 px while
+///   neutral pages sit at 8.7 px. No threshold separates them.
+///
+/// So 1280 stays, for every page. [`set_det_max_short`] remains for callers
+/// trading accuracy for speed knowingly.
 pub const DET_MAX_SHORT_DEFAULT: usize = 1280;
+
+/// Largest factor the floor may scale an image UP by (`FFAI_DET_MAX_UP`;
+/// unset or 0 = no cap). See [`DET_MAX_UP_DEFAULT`].
+fn det_max_up() -> f32 {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("FFAI_DET_MAX_UP")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .map_or(DET_MAX_UP_DEFAULT, |v| if v > 0.0 { v } else { f32::INFINITY })
+    })
+}
+
+/// Default cap on the floor's upscale factor: **4x**.
+///
+/// The floor ([`mobiledet_input`]'s `min_side`, 736) exists for SMALL text —
+/// receipts with ~10 px glyphs need enlarging before DBNet sees them. Applied
+/// to a small IMAGE of normal-sized text it over-enlarges instead: PdfCraft's
+/// 344x108 "HELLO WORLD" (28 px glyphs) reached the detector 6.8x larger, the
+/// box scores sank to 0.41-0.64 against the 0.6 threshold, and the final `O`
+/// fell out of its box (`HELL` + `WORLO`; ocrs read it whole). At 3x or 4x it
+/// is one box at 0.91 and reads `HELLO`.
+///
+/// Inert elsewhere, measured: `carmenta-form`'s 240 single-line clips (short
+/// side 150, 4.9x before) read identically, 0.407 % CER either way;
+/// `carmenta-capture` (620x200, 3.68x) is under the cap by construction, so
+/// the LIVE record is untouched.
+pub const DET_MAX_UP_DEFAULT: f32 = 4.0;
 
 pub fn mobiledet_input(
     img: &ImageBuffer,
@@ -676,7 +726,7 @@ pub fn mobiledet_input(
     let short = w.min(h) as f32;
     let max_short = det_max_short().max(min_side);
     let ratio = if (short as usize) < min_side {
-        min_side as f32 / short
+        (min_side as f32 / short).min(det_max_up())
     } else if (short as usize) > max_short {
         // The CEILING, and the one this policy was missing — see the section
         // below. Exclusive with the floor: `max_short` is clamped up to

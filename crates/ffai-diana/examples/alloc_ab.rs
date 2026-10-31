@@ -76,10 +76,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reps: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(200);
     let root =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()).unwrap();
-    let img = ffai_media::load_image(&root.join("corpora/clips/diana-coco/coco-032.png"))?;
     let engine =
         ffai_diana::engine::Yolo26::build(&tier, ffai_diana::image::Geometry::Rect, root.join("models"));
     let opts = DetectOptions { confidence: 0.25, ..Default::default() };
+
+    // `alloc_ab <tier> <passes> corpus`: every `coco-*.png` in the Diana corpus,
+    // so the allocator sees the spread of image content and detection counts
+    // rather than one image's allocation pattern repeated.
+    if std::env::args().nth(3).as_deref() == Some("corpus") {
+        return corpus(&engine, &opts, &tier, reps, &root.join("corpora/clips/diana-coco"));
+    }
+
+    let img = ffai_media::load_image(&root.join("corpora/clips/diana-coco/coco-032.png"))?;
 
     // Warm: first call pays lazy weight materialisation and the allocator's
     // own arena bring-up, neither of which is what we are comparing.
@@ -108,6 +116,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One machine-readable line so the ABBA harness never has to parse prose.
     println!(
         "ARM={ARM} tier={tier} reps={reps} min={min:.3} med={med:.3} ndet={n_det} sum={sum:.6}"
+    );
+    Ok(())
+}
+
+/// Corpus mode: one timed sample is one full PASS over every image, so the
+/// sample carries the corpus's whole allocation mix. Images are decoded once,
+/// before timing, so the decoder's own allocations are not in the number.
+fn corpus(
+    engine: &ffai_diana::engine::Yolo26,
+    opts: &DetectOptions,
+    tier: &str,
+    passes: usize,
+    dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut paths: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "png")
+                && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("coco-"))
+        })
+        .collect();
+    paths.sort();
+    let imgs = paths.iter().map(|p| ffai_media::load_image(p)).collect::<Result<Vec<_>, _>>()?;
+
+    // Warm pass, which also takes the work-parity checksum over the corpus.
+    let (mut n_det, mut sum) = (0usize, 0f64);
+    for img in &imgs {
+        for d in &engine.detect(img, opts)?.detections {
+            n_det += 1;
+            sum += f64::from(d.x0) + f64::from(d.y0) + f64::from(d.x1) + f64::from(d.y1) + f64::from(d.confidence);
+        }
+    }
+
+    let mut times = Vec::with_capacity(passes);
+    for _ in 0..passes {
+        let t = Instant::now();
+        for img in &imgs {
+            engine.detect(img, opts)?;
+        }
+        times.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let (min, med) = (times[0], times[times.len() / 2]);
+    println!(
+        "ARM={ARM} tier={tier} images={} passes={passes} min={min:.3} med={med:.3} ndet={n_det} sum={sum:.6}",
+        imgs.len()
     );
     Ok(())
 }

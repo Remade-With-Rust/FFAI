@@ -53,6 +53,26 @@ pub enum DetStage {
     Composed,
 }
 
+/// A page read at or above this confidence is taken as upright and
+/// `auto_orient` does not run its orientation decision on it. Between the
+/// lowest upright page PdfCraft measured (0.806, all capitals) and the highest
+/// turned one (0.474, upside down).
+const ORIENT_TRUST_ABOVE: f32 = 0.7;
+
+/// A page's recognition confidence: the line confidences weighted by their
+/// characters. `None` when no line has text and a confidence.
+fn page_confidence(out: &OcrOutput) -> Option<f32> {
+    let (mut sum, mut n) = (0f64, 0usize);
+    for line in out.lines() {
+        if let Some(c) = line.confidence {
+            let k = line.text.chars().filter(|c| !c.is_whitespace()).count();
+            sum += f64::from(c) * k as f64;
+            n += k;
+        }
+    }
+    (n > 0).then(|| (sum / n as f64) as f32)
+}
+
 /// Minimum short side the mobile-det input is scaled UP to; larger images pass
 /// through untouched (capped at `FFAI_DET_MAX_SIDE`). See
 /// `image::mobiledet_input` for why this is a floor and not a ceiling — the
@@ -68,6 +88,13 @@ fn mobiledet_min_side() -> usize {
 /// Crop pads for the mobile-det path, as fractions of line height. Zero by
 /// default because DB's unclip has already expanded the box; sweepable because
 /// "already expanded" is a claim a gate should get to test.
+///
+/// Tested 2026-10-30 and refuted: `FFAI_MDET_PAD_Y=0.3` made PdfCraft's
+/// blocky 5x7 "HELLO WORLD" read its `D` correctly instead of as `O`, and wrecked
+/// everything else — PdfCraft's 42 pages 0.25 % -> 9.93 % CER (its ruled table
+/// 0 -> 55 %), `carmenta-form` 0.41 -> 2.53 % (73 of 240 worse), `carmenta-doc`
+/// 30.1 -> 48.5 % (all 32 worse). The extra rows are the neighbouring lines.
+/// The 5x7 `D` stays a known misread of a blocky font.
 fn mobiledet_pads() -> (f32, f32) {
     static V: OnceLock<(f32, f32)> = OnceLock::new();
     *V.get_or_init(|| {
@@ -184,6 +211,32 @@ impl CraftCrnn {
     #[must_use]
     pub fn offline(rec: RecStage, det: DetStage, weights_root: &Path) -> Self {
         Self::with_source(rec, det, Source::Offline(weights_root.to_path_buf()))
+    }
+
+    /// Read `img` rotated back by `degrees` (see `crate::deskew`) and map the
+    /// result onto `img`'s own coordinates.
+    fn recognize_straightened(&self, img: &ImageBuffer, opts: &OcrOptions, degrees: f32) -> Result<OcrOutput> {
+        let (straight, sk) = crate::deskew::straighten(img, degrees);
+        let inner = OcrOptions { deskew: false, ..opts.clone() };
+        let mut out = self.recognize(&straight, &inner)?;
+        let (w, h) = (img.width as f32, img.height as f32);
+        for block in &mut out.blocks {
+            if let Some(b) = block.bbox {
+                block.bbox = Some(sk.back_box(b, w, h));
+            }
+            for line in &mut block.lines {
+                if let Some(b) = line.bbox {
+                    line.bbox = Some(sk.back_box(b, w, h));
+                }
+                for word in &mut line.words {
+                    if let Some(b) = word.bbox {
+                        word.bbox = Some(sk.back_box(b, w, h));
+                    }
+                }
+            }
+        }
+        out.skew_degrees = Some(degrees);
+        Ok(out)
     }
 
     /// Load every model now, returning the error instead of deferring it to
@@ -412,6 +465,7 @@ fn load_models(source: &Source, rec: RecStage, det: DetStage) -> Result<Models> 
             .map(|m| Resolver { manifest: m, source })
             .ok_or_else(|| Error::Model(format!("no model manifest named `{name}` in {searched}")))
     };
+    #[allow(unsafe_code)]
     let load_vb = |file: std::path::PathBuf| {
         unsafe { VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device) }
             .map_err(image::candle_err)
@@ -489,14 +543,16 @@ struct Resolver<'a> {
 }
 
 impl Resolver<'_> {
-    /// Resolve the files this loader will open. Offline resolution asks for
-    /// exactly those, so a deployment never has to ship files a manifest lists
-    /// only for provenance (a training checkpoint, say). The cache path keeps
-    /// its existing behaviour of resolving every declared file.
+    /// Resolve the files this loader will open, and only those, whichever the
+    /// source: a deployment never has to ship, and a hosted repo never has to
+    /// carry, files a manifest lists only for provenance (a training
+    /// checkpoint, say). The cache path used to resolve every declared file,
+    /// and the first download from the published PP-OCRv5 repo failed on
+    /// `det.safetensors`, which no engine opens.
     fn fetch(&self, needed: &[&str]) -> Result<ffai_models::ResolvedModel> {
         match self.source {
             Source::Offline(root) => self.manifest.resolve_only_in(root, needed),
-            _ => self.manifest.fetch(),
+            _ => self.manifest.fetch_only(needed),
         }
     }
 }
@@ -749,13 +805,32 @@ impl OcrEngine for CraftCrnn {
         // its boxes are mapped back so the caller's coordinates never change
         // meaning underneath them.
         if opts.auto_orient {
-            let o = self.detect_orientation(img)?;
             let inner = OcrOptions { auto_orient: false, ..opts.clone() };
+            // Read the page as given FIRST, and decide orientation only when
+            // that read is unconvincing. PdfCraft measured the unconditional
+            // decision at 2.2-2.3x the time of every page, upright ones
+            // included (the decision is a detection pass plus two dozen crop
+            // reads, and an upright page was then read in full anyway), while
+            // the page's own confidence already separates the cases: upright
+            // pages 0.967-0.997 (0.806 for a page of capitals), pages turned
+            // 90 / 180 / 270 degrees 0.000 / 0.474 / 0.267, a blank page none.
+            let first = self.recognize(img, &inner)?;
+            if page_confidence(&first).is_some_and(|c| c >= ORIENT_TRUST_ABOVE) {
+                return Ok(first);
+            }
+            let o = self.detect_orientation(img)?;
             if o.turns == 0 {
-                return self.recognize(img, &inner);
+                return Ok(first);
             }
             let upright = crate::orient::rotate(img, o.turns);
             let mut out = self.recognize(&upright, &inner)?;
+            // The decision samples two dozen crops; the two full reads are the
+            // better witness. A low-confidence upright page the sample misjudged
+            // keeps its own read. (`None`, no text, orders below any `Some`.)
+            if page_confidence(&out) <= page_confidence(&first) {
+                return Ok(first);
+            }
+            out.turns = o.turns;
             let (w, h) = (img.width as f32, img.height as f32);
             for line in out.blocks.iter_mut().flat_map(|b| b.lines.iter_mut()) {
                 if let Some(b) = line.bbox {
@@ -774,7 +849,17 @@ impl OcrEngine for CraftCrnn {
             }
             return Ok(out);
         }
+        if opts.deskew && self.det != DetStage::MobileDet {
+            return Err(Error::Other(
+                "deskew is measured from the mobile detector's text regions; use a mobiledet-* \
+                 engine"
+                    .into(),
+            ));
+        }
         let m = self.models()?;
+        // The caller's image, before rule removal: a page found skewed is
+        // straightened from THIS and read again from the top.
+        let caller_img = img;
 
         // Form rules come out BEFORE detection as well as recognition: a rule
         // joins the boxes DBNet draws, and the crop the recognizer reads is cut
@@ -863,7 +948,7 @@ impl OcrEngine for CraftCrnn {
                     confidence,
                 });
             }
-            return Ok(OcrOutput { blocks: vec![OcrBlock { lines, bbox: None }] });
+            return Ok(OcrOutput { blocks: vec![OcrBlock { lines, bbox: None }], skew_degrees: None, turns: 0 });
         }
 
         // ---- detect ----
@@ -872,6 +957,8 @@ impl OcrEngine for CraftCrnn {
         // `scale` is carried so the crop stage can map detector coordinates
         // back to image pixels via `to_img` below; mobile-det already emits
         // image coordinates, which is why its scale is the identity 2.0.
+        // Set by the mobile-det arm when `opts.deskew` asks for it.
+        let mut skew: Option<f32> = None;
         let (lines, region, affinity, mw, scale) = match self.det {
             DetStage::Craft => {
                 // Detection sees COLOR (chroma contrast is real signal on
@@ -936,6 +1023,9 @@ impl OcrEngine for CraftCrnn {
                                 out.push_str(&format!("{v:.3} "));
                             }
                             let _ = std::fs::write(format!("{dir}/{tag}.prob"), out);
+                        }
+                        if opts.deskew {
+                            skew = crate::mobiledet::skew_degrees(&flat, pw, ph, sx, sy);
                         }
                         let mut b = crate::mobiledet::boxes_from_probability(
                             &flat, pw, ph, sx, sy, unclip,
@@ -1067,6 +1157,12 @@ impl OcrEngine for CraftCrnn {
         // components, so the photographic per-word path has nothing to iterate;
         // the ink-gap splitter supplies word boundaries inside each line.
         let det_is_line_level = self.det == DetStage::MobileDet;
+        // A page found skewed is straightened and read again from the top,
+        // its boxes mapped back onto the caller's image. Only skewed pages pay
+        // the second detection pass; a square one carries on with these boxes.
+        if let Some(deg) = skew.filter(|d| d.abs() >= crate::deskew::MIN_DEGREES) {
+            return self.recognize_straightened(caller_img, opts, deg);
+        }
         // Parallel across lines ONLY when there are enough to amortize the
         // pool contention with candle's internal rayon: measured, a 1-line
         // band strip pays 177 ms/line under par_iter vs 82 ms serial, while
@@ -1094,6 +1190,8 @@ impl OcrEngine for CraftCrnn {
                 let x1 = (to_img(lb.x1) + px) as usize;
                 let y1 = (to_img(lb.y1) + py) as usize;
 
+                // Word geometry, where the recognizer can give it (SVTR).
+                let mut words: Vec<ffai_core::types::OcrWord> = Vec::new();
                 let (text, confidence) = match self.rec {
                     RecStage::Svtr => {
                         let (svtr, charset) =
@@ -1106,14 +1204,16 @@ impl OcrEngine for CraftCrnn {
                         };
                         let probs = crate::profile::timed(|p| &p.rec_fwd, || svtr.forward(&crop))
                             .map_err(image::candle_err)?;
-                        let (mut text, conf) = crate::profile::timed(|p| &p.decode, || match &mask {
-                            Some(mk) => crate::svtr::ctc_greedy_masked(&probs, charset, mk),
-                            None => crate::svtr::ctc_greedy(&probs, charset),
+                        let (mut text, conf, emits, steps) = crate::profile::timed(|p| &p.decode, || {
+                            crate::svtr::ctc_greedy_emits(&probs, charset, mask.as_deref())
                         })
                         .map_err(image::candle_err)?;
                         // SVTR's multilingual charset can put a full-width
                         // `０` or `，` into a Latin line; see `fold`.
                         crate::fold::apply(&mut text);
+                        // The crop exactly as `svtr_input` clamped it.
+                        let crop = (x0, y0, x1.min(w), y1.min(h));
+                        words = crate::words::boxes(&emits, steps, &gray, w, crop, crate::fold::apply);
                         (text, conf)
                     }
                     RecStage::Crnn => {
@@ -1267,7 +1367,8 @@ impl OcrEngine for CraftCrnn {
                     }
                 Ok(Some(OcrLine {
                     text,
-                    words: Vec::new(), // line-level recognition; word detail is open work
+                    // Empty for CRNN and the PARSeq path; see `crate::words`.
+                    words,
                     bbox: Some(BoundingBox {
                         x: x0 as f32,
                         y: y0 as f32,
@@ -1295,6 +1396,16 @@ impl OcrEngine for CraftCrnn {
             // z = +1.50 over 16 ABBA-paired rounds, INSIDE a 17-27 % noise
             // floor. Reverted per revert-if-unproven; §8.100 carries the
             // numbers so it is not rebuilt.
+            //
+            // Re-measured 2026-10-30 after the depthwise/epilogue work removed
+            // the per-channel conv overhead, with a thread-local "inner ops
+            // serial" flag and SVTR's matmuls calling gemm with
+            // `Parallelism::None` inside this fan-out (bit-identical output):
+            // SLOWER, 1.066x at 24 threads (0/6 ABBA wins) and 1.040x at 8
+            // (1/6), on 10 of PdfCraft's pages. Lines are uneven, and the
+            // inner fan-out is what lets the long ones finish with the rest.
+            // Serialising the LINES instead is worse still (55.6 s against
+            // 40.3 s on the 42-page corpus). Both refuted; keep this shape.
             lines.par_iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
         } else {
             lines.iter().map(&recognize_line).collect::<Result<Vec<_>>>()?
@@ -1317,6 +1428,25 @@ impl OcrEngine for CraftCrnn {
         };
         let out_lines =
             crate::suppress::probe_reorder(out_lines, &probe_stats, lowconf, w as f32, h as f32);
+        // Table bands read across their rows, on the finished order.
+        let out_lines = {
+            let bbs: Vec<boxes::DetBox> = out_lines
+                .iter()
+                .map(|l| {
+                    let b = l.bbox.unwrap_or(BoundingBox { x: 0.0, y: 0.0, width: 0.0, height: 0.0 });
+                    boxes::DetBox {
+                        x0: b.x.max(0.0) as usize,
+                        y0: b.y.max(0.0) as usize,
+                        x1: (b.x + b.width).max(0.0) as usize,
+                        y1: (b.y + b.height).max(0.0) as usize,
+                        score: 1.0,
+                    }
+                })
+                .collect();
+            let perm = boxes::grid_order(&bbs);
+            let mut slots: Vec<Option<OcrLine>> = out_lines.into_iter().map(Some).collect();
+            perm.into_iter().filter_map(|i| slots[i].take()).collect::<Vec<_>>()
+        };
 
         // §48: REGION ROUTING. Runs last, on the finished sequence, so the
         // reading order §29–§43 earned is spliced into rather than rebuilt.
@@ -1372,7 +1502,7 @@ impl OcrEngine for CraftCrnn {
 
         // v1: one block per page — paragraph segmentation is the DOCUMENT
         // milestone's work, and inventing it early would be unearned.
-        Ok(OcrOutput { blocks: vec![OcrBlock { lines: out_lines, bbox: None }] })
+        Ok(OcrOutput { blocks: vec![OcrBlock { lines: out_lines, bbox: None }], skew_degrees: None, turns: 0 })
     }
 }
 

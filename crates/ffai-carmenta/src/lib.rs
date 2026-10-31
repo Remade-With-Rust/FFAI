@@ -45,6 +45,8 @@ pub mod rules;
 pub mod harvest;
 pub mod image;
 pub mod conv3x3;
+pub mod deskew;
+pub mod dwconv;
 /// The LIVE frame reader — **native only.**
 ///
 /// It is the one part of Carmenta that is architecturally threaded: a
@@ -61,6 +63,7 @@ pub mod live;
 pub mod par;
 pub mod suppress;
 pub mod svtr;
+pub mod words;
 pub mod mobiledet;
 pub mod onnx_graph;
 pub mod doclayout;

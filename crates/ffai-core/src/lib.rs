@@ -19,6 +19,7 @@ pub mod error;
 pub mod fastmath;
 pub mod fastops;
 pub mod registry;
+pub mod threads;
 pub mod types;
 
 /// The shared tensor framework (Hugging Face candle).
@@ -71,6 +72,7 @@ pub const fn best_device() -> candle::Device {
 // Linux and break on Windows - so the lint is allowed rather than obeyed.
 // Caught only when CI first ran on Linux; it never fired on the author's box.
 #[allow(clippy::missing_const_for_fn)]
+#[allow(unsafe_code)]
 pub fn release_load_arena() {
     #[cfg(windows)]
     {
