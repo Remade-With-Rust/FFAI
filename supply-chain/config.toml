@@ -37,7 +37,7 @@ audit-as-crates-io = true
 [policy.candle-kernels]
 audit-as-crates-io = true
 
-[policy.candle-metal-kernels]
+[policy."candle-metal-kernels:0.11.0@git:fa366d84d12c5732cbc34c973fe92b8f480bfdbe"]
 audit-as-crates-io = true
 
 [policy.candle-ug]
@@ -852,7 +852,7 @@ version = "0.11.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.quinn-proto]]
-version = "0.11.16"
+version = "0.11.19"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
@@ -1304,7 +1304,7 @@ version = "0.26.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.webpki-roots]]
-version = "1.0.9"
+version = "1.0.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.weezl]]
