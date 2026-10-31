@@ -854,6 +854,7 @@ pub fn exp_sub_sum_inplace(row: &mut [f32], max: f32) -> f32 {
     {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: both features probed immediately above.
+            #[allow(unsafe_code)]
             return unsafe { exp_sub_sum_avx2(row, max) };
         }
     }
@@ -867,6 +868,7 @@ pub fn exp_sub_sum_inplace(row: &mut [f32], max: f32) -> f32 {
         // stops LLVM cold no matter what the baseline is.
         //
         // SAFETY: `neon` is a compile-time guarantee on this target.
+        #[allow(unsafe_code)]
         return unsafe { exp_sub_sum_neon(row, max) };
     }
     #[cfg(target_arch = "wasm32")]
@@ -879,6 +881,7 @@ pub fn exp_sub_sum_inplace(row: &mut [f32], max: f32) -> f32 {
         // requirement rather than an upgrade.
         //
         // SAFETY: `simd128` is a compile-time guarantee on this target.
+        #[allow(unsafe_code)]
         return unsafe { exp_sub_sum_simd128(row, max) };
     }
     #[allow(unreachable_code)]
@@ -910,6 +913,7 @@ pub fn exp_sub_sum_scalar(row: &mut [f32], max: f32) -> f32 {
 // goes stale the moment the arithmetic changes, and hides nothing.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
 unsafe fn exp_sub_sum_avx2(row: &mut [f32], max: f32) -> f32 {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1001,6 +1005,7 @@ unsafe fn exp_sub_sum_avx2(row: &mut [f32], max: f32) -> f32 {
 // goes stale the moment the arithmetic changes, and hides nothing.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
+#[allow(unsafe_code)]
 unsafe fn exp_sub_sum_neon(row: &mut [f32], max: f32) -> f32 {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1080,6 +1085,7 @@ unsafe fn exp_sub_sum_neon(row: &mut [f32], max: f32) -> f32 {
 // goes stale the moment the arithmetic changes, and hides nothing.
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128")]
+#[allow(unsafe_code)]
 unsafe fn exp_sub_sum_simd128(row: &mut [f32], max: f32) -> f32 {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1155,17 +1161,20 @@ pub fn max_f32(xs: &[f32]) -> f32 {
     {
         if is_x86_feature_detected!("avx2") {
             // SAFETY: probed immediately above.
+            #[allow(unsafe_code)]
             return unsafe { max_f32_avx2(xs) };
         }
     }
     #[cfg(target_arch = "aarch64")]
     {
         // SAFETY: `neon` is a compile-time guarantee on this target.
+        #[allow(unsafe_code)]
         return unsafe { max_f32_neon(xs) };
     }
     #[cfg(target_arch = "wasm32")]
     {
         // SAFETY: `simd128` is a compile-time guarantee on this target.
+        #[allow(unsafe_code)]
         return unsafe { max_f32_simd128(xs) };
     }
     #[allow(unreachable_code)]
@@ -1186,6 +1195,7 @@ pub fn max_f32_scalar(xs: &[f32]) -> f32 {
 /// Caller must have verified `avx2`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
+#[allow(unsafe_code)]
 unsafe fn max_f32_avx2(xs: &[f32]) -> f32 {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1222,6 +1232,7 @@ unsafe fn max_f32_avx2(xs: &[f32]) -> f32 {
 /// `neon` is a compile-time guarantee on `aarch64` here.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
+#[allow(unsafe_code)]
 unsafe fn max_f32_neon(xs: &[f32]) -> f32 {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1251,6 +1262,7 @@ unsafe fn max_f32_neon(xs: &[f32]) -> f32 {
 /// `simd128` is a compile-time guarantee on `wasm32` here.
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128")]
+#[allow(unsafe_code)]
 unsafe fn max_f32_simd128(xs: &[f32]) -> f32 {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1297,6 +1309,7 @@ pub fn gelu_tanh_inplace(xs: &mut [f32]) {
     {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: probed immediately above.
+            #[allow(unsafe_code)]
             unsafe { gelu_tanh_avx2(xs) };
             return;
         }
@@ -1304,12 +1317,14 @@ pub fn gelu_tanh_inplace(xs: &mut [f32]) {
     #[cfg(target_arch = "aarch64")]
     {
         // SAFETY: `neon` is a compile-time guarantee on this target.
+        #[allow(unsafe_code)]
         unsafe { gelu_tanh_neon(xs) };
         return;
     }
     #[cfg(target_arch = "wasm32")]
     {
         // SAFETY: `simd128` is a compile-time guarantee on this target.
+        #[allow(unsafe_code)]
         unsafe { gelu_tanh_simd128(xs) };
         return;
     }
@@ -1335,6 +1350,7 @@ pub fn gelu_tanh_inplace(xs: &mut [f32]) {
 // goes stale the moment the arithmetic changes, and hides nothing.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
 unsafe fn gelu_tanh_avx2(xs: &mut [f32]) {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1412,6 +1428,7 @@ unsafe fn gelu_tanh_avx2(xs: &mut [f32]) {
 // goes stale the moment the arithmetic changes, and hides nothing.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
+#[allow(unsafe_code)]
 unsafe fn gelu_tanh_neon(xs: &mut [f32]) {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -1482,6 +1499,7 @@ unsafe fn gelu_tanh_neon(xs: &mut [f32]) {
 // goes stale the moment the arithmetic changes, and hides nothing.
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128")]
+#[allow(unsafe_code)]
 unsafe fn gelu_tanh_simd128(xs: &mut [f32]) {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:

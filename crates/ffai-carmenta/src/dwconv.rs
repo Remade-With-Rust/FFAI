@@ -126,6 +126,7 @@ fn plane(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 #[allow(clippy::too_many_arguments)]
+#[allow(unsafe_code)]
 unsafe fn plane_fma(
     inp: &[f32],
     h: usize,
@@ -200,6 +201,7 @@ impl CustomOp2 for DwOp {
             #[cfg(target_arch = "x86_64")]
             if fma {
                 // SAFETY: `has_fma` confirmed AVX2 and FMA at run time.
+                #[allow(unsafe_code)]
                 unsafe { plane_fma(x, h, w, k, kh, kw, self.stride, self.pad, o, wo) };
                 return;
             }

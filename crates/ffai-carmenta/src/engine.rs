@@ -465,6 +465,7 @@ fn load_models(source: &Source, rec: RecStage, det: DetStage) -> Result<Models> 
             .map(|m| Resolver { manifest: m, source })
             .ok_or_else(|| Error::Model(format!("no model manifest named `{name}` in {searched}")))
     };
+    #[allow(unsafe_code)]
     let load_vb = |file: std::path::PathBuf| {
         unsafe { VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device) }
             .map_err(image::candle_err)

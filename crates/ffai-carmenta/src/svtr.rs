@@ -852,6 +852,7 @@ use std::sync::{PoisonError, RwLock};
 
 /// Load from a safetensors file produced by `tools/carmenta_svtr_prepare.py`.
 pub fn load(path: &std::path::Path, device: &Device, n_class: usize) -> Result<Svtr> {
+    #[allow(unsafe_code)]
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, device)? };
     Svtr::new(vb, n_class)
 }
