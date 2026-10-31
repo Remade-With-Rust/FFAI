@@ -39,16 +39,6 @@ fn esc(s: &str) -> String {
 }
 
 fn main() {
-    eprintln!("available_threads {}", ffai_core::threads::available_threads());
-    if std::env::var("BENCH_POOL").is_ok_and(|v| v == "1") {
-        let pool = ffai_core::threads::affinity_pool().expect("thread pool");
-        pool.install(run);
-    } else {
-        run();
-    }
-}
-
-fn run() {
     let mut args = std::env::args().skip(1);
     let root = args.next().expect("usage: pdfcraft_bench <weights_root> <page.png>...");
     let pages: Vec<String> = args.collect();
@@ -60,6 +50,19 @@ fn run() {
     let t = Instant::now();
     engine.preload().expect("preload");
     eprintln!("load {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    // The mask is read only now, after the load: a harness that pins the
+    // process after spawning it (pinvs does) can lose a race against the top
+    // of `main`, and the pool would be built for the whole machine.
+    eprintln!("available_threads {}", ffai_core::threads::available_threads());
+    if std::env::var("BENCH_POOL").is_ok_and(|v| v == "1") {
+        let pool = ffai_core::threads::affinity_pool().expect("thread pool");
+        pool.install(|| run(&engine, &pages));
+    } else {
+        run(&engine, &pages);
+    }
+}
+
+fn run(engine: &CraftCrnn, pages: &[String]) {
     let opts = OcrOptions {
         auto_orient: std::env::var("BENCH_ORIENT").is_ok_and(|v| v == "1"),
         deskew: std::env::var("BENCH_DESKEW").is_ok_and(|v| v == "1"),
@@ -70,7 +73,7 @@ fn run() {
     };
     let all = Instant::now();
     let (mut words_total, mut lines_with_words, mut lines_total) = (0usize, 0usize, 0usize);
-    for p in &pages {
+    for p in pages {
         let img = ffai_media::load_image(Path::new(p)).expect("load image");
         let t = Instant::now();
         let out = engine.recognize(&img, &opts).expect("recognize");
@@ -116,10 +119,12 @@ fn run() {
         s.push_str("]}");
         println!("{s}");
     }
+    // The pool the pages actually ran on, beside the time it produced.
     eprintln!(
-        "pages {} total {:.1} ms; lines {lines_total}, with words {lines_with_words}, words {words_total}",
+        "pages {} total {:.1} ms on {} threads; lines {lines_total}, with words {lines_with_words}, words {words_total}",
         pages.len(),
-        all.elapsed().as_secs_f64() * 1e3
+        all.elapsed().as_secs_f64() * 1e3,
+        rayon::current_num_threads()
     );
     if std::env::var_os("FFAI_PROFILE").is_some() {
         eprint!("{}", ffai_carmenta::profile::profile().report());
