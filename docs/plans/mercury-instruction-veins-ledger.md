@@ -481,8 +481,30 @@ duration predictor. Nothing in the TTS code picks a kernel by timing. In
 about 10 checked runs the post-campaign tree has not diverged, but at that
 rate 10 runs cannot rule it out. This matters beyond the campaign because
 the README promises byte-identical output per seed. **Open**, and not caused
-by this campaign. The next step is a loop of a few hundred `--no-asr` runs
-under load, hashing each one, to measure the rate and bisect the stage.
+by this campaign.
+
+**Rate measured.** Each binary was run 150 times TTS-only (`--no-asr`, 8
+sentences, seed 7), interleaved, on the loaded box, and the identity lines of
+every run were hashed:
+
+| Binary | Usual output | Alternate output | Alternate rate |
+|---|---:|---:|---:|
+| pre-campaign | 142 | 8 | 5.3 % |
+| post-campaign | 146 | 4 | 2.7 % |
+
+There are exactly **two** outputs, and the alternate is **the same in both
+binaries**. So the synthesizer is bimodal: something decided once per process
+selects one of two exact waveforms. The campaign reproduces both modes byte
+for byte, and the identity claim holds within each mode. The 8-vs-4 split is
+within chance (Fisher exact, two-sided, p ≈ 0.38), so no rate change is
+claimed in either direction.
+
+Consequence outside this campaign: the README's "byte-identical output per
+seed" is true of the code path but **not of the process**, which differs in
+about 3–5 % of runs on this box. Next step, not taken here: log which mode a
+run lands in alongside per-stage hashes (encoder, duration predictor, flow,
+decoder) to find the first stage that differs, then check thread-count- or
+dispatch-dependent reductions in that stage.
 
 ### Timing pass (2026-11-07): no admissible verdict on this box
 
