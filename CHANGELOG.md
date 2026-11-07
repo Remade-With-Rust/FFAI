@@ -26,6 +26,49 @@ mechanics are in `.github/workflows/release.yml`.
 
 ## [Unreleased]
 
+### rusty_alloc 2.2.5 → 2.4.0
+
+Every crate that installs or calls the allocator moves to the exact pin
+`=2.4.0`. Because the pin is exact, a consumer that pins rusty_alloc itself
+has to move with it, so each crate takes a minor bump:
+
+| crate | from | to |
+|---|---|---|
+| `ffai-argus` (workspace version) | 0.9.0 | **0.10.0** |
+| `ffai-argus-wasm` | 0.3.0 | **0.4.0** |
+| `ffai-carmenta` | 0.13.0 | **0.14.0** |
+| `ffai-carmenta-wasm` | 0.4.0 | **0.5.0** |
+| `ffai-mercury-wasm` | 0.3.0 | **0.4.0** |
+| `ffai-cli` | 0.10.0 | **0.11.0** |
+| `ffai-diana` | 0.10.0 | **0.11.0** |
+| `ffai-wasm` | 0.4.0 | **0.5.0** |
+
+What the allocator changes, as it affects FFai:
+
+- **2.3.0:** shorter allocation paths (up to 4.2 % fewer instructions across
+  whole Rust programs in its own benchmarks, peak RSS within ±0.4 %).
+- **2.3.1:** the 1 GiB arena is reserved, not committed: Windows commit charge
+  per process falls from ~1 GiB to ~33 MiB.
+- **2.4.0:** segments commit as they are carved (32 MiB of commit per thread
+  becomes a few MiB); **delayed purging is on by default** (`purge_delay`
+  10 ms), so freed spans of 512 KiB or more return to the OS 10 ms after they
+  are freed, and a page pinned by one live block gives back its free slots;
+  `stats::process_info` reads RSS exactly on Linux 6.2+.
+
+**Behaviour to know:** purging is now on where 2.2.5 retained everything.
+`RUSTY_ALLOC_PURGE_DELAY=-1` restores the old behaviour. The allocator A/B and
+RSS figures in the component READMEs were measured on 2.2.x and have not been
+re-measured on 2.4.0. On wasm32 commit and purge are no-ops.
+
+The workspace builds against 2.4.0 with no source change. cargo-vet's
+exemptions move to 2.4.0.
+
+#### Security
+
+The allocator is `unsafe` code FFai trusts. 2.4.0 fixes a Windows leak of a
+guarded object's chunk when purging is on (guarded sampling only, off by
+default). No advisory is resolved or waived.
+
 ### rusty_alloc 2.2.0 → 2.2.5
 
 Every crate that installs or calls the allocator moves to the exact pin

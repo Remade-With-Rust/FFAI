@@ -33,7 +33,7 @@ cargo add ffai-diana ffai-core ffai-media
 
 ```toml
 [dependencies]
-ffai-diana = "0.10"
+ffai-diana = "0.11"
 ffai-core = "0.9"
 ffai-media = "0.7"
 ```
@@ -318,10 +318,13 @@ that reaching a release. The evaluation, including five findings that did not
 reproduce and were retracted, is
 [docs/finished/rusty-alloc-evaluation.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/finished/rusty-alloc-evaluation.md).
 
-**The old `MIMALLOC_PURGE_DELAY=-1` knob no longer applies** — it was read by
-mimalloc itself, and mimalloc is no longer in the binary. Its replacement,
+**Since rusty_alloc 2.4.0 (ffai-diana 0.11), freed memory goes back to the OS by
+default**: spans of 512 KiB or more are purged once they have stayed free for
+10 ms. `RUSTY_ALLOC_PURGE_DELAY=-1` (or the compatible `MIMALLOC_PURGE_DELAY`)
+restores the retain-everything behaviour the figures above were measured
+under; they have not been re-measured on 2.4.0. FFai's own page trimmer,
 `FFAI_TRIM_MS`, exists and is **off**, because on clean measurement it reclaimed
-0.1 MB (0 %). The reasoning that kept the old knob off still holds and is worth
+0.1 MB (0 %). The reasoning that kept it off still holds and is worth
 keeping: page-trimming helps least when the machine is idle and safe, and most
 when it is already short of memory and retaining tens of MiB is the worst
 available response.

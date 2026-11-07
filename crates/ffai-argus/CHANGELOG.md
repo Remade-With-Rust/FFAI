@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-v0.9.0...ffai-argus-v0.10.0) - 2026-11-07
+
+### Changed
+
+- rusty_alloc and rusty_alloc-api `=2.2.5` -> `=2.4.0`. 2.3.0 shortens the allocation paths (up to 4.2 % fewer instructions across whole Rust programs in its own benchmarks). 2.3.1 and 2.4.0 commit memory as it is used, so a process no longer charges 1 GiB of commit on Windows for its arena, nor 32 MiB per thread. 2.4.0 turns delayed purging on by default (`purge_delay` 10 ms): freed spans of 512 KiB or more go back to the OS after 10 ms, so RSS falls back after a peak; `RUSTY_ALLOC_PURGE_DELAY=-1` restores 2.2.5's retain-everything behaviour. The pin is exact, so a consumer that pins rusty_alloc itself must move to 2.4.0 too.
+
 ## [0.9.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-v0.8.0...ffai-argus-v0.9.0) - 2026-10-31
 
 ### Changed

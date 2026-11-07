@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-wasm-v0.4.0...ffai-wasm-v0.5.0) - 2026-11-07
+
+### Changed
+
+- rusty_alloc-api `=2.2.5` -> `=2.4.0` (the `rusty-alloc` feature). Commit and purge are no-ops on wasm32, so what changes here is 2.3.0's shorter allocation paths; 2.4.0 keeps the wasm module under its size gate. The pin is exact, so a consumer that pins rusty_alloc itself must move to 2.4.0 too.
+- Requires `ffai-diana` 0.11.
+
 ## [0.4.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-wasm-v0.3.0...ffai-wasm-v0.4.0) - 2026-11-07
 
 ### Changed

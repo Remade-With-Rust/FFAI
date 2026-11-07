@@ -426,12 +426,20 @@ criteria = "safe-to-deploy"
 version = "0.6.9"
 criteria = "safe-to-deploy"
 
+[[exemptions.ffai-cli]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.ffai-core]]
 version = "0.7.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-diana]]
 version = "0.7.7"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-diana]]
+version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-media]]
@@ -452,6 +460,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ffai-wasm]]
 version = "0.1.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-wasm]]
+version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
@@ -983,11 +995,11 @@ version = "0.3.1"
 criteria = "safe-to-run"
 
 [[exemptions.rusty_alloc]]
-version = "2.2.5"
+version = "2.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_alloc-api]]
-version = "2.2.5"
+version = "2.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_expressions]]

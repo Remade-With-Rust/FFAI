@@ -407,7 +407,7 @@ or in `Cargo.toml`:
 
 ```toml
 [dependencies]
-ffai-argus = "0.9"    # the engine
+ffai-argus = "0.10"   # the engine
 ffai-core  = "0.7"    # the VlmEngine trait, the registry, the cost counters
 ffai-media = "0.7"    # decoding an image/video file is the CALLER's job
 ```

@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus-wasm"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-argus",
  "ffai-core",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta-wasm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ffai-carmenta",
  "ffai-core",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-demo"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "ffai-argus",
  "ffai-bench",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury-wasm"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-core",
  "ffai-mercury",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-wasm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ffai-core",
  "ffai-diana",
@@ -3961,9 +3961,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
-version = "2.2.5"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c12ed1752127ac2fabc5bc5aed934055f4be5f093885d830a66686bff4cd7668"
+checksum = "af775820e14adea82b15c22e9d2815cb85976c12285c30caa327f4d441038969"
 dependencies = [
  "libc",
  "portable-atomic",
@@ -3972,9 +3972,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc-api"
-version = "2.2.5"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a68d299fc4818e1b26164556504f28240de294ea709c519ec465add9238f30f7"
+checksum = "72a5b07b04e499fe5ff94c9866fd3b39e148b02f978b42ee6f572f92d7e32b9f"
 dependencies = [
  "rusty_alloc",
 ]
@@ -4554,7 +4554,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
