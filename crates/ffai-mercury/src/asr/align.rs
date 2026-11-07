@@ -311,27 +311,51 @@ pub fn forced_align(
     // Collect each token's frames. A token's span is the frames where it
     // actually emitted; if it only ever rode along under a blank, fall back to
     // the frames assigned to it so it still gets a position.
+    //
+    // Vein 13: `owner` is non-decreasing in t (the backtrace only ever steps
+    // j down as t goes down), so token j's frames are ONE contiguous run,
+    // found in a single sweep over the frames instead of a full `filter`
+    // scan per token — O(T) instead of O(T·J). The emitting frames are the
+    // flagged frames inside that run, visited in the same ascending order,
+    // so `score`'s sum adds the same terms in the same order.
     let mut spans = Vec::with_capacity(j_n);
+    let mut t = 0usize;
     for (j, &token) in tokens.iter().enumerate() {
-        let assigned: Vec<usize> = (0..t_n).filter(|&t| owner[t] == j).collect();
-        if assigned.is_empty() {
+        // Skip to this token's run (frames owned by earlier tokens are
+        // already behind `t`), then take the run.
+        while t < t_n && owner[t] < j {
+            t += 1;
+        }
+        let run_start = t;
+        while t < t_n && owner[t] == j {
+            t += 1;
+        }
+        let run_end = t;
+        super::profile::counters()
+            .small_kernel_ops
+            .add_n(run_end - run_start);
+        if run_end == run_start {
             // Should be unreachable given t_n >= j_n, but a silently missing
             // token would corrupt every word boundary after it.
             return Err(format!("token {j} received no frames during backtrace"));
         }
-        let emitting: Vec<usize> = assigned.iter().copied().filter(|&t| was_emit[t]).collect();
-        let frames = if emitting.is_empty() {
-            &assigned
+        let emitting_first = (run_start..run_end).find(|&f| was_emit[f]);
+        let (start, end, score) = if let Some(first) = emitting_first {
+            let last = (run_start..run_end)
+                .rfind(|&f| was_emit[f])
+                .unwrap_or(first);
+            let (sum, count) = (run_start..run_end)
+                .filter(|&f| was_emit[f])
+                .fold((0.0f32, 0usize), |(s, c), f| {
+                    (s + emissions.at(f, token).exp(), c + 1)
+                });
+            (first, last + 1, sum / count as f32)
         } else {
-            &emitting
+            let sum = (run_start..run_end)
+                .map(|f| emissions.at(f, token).exp())
+                .sum::<f32>();
+            (run_start, run_end, sum / (run_end - run_start) as f32)
         };
-        let start = frames[0];
-        let end = frames[frames.len() - 1] + 1;
-        let score = frames
-            .iter()
-            .map(|&t| emissions.at(t, token).exp())
-            .sum::<f32>()
-            / frames.len() as f32;
         spans.push(TokenSpan {
             token,
             start,

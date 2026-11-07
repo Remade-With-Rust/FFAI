@@ -109,23 +109,6 @@ fn frame_energies(samples: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-// The index cast is guarded twice: the `is_empty` early return below makes
-// `len - 1` safe, and the result is `.min(len - 1)` clamped before indexing, so
-// a NaN or out-of-range `p` cannot escape the slice. Rust also saturates
-// float->int casts rather than wrapping.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
-fn percentile(sorted: &[f32], p: f64) -> f32 {
-    if sorted.is_empty() {
-        return MIN_DBFS;
-    }
-    let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
-}
-
 /// Speech-to-floor energy contrast in dB: how far the loud frames (p90) sit
 /// above the noise floor (p10). Clean recordings show large contrast —
 /// speech against near-silence; noisy channels compress it, because the
@@ -135,13 +118,39 @@ fn percentile(sorted: &[f32], p: f64) -> f32 {
 /// paying for a doomed short-context attempt first.
 #[must_use]
 pub fn energy_contrast_db(samples: &[f32]) -> f32 {
-    let energies = frame_energies(samples);
+    let mut energies = frame_energies(samples);
     if energies.is_empty() {
         return 0.0;
     }
-    let mut sorted = energies;
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    percentile(&sorted, 0.90) - percentile(&sorted, FLOOR_PERCENTILE)
+    // Two order statistics, selected rather than sorted for (vein 13).
+    let hi = percentile_select(&mut energies, 0.90);
+    let lo = percentile_select(&mut energies, FLOOR_PERCENTILE);
+    hi - lo
+}
+
+/// The `p`-th percentile by SELECTION: `select_nth_unstable` puts the k-th
+/// smallest element at index k in O(n) without ordering the rest, and the
+/// element it finds is exactly the one a full sort would have at that index
+/// (the k-th smallest is unique as a value, whatever the algorithm). The
+/// index is the one `percentile` used on the sorted array.
+fn percentile_select(values: &mut [f32], p: f64) -> f32 {
+    if values.is_empty() {
+        return MIN_DBFS;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    // Same guarded cast as `percentile`: rounded, clamped, saturating.
+    let idx = (((values.len() - 1) as f64 * p).round() as usize).min(values.len() - 1);
+    super::profile::counters()
+        .small_kernel_ops
+        .add_n(values.len());
+    let (_, kth, _) = values.select_nth_unstable_by(idx, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    *kth
 }
 
 /// Find speech regions in 16 kHz mono samples.
@@ -156,9 +165,11 @@ pub fn detect(samples: &[f32], threshold: f32) -> Vec<TimedSegment<()>> {
         return Vec::new();
     }
 
-    let mut sorted = energies.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let floor = percentile(&sorted, FLOOR_PERCENTILE);
+    // One order statistic (vein 13): select it, do not sort for it.
+    let floor = {
+        let mut scratch = energies.clone();
+        percentile_select(&mut scratch, FLOOR_PERCENTILE)
+    };
 
     let margin = margin_db(threshold);
     let onset = (floor + margin).max(ABS_SILENCE_DBFS);

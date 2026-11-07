@@ -45,8 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         unsafe {
             if candle {
                 std::env::set_var("FFAI_CANDLE_FLOW", "1");
+                ffai_mercury::asr::knobs::reset_all(); // knobs cache their first read
             } else {
                 std::env::remove_var("FFAI_CANDLE_FLOW");
+                ffai_mercury::asr::knobs::reset_all(); // knobs cache their first read
             }
         }
         let t0 = Instant::now();

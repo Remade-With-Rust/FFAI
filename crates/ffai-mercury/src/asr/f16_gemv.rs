@@ -127,6 +127,33 @@ impl F16Gemv {
             w: self.w.clone(),
             in_dim: self.in_dim,
             out_dim: self.out_dim,
+            bias: None,
+            dims: None,
+        })
+    }
+
+    /// The single-row projection as ONE op: bias added by the kernel as each
+    /// output lands, and the result emitted at the caller's rank (`dims` with
+    /// the last axis replaced by `out`), so the surrounding `reshape` pair and
+    /// `broadcast_add` pass disappear. `x` must be contiguous with exactly
+    /// `in` elements. Arithmetic is identical to `forward` + `broadcast_add`:
+    /// the same f32 dot, then the same f32 add.
+    pub fn forward_fused(
+        &self,
+        x: &Tensor,
+        bias: Option<&std::sync::Arc<Vec<f32>>>,
+        dims: &[usize],
+    ) -> CandleResult<Tensor> {
+        let mut out_dims = dims.to_vec();
+        if let Some(last) = out_dims.last_mut() {
+            *last = self.out_dim;
+        }
+        x.apply_op1(F16GemvOp {
+            w: self.w.clone(),
+            in_dim: self.in_dim,
+            out_dim: self.out_dim,
+            bias: bias.cloned(),
+            dims: Some(out_dims),
         })
     }
 }
@@ -135,6 +162,10 @@ struct F16GemvOp {
     w: std::sync::Arc<Vec<u16>>,
     in_dim: usize,
     out_dim: usize,
+    /// Folded bias (`forward_fused`), or none.
+    bias: Option<std::sync::Arc<Vec<f32>>>,
+    /// Output shape override (`forward_fused`), or `(1, out)`.
+    dims: Option<Vec<usize>>,
 }
 
 impl CustomOp1 for F16GemvOp {
@@ -153,14 +184,31 @@ impl CustomOp1 for F16GemvOp {
         let (d, o) = (self.in_dim, self.out_dim);
         let x = &xf[l.start_offset()..l.start_offset() + d];
         let mut out = vec![0f32; o];
-        for (i, slot) in out.iter_mut().enumerate() {
-            // SAFETY: avx2+fma+f16c - the op is only constructed when `have_f16c()` passes
-            // (see the guard above), so this call cannot be reached on a CPU without them.
-            // Pointer bounds: `w` holds out_dim*in_dim f16 weights and `i < out_dim`, so
-            // `w.add(i*d)` addresses a full `d`-element row inside the allocation.
-            *slot = unsafe { dot_f16(self.w.as_ptr().add(i * d), x, d) };
+        match &self.bias {
+            None => {
+                for (i, slot) in out.iter_mut().enumerate() {
+                    // SAFETY: avx2+fma+f16c - the op is only constructed when `have_f16c()` passes
+                    // (see the guard above), so this call cannot be reached on a CPU without them.
+                    // Pointer bounds: `w` holds out_dim*in_dim f16 weights and `i < out_dim`, so
+                    // `w.add(i*d)` addresses a full `d`-element row inside the allocation.
+                    *slot = unsafe { dot_f16(self.w.as_ptr().add(i * d), x, d) };
+                }
+            }
+            Some(b) => {
+                if b.len() != o {
+                    ffai_core::candle::bail!("f16-gemv: bias has {} rows, weight {o}", b.len());
+                }
+                for (i, (slot, &bias)) in out.iter_mut().zip(b.iter()).enumerate() {
+                    // SAFETY: as above.
+                    *slot = unsafe { dot_f16(self.w.as_ptr().add(i * d), x, d) } + bias;
+                }
+            }
         }
-        Ok((CpuStorage::F32(out), Shape::from_dims(&[1, o])))
+        let shape = match &self.dims {
+            Some(dims) => Shape::from_dims(dims),
+            None => Shape::from_dims(&[1, o]),
+        };
+        Ok((CpuStorage::F32(out), shape))
     }
 }
 

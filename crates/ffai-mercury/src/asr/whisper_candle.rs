@@ -472,7 +472,7 @@ impl AsrEngine for WhisperCandle {
                 let chunk = super::profile::timed(&super::profile::profile().mel, || {
                     state
                         .front_end
-                        .compute(&mel::pad_or_trim_to(window, (ctx_secs * sr) as usize))
+                        .compute_window(window, (ctx_secs * sr) as usize)
                 });
                 outcome = decoder::decode_window_strict(
                     &mut state.whisper,
@@ -533,7 +533,7 @@ impl AsrEngine for WhisperCandle {
                 // Pad in the sample domain, before the spectrogram — see
                 // mel::pad_or_trim for why the distinction matters.
                 let chunk = super::profile::timed(&super::profile::profile().mel, || {
-                    state.front_end.compute(&mel::pad_or_trim(window))
+                    state.front_end.compute_window(window, mel::N_SAMPLES)
                 });
                 decoder::decode_window(&mut state.whisper, &chunk, offset_secs, &wcfg, window_secs)?
             };

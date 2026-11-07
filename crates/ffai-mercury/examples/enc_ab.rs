@@ -55,8 +55,10 @@ fn set_arm_serial(serial: bool) {
     unsafe {
         if serial {
             std::env::set_var(knob(), "1");
+            ffai_mercury::asr::knobs::reset_all(); // knobs cache their first read
         } else {
             std::env::remove_var(knob());
+            ffai_mercury::asr::knobs::reset_all(); // knobs cache their first read
         }
     }
 }

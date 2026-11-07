@@ -115,6 +115,11 @@ impl MelFilters {
 /// the filterbank, both of which are expensive to rebuild per call.
 pub struct MelSpectrogram {
     filters: MelFilters,
+    /// The filterbank as the `(n_mels, n_bins)` tensor the projection
+    /// multiplies by, built ONCE here rather than copied out of `filters`
+    /// on every window (vein 4). `None` only if the tensor could not be
+    /// built, in which case the scalar projection serves.
+    filters_t: Option<ffai_core::candle::Tensor>,
     window: Vec<f32>,
     fft: Arc<dyn Fft<f32>>,
 }
@@ -126,8 +131,16 @@ impl MelSpectrogram {
         let window: Vec<f32> = (0..N_FFT)
             .map(|n| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / N_FFT as f32).cos()))
             .collect();
+        let filters = MelFilters::new(n_mels);
+        let filters_t = ffai_core::candle::Tensor::from_slice(
+            &filters.weights,
+            (filters.n_mels, filters.n_bins),
+            &ffai_core::candle::Device::Cpu,
+        )
+        .ok();
         Self {
-            filters: MelFilters::new(n_mels),
+            filters,
+            filters_t,
             window,
             fft: FftPlanner::new().plan_fft_forward(N_FFT),
         }
@@ -165,23 +178,60 @@ impl MelSpectrogram {
     /// Compute the log-mel spectrogram: `(n_mels, n_frames)` row-major.
     #[must_use]
     pub fn compute(&self, samples: &[f32]) -> MelChunk {
-        let n_frames = Self::n_frames(samples.len());
-        let n_bins = self.filters.n_bins;
-
         // center=True with reflect padding, matching torch.stft.
-        let padded = reflect_pad(samples, N_FFT / 2);
+        self.compute_padded(
+            reflect_pad(samples, N_FFT / 2),
+            Self::n_frames(samples.len()),
+        )
+    }
+
+    /// `compute(&pad_or_trim_to(samples, target))` without the intermediate
+    /// buffer (vein 4): the zero-padded, reflect-padded frame is built in one
+    /// allocation instead of a zero-filled copy that is then copied again.
+    /// Bit-identical to the two-step form — same samples at the same offsets.
+    #[must_use]
+    pub fn compute_window(&self, samples: &[f32], target: usize) -> MelChunk {
+        let take = samples.len().min(target);
+        self.compute_padded(
+            reflect_pad_zero_extended(&samples[..take], target, N_FFT / 2),
+            Self::n_frames(target),
+        )
+    }
+
+    /// The spectrogram of an already reflect-padded signal of `n_frames`.
+    fn compute_padded(&self, padded: Vec<f32>, n_frames: usize) -> MelChunk {
+        let n_bins = self.filters.n_bins;
 
         // Power spectrum stored BIN-MAJOR, (n_bins, n_frames). The natural
         // frame-major layout would force a transpose before the filterbank
         // matmul below; writing it transposed here costs nothing, since the
         // FFT output is scattered either way.
+        //
+        // Zero-initialised ON PURPOSE: a frame whose whole N_FFT span is
+        // zero has an exactly-zero spectrum (every butterfly is a sum of
+        // products with 0), so its column is left as the zeros it already
+        // holds and the FFT is skipped (vein 4). On a 30 s window holding
+        // 6 s of speech that is 80 % of the FFTs; on a full window it is
+        // none, and the count must read exactly `n_frames`.
         let mut power = vec![0.0f32; n_bins * n_frames];
         let mut scratch = vec![Complex32::new(0.0, 0.0); N_FFT];
+        let census = super::profile::counters();
+        census.stft_builds.hit();
+        let first_nz = padded.iter().position(|&x| x != 0.0);
+        let last_nz = padded.iter().rposition(|&x| x != 0.0);
         for frame in 0..n_frames {
             let start = frame * HOP_LENGTH;
+            let live = match (first_nz, last_nz) {
+                (Some(f), Some(l)) => start + N_FFT > f && start <= l,
+                _ => false,
+            };
+            if !live {
+                continue;
+            }
             for i in 0..N_FFT {
                 scratch[i] = Complex32::new(padded[start + i] * self.window[i], 0.0);
             }
+            census.fft_calls.hit();
             self.fft.process(&mut scratch);
             for bin in 0..n_bins {
                 power[bin * n_frames + frame] = scratch[bin].norm_sqr();
@@ -197,28 +247,49 @@ impl MelSpectrogram {
         // secretly a matmul is worth looking for anywhere it appears.
         let n_mels = self.filters.n_mels;
         let device = ffai_core::candle::Device::Cpu;
-        let mel = match (
-            ffai_core::candle::Tensor::from_slice(&self.filters.weights, (n_mels, n_bins), &device),
-            ffai_core::candle::Tensor::from_slice(&power, (n_bins, n_frames), &device),
-        ) {
-            (Ok(f), Ok(p)) => f
-                .matmul(&p)
-                .and_then(|t| t.flatten_all())
-                .and_then(|t| t.to_vec1::<f32>())
-                .unwrap_or_else(|_| Self::filterbank_scalar(&self.filters, &power, n_frames)),
-            _ => Self::filterbank_scalar(&self.filters, &power, n_frames),
+        // log10 with a floor, applied as the product is read out of the
+        // tensor (vein 4): one pass that writes the final buffer, instead of
+        // a `to_vec1` copy followed by an in-place pass over it. Same
+        // sequence of operations per element, same running peak.
+        let log_pass = |src: &[f32]| -> (Vec<f32>, f32) {
+            let mut peak = f32::MIN;
+            let mel: Vec<f32> = src
+                .iter()
+                .map(|&v| {
+                    // `fastmath::log10` — one libm call per mel bin per frame
+                    // otherwise, and the loop cannot vectorise around a call.
+                    let l = ffai_core::fastmath::log10(v.max(1e-10));
+                    peak = peak.max(l);
+                    l
+                })
+                .collect();
+            (mel, peak)
         };
-        let mut mel = mel;
-
-        // log10 with a floor, then a dynamic-range clamp 8 decades below the
-        // GLOBAL peak, then scale into roughly [-1, 1].
-        let mut peak = f32::MIN;
-        for v in &mut mel {
-            // `fastmath::log10` — one libm call per mel bin per frame
-            // otherwise, and the loop cannot vectorise around a call.
-            *v = ffai_core::fastmath::log10(v.max(1e-10));
-            peak = peak.max(*v);
-        }
+        // `power` is MOVED into its tensor (vein 4), not copied: 2.4 MB per
+        // window on a 30 s context. The scalar fallback reads it back through
+        // the tensor if the projection ever declines.
+        let projected = match (
+            &self.filters_t,
+            ffai_core::candle::Tensor::from_vec(power, (n_bins, n_frames), &device),
+        ) {
+            (Some(f), Ok(p)) => match f.matmul(&p) {
+                Ok(t) => crate::buf::with_f32(&t, log_pass).ok(),
+                Err(_) => crate::buf::with_f32(&p, |pw| {
+                    log_pass(&Self::filterbank_scalar(&self.filters, pw, n_frames))
+                })
+                .ok(),
+            },
+            (None, Ok(p)) => crate::buf::with_f32(&p, |pw| {
+                log_pass(&Self::filterbank_scalar(&self.filters, pw, n_frames))
+            })
+            .ok(),
+            (_, Err(_)) => None,
+        };
+        let (mut mel, peak) = projected.unwrap_or_else(|| {
+            // Unreachable in practice (a shape mismatch on our own buffer);
+            // stay total rather than panic in the front end.
+            log_pass(&vec![0.0f32; n_mels * n_frames])
+        });
         let floor = peak - 8.0;
         for v in &mut mel {
             *v = (v.max(floor) + 4.0) / 4.0;
@@ -317,6 +388,29 @@ fn reflect_pad(samples: &[f32], pad: usize) -> Vec<f32> {
 
 fn reflect_index(i: usize, n: usize) -> usize {
     if n == 0 { 0 } else { i.min(n - 1) }
+}
+
+/// `reflect_pad(&pad_or_trim_to(samples, target), pad)` in one allocation:
+/// the signal is `samples` followed by zeros up to `target`, and both
+/// reflections index into THAT signal, exactly as the two-step form did.
+fn reflect_pad_zero_extended(samples: &[f32], target: usize, pad: usize) -> Vec<f32> {
+    let n = target;
+    if n == 0 {
+        return vec![0.0; 2 * pad];
+    }
+    let take = samples.len().min(n);
+    // The zero-extended signal, by index.
+    let z = |i: usize| -> f32 { if i < take { samples[i] } else { 0.0 } };
+    let mut out = Vec::with_capacity(n + 2 * pad);
+    for i in 0..pad {
+        out.push(z(reflect_index(pad - i, n)));
+    }
+    out.extend_from_slice(&samples[..take]);
+    out.resize(pad + n, 0.0);
+    for i in 1..=pad {
+        out.push(z(reflect_index(n - 1 - i.min(n - 1), n)));
+    }
+    out
 }
 
 #[cfg(test)]

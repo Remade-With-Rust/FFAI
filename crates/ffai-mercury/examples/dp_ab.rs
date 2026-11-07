@@ -34,8 +34,10 @@ fn set_arm_old(old: bool) {
     unsafe {
         if old {
             std::env::set_var("FFAI_DP_DIRECT_1X1", "1");
+            ffai_mercury::asr::knobs::reset_all(); // knobs cache their first read
         } else {
             std::env::remove_var("FFAI_DP_DIRECT_1X1");
+            ffai_mercury::asr::knobs::reset_all(); // knobs cache their first read
         }
     }
 }

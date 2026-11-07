@@ -250,8 +250,6 @@ fn conv1d_flat_prepacked_into(
             // SAFETY: disjoint (co, t) regions per task, see above.
             unsafe { std::slice::from_raw_parts_mut(out_ptr.0.add(co * l_out + t0), bt) }
         };
-        // Scratch tile, zero-initialized: bias joins in the merge pass.
-        let mut tile = vec![0f32; (co1 - co0) * bt];
         // Interior region where every tap's input index is in-range —
         // eligible for the AVX2 micro-kernel; edges take the safe path.
         let span = dilation * (k - 1);
@@ -264,54 +262,131 @@ fn conv1d_flat_prepacked_into(
         #[cfg(not(target_arch = "x86_64"))]
         let use_avx = false;
 
-        // 4-wide output-channel register block: each src load feeds four
-        // FMA streams instead of one (the load was the bottleneck — one
-        // load per FMA caps at a quarter of FMA throughput).
-        let mut co_i = 0;
-        while co_i < co1 - co0 {
-            let quad = (co1 - co0 - co_i).min(4);
-            #[cfg(target_arch = "x86_64")]
-            if use_avx && quad == 4 {
-                // SAFETY: dispatched on runtime avx2+fma detection; all
-                // slice geometry is checked by the kernel's caller
-                // contract (interior region only).
-                unsafe {
-                    let quad_base = ((co0 + co_i) / 4) * c_in * k * 4;
-                    conv_quad_avx2(
-                        xv,
-                        len,
-                        &wp[quad_base..quad_base + c_in * k * 4],
-                        &mut tile[co_i * bt..(co_i + 4) * bt],
-                        bt,
-                        c_in,
-                        k,
-                        pad,
-                        dilation,
-                        t0,
-                        int_lo,
-                        int_hi,
-                    );
+        // Scratch tile; bias joins in the merge pass. Zeroed only where the
+        // scalar `+=` paths accumulate (vein 6): a full quad row's interior
+        // strips are written by direct stores in the kernel, so on those rows
+        // only the edge columns and the <8-wide tail need the zero. Other
+        // rows (a partial quad, or no AVX) are zeroed whole as before.
+        let rows = co1 - co0;
+        let stored_hi = if use_avx {
+            int_lo + ((int_hi - int_lo) / 8) * 8
+        } else {
+            int_lo
+        };
+        let full_quads = if use_avx { rows / 4 * 4 } else { 0 };
+        {
+            let c = crate::asr::profile::counters();
+            let edge = (int_lo - t0) + (t1 - stored_hi);
+            c.memset_bytes
+                .add_n((full_quads * edge + (rows - full_quads) * bt) * 4);
+            c.tile_merge_bytes.add_n(rows * bt * 4);
+        }
+        let tile = crate::buf::filled_f32(rows * bt, |tile| {
+            for (r, row) in tile.chunks_mut(bt).enumerate() {
+                if r < full_quads {
+                    row[..int_lo - t0].fill(0.0);
+                    row[stored_hi - t0..].fill(0.0);
+                } else {
+                    row.fill(0.0);
                 }
-                // Edges (t < int_lo or t >= int_hi) via the safe path.
-                for (edge_lo, edge_hi) in [(t0, int_lo), (int_hi, t1)] {
-                    if edge_lo >= edge_hi {
-                        continue;
+            }
+            // The accumulation itself, so every cell is written before the
+            // buffer is published: the kernel stores the interior strips, the
+            // scalar paths accumulate onto the zeroed edges and remainders.
+
+            // 4-wide output-channel register block: each src load feeds four
+            // FMA streams instead of one (the load was the bottleneck — one
+            // load per FMA caps at a quarter of FMA throughput).
+            let mut co_i = 0;
+            while co_i < co1 - co0 {
+                let quad = (co1 - co0 - co_i).min(4);
+                #[cfg(target_arch = "x86_64")]
+                if use_avx && quad == 4 {
+                    // SAFETY: dispatched on runtime avx2+fma detection; all
+                    // slice geometry is checked by the kernel's caller
+                    // contract (interior region only).
+                    unsafe {
+                        let quad_base = ((co0 + co_i) / 4) * c_in * k * 4;
+                        conv_quad_avx2(
+                            xv,
+                            len,
+                            &wp[quad_base..quad_base + c_in * k * 4],
+                            &mut tile[co_i * bt..(co_i + 4) * bt],
+                            bt,
+                            c_in,
+                            k,
+                            pad,
+                            dilation,
+                            t0,
+                            int_lo,
+                            int_hi,
+                        );
                     }
-                    for q in 0..4 {
-                        let co = co0 + co_i + q;
-                        for ci in 0..c_in {
-                            let xrow = &xv[ci * len..(ci + 1) * len];
-                            for j in 0..k {
-                                let off = j * dilation;
-                                let lo = edge_lo.max(pad.saturating_sub(off));
-                                let hi = edge_hi.min(len + pad - off);
-                                if lo >= hi {
-                                    continue;
+                    // Edges (t < int_lo or t >= int_hi) via the safe path.
+                    for (edge_lo, edge_hi) in [(t0, int_lo), (int_hi, t1)] {
+                        if edge_lo >= edge_hi {
+                            continue;
+                        }
+                        for q in 0..4 {
+                            let co = co0 + co_i + q;
+                            for ci in 0..c_in {
+                                let xrow = &xv[ci * len..(ci + 1) * len];
+                                for j in 0..k {
+                                    let off = j * dilation;
+                                    let lo = edge_lo.max(pad.saturating_sub(off));
+                                    let hi = edge_hi.min(len + pad - off);
+                                    if lo >= hi {
+                                        continue;
+                                    }
+                                    let wcoef = wv[(co * c_in + ci) * k + j];
+                                    let src = &xrow[lo + off - pad..hi + off - pad];
+                                    let dst = &mut tile
+                                        [(co_i + q) * bt + lo - t0..(co_i + q) * bt + hi - t0];
+                                    for (a, &s) in dst.iter_mut().zip(src) {
+                                        *a += wcoef * s;
+                                    }
                                 }
-                                let wcoef = wv[(co * c_in + ci) * k + j];
-                                let src = &xrow[lo + off - pad..hi + off - pad];
+                            }
+                        }
+                    }
+                    co_i += 4;
+                    continue;
+                }
+                for ci in 0..c_in {
+                    let xrow = &xv[ci * len..(ci + 1) * len];
+                    for j in 0..k {
+                        let off = j * dilation;
+                        let lo = t0.max(pad.saturating_sub(off));
+                        let hi = t1.min(len + pad - off);
+                        if lo >= hi {
+                            continue;
+                        }
+                        let src = &xrow[lo + off - pad..hi + off - pad];
+                        let n = hi - lo;
+                        let base = lo - t0;
+                        if quad == 4 {
+                            let w0 = wv[((co0 + co_i) * c_in + ci) * k + j];
+                            let w1 = wv[((co0 + co_i + 1) * c_in + ci) * k + j];
+                            let w2 = wv[((co0 + co_i + 2) * c_in + ci) * k + j];
+                            let w3 = wv[((co0 + co_i + 3) * c_in + ci) * k + j];
+                            // Split tile into four disjoint rows.
+                            let (r0, rest) = tile[co_i * bt..].split_at_mut(bt);
+                            let (r1, rest) = rest.split_at_mut(bt);
+                            let (r2, r3) = rest.split_at_mut(bt);
+                            let (d0, d1) = (&mut r0[base..base + n], &mut r1[base..base + n]);
+                            let (d2, d3) = (&mut r2[base..base + n], &mut r3[base..base + n]);
+                            for t in 0..n {
+                                let s = src[t];
+                                d0[t] += w0 * s;
+                                d1[t] += w1 * s;
+                                d2[t] += w2 * s;
+                                d3[t] += w3 * s;
+                            }
+                        } else {
+                            for q in 0..quad {
+                                let wcoef = wv[((co0 + co_i + q) * c_in + ci) * k + j];
                                 let dst =
-                                    &mut tile[(co_i + q) * bt + lo - t0..(co_i + q) * bt + hi - t0];
+                                    &mut tile[(co_i + q) * bt + base..(co_i + q) * bt + base + n];
                                 for (a, &s) in dst.iter_mut().zip(src) {
                                     *a += wcoef * s;
                                 }
@@ -319,52 +394,9 @@ fn conv1d_flat_prepacked_into(
                         }
                     }
                 }
-                co_i += 4;
-                continue;
+                co_i += quad;
             }
-            for ci in 0..c_in {
-                let xrow = &xv[ci * len..(ci + 1) * len];
-                for j in 0..k {
-                    let off = j * dilation;
-                    let lo = t0.max(pad.saturating_sub(off));
-                    let hi = t1.min(len + pad - off);
-                    if lo >= hi {
-                        continue;
-                    }
-                    let src = &xrow[lo + off - pad..hi + off - pad];
-                    let n = hi - lo;
-                    let base = lo - t0;
-                    if quad == 4 {
-                        let w0 = wv[((co0 + co_i) * c_in + ci) * k + j];
-                        let w1 = wv[((co0 + co_i + 1) * c_in + ci) * k + j];
-                        let w2 = wv[((co0 + co_i + 2) * c_in + ci) * k + j];
-                        let w3 = wv[((co0 + co_i + 3) * c_in + ci) * k + j];
-                        // Split tile into four disjoint rows.
-                        let (r0, rest) = tile[co_i * bt..].split_at_mut(bt);
-                        let (r1, rest) = rest.split_at_mut(bt);
-                        let (r2, r3) = rest.split_at_mut(bt);
-                        let (d0, d1) = (&mut r0[base..base + n], &mut r1[base..base + n]);
-                        let (d2, d3) = (&mut r2[base..base + n], &mut r3[base..base + n]);
-                        for t in 0..n {
-                            let s = src[t];
-                            d0[t] += w0 * s;
-                            d1[t] += w1 * s;
-                            d2[t] += w2 * s;
-                            d3[t] += w3 * s;
-                        }
-                    } else {
-                        for q in 0..quad {
-                            let wcoef = wv[((co0 + co_i + q) * c_in + ci) * k + j];
-                            let dst = &mut tile[(co_i + q) * bt + base..(co_i + q) * bt + base + n];
-                            for (a, &s) in dst.iter_mut().zip(src) {
-                                *a += wcoef * s;
-                            }
-                        }
-                    }
-                }
-            }
-            co_i += quad;
-        }
+        });
         // Merge into this task's disjoint region of `out`, in-task
         // (parallel, tile still cache-hot), bias folded into the pass.
         for (co_i, co) in (co0..co1).enumerate() {
@@ -424,10 +456,11 @@ pub fn conv_transpose1d_flat(
     stride: usize,
 ) -> (Vec<f32>, usize) {
     let l_out = (len - 1) * stride + k - 2 * pad;
-    let out: Vec<Vec<f32>> = (0..c_out)
-        .into_par_iter()
-        .map(|co| {
-            let mut row = vec![bv.map_or(0.0, |b| b[co]); l_out];
+    // Vein 6: each output row is written straight into the flat result —
+    // no per-row `Vec`, no `Vec<Vec>` and no second pass flattening it.
+    let out = crate::buf::filled_f32(c_out * l_out, |out| {
+        out.par_chunks_mut(l_out).enumerate().for_each(|(co, row)| {
+            row.fill(bv.map_or(0.0, |b| b[co]));
             let mut phase_acc = vec![0f32; l_out / stride + 1];
             for phase in 0..stride {
                 // Output positions t = phase, phase+s, ... : n_phase of them.
@@ -460,15 +493,9 @@ pub fn conv_transpose1d_flat(
                     row[n * stride + phase] += v;
                 }
             }
-            row
-        })
-        .collect();
-
-    let mut flat = Vec::with_capacity(c_out * l_out);
-    for row in out {
-        flat.extend(row);
-    }
-    (flat, l_out)
+        });
+    });
+    (out, l_out)
 }
 
 // ---------------------------------------------------------------------------
@@ -629,7 +656,7 @@ impl FlatDecoder {
     /// per-op breakdown (the ASR convention).
     #[must_use]
     pub fn run(&self, z: &[f32], len: usize) -> Vec<f32> {
-        let profile = std::env::var("FFAI_PROFILE").is_ok();
+        let profile = crate::asr::knobs::PROFILE_ON.get();
         let mut t_up = 0f64;
         let mut t_conv = 0f64;
         let mut t_glue = 0f64;
@@ -823,8 +850,8 @@ unsafe fn conv_quad_avx2(
     // the contract is stated on the `unsafe fn` signature above.
     unsafe {
         use std::arch::x86_64::{
-            _mm256_add_ps, _mm256_broadcast_ss, _mm256_fmadd_ps, _mm256_loadu_ps,
-            _mm256_setzero_ps, _mm256_storeu_ps,
+            _mm256_broadcast_ss, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps,
+            _mm256_storeu_ps,
         };
         let x = xv.as_ptr();
         let w = wp.as_ptr();
@@ -853,11 +880,16 @@ unsafe fn conv_quad_avx2(
                         wi += 4;
                     }
                 }
+                // Vein 6: this strip is the ONLY writer of these tile cells
+                // (strips partition the interior; edges and the <8 tail are
+                // the scalar paths), and the register accumulator already
+                // holds the whole ci x j reduction. Storing it is what
+                // `0.0 + acc` evaluated to — the load+add pair per 8 outputs
+                // was reading zeros.
                 for q in 0..4 {
                     let dst = tile.as_mut_ptr().add(q * bt + (t - t0));
                     for (g, a) in acc[q].iter().enumerate() {
-                        let cur = _mm256_loadu_ps(dst.add(g * 8));
-                        _mm256_storeu_ps(dst.add(g * 8), _mm256_add_ps(cur, *a));
+                        _mm256_storeu_ps(dst.add(g * 8), *a);
                     }
                 }
                 t += 32;
@@ -880,8 +912,7 @@ unsafe fn conv_quad_avx2(
                 }
                 for (q, a) in acc.iter().enumerate() {
                     let dst = tile.as_mut_ptr().add(q * bt + (t - t0));
-                    let cur = _mm256_loadu_ps(dst);
-                    _mm256_storeu_ps(dst, _mm256_add_ps(cur, *a));
+                    _mm256_storeu_ps(dst, *a);
                 }
                 t += 8;
             } else {
@@ -1045,7 +1076,7 @@ impl FlatFlow {
     /// shape. v4 is v1's structure (flat convs + one-pass fused gates) on
     /// the packed kernel.
     pub fn run(&self, z: &mut [f32], len: usize) -> Result<()> {
-        let profile = std::env::var("FFAI_PROFILE").is_ok();
+        let profile = crate::asr::knobs::PROFILE_ON.get();
         let (mut t_conv_in, mut t_conv_rs, mut t_gate, mut t_other) = (0f64, 0f64, 0f64, 0f64);
         let clock = crate::clock::Instant::now;
         let c = self.hidden;
@@ -1058,9 +1089,20 @@ impl FlatFlow {
             // earlier v2 loss was its branchy per-element im2col gather and
             // pre-fast-exp gates, not the GEMM idea.
             let dev = Device::Cpu;
-            let mm = |wt: &Tensor, c_in: usize, x: &[f32]| -> Result<Vec<f32>> {
+            // The product stays a tensor and is READ where it lies (vein 7):
+            // `to_vec1` copied 2c x len floats back out of every GEMM, and
+            // every consumer below is a streaming pass that is just as happy
+            // with a borrow. Only the input copy (`from_slice`) remains — the
+            // allocate-and-move alternative measured neutral (see `ffn`).
+            let mm = |wt: &Tensor, c_in: usize, x: &[f32]| -> Result<Tensor> {
+                crate::asr::profile::counters()
+                    .tts_copy_bytes
+                    .add_n(x.len() * 4);
                 let xt = e(Tensor::from_slice(x, (c_in, len), &dev))?;
-                e(e(e(wt.matmul(&xt))?.flatten_all())?.to_vec1())
+                e(wt.matmul(&xt))
+            };
+            let read = |t: &Tensor, f: &mut dyn FnMut(&[f32])| -> Result<()> {
+                e(crate::buf::with_f32(t, |v| f(v)))
             };
 
             let t0 = clock();
@@ -1071,16 +1113,31 @@ impl FlatFlow {
                 a[lo * len..lo * len + len].swap_with_slice(&mut b[..len]);
             }
             let (x0, x1) = z.split_at_mut(half * len);
-            let mut h = mm(&coupling.pre_t, half, x0)?;
-            if let Some(b) = &coupling.pre_b {
-                for (row, bias) in h.chunks_mut(len).zip(b) {
-                    row.iter_mut().for_each(|v| *v += bias);
+            // `h` is the running hidden state and is mutated below, so this
+            // one product IS copied out — into its final buffer, bias added
+            // on the way, rather than copied and then re-walked.
+            let pre_t = mm(&coupling.pre_t, half, x0)?;
+            let mut h = Vec::with_capacity(c * len);
+            read(&pre_t, &mut |p| {
+                crate::asr::profile::counters()
+                    .tts_copy_bytes
+                    .add_n(p.len() * 4);
+                match &coupling.pre_b {
+                    Some(b) => {
+                        for (row, bias) in p.chunks(len).zip(b) {
+                            h.extend(row.iter().map(|v| v + bias));
+                        }
+                    }
+                    None => h.extend_from_slice(p),
                 }
-            }
+            })?;
             t_other += t0.elapsed().as_secs_f64();
 
             let k = coupling.k;
             let pad = coupling.pad;
+            crate::asr::profile::counters()
+                .memset_bytes
+                .add_n((c * k * len + 2 * c * len) * 4);
             let mut cols = vec![0f32; c * k * len];
             let mut skip = vec![0f32; c * len];
             let mut acts = vec![0f32; c * len];
@@ -1107,12 +1164,7 @@ impl FlatFlow {
                         }
                     }
                 }
-                let mut a = mm(&coupling.in_t[i], c * k, &cols)?;
-                if let Some(b) = &coupling.in_b[i] {
-                    for (row, bias) in a.chunks_mut(len).zip(b) {
-                        row.iter_mut().for_each(|v| *v += bias);
-                    }
-                }
+                let a = mm(&coupling.in_t[i], c * k, &cols)?;
                 t_conv_in += t0.elapsed().as_secs_f64();
                 // Fused gate: tanh(a[..c]) · sigmoid(a[c..2c]), rayon over
                 // channel rows, via the vectorized-exp forms (~2e-7 rel
@@ -1121,56 +1173,79 @@ impl FlatFlow {
                 // REVERTED when it compounded to 7e-2 at dec_in over 16
                 // coupled gates. fast_exp is three orders tighter and the
                 // dec_in oracle re-gates it.
+                //
+                // The in-layer bias is added as each value is read (vein 7):
+                // the same `t + bias` the separate pass computed, with no
+                // pass of its own.
                 let t0 = clock();
-                let (gate_t, gate_s) = a.split_at(c * len);
-                acts.par_chunks_mut(len)
-                    .zip(gate_t.par_chunks(len).zip(gate_s.par_chunks(len)))
-                    .for_each(|(dst, (at, as_))| {
-                        for ((d, &t), &s) in dst.iter_mut().zip(at).zip(as_) {
-                            *d = fast_tanh_exp(t) * fast_sigmoid(s);
-                        }
-                    });
+                let in_b = coupling.in_b[i].as_deref();
+                read(&a, &mut |a| {
+                    let (gate_t, gate_s) = a.split_at(c * len);
+                    acts.par_chunks_mut(len)
+                        .zip(gate_t.par_chunks(len).zip(gate_s.par_chunks(len)))
+                        .enumerate()
+                        .for_each(|(ch, (dst, (at, as_)))| match in_b {
+                            Some(b) => {
+                                let (bt, bs) = (b[ch], b[c + ch]);
+                                for ((d, &t), &s) in dst.iter_mut().zip(at).zip(as_) {
+                                    *d = fast_tanh_exp(t + bt) * fast_sigmoid(s + bs);
+                                }
+                            }
+                            None => {
+                                for ((d, &t), &s) in dst.iter_mut().zip(at).zip(as_) {
+                                    *d = fast_tanh_exp(t) * fast_sigmoid(s);
+                                }
+                            }
+                        });
+                })?;
                 t_gate += t0.elapsed().as_secs_f64();
                 let t0 = clock();
                 // res_skip is a pure GEMM (k=1, the 96-vs-19 GF/s probe
                 // row); its bias fuses into the residual/skip adds.
                 let r = mm(&coupling.rs_t[i], c, &acts)?;
                 let rb = coupling.rs_b[i].as_deref();
-                if i < n_layers - 1 {
-                    for ch in 0..c {
-                        let bias = rb.map_or(0.0, |b| b[ch]);
-                        let hr = &mut h[ch * len..(ch + 1) * len];
-                        for (hv, rv) in hr.iter_mut().zip(&r[ch * len..(ch + 1) * len]) {
-                            *hv += rv + bias;
+                let last = i == n_layers - 1;
+                read(&r, &mut |r| {
+                    if last {
+                        for ch in 0..c {
+                            let bias = rb.map_or(0.0, |b| b[ch]);
+                            let sk = &mut skip[ch * len..(ch + 1) * len];
+                            for (sv, rv) in sk.iter_mut().zip(&r[ch * len..(ch + 1) * len]) {
+                                *sv += rv + bias;
+                            }
                         }
-                        let bias2 = rb.map_or(0.0, |b| b[c + ch]);
-                        let sk = &mut skip[ch * len..(ch + 1) * len];
-                        for (sv, rv) in sk.iter_mut().zip(&r[(c + ch) * len..(c + ch + 1) * len]) {
-                            *sv += rv + bias2;
+                    } else {
+                        for ch in 0..c {
+                            let bias = rb.map_or(0.0, |b| b[ch]);
+                            let hr = &mut h[ch * len..(ch + 1) * len];
+                            for (hv, rv) in hr.iter_mut().zip(&r[ch * len..(ch + 1) * len]) {
+                                *hv += rv + bias;
+                            }
+                            let bias2 = rb.map_or(0.0, |b| b[c + ch]);
+                            let sk = &mut skip[ch * len..(ch + 1) * len];
+                            for (sv, rv) in
+                                sk.iter_mut().zip(&r[(c + ch) * len..(c + ch + 1) * len])
+                            {
+                                *sv += rv + bias2;
+                            }
                         }
                     }
-                } else {
-                    for ch in 0..c {
-                        let bias = rb.map_or(0.0, |b| b[ch]);
-                        let sk = &mut skip[ch * len..(ch + 1) * len];
-                        for (sv, rv) in sk.iter_mut().zip(&r[ch * len..(ch + 1) * len]) {
-                            *sv += rv + bias;
-                        }
-                    }
-                }
+                })?;
                 t_conv_rs += t0.elapsed().as_secs_f64();
             }
             let t0 = clock();
             // post: GEMM; bias fused into the coupling subtract.
             let m = mm(&coupling.post_t, c, &skip)?;
             let pb = coupling.post_b.as_deref();
-            for ch in 0..half {
-                let bias = pb.map_or(0.0, |b| b[ch]);
-                let xr = &mut x1[ch * len..(ch + 1) * len];
-                for (x, mv) in xr.iter_mut().zip(&m[ch * len..(ch + 1) * len]) {
-                    *x -= mv + bias;
+            read(&m, &mut |m| {
+                for ch in 0..half {
+                    let bias = pb.map_or(0.0, |b| b[ch]);
+                    let xr = &mut x1[ch * len..(ch + 1) * len];
+                    for (x, mv) in xr.iter_mut().zip(&m[ch * len..(ch + 1) * len]) {
+                        *x -= mv + bias;
+                    }
                 }
-            }
+            })?;
             t_other += t0.elapsed().as_secs_f64();
         }
         if profile {
@@ -1464,15 +1539,16 @@ pub fn layer_norm_flat(
 /// the flattening.
 #[must_use]
 pub fn gelu_erf_flat(xv: &[f32]) -> Vec<f32> {
-    let mut out = vec![0f32; xv.len()];
-    out.par_chunks_mut(4096)
-        .zip(xv.par_chunks(4096))
-        .for_each(|(o, x)| {
-            for (o, &v) in o.iter_mut().zip(x) {
-                *o = 0.5 * v * (1.0 + erf_as(v * std::f32::consts::FRAC_1_SQRT_2));
-            }
-        });
-    out
+    // Every element written (vein 5): no zero pass.
+    crate::buf::filled_f32(xv.len(), |out| {
+        out.par_chunks_mut(4096)
+            .zip(xv.par_chunks(4096))
+            .for_each(|(o, x)| {
+                for (o, &v) in o.iter_mut().zip(x) {
+                    *o = 0.5 * v * (1.0 + erf_as(v * std::f32::consts::FRAC_1_SQRT_2));
+                }
+            });
+    })
 }
 
 /// Abramowitz & Stegun 7.1.26 — |error| <= 1.5e-7.

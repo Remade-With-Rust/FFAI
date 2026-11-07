@@ -62,46 +62,14 @@ fn conv1d_gemm(
     let batch = x.dim(0)?;
     let l_in = x.dim(2)?;
     let l_out = (l_in + 2 - 3) / stride + 1;
-    let src: Vec<f32> = x.flatten_all()?.to_vec1()?;
-
-    // im2col for every batch item into ONE buffer, laid out so the columns of
-    // item b occupy `[b*l_out, (b+1)*l_out)`. That makes the whole batch a
-    // single `(cin*3) x (batch*l_out)` GEMM instead of `batch` small ones —
-    // the weight matrix is read once rather than per item.
-    //
-    // This used to index `src[c*l_in..]` with no batch stride while the
-    // caller's signature advertised `(batch, n_mels, frames)`. With batch > 1
-    // it silently produced item 0's answer for the whole batch: no error, no
-    // shape mismatch, just wrong features for every window after the first.
-    let mut col = vec![0f32; cin * 3 * batch * l_out];
-    let row_stride = batch * l_out;
-    for b in 0..batch {
-        let base = b * cin * l_in;
-        for c in 0..cin {
-            let s = &src[base + c * l_in..base + (c + 1) * l_in];
-            for k in 0..3 {
-                let row = (c * 3 + k) * row_stride + b * l_out;
-                let dst = &mut col[row..row + l_out];
-                if stride == 1 {
-                    // Contiguous slices — padding 1 means tap k reads t+k-1.
-                    match k {
-                        0 => dst[1..].copy_from_slice(&s[..l_out - 1]),
-                        1 => dst.copy_from_slice(&s[..l_out]),
-                        _ => dst[..l_out - 1].copy_from_slice(&s[1..l_out]),
-                    }
-                } else {
-                    for (i, o) in dst.iter_mut().enumerate() {
-                        let idx = stride * i + k;
-                        *o = if idx == 0 {
-                            0.0
-                        } else {
-                            *s.get(idx - 1).unwrap_or(&0.0)
-                        };
-                    }
-                }
-            }
-        }
-    }
+    // Vein 14: read the input where it is instead of `to_vec1()`-copying it
+    // (0.96 MB for conv1, 4.6 MB for conv2, per window on tiny).
+    let xc = if x.is_contiguous() {
+        x.clone()
+    } else {
+        x.contiguous()?
+    };
+    let col = crate::buf::with_f32(&xc, |src| im2col_k3(src, cin, l_in, batch, l_out, stride))?;
     let cout = wm.dim(0)?;
     let colt = Tensor::from_vec(col, (cin * 3, batch * l_out), x.device())?;
     let y = wm
@@ -115,6 +83,69 @@ fn conv1d_gemm(
     } else {
         y.transpose(0, 1)?.contiguous()
     }
+}
+
+/// The k=3, pad=1 im2col matrix, `(cin*3, batch*l_out)`, written straight
+/// into its buffer (vein 5): every element is either copied from `src` or is
+/// an explicit edge zero, so there is no zero pass to pay first.
+fn im2col_k3(
+    src: &[f32],
+    cin: usize,
+    l_in: usize,
+    batch: usize,
+    l_out: usize,
+    stride: usize,
+) -> Vec<f32> {
+    super::profile::counters()
+        .enc_copy_bytes
+        .add_n(cin * 3 * batch * l_out * 4);
+
+    // im2col for every batch item into ONE buffer, laid out so the columns of
+    // item b occupy `[b*l_out, (b+1)*l_out)`. That makes the whole batch a
+    // single `(cin*3) x (batch*l_out)` GEMM instead of `batch` small ones —
+    // the weight matrix is read once rather than per item.
+    //
+    // This used to index `src[c*l_in..]` with no batch stride while the
+    // caller's signature advertised `(batch, n_mels, frames)`. With batch > 1
+    // it silently produced item 0's answer for the whole batch: no error, no
+    // shape mismatch, just wrong features for every window after the first.
+    let row_stride = batch * l_out;
+    crate::buf::filled_f32(cin * 3 * batch * l_out, |col| {
+        for b in 0..batch {
+            let base = b * cin * l_in;
+            for c in 0..cin {
+                let s = &src[base + c * l_in..base + (c + 1) * l_in];
+                for k in 0..3 {
+                    let row = (c * 3 + k) * row_stride + b * l_out;
+                    let dst = &mut col[row..row + l_out];
+                    if stride == 1 {
+                        // Contiguous slices — padding 1 means tap k reads t+k-1;
+                        // the one edge cell each outer tap leaves is the pad.
+                        match k {
+                            0 => {
+                                dst[0] = 0.0;
+                                dst[1..].copy_from_slice(&s[..l_out - 1]);
+                            }
+                            1 => dst.copy_from_slice(&s[..l_out]),
+                            _ => {
+                                dst[..l_out - 1].copy_from_slice(&s[1..l_out]);
+                                dst[l_out - 1] = 0.0;
+                            }
+                        }
+                    } else {
+                        for (i, o) in dst.iter_mut().enumerate() {
+                            let idx = stride * i + k;
+                            *o = if idx == 0 {
+                                0.0
+                            } else {
+                                *s.get(idx - 1).unwrap_or(&0.0)
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn layer_norm(size: usize, vb: VarBuilder) -> CandleResult<LayerNorm> {

@@ -183,9 +183,20 @@ pub fn subsegment_at(
 /// poison every comparison it takes part in.
 #[must_use]
 pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    cosine_distance_with_norms(a, b, norm(a), norm(b))
+}
+
+/// `sqrt(sum x^2)` — the per-embedding half of a cosine distance, which
+/// depends on one embedding only and so is computed once per embedding in
+/// `cluster` rather than once per PAIR (vein 10). Same expression, same bits.
+fn norm(a: &[f32]) -> f32 {
+    a.iter().map(|x| x * x).sum::<f32>().sqrt()
+}
+
+/// [`cosine_distance`] with the two norms already known.
+fn cosine_distance_with_norms(a: &[f32], b: &[f32], na: f32, nb: f32) -> f32 {
+    super::profile::counters().dist_evals.hit();
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
     if na <= f32::EPSILON || nb <= f32::EPSILON {
         return 2.0;
     }
@@ -214,13 +225,41 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// optimal mapping; a bad merge is not. Supply the count when it is certain,
 /// not as a safety measure.
 #[must_use]
-pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, max_speakers: Option<usize>) -> Vec<usize> {
+pub fn cluster<E: AsRef<[f32]>>(
+    embeddings: &[E],
+    threshold: f32,
+    max_speakers: Option<usize>,
+) -> Vec<usize> {
     let n = embeddings.len();
     if n == 0 {
         return Vec::new();
     }
     if n == 1 {
         return vec![0];
+    }
+
+    // Vein 10: every pairwise distance ONCE, up front. The loop below used
+    // to re-evaluate `cosine_distance` (a 192-wide dot and two norms) for
+    // every member pair of every cluster pair on every merge round —
+    // O(n^2) evaluations per round, O(n^3)-O(n^4) per call — for values that
+    // never change. The matrix holds the identical f32 each pair produced,
+    // and the average-linkage sums below add them in the same member order,
+    // so every merge decision is bit-for-bit the one the recomputing loop
+    // made. The norms, which depend on one embedding each, are n sqrts
+    // instead of n^2.
+    let norms: Vec<f32> = embeddings.iter().map(|e| norm(e.as_ref())).collect();
+    let mut dist = vec![0.0f32; n * n];
+    for a in 0..n {
+        for b in (a + 1)..n {
+            let d = cosine_distance_with_norms(
+                embeddings[a].as_ref(),
+                embeddings[b].as_ref(),
+                norms[a],
+                norms[b],
+            );
+            dist[a * n + b] = d;
+            dist[b * n + a] = d;
+        }
     }
 
     // Each item starts in its own cluster; `members` tracks live clusters.
@@ -236,11 +275,11 @@ pub fn cluster(embeddings: &[Vec<f32>], threshold: f32, max_speakers: Option<usi
         for i in 0..members.len() {
             for j in (i + 1)..members.len() {
                 let mut sum = 0.0f32;
-                let mut count = 0usize;
+                // |i|·|j| terms, each a table read; the count is the product.
+                let count = members[i].len() * members[j].len();
                 for &a in &members[i] {
                     for &b in &members[j] {
-                        sum += cosine_distance(&embeddings[a], &embeddings[b]);
-                        count += 1;
+                        sum += dist[a * n + b];
                     }
                 }
                 let d = if count > 0 {
@@ -477,7 +516,7 @@ mod tests {
 
     #[test]
     fn empty_input_is_empty_output() {
-        assert!(cluster(&[], DEFAULT_THRESHOLD, None).is_empty());
+        assert!(cluster::<Vec<f32>>(&[], DEFAULT_THRESHOLD, None).is_empty());
         assert!(subsegment(&[], 1.5, 0.75).is_empty());
         assert!(turns_from_labels(&[], &[]).is_empty());
     }
@@ -746,6 +785,16 @@ impl StreamState {
         (
             self.windows.iter().map(|w| (w.0, w.1)).collect(),
             self.windows.iter().map(|w| w.2.clone()).collect(),
+        )
+    }
+
+    /// [`Self::parts`] without copying the embeddings (vein 10): the bounds
+    /// are copied (16 bytes each), the embeddings are borrowed.
+    #[must_use]
+    pub fn parts_ref(&self) -> (Vec<(f64, f64)>, Vec<&[f32]>) {
+        (
+            self.windows.iter().map(|w| (w.0, w.1)).collect(),
+            self.windows.iter().map(|w| w.2.as_slice()).collect(),
         )
     }
 }

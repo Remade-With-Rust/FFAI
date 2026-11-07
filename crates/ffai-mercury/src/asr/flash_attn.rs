@@ -47,7 +47,7 @@ use std::arch::x86_64::{
 
 const BQ: usize = 64;
 const BK: usize = 256;
-const HD: usize = 64;
+pub(crate) const HD: usize = 64;
 
 /// Below this query length the three-op path wins — there is not enough work
 /// per tile to amortize packing, and the decoder's single-row queries have no
@@ -128,6 +128,60 @@ pub fn serves(kt: &Tensor, v: &Tensor) -> bool {
     }
 }
 
+/// Whether the decode-shape kernel exists on this machine at all.
+#[inline]
+pub(crate) fn decode_kernel_available() -> bool {
+    have_avx2()
+}
+
+/// The key count below which the decode shape takes the three-op path — the
+/// same floor `attend` applies, exposed so a caller holding its own K/V
+/// layout routes identically.
+#[inline]
+pub(crate) fn decode_floor() -> usize {
+    min_decode_keys()
+}
+
+/// One decode-shape head straight out of a flat, kernel-layout K/V cache.
+///
+/// `kt` is a `[HD][kstride]` block whose first `keys` columns are live, `v`
+/// is `[keys][HD]` contiguous, `q` and `out` are one head (HD floats), and
+/// `scratch` holds at least `keys` floats. This is the body `attend` runs
+/// through `CustomOp3` at `qlen == 1`, minus the dispatch: the self-attention
+/// decoder keeps its cache in exactly this layout (`text_decoder::FlatKv`) so
+/// nothing has to be concatenated, split, transposed or made contiguous
+/// before the kernel can read it. Arithmetic is identical to the op path —
+/// the stride only changes addresses.
+///
+/// Returns `false` (and writes nothing) when the kernel is unavailable here.
+pub(crate) fn decode_head(
+    q: &[f32],
+    kt: &[f32],
+    kstride: usize,
+    v: &[f32],
+    out: &mut [f32],
+    keys: usize,
+    scratch: &mut [f32],
+) -> bool {
+    if !have_avx2() || keys == 0 {
+        return false;
+    }
+    // The kernel's length contract, checked once per head rather than trusted.
+    assert!(
+        keys <= kstride,
+        "flat K/V: {keys} live keys exceed the row stride {kstride}"
+    );
+    assert!(q.len() >= HD && out.len() >= HD && scratch.len() >= keys);
+    assert!(kt.len() >= (HD - 1) * kstride + keys && v.len() >= keys * HD);
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: avx2+fma checked by `have_avx2()` above; every slice extent the
+    // kernel dereferences was asserted just above.
+    unsafe {
+        xattn_head(q, kt, v, out, keys, scratch, kstride);
+    }
+    true
+}
+
 /// Encoder attention returning (1, seq, heads*HD) — already merged.
 ///
 /// Saves the caller a `transpose(1,2) + flatten_from(2)`, which is a strided
@@ -153,13 +207,56 @@ pub fn attend_merged(q: &Tensor, kt: &Tensor, v: &Tensor) -> CandleResult<Option
     Ok(Some(q.apply_op3(
         kt,
         v,
-        MergedAttnOp { heads, seq: keys },
+        MergedAttnOp {
+            heads,
+            seq: keys,
+            unsplit: false,
+        },
+    )?))
+}
+
+/// [`attend_merged`] for q and v that were never split into heads: `q` and
+/// `v` are `(1, seq, heads*HD)` — the projection outputs as they come — and
+/// `kt` is `(1, heads, HD, seq)` as before. Head `h` of q is the column band
+/// `[h*HD, (h+1)*HD)` of every row, read with a row stride of `heads*HD`; v
+/// likewise. Same kernel, same arithmetic, two fewer 2.3 MB copies per layer.
+pub fn attend_merged_unsplit(q: &Tensor, kt: &Tensor, v: &Tensor) -> CandleResult<Option<Tensor>> {
+    let (b, seq, width) = match q.dims3() {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    if b != 1 || !have_avx2() || !matches!(q.device(), Device::Cpu) {
+        return Ok(None);
+    }
+    if q.dtype() != DType::F32 || kt.dtype() != DType::F32 || v.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    let heads = match kt.dims4() {
+        Ok((1, h, d, k)) if d == HD && k == seq && h * HD == width => h,
+        _ => return Ok(None),
+    };
+    if v.dims3()? != (1, seq, width) || seq < MIN_SEQ {
+        return Ok(None);
+    }
+    if !q.is_contiguous() || !v.is_contiguous() {
+        return Ok(None);
+    }
+    Ok(Some(q.apply_op3(
+        kt,
+        v,
+        MergedAttnOp {
+            heads,
+            seq,
+            unsplit: true,
+        },
     )?))
 }
 
 struct MergedAttnOp {
     heads: usize,
     seq: usize,
+    /// q and v arrive as `(1, seq, heads*HD)` rather than head-split.
+    unsplit: bool,
 }
 
 impl CustomOp3 for MergedAttnOp {
@@ -190,20 +287,42 @@ impl CustomOp3 for MergedAttnOp {
         let v = &v[l3.start_offset()..l3.start_offset() + n];
 
         let width = heads * HD;
-        let mut out = vec![0f32; seq * width];
-        // Heads write disjoint COLUMN BANDS of the same rows, so the slices
-        // cannot be handed out by `par_chunks_mut`. Split by head over raw
-        // pointers instead; each head touches only `[.. + h*HD .. + h*HD+HD]`
-        // of every row, so no two threads ever write the same element.
-        let base = out.as_mut_ptr() as usize;
-        (0..heads).into_par_iter().for_each(|h| {
-            let per = seq * HD;
-            let r = h * per..(h + 1) * per;
-            // SAFETY: disjoint column bands, as argued above.
-            let slice = unsafe {
-                std::slice::from_raw_parts_mut((base as *mut f32).add(h * HD), seq * width - h * HD)
-            };
-            flash_head_strided(&q[r.clone()], &kt[r.clone()], &v[r], slice, seq, width);
+        // Every (row, column) of `out` is written by exactly one head below
+        // (vein 5): no zero pass over the 2.3 MB.
+        let unsplit = self.unsplit;
+        let out = crate::buf::filled_f32(seq * width, |out| {
+            // Heads write disjoint COLUMN BANDS of the same rows, so the slices
+            // cannot be handed out by `par_chunks_mut`. Split by head over raw
+            // pointers instead; each head touches only `[.. + h*HD .. + h*HD+HD]`
+            // of every row, so no two threads ever write the same element.
+            let base = out.as_mut_ptr() as usize;
+            (0..heads).into_par_iter().for_each(|h| {
+                let per = seq * HD;
+                let r = h * per..(h + 1) * per;
+                // SAFETY: disjoint column bands, as argued above.
+                let slice = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        (base as *mut f32).add(h * HD),
+                        seq * width - h * HD,
+                    )
+                };
+                if unsplit {
+                    // Head h of q / v: column band h*HD.. of every row, row
+                    // stride `width`.
+                    flash_head_strided_io(
+                        &q[h * HD..],
+                        width,
+                        &kt[r],
+                        &v[h * HD..],
+                        width,
+                        slice,
+                        seq,
+                        width,
+                    );
+                } else {
+                    flash_head_strided(&q[r.clone()], &kt[r.clone()], &v[r], slice, seq, width);
+                }
+            });
         });
         Ok((CpuStorage::F32(out), Shape::from_dims(&[1, seq, width])))
     }
@@ -394,6 +513,7 @@ impl CustomOp3 for FlashAttnOp {
                         &mut out[h * HD..(h + 1) * HD],
                         keys,
                         &mut scratch,
+                        keys,
                     );
                 }
             }
@@ -434,6 +554,26 @@ fn flash_head_strided(
     seq: usize,
     out_stride: usize,
 ) {
+    flash_head_strided_io(q, HD, kt, v, HD, out, seq, out_stride);
+}
+
+/// [`flash_head_strided`] with explicit row strides on q and v as well, so a
+/// head can be read straight out of the unsplit `(seq, heads*HD)` projection
+/// (`q_stride == v_stride == heads*HD`) instead of a head-split copy. The
+/// kernels only ever index rows by `row * stride + d`, so the arithmetic is
+/// the same to the bit; only the addresses change.
+#[cfg(target_arch = "x86_64")]
+#[allow(clippy::too_many_arguments)]
+fn flash_head_strided_io(
+    q: &[f32],
+    q_stride: usize,
+    kt: &[f32],
+    v: &[f32],
+    v_stride: usize,
+    out: &mut [f32],
+    seq: usize,
+    out_stride: usize,
+) {
     let mut scores = vec![0f32; BQ * BK];
     let mut acc = vec![0f32; BQ * HD];
     let mut run_max = vec![0f32; BQ];
@@ -444,16 +584,18 @@ fn flash_head_strided(
         acc[..rows * HD].fill(0.0);
         run_max[..rows].fill(f32::NEG_INFINITY);
         run_sum[..rows].fill(0.0);
-        let qblock = &q[q0 * HD..(q0 + rows) * HD];
+        let qblock = &q[q0 * q_stride..];
 
         for k0 in (0..seq).step_by(BK) {
             let cols = BK.min(seq - k0);
             // SAFETY: every callee here (`scores_tile`, `softmax_row`, `accum_pv`) is
             // avx2+fma-gated, and this function is only reached once `have_avx2()` has
             // passed. Slice bounds: `rows`/`cols` are clamped to the block size against
-            // `seq` immediately above, so no tile read crosses the end of `q`/`kt`.
+            // `seq` immediately above, so no tile read crosses the end of `q`/`kt`;
+            // the strided q/v views extend to the end of their buffers, and the last
+            // row read is `(rows-1)*stride + HD <= len` by the callers' geometry.
             unsafe {
-                scores_tile(qblock, kt, &mut scores, rows, k0, cols, seq);
+                scores_tile(qblock, q_stride, kt, &mut scores, rows, k0, cols, seq);
                 for i in 0..rows {
                     let (new_max, correction, block_sum) =
                         softmax_row(&mut scores[i * BK..(i + 1) * BK], cols, run_max[i]);
@@ -469,7 +611,7 @@ fn flash_head_strided(
                         }
                     }
                 }
-                accum_pv(&scores, v, &mut acc, rows, k0, cols);
+                accum_pv(&scores, v, v_stride, &mut acc, rows, k0, cols);
             }
         }
 
@@ -498,6 +640,7 @@ unsafe fn xattn_head(
     _o: &mut [f32],
     _n: usize,
     _s: &mut [f32],
+    _kstride: usize,
 ) {
     unreachable!("guarded by have_avx2()")
 }
@@ -518,6 +661,26 @@ fn flash_head_strided(
     _q: &[f32],
     _kt: &[f32],
     _v: &[f32],
+    _out: &mut [f32],
+    _seq: usize,
+    _out_stride: usize,
+) {
+    unreachable!("guarded by have_avx2()")
+}
+
+// Stub for the unsplit-operand kernel (vein 14): `MergedAttnOp` names it on
+// every target, and `attend_merged_unsplit` only returns `Some` behind
+// `have_avx2()`, so this body is unreachable off x86_64. The
+// `tests/veins_reachability.rs` gate asserts the kernel declines on non-AVX2
+// machines.
+#[cfg(not(target_arch = "x86_64"))]
+#[allow(clippy::too_many_arguments)]
+fn flash_head_strided_io(
+    _q: &[f32],
+    _q_stride: usize,
+    _kt: &[f32],
+    _v: &[f32],
+    _v_stride: usize,
     _out: &mut [f32],
     _seq: usize,
     _out_stride: usize,
@@ -606,6 +769,7 @@ unsafe fn xattn_head(
     out: &mut [f32],
     keys: usize,
     s: &mut [f32],
+    kstride: usize,
 ) {
     // SAFETY: whole-body wrapper inserted by the edition-2024
     // `unsafe_op_in_unsafe_fn` migration. This block adds no new obligation:
@@ -616,7 +780,7 @@ unsafe fn xattn_head(
         s[..keys].fill(0.0);
         for t in 0..HD {
             let qv = _mm256_set1_ps(*q.get_unchecked(t));
-            let krow = kt.as_ptr().add(t * keys);
+            let krow = kt.as_ptr().add(t * kstride);
             let sp = s.as_mut_ptr();
             let mut j = 0;
             while j + 8 <= keys {
@@ -796,6 +960,7 @@ unsafe fn xattn_head_f16(
 // bounds - the flash loop clamps both against `seq` before calling.
 unsafe fn scores_tile(
     qs: &[f32],
+    q_stride: usize,
     kt: &[f32],
     scores: &mut [f32],
     rows: usize,
@@ -822,10 +987,10 @@ unsafe fn scores_tile(
                     let kv0 = _mm256_loadu_ps(kp);
                     let kv1 = _mm256_loadu_ps(kp.add(8));
 
-                    let q0 = _mm256_set1_ps(*qs.get_unchecked(i0 * HD + t));
-                    let q1 = _mm256_set1_ps(*qs.get_unchecked((i0 + 1) * HD + t));
-                    let q2 = _mm256_set1_ps(*qs.get_unchecked((i0 + 2) * HD + t));
-                    let q3 = _mm256_set1_ps(*qs.get_unchecked((i0 + 3) * HD + t));
+                    let q0 = _mm256_set1_ps(*qs.get_unchecked(i0 * q_stride + t));
+                    let q1 = _mm256_set1_ps(*qs.get_unchecked((i0 + 1) * q_stride + t));
+                    let q2 = _mm256_set1_ps(*qs.get_unchecked((i0 + 2) * q_stride + t));
+                    let q3 = _mm256_set1_ps(*qs.get_unchecked((i0 + 3) * q_stride + t));
 
                     a00 = _mm256_fmadd_ps(q0, kv0, a00);
                     a01 = _mm256_fmadd_ps(q0, kv1, a01);
@@ -852,7 +1017,7 @@ unsafe fn scores_tile(
                 for m in 0..4 {
                     let mut a = 0f32;
                     for t in 0..HD {
-                        a += qs.get_unchecked((i0 + m) * HD + t)
+                        a += qs.get_unchecked((i0 + m) * q_stride + t)
                             * kt.get_unchecked(t * seq + k0 + j);
                     }
                     *scores.get_unchecked_mut((i0 + m) * BK + j) = a;
@@ -864,7 +1029,7 @@ unsafe fn scores_tile(
             for j in 0..cols {
                 let mut a = 0f32;
                 for t in 0..HD {
-                    a += qs.get_unchecked(i * HD + t) * kt.get_unchecked(t * seq + k0 + j);
+                    a += qs.get_unchecked(i * q_stride + t) * kt.get_unchecked(t * seq + k0 + j);
                 }
                 *scores.get_unchecked_mut(i * BK + j) = a;
             }
@@ -880,6 +1045,7 @@ unsafe fn scores_tile(
 unsafe fn accum_pv(
     scores: &[f32],
     v: &[f32],
+    v_stride: usize,
     acc: &mut [f32],
     rows: usize,
     k0: usize,
@@ -905,7 +1071,7 @@ unsafe fn accum_pv(
                 let mut a31 = _mm256_loadu_ps(ap.add((i0 + 3) * HD + d0 + 8));
 
                 for j in 0..cols {
-                    let vp = vbase.add((k0 + j) * HD + d0);
+                    let vp = vbase.add((k0 + j) * v_stride + d0);
                     let vv0 = _mm256_loadu_ps(vp);
                     let vv1 = _mm256_loadu_ps(vp.add(8));
 
@@ -940,7 +1106,8 @@ unsafe fn accum_pv(
             for j in 0..cols {
                 let p = *scores.get_unchecked(i * BK + j);
                 for d in 0..HD {
-                    *acc.get_unchecked_mut(i * HD + d) += p * v.get_unchecked((k0 + j) * HD + d);
+                    *acc.get_unchecked_mut(i * HD + d) +=
+                        p * v.get_unchecked((k0 + j) * v_stride + d);
                 }
             }
         }
@@ -1036,5 +1203,142 @@ mod tests {
         let v = Tensor::randn(0f32, 1., (1, 4, 512, HD), &dev)?;
         assert!(attend(&q, &k, &v, true)?.is_none());
         Ok(())
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod veins_tests {
+    //! Vein 1 and vein 14 kernel entry points against the op path they
+    //! replace, to the bit: the stride is the only thing that changed.
+    use super::*;
+
+    fn lcg(seed: &mut u64) -> f32 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((*seed >> 40) as f32 / (1u64 << 24) as f32) - 0.5
+    }
+
+    #[test]
+    fn decode_head_reads_a_strided_flat_cache_like_the_op_reads_a_tight_one() {
+        if !have_avx2() {
+            return;
+        }
+        let (heads, keys, cap) = (6usize, 37usize, 100usize);
+        let mut seed = 7u64;
+        let q: Vec<f32> = (0..heads * HD).map(|_| lcg(&mut seed)).collect();
+        // Flat cache: K [heads][HD][cap] with `keys` live columns, V [heads][cap][HD].
+        let mut kflat = vec![0f32; heads * HD * cap];
+        let mut vflat = vec![0f32; heads * cap * HD];
+        for h in 0..heads {
+            for t in 0..HD {
+                for j in 0..keys {
+                    kflat[h * HD * cap + t * cap + j] = lcg(&mut seed);
+                }
+            }
+            for j in 0..keys {
+                for d in 0..HD {
+                    vflat[h * cap * HD + j * HD + d] = lcg(&mut seed);
+                }
+            }
+        }
+        // The tight operands the op path consumes.
+        let mut kt = Vec::with_capacity(heads * HD * keys);
+        let mut v = Vec::with_capacity(heads * keys * HD);
+        for h in 0..heads {
+            for t in 0..HD {
+                kt.extend_from_slice(&kflat[h * HD * cap + t * cap..h * HD * cap + t * cap + keys]);
+            }
+            v.extend_from_slice(&vflat[h * cap * HD..h * cap * HD + keys * HD]);
+        }
+        let dev = Device::Cpu;
+        let qt = Tensor::from_vec(q.clone(), (1, heads, 1, HD), &dev).unwrap();
+        let ktt = Tensor::from_vec(kt, (1, heads, HD, keys), &dev).unwrap();
+        let vt = Tensor::from_vec(v, (1, heads, keys, HD), &dev).unwrap();
+        let want: Vec<f32> = attend(&qt, &ktt, &vt, false)
+            .unwrap()
+            .expect("op path serves this shape")
+            .flatten_all()
+            .unwrap()
+            .to_vec1()
+            .unwrap();
+
+        let mut got = vec![0f32; heads * HD];
+        let mut scratch = vec![0f32; cap];
+        for h in 0..heads {
+            assert!(decode_head(
+                &q[h * HD..(h + 1) * HD],
+                &kflat[h * HD * cap..(h + 1) * HD * cap],
+                cap,
+                &vflat[h * cap * HD..h * cap * HD + keys * HD],
+                &mut got[h * HD..(h + 1) * HD],
+                keys,
+                &mut scratch,
+            ));
+        }
+        for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "element {i}: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn unsplit_merged_attention_matches_the_split_operand_path_bitwise() {
+        if !have_avx2() {
+            return;
+        }
+        let (heads, seq) = (6usize, 300usize);
+        let width = heads * HD;
+        let mut seed = 11u64;
+        let dev = Device::Cpu;
+        let q = Tensor::from_vec(
+            (0..seq * width)
+                .map(|_| lcg(&mut seed))
+                .collect::<Vec<f32>>(),
+            (1, seq, width),
+            &dev,
+        )
+        .unwrap();
+        let v = Tensor::from_vec(
+            (0..seq * width)
+                .map(|_| lcg(&mut seed))
+                .collect::<Vec<f32>>(),
+            (1, seq, width),
+            &dev,
+        )
+        .unwrap();
+        let kt = Tensor::from_vec(
+            (0..heads * HD * seq)
+                .map(|_| lcg(&mut seed))
+                .collect::<Vec<f32>>(),
+            (1, heads, HD, seq),
+            &dev,
+        )
+        .unwrap();
+        let split = |t: &Tensor| {
+            t.reshape((1, seq, heads, HD))
+                .unwrap()
+                .transpose(1, 2)
+                .unwrap()
+                .contiguous()
+                .unwrap()
+        };
+        let want: Vec<f32> = attend_merged(&split(&q), &kt, &split(&v))
+            .unwrap()
+            .expect("split path serves")
+            .flatten_all()
+            .unwrap()
+            .to_vec1()
+            .unwrap();
+        let got: Vec<f32> = attend_merged_unsplit(&q, &kt, &v)
+            .unwrap()
+            .expect("unsplit path serves")
+            .flatten_all()
+            .unwrap()
+            .to_vec1()
+            .unwrap();
+        assert_eq!(got.len(), want.len());
+        for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "element {i}: {a} vs {b}");
+        }
     }
 }

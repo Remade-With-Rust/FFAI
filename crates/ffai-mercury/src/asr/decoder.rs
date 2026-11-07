@@ -508,14 +508,13 @@ fn decode_beam(
 
     // Step 0 is shared: one forward over the prompt seeds every beam, so the
     // prompt is encoded once no matter how wide the search is.
-    let logits = super::profile::timed(&p.decoder, || {
-        whisper.decoder.forward(&prompt, audio_features)
+    let mut values: Vec<f32> = Vec::new();
+    super::profile::timed(&p.decoder, || {
+        whisper
+            .decoder
+            .forward_into(&prompt, audio_features, &mut values)
     })
     .map_err(|e| Error::Model(format!("decoder forward: {e}")))?;
-    let mut values: Vec<f32> = logits
-        .to_dtype(ffai_core::candle::DType::F32)
-        .and_then(|t| t.to_vec1())
-        .map_err(tensor_err)?;
     let no_speech_prob = {
         let denom = logsumexp(&values);
         values
@@ -558,17 +557,13 @@ fn decode_beam(
             }
             whisper.decoder.restore(&beam.state);
             let last = [*beam.tokens.last().expect("seeded with one token")];
-            let logits = super::profile::timed(&p.decoder, || {
-                whisper.decoder.forward(&last, audio_features)
+            super::profile::timed(&p.decoder, || {
+                whisper
+                    .decoder
+                    .forward_into(&last, audio_features, &mut values)
             })
             .map_err(|e| Error::Model(format!("decoder forward: {e}")))?;
             let state = whisper.decoder.save();
-            let mut values: Vec<f32> = super::profile::timed(&p.sampling, || {
-                logits
-                    .to_dtype(ffai_core::candle::DType::F32)
-                    .and_then(|t| t.to_vec1())
-            })
-            .map_err(tensor_err)?;
             super::profile::timed(&p.sampling, || {
                 apply_logit_filters(
                     &mut values,
@@ -635,15 +630,34 @@ fn beam_score(beam: &Beam, prompt_len: usize, cfg: &DecodeConfig) -> f32 {
 /// comparable with any other beam's: `apply_logit_filters` sets rejected
 /// tokens to `-inf`, and those drop out of the `logsumexp` rather than
 /// silently stealing mass.
+///
+/// Selection, not a sort (vein 12): one pass keeps the `k` best in a small
+/// insertion-ordered buffer, so the 51 865-element index vector and its full
+/// `sort_unstable` per beam per step are gone. Ties are broken by lower
+/// index first — a DEFINED order where the unstable sort's was arbitrary.
+/// The pass also yields the maximum, which `logsumexp` then reuses.
 fn top_k(values: &[f32], k: usize) -> Vec<(u32, f32)> {
-    let denom = logsumexp(values);
-    let mut idx: Vec<u32> = (0..values.len() as u32).collect();
-    idx.sort_unstable_by(|&a, &b| values[b as usize].total_cmp(&values[a as usize]));
-    idx.into_iter()
-        .take(k)
-        .filter(|&i| values[i as usize].is_finite())
-        .map(|i| (i, values[i as usize] - denom))
-        .collect()
+    super::profile::counters().vocab_passes.add(1);
+    // (value, index), best first; `k` is the beam width, so this is tiny.
+    let mut best: Vec<(f32, u32)> = Vec::with_capacity(k + 1);
+    for (i, &v) in values.iter().enumerate() {
+        if !v.is_finite() {
+            continue;
+        }
+        if best.len() == k && v <= best[k - 1].0 {
+            continue;
+        }
+        // Insert before the first entry it beats strictly; equal values keep
+        // the earlier index ahead.
+        let pos = best.partition_point(|&(bv, _)| bv >= v);
+        best.insert(pos, (v, i as u32));
+        best.truncate(k);
+    }
+    let Some(&(max, _)) = best.first() else {
+        return Vec::new();
+    };
+    let denom = logsumexp_with_max(values, max);
+    best.into_iter().map(|(v, i)| (i, v - denom)).collect()
 }
 
 /// Token generation at a given temperature. The KV cache is reset per window.
@@ -714,7 +728,11 @@ fn decode_once(
     let mut no_speech_prob = 0.0f32;
 
     let p = super::profile::profile();
+    // One logits buffer per window, refilled in place every token (vein 2).
+    let mut values: Vec<f32> = Vec::new();
     for step in 0..cfg.max_tokens {
+        // The candle reference arm still yields a tensor; the fast arm fills
+        // `values` directly and leaves this `None`.
         let logits = if use_candle {
             // Reference path: re-feed the whole sequence every step.
             let input = Tensor::new(tokens.as_slice(), &whisper.device)
@@ -732,14 +750,16 @@ fn decode_once(
             // skipping it makes argmax pick over d_model instead of
             // vocab_size, which decodes as fluent-looking garbage.
             let (_, seq_len, _) = hidden.dims3().map_err(tensor_err)?;
-            whisper
-                .model
-                .decoder
-                .final_linear(&hidden.i((..1, seq_len - 1..)).map_err(tensor_err)?)
-                .map_err(|e| Error::Model(format!("final_linear: {e}")))?
-                .i(0)
-                .and_then(|t| t.i(0))
-                .map_err(tensor_err)?
+            Some(
+                whisper
+                    .model
+                    .decoder
+                    .final_linear(&hidden.i((..1, seq_len - 1..)).map_err(tensor_err)?)
+                    .map_err(|e| Error::Model(format!("final_linear: {e}")))?
+                    .i(0)
+                    .and_then(|t| t.i(0))
+                    .map_err(tensor_err)?,
+            )
         } else {
             // Fast path: the whole prompt once, then one token per step.
             let feed: &[u32] = if step == 0 {
@@ -750,10 +770,18 @@ fn decode_once(
             super::profile::timed(&p.decoder, || {
                 whisper
                     .decoder
-                    .forward(feed, audio_features)
+                    .forward_into(feed, audio_features, &mut values)
                     .map_err(|e| Error::Model(format!("decoder forward: {e}")))
-            })?
+            })?;
+            None
         };
+        if let Some(t) = &logits {
+            values = t
+                .to_dtype(ffai_core::candle::DType::F32)
+                .and_then(|t| t.to_vec1())
+                .map_err(tensor_err)?;
+            census_to_vec1(values.len());
+        }
         // `P(<|nospeech|>)` at the first position, read from UNFILTERED logits
         // — `apply_logit_filters` drives that token to -inf, so reading it
         // afterwards always yields zero. Position 0 is the only place it is
@@ -763,11 +791,9 @@ fn decode_once(
         // conditional annotation gate has to act on it *before* the first
         // token is filtered: the annotation opens with `[` or `(`, so a
         // decision made one step later is a decision made too late.
+        // Read from the UNFILTERED logits, before the closure below masks
+        // them — no second copy of the vocabulary needed for it (vein 2).
         let step0_no_speech = if step == 0 {
-            let values: Vec<f32> = logits
-                .to_dtype(ffai_core::candle::DType::F32)
-                .and_then(|t| t.to_vec1())
-                .map_err(tensor_err)?;
             let denom = logsumexp(&values);
             values
                 .get(no_speech_tok)
@@ -792,29 +818,30 @@ fn decode_once(
                 // Logit filtering and sampling always run in f32, whatever the
                 // weights are stored as: the vocabulary softmax is where
                 // half-precision rounding would actually change a token choice.
-                let mut values: Vec<f32> = logits
-                    .to_dtype(ffai_core::candle::DType::F32)
-                    .and_then(|t| t.to_vec1())
-                    .map_err(tensor_err)?;
+                let values = &mut values;
                 // `<|nospeech|>` is read for the caller's benefit only when the
                 // conditional gate is off; with it on the value is needed BEFORE
                 // filtering (see the block above this closure) and is passed in.
                 let ns = if step == 0 { step0_no_speech } else { 0.0 };
-                apply_logit_filters(
-                    &mut values,
+                let post_max = apply_logit_filters(
+                    values,
                     &tokens[prompt_len..],
                     &whisper.tokenizer,
                     cfg,
                     &non_speech,
                 );
+                // The filtered maximum: the timestamp rule already computed
+                // both halves of it, so no further pass is needed (vein 2).
+                let max = post_max.unwrap_or_else(|| ffai_core::fastmath::max_f32(values));
                 let chosen = if temperature > 0.0 {
-                    sample(&values, temperature, &mut rng)
+                    sample(values, temperature, &mut rng, max)
                 } else {
-                    argmax(&values)
+                    argmax_at(values, max)
                 };
                 // log P(chosen) = logit - logsumexp(logits), the quantity the
-                // fallback threshold is defined on.
-                let lp = values[chosen as usize] - logsumexp(&values);
+                // fallback threshold is defined on. `logsumexp` reuses the
+                // maximum rather than scanning for it again.
+                let lp = values[chosen as usize] - logsumexp_with_max(values, max);
                 Ok((chosen, lp, ns))
             })?;
         if step == 0 {
@@ -848,14 +875,17 @@ fn decode_once(
 
 /// Temperature sampling from raw logits, with a deterministic RNG so a run is
 /// reproducible — a benchmark that cannot be repeated is not a measurement.
-fn sample(logits: &[f32], temperature: f32, rng: &mut u64) -> u32 {
-    // Vectorised. Runs once per decode STEP over ~51 865 logits, and a
-    // `fold(NEG_INFINITY, f32::max)` is a loop-carried reduction on a
-    // NaN-aware function that LLVM will not lane. Exact — max is associative
-    // on non-NaN floats — so this is byte-identical, not a tolerance.
-    let max = ffai_core::fastmath::max_f32(logits);
+///
+/// `max` is the maximum of `logits`, which the caller already holds.
+fn sample(logits: &[f32], temperature: f32, rng: &mut u64, max: f32) -> u32 {
     if !max.is_finite() {
         return 0;
+    }
+    {
+        // Work census (vein 2): exp, sum, scan — and a 207 KB `weights`.
+        let c = super::profile::counters();
+        c.vocab_passes.add(3);
+        c.vocab_heap_bytes.add_n(logits.len() * 4);
     }
     // `fastmath::exp` over the whole vocabulary. This runs once per decode
     // STEP over ~51 865 logits, so it was ~52 K scalar libm calls per token —
@@ -878,7 +908,7 @@ fn sample(logits: &[f32], temperature: f32, rng: &mut u64) -> u32 {
             return i as u32;
         }
     }
-    argmax(logits)
+    argmax_at(logits, max)
 }
 
 /// Whisper's decoding rules, applied to the logits before sampling.
@@ -891,13 +921,18 @@ fn sample(logits: &[f32], temperature: f32, rng: &mut u64) -> u32 {
 ///
 /// Ported from `whisper/decoding.py`: `SuppressBlank`, `SuppressTokens`, and
 /// `ApplyTimestampRules`.
+///
+/// Returns the maximum of the FILTERED logits when the timestamp rule has
+/// computed it along the way (it already takes the max over the text half and
+/// over the timestamp half), so the caller need not make another pass for
+/// it; `None` when timestamps are off and no such pass was made.
 fn apply_logit_filters(
     logits: &mut [f32],
     generated: &[u32],
     tk: &super::tokenizer::WhisperTokenizer,
     cfg: &DecodeConfig,
     non_speech: &[u32],
-) {
+) -> Option<f32> {
     let vocab = logits.len() as u32;
     let suppress = |logits: &mut [f32], token: u32| {
         if let Some(slot) = logits.get_mut(token as usize) {
@@ -932,7 +967,7 @@ fn apply_logit_filters(
 
     if !cfg.timestamps {
         suppress_range(logits, tk.timestamp_begin..vocab);
-        return;
+        return None;
     }
 
     // Timestamps come in pairs, except immediately before end-of-text.
@@ -988,18 +1023,33 @@ fn apply_logit_filters(
     // all on some clips.
     let ts = tk.timestamp_begin as usize;
     if ts < logits.len() {
-        let timestamp_mass = logsumexp(&logits[ts..]);
+        // Both halves' maxima fall out of this rule; the overall maximum of
+        // what the caller will see is one of them (vein 2). `max_f32` is the
+        // same reduction `argmax`'s scan performs, so handing it on changes
+        // no bit — max is associative on non-NaN floats.
+        let best_ts = ffai_core::fastmath::max_f32(&logits[ts..]);
+        let timestamp_mass = logsumexp_with_max(&logits[ts..], best_ts);
         let best_text = ffai_core::fastmath::max_f32(&logits[..ts]);
         if timestamp_mass > best_text {
             suppress_range(logits, 0..tk.timestamp_begin);
+            return Some(best_ts);
         }
+        return Some(best_text.max(best_ts));
     }
+    None
 }
 
 /// Numerically stable `log(sum(exp(xs)))`, skipping suppressed (-inf) entries.
 fn logsumexp(xs: &[f32]) -> f32 {
+    // Work census (vein 2): a max pass before the exp-sum pass.
+    super::profile::counters().vocab_passes.add(1);
     // Vectorised max; the same whole-vocabulary shape as `sample` above.
-    let max = ffai_core::fastmath::max_f32(xs);
+    logsumexp_with_max(xs, ffai_core::fastmath::max_f32(xs))
+}
+
+/// `logsumexp` for a caller that already holds `max(xs)` — one pass, not two.
+fn logsumexp_with_max(xs: &[f32], max: f32) -> f32 {
+    super::profile::counters().vocab_passes.add(1);
     if !max.is_finite() {
         return f32::NEG_INFINITY;
     }
@@ -1009,13 +1059,29 @@ fn logsumexp(xs: &[f32]) -> f32 {
     max + ffai_core::fastmath::ln(sum)
 }
 
-fn argmax(values: &[f32]) -> u32 {
+/// The index of `max` in `values`: the LAST position holding it, which is
+/// what `Iterator::max_by` returned when this was a full compare-chain scan.
+/// Scans backwards and stops at the first hit, so on average it touches half
+/// the vocabulary and the compare is a bit-equality, not a `total_cmp`.
+///
+/// Bit-equality rather than `==` so a `-0.0`/`+0.0` pair cannot pick the
+/// wrong one; the lone theoretical divergence from the old scan is a
+/// vocabulary whose maximum logit is exactly a signed zero in both signs.
+fn argmax_at(values: &[f32], max: f32) -> u32 {
+    super::profile::counters().vocab_passes.add(1);
+    let bits = max.to_bits();
     values
         .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .map(|(i, _)| i as u32)
-        .unwrap_or_default()
+        .rposition(|v| v.to_bits() == bits)
+        .map_or(0, |i| i as u32)
+}
+
+/// Work census (vein 2): one `to_vec1` of the logits is a full-vocabulary
+/// pass and a fresh 4·vocab-byte heap allocation.
+fn census_to_vec1(len: usize) {
+    let c = super::profile::counters();
+    c.vocab_passes.add(1);
+    c.vocab_heap_bytes.add_n(len * 4);
 }
 
 fn tensor_err(e: ffai_core::candle::Error) -> Error {

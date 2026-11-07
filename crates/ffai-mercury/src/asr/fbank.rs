@@ -106,6 +106,10 @@ pub struct Fbank {
     n_mels: usize,
     window: Vec<f32>,
     filters: Vec<Vec<f32>>,
+    /// Each triangular filter's non-zero bin range `[lo, hi)`, found once
+    /// (vein 13). A triangle is zero outside its band, and `0 * p` adds
+    /// nothing to a sum, so the dot is taken over the band only.
+    support: Vec<(usize, usize)>,
     fft: Arc<dyn Fft<f32>>,
 }
 
@@ -113,10 +117,20 @@ impl Fbank {
     #[must_use]
     pub fn new(n_mels: usize) -> Self {
         let n_stft = N_FFT / 2 + 1;
+        let filters = filterbank(n_mels, n_stft, 0.0, (SAMPLE_RATE / 2) as f32);
+        let support = filters
+            .iter()
+            .map(|f| {
+                let lo = f.iter().position(|&w| w != 0.0).unwrap_or(0);
+                let hi = f.iter().rposition(|&w| w != 0.0).map_or(lo, |h| h + 1);
+                (lo, hi.max(lo))
+            })
+            .collect();
         Self {
             n_mels,
             window: hamming(N_FFT),
-            filters: filterbank(n_mels, n_stft, 0.0, (SAMPLE_RATE / 2) as f32),
+            filters,
+            support,
             fft: FftPlanner::new().plan_fft_forward(N_FFT),
         }
     }
@@ -167,8 +181,17 @@ impl Fbank {
                 // power_spectrogram = 2: magnitude squared.
                 *p = scratch[bin].norm_sqr();
             }
-            for (m, filter) in self.filters.iter().enumerate() {
-                let energy: f32 = filter.iter().zip(power.iter()).map(|(w, p)| w * p).sum();
+            for (m, (filter, &(lo, hi))) in self.filters.iter().zip(&self.support).enumerate() {
+                // Over the band only (vein 13): the terms outside it are
+                // `0.0 * p == 0.0` for every finite `p`, and adding +0.0 to a
+                // partial sum returns the partial sum, so the fold is the
+                // same number — the 201-wide dot is now ~25 wide.
+                super::profile::counters().small_kernel_ops.add_n(hi - lo);
+                let energy: f32 = filter[lo..hi]
+                    .iter()
+                    .zip(&power[lo..hi])
+                    .map(|(w, p)| w * p)
+                    .sum();
                 out[frame * self.n_mels + m] =
                     DB_MULTIPLIER * ffai_core::fastmath::log10(energy.max(AMIN));
             }

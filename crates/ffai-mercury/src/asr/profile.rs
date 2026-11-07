@@ -60,6 +60,143 @@ impl Stage {
     }
 }
 
+/// A deterministic work counter: a count of things done (bytes copied, FFTs
+/// run, passes made), never a duration.
+///
+/// This is the campaign instrument of `docs/plans/mercury-instruction-veins.md`:
+/// a brick claims to REMOVE work, and a count proves it without pinning,
+/// z-scores or a quiet box. Incremented only when `FFAI_PROFILE` is set, so the
+/// shipped cost is the same relaxed load the stage timers already pay.
+#[derive(Debug, Default)]
+pub struct Counter {
+    n: AtomicU64,
+}
+
+impl Counter {
+    const fn new() -> Self {
+        Self {
+            n: AtomicU64::new(0),
+        }
+    }
+
+    /// Add `n` to the count (no-op unless profiling is on).
+    #[inline]
+    pub fn add(&self, n: u64) {
+        if enabled() {
+            self.n.fetch_add(n, Ordering::Relaxed);
+        }
+    }
+
+    /// Add one.
+    #[inline]
+    pub fn hit(&self) {
+        self.add(1);
+    }
+
+    /// Add a `usize` count (lengths, element counts, byte counts).
+    #[inline]
+    pub fn add_n(&self, n: usize) {
+        self.add(n as u64);
+    }
+
+    pub fn get(&self) -> u64 {
+        self.n.load(Ordering::Relaxed)
+    }
+}
+
+/// The deterministic work counters, one per vein of the campaign. Each is
+/// named for the work it counts, and the ledger quotes it by this name.
+pub struct Counters {
+    /// Vein 1: bytes copied maintaining the self-attention K/V cache.
+    pub kv_bytes_copied: Counter,
+    /// Vein 1: candle ops issued per self-attention step (cat/reshape/transpose/contiguous/custom).
+    pub kv_cache_ops: Counter,
+    /// Vein 2: full-vocabulary (51 865-wide) passes made in logit post-processing.
+    pub vocab_passes: Counter,
+    /// Vein 2: heap bytes allocated by logit post-processing.
+    pub vocab_heap_bytes: Counter,
+    /// Vein 3: `powf` calls on the per-token path.
+    pub powf_calls: Counter,
+    /// Vein 3: reshape/`unsqueeze`/`squeeze` plumbing ops per token.
+    pub plumbing_ops: Counter,
+    /// Vein 4: forward FFTs run by the mel front end.
+    pub fft_calls: Counter,
+    /// Vein 4: full STFT builds (one per `MelSpectrogram::compute`).
+    pub stft_builds: Counter,
+    /// Vein 5/6: bytes zero-filled and then overwritten.
+    pub memset_bytes: Counter,
+    /// Vein 6: bytes merged from per-task tiles into the output.
+    pub tile_merge_bytes: Counter,
+    /// Vein 7: bytes copied in tensor<->Vec round-trips (TTS flow).
+    pub tts_copy_bytes: Counter,
+    /// Vein 8: int8 GEMV per-block horizontal reductions.
+    pub int8_reductions: Counter,
+    /// Vein 9: `std::env::var` reads on hot paths.
+    pub env_reads: Counter,
+    /// Vein 9: `format!`-keyed weight-map lookups.
+    pub name_lookups: Counter,
+    /// Vein 10: cosine-distance evaluations in agglomerative clustering.
+    pub dist_evals: Counter,
+    /// Vein 12: elements sorted in beam `top_k`.
+    pub topk_sorted: Counter,
+    /// Vein 13: multiply-adds in fbank filtering, forced-align spans, VAD passes.
+    pub small_kernel_ops: Counter,
+    /// Vein 14: bytes copied in the encoder front end (im2col, head prep).
+    pub enc_copy_bytes: Counter,
+    /// Vein 15: rel-attention table builds (TTS).
+    pub rel_table_builds: Counter,
+}
+
+impl Counters {
+    const fn new() -> Self {
+        Self {
+            kv_bytes_copied: Counter::new(),
+            kv_cache_ops: Counter::new(),
+            vocab_passes: Counter::new(),
+            vocab_heap_bytes: Counter::new(),
+            powf_calls: Counter::new(),
+            plumbing_ops: Counter::new(),
+            fft_calls: Counter::new(),
+            stft_builds: Counter::new(),
+            memset_bytes: Counter::new(),
+            tile_merge_bytes: Counter::new(),
+            tts_copy_bytes: Counter::new(),
+            int8_reductions: Counter::new(),
+            env_reads: Counter::new(),
+            name_lookups: Counter::new(),
+            dist_evals: Counter::new(),
+            topk_sorted: Counter::new(),
+            small_kernel_ops: Counter::new(),
+            enc_copy_bytes: Counter::new(),
+            rel_table_builds: Counter::new(),
+        }
+    }
+
+    const fn all(&self) -> [(&'static str, &Counter); 19] {
+        [
+            ("kv_bytes_copied", &self.kv_bytes_copied),
+            ("kv_cache_ops", &self.kv_cache_ops),
+            ("vocab_passes", &self.vocab_passes),
+            ("vocab_heap_bytes", &self.vocab_heap_bytes),
+            ("powf_calls", &self.powf_calls),
+            ("plumbing_ops", &self.plumbing_ops),
+            ("fft_calls", &self.fft_calls),
+            ("stft_builds", &self.stft_builds),
+            ("memset_bytes", &self.memset_bytes),
+            ("tile_merge_bytes", &self.tile_merge_bytes),
+            ("tts_copy_bytes", &self.tts_copy_bytes),
+            ("int8_reductions", &self.int8_reductions),
+            ("env_reads", &self.env_reads),
+            ("name_lookups", &self.name_lookups),
+            ("dist_evals", &self.dist_evals),
+            ("topk_sorted", &self.topk_sorted),
+            ("small_kernel_ops", &self.small_kernel_ops),
+            ("enc_copy_bytes", &self.enc_copy_bytes),
+            ("rel_table_builds", &self.rel_table_builds),
+        ]
+    }
+}
+
 /// The stages of one transcription.
 pub struct Profile {
     /// PCM → log-mel spectrogram.
@@ -113,6 +250,8 @@ pub struct Profile {
 
     /// Tokens generated, for per-token cost.
     pub tokens: AtomicU64,
+    /// Deterministic work counters (see [`Counters`]).
+    pub counters: Counters,
 }
 
 impl Profile {
@@ -146,7 +285,28 @@ impl Profile {
             xa_merge: Stage::new(),
             xa_out: Stage::new(),
             tokens: AtomicU64::new(0),
+            counters: Counters::new(),
         }
+    }
+
+    /// The work counters as `name value` lines, plus per-token figures for
+    /// the per-token ones — the form the veins ledger quotes.
+    pub fn counters_report(&self) -> String {
+        let tokens = self.tokens.load(Ordering::Relaxed).max(1);
+        let mut out = format!(
+            "tokens {}
+",
+            self.tokens.load(Ordering::Relaxed)
+        );
+        for (name, c) in self.counters.all() {
+            let v = c.get();
+            out.push_str(&format!(
+                "{name:<18} {v:>14}   per-token {:>10.1}
+",
+                v as f64 / tokens as f64
+            ));
+        }
+        out
     }
 
     pub fn count_tokens(&self, n: usize) {
@@ -349,6 +509,23 @@ pub fn reset() {
         s.calls.store(0, Ordering::Relaxed);
     }
     p.tokens.store(0, Ordering::Relaxed);
+    for (_, c) in p.counters.all() {
+        c.n.store(0, Ordering::Relaxed);
+    }
+}
+
+/// `std::env::var`, counted into `env_reads` — how the hot-path reads of
+/// vein 9 are made visible before they are removed.
+pub fn env_var(name: &str) -> Result<String, std::env::VarError> {
+    profile().counters.env_reads.hit();
+    std::env::var(name)
+}
+
+/// The counters, for call sites that want one short name.
+#[inline]
+#[must_use]
+pub fn counters() -> &'static Counters {
+    &profile().counters
 }
 
 /// Marker so `AtomicBool` stays available if a per-run reset lands later.

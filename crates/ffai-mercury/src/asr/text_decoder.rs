@@ -114,6 +114,9 @@ pub enum QLinear {
     Half {
         k: super::f16_gemv::F16Gemv,
         bias: Option<Tensor>,
+        /// The same bias as plain f32, for the kernel to add in place
+        /// (`F16Gemv::forward_fused`).
+        bias_f32: Option<std::sync::Arc<Vec<f32>>>,
     },
 }
 
@@ -246,7 +249,15 @@ impl QLinear {
             return Self::new(weight, bias, precision);
         }
         match super::f16_gemv::F16Gemv::new(&weight)? {
-            Some(k) => Ok(Self::Half { k, bias }),
+            Some(k) => {
+                let bias_f32 = match &bias {
+                    Some(b) => Some(std::sync::Arc::new(
+                        b.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?,
+                    )),
+                    None => None,
+                };
+                Ok(Self::Half { k, bias, bias_f32 })
+            }
             None => Self::new(weight, bias, precision),
         }
     }
@@ -278,9 +289,18 @@ impl QLinear {
                     None => Ok(y),
                 }
             }
-            Self::Half { k, bias } => {
+            Self::Half { k, bias, bias_f32 } => {
                 let dims = x.dims();
                 let rows: usize = dims[..dims.len() - 1].iter().product();
+                // Vein 3: the one-row case — every decoder projection — is a
+                // single op. The kernel adds the bias as it writes and emits
+                // the caller's rank, so the reshape pair and the
+                // `broadcast_add` pass (4 ops, two 1.5 KB tensors) are gone.
+                if rows == 1 && x.is_contiguous() && !super::knobs::VEINS_OFF.get() {
+                    super::profile::counters().plumbing_ops.add(1);
+                    return k.forward_fused(x, bias_f32.as_ref(), dims);
+                }
+                super::profile::counters().plumbing_ops.add(4);
                 let flat = x.reshape((rows, dims[dims.len() - 1]))?;
                 let y = gemv_rows(rows, &flat, |r| k.forward(r))?;
                 let y = match bias {
@@ -382,14 +402,16 @@ impl ffai_core::candle::CustomOp1 for FastGelu {
         let out = match storage {
             CpuStorage::F32(src) => {
                 let src = &src[start..end];
-                let mut out = vec![0f32; src.len()];
-                out.par_chunks_mut(CHUNK)
-                    .zip(src.par_chunks(CHUNK))
-                    .for_each(|(o, i)| {
-                        for (o, &t) in o.iter_mut().zip(i.iter()) {
-                            *o = gelu_scalar(t);
-                        }
-                    });
+                // Every element is written below (vein 5): no zero pass.
+                let out = crate::buf::filled_f32(src.len(), |out| {
+                    out.par_chunks_mut(CHUNK)
+                        .zip(src.par_chunks(CHUNK))
+                        .for_each(|(o, i)| {
+                            for (o, &t) in o.iter_mut().zip(i.iter()) {
+                                *o = gelu_scalar(t);
+                            }
+                        });
+                });
                 CpuStorage::F32(out)
             }
             // f16 storage, f32 arithmetic — the same split ggml uses. Halving
@@ -397,14 +419,15 @@ impl ffai_core::candle::CustomOp1 for FastGelu {
             // precision would only lose accuracy for nothing.
             CpuStorage::F16(src) => {
                 let src = &src[start..end];
-                let mut out = vec![half::f16::ZERO; src.len()];
-                out.par_chunks_mut(CHUNK)
-                    .zip(src.par_chunks(CHUNK))
-                    .for_each(|(o, i)| {
-                        for (o, &t) in o.iter_mut().zip(i.iter()) {
-                            *o = half::f16::from_f32(gelu_scalar(t.to_f32()));
-                        }
-                    });
+                let out = crate::buf::filled_f16(src.len(), |out| {
+                    out.par_chunks_mut(CHUNK)
+                        .zip(src.par_chunks(CHUNK))
+                        .for_each(|(o, i)| {
+                            for (o, &t) in o.iter_mut().zip(i.iter()) {
+                                *o = half::f16::from_f32(gelu_scalar(t.to_f32()));
+                            }
+                        });
+                });
                 CpuStorage::F16(out)
             }
             _ => {
@@ -464,9 +487,15 @@ impl ffai_core::candle::CustomOp1 for FastSoftmax {
         fn softmax_row(src: &[f32], dst: &mut [f32]) {
             let max = ffai_core::fastmath::max_f32(src);
             dst.copy_from_slice(src);
-            let sum = ffai_core::fastmath::exp_sub_sum_inplace(dst, max);
+            softmax_inplace(dst, max);
+        }
+
+        /// The same three passes on a row that is already where it belongs.
+        #[inline(always)]
+        fn softmax_inplace(row: &mut [f32], max: f32) {
+            let sum = ffai_core::fastmath::exp_sub_sum_inplace(row, max);
             let inv = 1.0 / sum;
-            for d in dst.iter_mut() {
+            for d in row.iter_mut() {
                 *d *= inv;
             }
         }
@@ -474,26 +503,31 @@ impl ffai_core::candle::CustomOp1 for FastSoftmax {
         let out = match storage {
             CpuStorage::F32(src) => {
                 let src = &src[start..end];
-                let mut out = vec![0f32; src.len()];
-                out.par_chunks_mut(last)
-                    .zip(src.par_chunks(last))
-                    .for_each(|(d, s)| softmax_row(s, d));
+                // Every row is written below (vein 5): no zero pass.
+                let out = crate::buf::filled_f32(src.len(), |out| {
+                    out.par_chunks_mut(last)
+                        .zip(src.par_chunks(last))
+                        .for_each(|(d, s)| softmax_row(s, d));
+                });
                 CpuStorage::F32(out)
             }
             CpuStorage::F16(src) => {
                 let src = &src[start..end];
-                let mut out = vec![half::f16::ZERO; src.len()];
-                out.par_chunks_mut(last)
-                    .zip(src.par_chunks(last))
-                    .for_each(|(d, s)| {
-                        // One conversion per row, not per element.
-                        let row: Vec<f32> = s.iter().map(|x| x.to_f32()).collect();
-                        let mut tmp = vec![0f32; row.len()];
-                        softmax_row(&row, &mut tmp);
-                        for (d, &t) in d.iter_mut().zip(tmp.iter()) {
-                            *d = half::f16::from_f32(t);
-                        }
-                    });
+                let out = crate::buf::filled_f16(src.len(), |out| {
+                    out.par_chunks_mut(last)
+                        .zip(src.par_chunks(last))
+                        .for_each(|(d, s)| {
+                            // One conversion per row, not per element — and the
+                            // widened row is the work buffer itself (vein 5): one
+                            // allocation per row, no zeroed `tmp` beside it.
+                            let mut row: Vec<f32> = s.iter().map(|x| x.to_f32()).collect();
+                            let max = ffai_core::fastmath::max_f32(&row);
+                            softmax_inplace(&mut row, max);
+                            for (d, &t) in d.iter_mut().zip(row.iter()) {
+                                *d = half::f16::from_f32(t);
+                            }
+                        });
+                });
                 CpuStorage::F16(out)
             }
             _ => {
@@ -542,15 +576,216 @@ fn linear_no_bias(
 }
 
 /// Multi-head attention with a K/V cache.
+/// Self-attention K/V kept in the fused decode kernel's own layout.
+///
+/// K is `[heads][HD][cap]` — the head-split, transposed operand the kernel
+/// streams — and V is `[heads][cap][HD]`; `cap` grows geometrically up to the
+/// model's position limit, so a short window never pays for 448 slots.
+///
+/// This replaces `Option<(Tensor, Tensor)>` + `Tensor::cat` for the decoder's
+/// self-attention. That path cost, per layer per token, two `cat`s that
+/// copied the whole cache and a `split_heads().transpose().contiguous()` pair
+/// that copied it again — four passes over O(n) data for an O(1) append, plus
+/// eleven candle ops of plumbing before the kernel saw a byte. Here a token
+/// is written into place (2·n_state floats) and the kernel reads the cache
+/// directly with a row stride of `cap`.
+struct FlatKv {
+    k: Vec<f32>,
+    v: Vec<f32>,
+    heads: usize,
+    hd: usize,
+    cap: usize,
+    len: usize,
+    max: usize,
+    /// The kernel's score row, reused across heads and tokens.
+    scratch: Vec<f32>,
+}
+
+/// A copied prefix of a [`FlatKv`], for beam search's save/restore.
+#[derive(Clone)]
+struct FlatKvState {
+    k: Vec<f32>,
+    v: Vec<f32>,
+    len: usize,
+}
+
+impl FlatKv {
+    const INITIAL_CAP: usize = 64;
+
+    fn new(heads: usize, hd: usize, max: usize) -> Self {
+        let cap = Self::INITIAL_CAP.min(max.max(1));
+        Self {
+            k: vec![0.0; heads * hd * cap],
+            v: vec![0.0; heads * cap * hd],
+            heads,
+            hd,
+            cap,
+            len: 0,
+            max,
+            scratch: vec![0.0; cap],
+        }
+    }
+
+    const fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    /// Re-lay both buffers for a new capacity, keeping the used prefix.
+    fn regrow(&mut self, cap: usize) {
+        let (heads, hd, len, old) = (self.heads, self.hd, self.len, self.cap);
+        let mut k = vec![0f32; heads * hd * cap];
+        for r in 0..heads * hd {
+            k[r * cap..r * cap + len].copy_from_slice(&self.k[r * old..r * old + len]);
+        }
+        let mut v = vec![0f32; heads * cap * hd];
+        for h in 0..heads {
+            v[h * cap * hd..h * cap * hd + len * hd]
+                .copy_from_slice(&self.v[h * old * hd..h * old * hd + len * hd]);
+        }
+        self.k = k;
+        self.v = v;
+        self.cap = cap;
+        self.scratch = vec![0.0; cap];
+    }
+
+    /// Room for `extra` more positions; grows by doubling, amortized O(1).
+    fn reserve(&mut self, extra: usize) -> CandleResult<()> {
+        let need = self.len + extra;
+        if need <= self.cap {
+            return Ok(());
+        }
+        if need > self.max {
+            ffai_core::candle::bail!(
+                "self-attention cache: {need} positions exceed the model's {}",
+                self.max
+            );
+        }
+        let mut cap = self.cap;
+        while cap < need {
+            cap = (cap * 2).min(self.max);
+        }
+        self.regrow(cap);
+        Ok(())
+    }
+
+    /// Append `n` positions. `k_rows` / `v_rows` are position-major
+    /// `(n, heads*hd)` — the projections exactly as the linear layers emit
+    /// them, so the only data movement is this scatter into kernel layout.
+    fn append(&mut self, k_rows: &[f32], v_rows: &[f32], n: usize) -> CandleResult<()> {
+        self.reserve(n)?;
+        let (heads, hd, cap) = (self.heads, self.hd, self.cap);
+        let n_state = heads * hd;
+        for p in 0..n {
+            let pos = self.len + p;
+            let kr = &k_rows[p * n_state..(p + 1) * n_state];
+            let vr = &v_rows[p * n_state..(p + 1) * n_state];
+            for h in 0..heads {
+                let kbase = h * hd * cap + pos;
+                for (t, &kv) in kr[h * hd..(h + 1) * hd].iter().enumerate() {
+                    self.k[kbase + t * cap] = kv;
+                }
+                let vdst = h * cap * hd + pos * hd;
+                self.v[vdst..vdst + hd].copy_from_slice(&vr[h * hd..(h + 1) * hd]);
+            }
+        }
+        self.len += n;
+        Ok(())
+    }
+
+    /// Head `h` of K: a `[hd][cap]` block, `len` live columns per row.
+    fn k_head(&self, h: usize) -> &[f32] {
+        &self.k[h * self.hd * self.cap..(h + 1) * self.hd * self.cap]
+    }
+
+    /// Head `h` of V: the `len` live rows, contiguous.
+    fn v_head(&self, h: usize) -> &[f32] {
+        let base = h * self.cap * self.hd;
+        &self.v[base..base + self.len * self.hd]
+    }
+
+    /// The used prefix, copied tight.
+    fn prefix(&self) -> (Vec<f32>, Vec<f32>) {
+        let (heads, hd, cap, len) = (self.heads, self.hd, self.cap, self.len);
+        let mut k = Vec::with_capacity(heads * hd * len);
+        for r in 0..heads * hd {
+            k.extend_from_slice(&self.k[r * cap..r * cap + len]);
+        }
+        let mut v = Vec::with_capacity(heads * len * hd);
+        for h in 0..heads {
+            v.extend_from_slice(&self.v[h * cap * hd..h * cap * hd + len * hd]);
+        }
+        (k, v)
+    }
+
+    /// The used prefix as the `(1, heads, hd, len)` / `(1, heads, len, hd)`
+    /// tensors the three-op path consumes — prefill and the few first tokens
+    /// under the kernel's key floor. Same values the legacy
+    /// `split_heads().transpose().contiguous()` produced.
+    fn materialize(&self, device: &ffai_core::candle::Device) -> CandleResult<(Tensor, Tensor)> {
+        let (k, v) = self.prefix();
+        Ok((
+            Tensor::from_vec(k, (1, self.heads, self.hd, self.len), device)?,
+            Tensor::from_vec(v, (1, self.heads, self.len, self.hd), device)?,
+        ))
+    }
+
+    fn snapshot(&self) -> FlatKvState {
+        let (k, v) = self.prefix();
+        FlatKvState {
+            k,
+            v,
+            len: self.len,
+        }
+    }
+
+    /// Put a snapshot back. Infallible: a snapshot came out of a cache that
+    /// held it, so it fits the position limit by construction.
+    fn restore(&mut self, s: &FlatKvState) {
+        self.len = 0;
+        if s.len > self.cap {
+            let mut cap = self.cap.max(1);
+            while cap < s.len {
+                cap *= 2;
+            }
+            self.regrow(cap.min(self.max.max(s.len)));
+        }
+        let (heads, hd, cap, len) = (self.heads, self.hd, self.cap, s.len);
+        for r in 0..heads * hd {
+            self.k[r * cap..r * cap + len].copy_from_slice(&s.k[r * len..(r + 1) * len]);
+        }
+        for h in 0..heads {
+            self.v[h * cap * hd..h * cap * hd + len * hd]
+                .copy_from_slice(&s.v[h * len * hd..(h + 1) * len * hd]);
+        }
+        self.len = len;
+    }
+}
+
+use crate::buf::with_f32;
+
 struct Attention {
     query: QLinear,
     key: QLinear,
     value: QLinear,
     out: QLinear,
     n_head: usize,
-    /// Cached keys/values. For self-attention this grows one step per token;
-    /// for cross-attention it is filled once per window and then reused.
+    /// Cached keys/values. For cross-attention it is filled once per window
+    /// and then reused; for self-attention it is the legacy (`FFAI_VEINS=off`)
+    /// arm, superseded by `flat`.
     cache: Option<(Tensor, Tensor)>,
+    /// Self-attention K/V in kernel layout (vein 1). `None` until the first
+    /// token of the first window; cleared, not freed, between windows.
+    flat: Option<FlatKv>,
+    /// The model's position limit — the flat cache's ceiling. Zero for
+    /// attention that never holds a growing cache (encoder, cross).
+    max_positions: usize,
+    /// Whisper's `head_dim^-0.25` applied to BOTH q and k, folded onto q
+    /// alone as its square — a constant of the layer geometry, computed once
+    /// here instead of a `powf` per call (vein 3).
+    scale2: f64,
+    /// Whether the fused kernel serves the cross-attention cache as built.
+    /// Decided when the cache is built, not re-asked on every token (vein 3).
+    kernel_serves: bool,
 }
 
 // MEASURED AND REVERTED: int8 GEMV across every decoder projection.
@@ -609,6 +844,7 @@ impl Attention {
         vb: VarBuilder,
         p: Precision,
         kv_single_row: bool,
+        max_positions: usize,
     ) -> CandleResult<Self> {
         let half =
             |name: &str, b: bool| QLinear::from_vb_gemv_f16(n_state, n_state, vb.pp(name), b, p);
@@ -627,6 +863,10 @@ impl Attention {
             out: half("out_proj", true)?,
             n_head,
             cache: None,
+            flat: None,
+            max_positions: if kv_single_row { max_positions } else { 0 },
+            scale2: Self::scale2(n_state, n_head),
+            kernel_serves: false,
         })
     }
 
@@ -640,7 +880,19 @@ impl Attention {
             out: linear(n_state, n_state, vb.pp("out_proj"), p)?,
             n_head,
             cache: None,
+            flat: None,
+            max_positions: 0,
+            scale2: Self::scale2(n_state, n_head),
+            kernel_serves: false,
         })
+    }
+
+    /// Whisper folds `1/sqrt(head_dim)` into q and k as `^-0.25` each; the
+    /// product of the two halves rides on q alone. Same expression the
+    /// per-call `scale()` evaluated, so the bits are identical.
+    fn scale2(n_state: usize, n_head: usize) -> f64 {
+        let scale = ((n_state / n_head) as f64).powf(-0.25);
+        scale * scale
     }
 
     /// (batch, seq, `n_state`) -> (batch, `n_head`, seq, `head_dim`)
@@ -662,6 +914,22 @@ impl Attention {
         let k = self.key.forward(x)?;
         let v = self.value.forward(x)?;
 
+        // Arm choice is sticky for the window: whichever cache already holds
+        // tokens continues, so a knob flipped mid-window cannot split one
+        // history across two layouts.
+        let flat_live = self.flat.as_ref().is_some_and(|f| f.len > 0);
+        let use_flat = flat_live
+            || (self.cache.is_none()
+                && self.max_positions > 0
+                && !super::knobs::VEINS_OFF.get()
+                && k.dtype() == DType::F32
+                && matches!(k.device(), ffai_core::candle::Device::Cpu)
+                && k.dim(0)? == 1
+                && k.dim(D::Minus1)? / self.n_head == super::flash_attn::HD);
+        if use_flat {
+            return self.forward_self_flat(&q, &k, &v, offset);
+        }
+
         let (k, v) = match self.cache.take() {
             Some((prev_k, prev_v)) => (
                 Tensor::cat(&[&prev_k, &k], 1)?,
@@ -669,6 +937,13 @@ impl Attention {
             ),
             None => (k, v),
         };
+        {
+            // Work census (vein 1): two cats, each copying the WHOLE cache.
+            let c = super::profile::counters();
+            c.kv_cache_ops.add(2);
+            c.kv_bytes_copied
+                .add_n((k.elem_count() + v.elem_count()) * k.dtype().size_in_bytes());
+        }
         self.cache = Some((k.clone(), v.clone()));
 
         let q_len = x.dim(1)?;
@@ -686,6 +961,80 @@ impl Attention {
         self.attend(&q, &k, &v, mask.as_ref())
     }
 
+    /// Self-attention on the flat cache (vein 1).
+    ///
+    /// Steady state (one query, cache at or above the kernel's key floor):
+    /// append in place, scale q, run the kernel per head straight off the
+    /// cache, wrap the merged context in ONE tensor for the output
+    /// projection. Per layer per token that is 1 candle op and 2·n_state
+    /// floats of copying, against 16 ops and four whole-cache passes before.
+    ///
+    /// Prefill (several queries) and the first few tokens under the floor
+    /// take the three-op path on a tight copy of the used prefix — the same
+    /// operands the legacy arm built, so the same arithmetic.
+    fn forward_self_flat(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        offset: usize,
+    ) -> CandleResult<Tensor> {
+        let (_, seq, n_state) = k.dims3()?;
+        let heads = self.n_head;
+        let hd = n_state / heads;
+        let max = self.max_positions;
+        let flat = self.flat.get_or_insert_with(|| FlatKv::new(heads, hd, max));
+        with_f32(k, |kr| with_f32(v, |vr| flat.append(kr, vr, seq)))???;
+        let c = super::profile::counters();
+        c.kv_bytes_copied.add_n(2 * seq * n_state * 4);
+        let keys = flat.len;
+
+        if seq == 1
+            && keys >= super::flash_attn::decode_floor()
+            && super::flash_attn::decode_kernel_available()
+        {
+            // q scaled exactly as candle's `Tensor * f64` does it on f32:
+            // `v * (s as f32) + 0.0`.
+            // f64 -> f32 on purpose: candle's `affine` narrows the same way.
+            #[allow(clippy::cast_possible_truncation)]
+            let s = self.scale2 as f32;
+            let qs = with_f32(q, |qv| {
+                qv.iter().map(|&x| x * s + 0.0).collect::<Vec<f32>>()
+            })?;
+            c.memset_bytes.add_n(n_state * 4);
+            let mut out = vec![0f32; n_state];
+            let mut scratch = std::mem::take(&mut flat.scratch);
+            for h in 0..heads {
+                let served = super::flash_attn::decode_head(
+                    &qs[h * hd..(h + 1) * hd],
+                    flat.k_head(h),
+                    flat.cap,
+                    flat.v_head(h),
+                    &mut out[h * hd..(h + 1) * hd],
+                    keys,
+                    &mut scratch,
+                );
+                debug_assert!(served, "decode_kernel_available() was checked above");
+            }
+            flat.scratch = scratch;
+            c.kv_cache_ops.add(1);
+            let ctx = Tensor::from_vec(out, (1, 1, n_state), q.device())?;
+            return self.out.forward(&ctx);
+        }
+
+        let (kt, vt) = flat.materialize(q.device())?;
+        c.kv_cache_ops.add(2);
+        c.kv_bytes_copied.add_n(2 * keys * n_state * 4);
+        let qp = (self.split_heads(q)? * self.scale2)?.contiguous()?;
+        c.kv_cache_ops.add(4);
+        let mask = if seq > 1 {
+            Some(causal_mask(seq, keys, offset, q.dtype(), q.device())?)
+        } else {
+            None
+        };
+        self.attend_prepared(&qp, &kt, &vt, mask.as_ref())
+    }
+
     /// Cross-attention: keys/values come from the encoder and are constant for
     /// the whole window, so they are projected once and reused.
     ///
@@ -697,7 +1046,6 @@ impl Attention {
     fn forward_cross(&mut self, x: &Tensor, audio: &Tensor) -> CandleResult<Tensor> {
         let p = super::profile::profile();
         let q = super::profile::timed(&p.xa_qproj, || self.query.forward(x))?;
-        let scale = self.scale(&q)?;
         let (k, v) = if let Some((k, v)) = &self.cache {
             (k.clone(), v.clone())
         } else {
@@ -738,7 +1086,11 @@ impl Attention {
             // against a 1.10 threshold) meant it kept re-deciding. When
             // the fused kernel can serve this shape the choice is no
             // longer a balance to calibrate, so stop calibrating it.
-            let kv_dtype = if super::flash_attn::serves(&k, &v) {
+            // Decided once per cache build (vein 3): the kernel's answer is
+            // a function of the cache's shape, which does not change until
+            // the next window rebuilds it.
+            self.kernel_serves = super::flash_attn::serves(&k, &v);
+            let kv_dtype = if self.kernel_serves {
                 // f16 cache: the fused kernel widens it with F16C as it
                 // streams and still accumulates in f32, so this halves the
                 // 18.4 MB/token read without halving the arithmetic. That
@@ -782,8 +1134,8 @@ impl Attention {
             // the conversion is free against the megabytes it unlocks.
             // NOT k.dtype(): with an f16 cache the kernel wants q in f32 so
             // the accumulation stays full precision.
-            let q = (self.split_heads(&q)? * (scale * scale))?.contiguous()?;
-            if super::flash_attn::serves(&k, &v) {
+            let q = (self.split_heads(&q)? * self.scale2)?.contiguous()?;
+            if self.kernel_serves {
                 Ok(q)
             } else {
                 q.to_dtype(k.dtype())
@@ -824,12 +1176,6 @@ impl Attention {
         super::profile::timed(&p.xa_out, || self.out.forward(&merged))
     }
 
-    /// Whisper folds `1/sqrt(head_dim)` into q and k as `^-0.25` each, rather
-    /// than scaling once after the product.
-    fn scale(&self, q: &Tensor) -> CandleResult<f64> {
-        Ok(((q.dim(D::Minus1)? / self.n_head) as f64).powf(-0.25))
-    }
-
     /// Split heads, scale, and attend. Used by self-attention, whose keys and
     /// values change every step.
     pub(crate) fn attend(
@@ -839,15 +1185,22 @@ impl Attention {
         v: &Tensor,
         mask: Option<&Tensor>,
     ) -> CandleResult<Tensor> {
-        let scale = self.scale(q)?;
         // Whisper folds 1/sqrt(d) as ^-0.25 into BOTH operands. Symmetric, but
         // (q*s)(k*s) = q*k*s^2, so one side can carry all of it. Both sides
         // here are 1500x384, and the k-side multiply is a 2.3 MB
         // allocate-and-write per layer measured at 0.72 ms -- 5.8 ms across
         // the encoder for arithmetic q can absorb for free.
-        let q = (self.split_heads(q)? * (scale * scale))?.contiguous()?;
+        let q = (self.split_heads(q)? * self.scale2)?.contiguous()?;
         let k = self.split_heads(k)?.transpose(2, 3)?.contiguous()?;
         let v = self.split_heads(v)?.contiguous()?;
+        {
+            // Work census (vein 1): reshape/transpose/scale/contiguous on q
+            // (4), k (4), v (3); the two contiguous() calls copy K and V whole.
+            let c = super::profile::counters();
+            c.kv_cache_ops.add(11);
+            c.kv_bytes_copied
+                .add_n((k.elem_count() + v.elem_count()) * k.dtype().size_in_bytes());
+        }
         self.attend_prepared(&q, &k, &v, mask)
     }
 
@@ -863,11 +1216,13 @@ impl Attention {
         // path on the encoder shape (super::flash_attn). Declines and falls
         // through for masked, short-query, non-f32 or non-CPU cases.
         if let Some(wv) = super::flash_attn::attend(q, k, v, mask.is_some())? {
+            super::profile::counters().kv_cache_ops.add(3);
             return wv
                 .transpose(1, 2)?
                 .flatten_from(2)
                 .and_then(|wv| self.out.forward(&wv));
         }
+        super::profile::counters().kv_cache_ops.add(6);
         let mut qk = q.matmul(k)?;
         if let Some(mask) = mask {
             qk = qk.broadcast_add(mask)?;
@@ -880,6 +1235,10 @@ impl Attention {
 
     fn reset(&mut self) {
         self.cache = None;
+        // Cleared, not dropped: the next window reuses the allocation.
+        if let Some(f) = &mut self.flat {
+            f.clear();
+        }
     }
 }
 
@@ -964,6 +1323,22 @@ enum VocabProj {
 }
 
 impl VocabProj {
+    /// Logits into the caller's buffer. The int8 arm writes them there
+    /// directly; the tensor arms compute as before and copy out once.
+    fn forward_into(&self, x: &Tensor, out: &mut Vec<f32>) -> CandleResult<()> {
+        if let Self::Int8(q) = self
+            && x.dtype() == DType::F32
+            && x.is_contiguous()
+        {
+            return with_f32(x, |xs| q.forward_into(xs, out))?;
+        }
+        let logits = self.forward(x)?.to_dtype(DType::F32)?;
+        with_f32(&logits.contiguous()?, |l| {
+            out.clear();
+            out.extend_from_slice(l);
+        })
+    }
+
     fn forward(&self, x: &Tensor) -> CandleResult<Tensor> {
         match self {
             // The activation is a single row; converting it costs nothing
@@ -1103,14 +1478,28 @@ impl EncoderAttention {
             ))
         })?;
 
-        let scale = self.inner.scale(&q)?;
+        // Vein 14: with K already in kernel layout, q and v can be read by
+        // the merged kernel exactly as the projections emit them — one row
+        // per position, heads side by side — so the two `split_heads()
+        // .contiguous()` copies (2 x 2.3 MB per layer on tiny) never happen.
+        if kt_on && !super::knobs::VEINS_OFF.get() {
+            let kt = super::profile::timed(&p.ea_prep, || kt.reshape((1, heads, hd, seq)))?;
+            if let Some(merged) = super::profile::timed(&p.ea_kernel, || {
+                super::flash_attn::attend_merged_unsplit(&q, &kt, &v)
+            })? {
+                return super::profile::timed(&p.ea_merge, || self.inner.out.forward(&merged));
+            }
+        }
         let (q, k, v) = super::profile::timed(&p.ea_prep, || -> CandleResult<_> {
+            super::profile::counters()
+                .enc_copy_bytes
+                .add_n(2 * seq * d * 4);
             Ok((
                 if kt_on {
                     self.inner.split_heads(&q)?.contiguous()?
                 } else {
                     // Whole scale on q — see `Attention::attend`.
-                    (self.inner.split_heads(&q)? * (scale * scale))?.contiguous()?
+                    (self.inner.split_heads(&q)? * self.inner.scale2)?.contiguous()?
                 },
                 if kt_on {
                     // A contiguous reshape into exactly the layout the kernel
@@ -1158,11 +1547,31 @@ struct Block {
 }
 
 impl Block {
-    fn load(n_state: usize, n_head: usize, vb: VarBuilder, p: Precision) -> CandleResult<Self> {
+    fn load(
+        n_state: usize,
+        n_head: usize,
+        vb: VarBuilder,
+        p: Precision,
+        max_positions: usize,
+    ) -> CandleResult<Self> {
         Ok(Self {
-            attn: Attention::load_decode(n_state, n_head, vb.pp("self_attn"), p, true)?,
+            attn: Attention::load_decode(
+                n_state,
+                n_head,
+                vb.pp("self_attn"),
+                p,
+                true,
+                max_positions,
+            )?,
             attn_ln: layer_norm(n_state, vb.pp("self_attn_layer_norm"))?,
-            cross_attn: Attention::load_decode(n_state, n_head, vb.pp("encoder_attn"), p, false)?,
+            cross_attn: Attention::load_decode(
+                n_state,
+                n_head,
+                vb.pp("encoder_attn"),
+                p,
+                false,
+                0,
+            )?,
             cross_attn_ln: layer_norm(n_state, vb.pp("encoder_attn_layer_norm"))?,
             mlp_ln: layer_norm(n_state, vb.pp("final_layer_norm"))?,
             // MEASURED AND REVERTED: int8 GEMV on the decoder MLP.
@@ -1237,7 +1646,13 @@ impl Block {
 /// beam search only needs to save one and put it back.
 #[derive(Clone)]
 pub struct DecoderState {
-    blocks: Vec<(Option<(Tensor, Tensor)>, Option<(Tensor, Tensor)>)>,
+    /// Per block: legacy self-attention cache, cross-attention cache, and
+    /// the flat self-attention cache's used prefix.
+    blocks: Vec<(
+        Option<(Tensor, Tensor)>,
+        Option<(Tensor, Tensor)>,
+        Option<FlatKvState>,
+    )>,
     offset: usize,
 }
 
@@ -1327,7 +1742,15 @@ impl TextDecoder {
             "embed_positions.weight",
         )?;
         let blocks = (0..cfg.decoder_layers)
-            .map(|i| Block::load(n_state, n_head, vb.pp(format!("layers.{i}")), precision))
+            .map(|i| {
+                Block::load(
+                    n_state,
+                    n_head,
+                    vb.pp(format!("layers.{i}")),
+                    precision,
+                    cfg.max_target_positions,
+                )
+            })
             .collect::<CandleResult<Vec<_>>>()?;
         let ln = layer_norm(n_state, vb.pp("layer_norm"))?;
         let embeddings = token_embedding.embeddings();
@@ -1367,18 +1790,30 @@ impl TextDecoder {
     /// re-feed each beam's whole prefix every step — is O(steps²·beams),
     /// roughly a hundredfold more decoder work at beam 5.
     ///
-    /// The clone is SHALLOW: a candle `Tensor` is a handle onto refcounted
-    /// storage, and the caches are only ever *replaced* (by `Tensor::cat`),
-    /// never written in place, so snapshots share storage with the live
-    /// cache and stay valid after it advances. The cross-attention cache is
-    /// identical across beams — same audio — so sharing it costs nothing.
+    /// The tensor clones are SHALLOW: a candle `Tensor` is a handle onto
+    /// refcounted storage, and those caches are only ever *replaced*, never
+    /// written in place, so snapshots share storage with the live cache. The
+    /// cross-attention cache is identical across beams — same audio — so
+    /// sharing it costs nothing. The flat self-attention cache IS written in
+    /// place, so its used prefix is copied: 2·len·n_state floats per layer,
+    /// a few percent of the weight traffic one decode step already pays.
     #[must_use]
     pub fn save(&self) -> DecoderState {
         DecoderState {
             blocks: self
                 .blocks
                 .iter()
-                .map(|b| (b.attn.cache.clone(), b.cross_attn.cache.clone()))
+                .map(|b| {
+                    (
+                        b.attn.cache.clone(),
+                        b.cross_attn.cache.clone(),
+                        b.attn
+                            .flat
+                            .as_ref()
+                            .filter(|f| f.len > 0)
+                            .map(FlatKv::snapshot),
+                    )
+                })
                 .collect(),
             offset: self.offset,
         }
@@ -1386,16 +1821,51 @@ impl TextDecoder {
 
     /// Restore a snapshot taken by [`Self::save`].
     pub fn restore(&mut self, state: &DecoderState) {
-        for (block, (attn, cross)) in self.blocks.iter_mut().zip(state.blocks.iter()) {
+        for (block, (attn, cross, flat)) in self.blocks.iter_mut().zip(state.blocks.iter()) {
             block.attn.cache = attn.clone();
             block.cross_attn.cache = cross.clone();
+            match (flat, &mut block.attn.flat) {
+                (Some(s), Some(f)) => f.restore(s),
+                (Some(s), None) => {
+                    let heads = block.attn.n_head;
+                    let hd = s.k.len() / (heads * s.len).max(1);
+                    let mut f = FlatKv::new(heads, hd, block.attn.max_positions.max(s.len));
+                    f.restore(s);
+                    block.attn.flat = Some(f);
+                }
+                (None, Some(f)) => f.clear(),
+                (None, None) => {}
+            }
         }
         self.offset = state.offset;
     }
 
-    /// Feed `tokens` (the whole prompt on the first call, one token after) and
-    /// return the logits for the final position only.
-    pub fn forward(&mut self, tokens: &[u32], audio: &Tensor) -> CandleResult<Tensor> {
+    /// [`Self::forward`], with the final position's logits written into
+    /// `out` (resized to the vocabulary) instead of returned as a tensor.
+    ///
+    /// The decode loop reads logits as a `Vec<f32>`; `forward` + `to_vec1`
+    /// built a 51 865-float tensor only to copy it out again on every token.
+    /// With the int8 projection the kernel now writes into `out` itself
+    /// (vein 2) — same values, one less full-vocabulary pass and one less
+    /// 207 KB allocation per token.
+    pub fn forward_into(
+        &mut self,
+        tokens: &[u32],
+        audio: &Tensor,
+        out: &mut Vec<f32>,
+    ) -> CandleResult<()> {
+        let p = super::profile::profile();
+        let x = self.hidden(tokens, audio)?;
+        let seq_len = tokens.len();
+        super::profile::timed(&p.dec_final, || {
+            let last = x.i((.., seq_len - 1.., ..))?.reshape((1, self.n_state))?;
+            self.vocab_proj.forward_into(&last, out)
+        })
+    }
+
+    /// The transformer stack: embeddings through the final layer norm,
+    /// `(1, seq, n_state)`.
+    fn hidden(&mut self, tokens: &[u32], audio: &Tensor) -> CandleResult<Tensor> {
         let p = super::profile::profile();
         let device = audio.device();
         let seq_len = tokens.len();
@@ -1412,8 +1882,15 @@ impl TextDecoder {
             x = block.forward(&x, audio, self.offset)?;
         }
         self.offset += seq_len;
+        self.ln.forward(&x)
+    }
 
-        let x = self.ln.forward(&x)?;
+    /// Feed `tokens` (the whole prompt on the first call, one token after) and
+    /// return the logits for the final position only.
+    pub fn forward(&mut self, tokens: &[u32], audio: &Tensor) -> CandleResult<Tensor> {
+        let p = super::profile::profile();
+        let x = self.hidden(tokens, audio)?;
+        let seq_len = tokens.len();
         super::profile::timed(&p.dec_final, || {
             // Only the last position's logits matter; projecting the rest to a
             // ~51k vocabulary would be the most expensive wasted op here.
@@ -1423,5 +1900,124 @@ impl TextDecoder {
             let last = x.i((.., seq_len - 1.., ..))?.reshape((1, self.n_state))?;
             self.vocab_proj.forward(&last)?.i(0)
         })
+    }
+}
+
+#[cfg(test)]
+mod flat_kv_tests {
+    //! Vein 1: the flat cache holds exactly what `Tensor::cat` +
+    //! `split_heads().transpose().contiguous()` would have produced.
+    use super::*;
+
+    fn rows(n: usize, n_state: usize, seed: &mut u64) -> Vec<f32> {
+        (0..n * n_state)
+            .map(|_| {
+                *seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((*seed >> 40) as f32 / (1u64 << 24) as f32) - 0.5
+            })
+            .collect()
+    }
+
+    fn reference(
+        all_k: &[f32],
+        all_v: &[f32],
+        len: usize,
+        heads: usize,
+        hd: usize,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let dev = ffai_core::candle::Device::Cpu;
+        let k = Tensor::from_vec(all_k.to_vec(), (1, len, heads * hd), &dev).unwrap();
+        let v = Tensor::from_vec(all_v.to_vec(), (1, len, heads * hd), &dev).unwrap();
+        let kt = k
+            .reshape((1, len, heads, hd))
+            .unwrap()
+            .transpose(1, 2)
+            .unwrap()
+            .transpose(2, 3)
+            .unwrap()
+            .contiguous()
+            .unwrap();
+        let vs = v
+            .reshape((1, len, heads, hd))
+            .unwrap()
+            .transpose(1, 2)
+            .unwrap()
+            .contiguous()
+            .unwrap();
+        (
+            kt.flatten_all().unwrap().to_vec1().unwrap(),
+            vs.flatten_all().unwrap().to_vec1().unwrap(),
+        )
+    }
+
+    #[test]
+    fn append_grow_materialize_and_snapshot_match_the_tensor_layout() {
+        let (heads, hd, max) = (6usize, 64usize, 448usize);
+        let n_state = heads * hd;
+        let mut seed = 3u64;
+        let mut flat = FlatKv::new(heads, hd, max);
+        assert_eq!(flat.cap, FlatKv::INITIAL_CAP);
+        let mut all_k = Vec::new();
+        let mut all_v = Vec::new();
+        // A 5-token prefill, then single tokens past the first capacity.
+        for n in std::iter::once(5).chain(std::iter::repeat_n(1, 70)) {
+            let k = rows(n, n_state, &mut seed);
+            let v = rows(n, n_state, &mut seed);
+            flat.append(&k, &v, n).unwrap();
+            all_k.extend_from_slice(&k);
+            all_v.extend_from_slice(&v);
+        }
+        assert_eq!(flat.len, 75);
+        assert!(flat.cap >= 75 && flat.cap <= max, "cap {}", flat.cap);
+        let (want_k, want_v) = reference(&all_k, &all_v, flat.len, heads, hd);
+        let (kt, vt) = flat.materialize(&ffai_core::candle::Device::Cpu).unwrap();
+        assert_eq!(kt.dims(), &[1, heads, hd, 75]);
+        assert_eq!(vt.dims(), &[1, heads, 75, hd]);
+        let got_k: Vec<f32> = kt.flatten_all().unwrap().to_vec1().unwrap();
+        let got_v: Vec<f32> = vt.flatten_all().unwrap().to_vec1().unwrap();
+        assert_eq!(got_k, want_k);
+        assert_eq!(got_v, want_v);
+        // Per-head views the kernel reads: row stride `cap`, `len` live.
+        for h in 0..heads {
+            let kh = flat.k_head(h);
+            for t in 0..hd {
+                assert_eq!(
+                    &kh[t * flat.cap..t * flat.cap + 75],
+                    &want_k[(h * hd + t) * 75..(h * hd + t + 1) * 75]
+                );
+            }
+            assert_eq!(flat.v_head(h), &want_v[h * 75 * hd..(h + 1) * 75 * hd]);
+        }
+        // Snapshot, advance, restore: the restored cache is the snapshot.
+        let snap = flat.snapshot();
+        let (k2, v2) = (rows(3, n_state, &mut seed), rows(3, n_state, &mut seed));
+        flat.append(&k2, &v2, 3).unwrap();
+        assert_eq!(flat.len, 78);
+        flat.restore(&snap);
+        assert_eq!(flat.len, 75);
+        let (kt2, _) = flat.materialize(&ffai_core::candle::Device::Cpu).unwrap();
+        let got_k2: Vec<f32> = kt2.flatten_all().unwrap().to_vec1().unwrap();
+        assert_eq!(got_k2, want_k);
+        // Restoring into a smaller, fresh cache grows it to fit.
+        let mut fresh = FlatKv::new(heads, hd, max);
+        fresh.restore(&snap);
+        assert_eq!(fresh.len, 75);
+        assert_eq!(fresh.snapshot().k, snap.k);
+        // Clearing keeps the allocation and forgets the tokens.
+        let cap = flat.cap;
+        flat.clear();
+        assert_eq!((flat.len, flat.cap), (0, cap));
+        // Beyond the model's limit is an error, not a silent overrun.
+        let mut tiny = FlatKv::new(heads, hd, 4);
+        assert!(
+            tiny.append(
+                &rows(5, n_state, &mut seed),
+                &rows(5, n_state, &mut seed),
+                5
+            )
+            .is_err()
+        );
     }
 }

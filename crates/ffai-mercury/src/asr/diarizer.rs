@@ -321,7 +321,10 @@ impl Diarizer {
             &format!("reused={reused} stored={} to={buffer_end:.2}", state.len()),
         );
 
-        let (kept_abs, embeddings) = state.parts();
+        // Borrow the stored embeddings (vein 10): `parts()` cloned every
+        // 192-float embedding of the 30 s horizon on every tick, only for
+        // clustering to read them.
+        let (kept_abs, embeddings) = state.parts_ref();
         if embeddings.is_empty() {
             return Vec::new();
         }

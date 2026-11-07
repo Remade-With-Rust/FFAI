@@ -56,7 +56,8 @@ use ffai_core::candle::{
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{
-    __m256i, _mm_add_epi32, _mm_cvtsi128_si32, _mm_shuffle_epi32, _mm256_add_epi32,
+    __m128i, __m256i, _mm_add_epi32, _mm_cvtepi32_ps, _mm_cvtsi128_si32, _mm_hadd_epi32,
+    _mm_loadu_ps, _mm_mul_ps, _mm_shuffle_epi32, _mm_storeu_ps, _mm256_add_epi32,
     _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_madd_epi16,
     _mm256_maddubs_epi16, _mm256_set1_epi16, _mm256_setzero_si256,
 };
@@ -205,6 +206,100 @@ impl Int8Vocab {
             q: self.shared.clone(),
         })
     }
+
+    /// The projection straight into `out` (resized to the vocabulary), with
+    /// no tensor built around the result. The decode loop reads the logits as
+    /// a `Vec<f32>` anyway; routing through a `Tensor` only to `to_vec1()` it
+    /// back out was a 4·vocab-byte allocation and copy per token (vein 2).
+    /// `x` is the one activation row, `d` floats. Same kernel, same order.
+    pub fn forward_into(&self, x: &[f32], out: &mut Vec<f32>) -> CandleResult<()> {
+        if x.len() != self.shared.d {
+            ffai_core::candle::bail!(
+                "int8-vocab: activation has {} elements, expected {}",
+                x.len(),
+                self.shared.d
+            );
+        }
+        out.resize(self.shared.vocab, 0.0);
+        project(&self.shared, x, out);
+        Ok(())
+    }
+}
+
+/// The GEMV body shared by the op and `forward_into`: quantize the activation
+/// row, then one block-scaled int8 dot per vocabulary row.
+fn project(q: &Shared, x: &[f32], out: &mut [f32]) {
+    let amax = x.iter().fold(0f32, |m, &v| m.max(v.abs()));
+    let sx = if amax > 0.0 { amax / 63.0 } else { 1.0 };
+    let mut xu = vec![0u8; q.d];
+    // Zipped rather than indexed: same elements in the same order, and no
+    // `panic_bounds_check` in a loop that runs `d` times per decode step.
+    //
+    // Vein 8: `f32::round` is a libm CALL (ties-away has no x86 instruction),
+    // the one thing in this unit-stride loop that would not widen.
+    // `round_ties_away_i32` reproduces it exactly — same integer for every
+    // input, including the `.5` ties and the `0.499_999_97 + 0.5` carry —
+    // in pure arithmetic, so the loop vectorises.
+    for (slot, &v) in xu.iter_mut().zip(x) {
+        let qi = ffai_core::fastmath::round_ties_away_i32((v / sx).clamp(-64.0, 63.0));
+        *slot = (qi + 64) as u8;
+    }
+
+    let (d, nb) = (q.d, q.nblocks);
+    let blk = d / nb;
+    let legacy = super::knobs::VEINS_OFF.get();
+    out.par_chunks_mut(512).enumerate().for_each(|(ci, o)| {
+        let v0 = ci * 512;
+        let mut i = 0;
+        // Vein 8: two vocabulary rows per pass share every load of the
+        // activation (`xu`); the arithmetic per row is untouched, so this is
+        // bit-identical and simply issues fewer instructions.
+        while i + 2 <= o.len() && !legacy {
+            let (va, vb) = (v0 + i, v0 + i + 1);
+            // SAFETY: avx2 - `Int8Vocab::new` only constructs this when `have_avx2()`
+            // passes, and both entry points go through it. The slices handed to the
+            // kernel are derived from `nblocks`/`blk`, which partition the quantized
+            // weight buffer exactly.
+            let (acc_a, acc_b) = unsafe {
+                dot_i8_blocked_x2(
+                    &q.qw[va * d..(va + 1) * d],
+                    &q.qw[vb * d..(vb + 1) * d],
+                    &q.bscale[va * nb..(va + 1) * nb],
+                    &q.bscale[vb * nb..(vb + 1) * nb],
+                    &xu,
+                    nb,
+                    blk,
+                )
+            };
+            o[i] = (acc_a - q.corr[va]) * sx;
+            o[i + 1] = (acc_b - q.corr[vb]) * sx;
+            i += 2;
+        }
+        for (i, slot) in o.iter_mut().enumerate().skip(i) {
+            let v = v0 + i;
+            // SAFETY: as above.
+            let acc = unsafe {
+                if legacy {
+                    dot_i8_blocked_legacy(
+                        &q.qw[v * d..(v + 1) * d],
+                        &q.bscale[v * nb..(v + 1) * nb],
+                        &xu,
+                        nb,
+                        blk,
+                    )
+                } else {
+                    dot_i8_blocked(
+                        &q.qw[v * d..(v + 1) * d],
+                        &q.bscale[v * nb..(v + 1) * nb],
+                        &xu,
+                        nb,
+                        blk,
+                    )
+                }
+            };
+            *slot = (acc - q.corr[v]) * sx;
+        }
+    });
 }
 
 struct Int8VocabOp {
@@ -226,37 +321,8 @@ impl CustomOp1 for Int8VocabOp {
         }
         let q = &*self.q;
         let x = &xf[l.start_offset()..l.start_offset() + q.d];
-        let amax = x.iter().fold(0f32, |m, &v| m.max(v.abs()));
-        let sx = if amax > 0.0 { amax / 63.0 } else { 1.0 };
-        let mut xu = vec![0u8; q.d];
-        // Zipped rather than indexed: same elements in the same order, and no
-        // `panic_bounds_check` in a loop that runs `d` times per decode step.
-        for (slot, &v) in xu.iter_mut().zip(x) {
-            let qi = (v / sx).round().clamp(-64.0, 63.0) as i32;
-            *slot = (qi + 64) as u8;
-        }
-
         let mut out = vec![0f32; q.vocab];
-        let (d, nb) = (q.d, q.nblocks);
-        out.par_chunks_mut(512).enumerate().for_each(|(ci, o)| {
-            let v0 = ci * 512;
-            for (i, slot) in o.iter_mut().enumerate() {
-                let v = v0 + i;
-                // SAFETY: avx2 - the op is only built when `have_avx2()` passes (guard above).
-                // The slices handed to the kernel are derived from `nblocks`/`blk`, which
-                // partition the quantized weight buffer exactly.
-                let acc = unsafe {
-                    dot_i8_blocked(
-                        &q.qw[v * d..(v + 1) * d],
-                        &q.bscale[v * nb..(v + 1) * nb],
-                        &xu,
-                        nb,
-                        d / nb,
-                    )
-                };
-                *slot = (acc - q.corr[v]) * sx;
-            }
-        });
+        project(q, x, &mut out);
         Ok((CpuStorage::F32(out), Shape::from_dims(&[1, q.vocab])))
     }
 }
@@ -277,12 +343,19 @@ fn have_avx2() -> bool {
 /// its own f32, and accumulates in float.
 ///
 /// The per-block horizontal reduction is the price of the finer scale — the
-/// row-scaled version avoided it by reducing once per row.
+/// row-scaled version avoided it by reducing once per row. This is the
+/// original form, kept as the oracle and as the `FFAI_VEINS=off` arm.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 // SAFETY: caller must ensure avx2, and that `w`/`bscale`/`xu` are long enough
 // for `nblocks*blk`. Guarded by `have_avx2()` at the single call site.
-unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, blk: usize) -> f32 {
+unsafe fn dot_i8_blocked_legacy(
+    w: &[i8],
+    bscale: &[f32],
+    xu: &[u8],
+    nblocks: usize,
+    blk: usize,
+) -> f32 {
     unsafe {
         let ones = _mm256_set1_epi16(1);
         let wp = w.as_ptr();
@@ -308,6 +381,169 @@ unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, bl
     }
 }
 
+/// The block sums of one row, as 8-lane i32 partials: `blk` lanes of
+/// `maddubs`+`madd` per block, exact integers throughout.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+// SAFETY: caller must ensure avx2 and that `wp`/`xp` address `blk` bytes from
+// `base`. Only called from the two kernels below, which hold that contract.
+unsafe fn block_partials(wp: *const i8, xp: *const u8, base: usize, blk: usize) -> __m256i {
+    unsafe {
+        let ones = _mm256_set1_epi16(1);
+        let mut p = _mm256_setzero_si256();
+        let mut o = 0;
+        while o < blk {
+            let x0 = _mm256_loadu_si256(xp.add(base + o).cast::<__m256i>());
+            let w0 = _mm256_loadu_si256(wp.add(base + o).cast::<__m256i>());
+            p = _mm256_add_epi32(p, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones));
+            o += 32;
+        }
+        p
+    }
+}
+
+/// Four blocks' 8-lane i32 partials -> their four exact block sums, in one
+/// 128-bit lane each, with 3 `hadd`s instead of 4 x (2 shuffles + 2 adds).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+// SAFETY: avx2 (for `_mm256_extracti128_si256`); pure register arithmetic.
+unsafe fn sum4(p0: __m256i, p1: __m256i, p2: __m256i, p3: __m256i) -> __m128i {
+    let q0 = _mm_add_epi32(_mm256_castsi256_si128(p0), _mm256_extracti128_si256(p0, 1));
+    let q1 = _mm_add_epi32(_mm256_castsi256_si128(p1), _mm256_extracti128_si256(p1, 1));
+    let q2 = _mm_add_epi32(_mm256_castsi256_si128(p2), _mm256_extracti128_si256(p2, 1));
+    let q3 = _mm_add_epi32(_mm256_castsi256_si128(p3), _mm256_extracti128_si256(p3, 1));
+    // [q0a+q0b, q0c+q0d, q1a+q1b, q1c+q1d] and the same for q2/q3, then
+    // one more pairwise add leaves [sum q0, sum q1, sum q2, sum q3].
+    _mm_hadd_epi32(_mm_hadd_epi32(q0, q1), _mm_hadd_epi32(q2, q3))
+}
+
+/// Fold four block sums into the running f32 accumulator EXACTLY as the
+/// legacy kernel did: `acc += (sum_b as f32) * bscale[b]` in block order.
+/// The four products are formed in one packed multiply (each lane is the
+/// same IEEE product the scalar form computes); only the four adds stay
+/// sequential, because they must.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+// SAFETY: avx2/sse; `bscale` must hold 4 readable floats.
+unsafe fn fold4(acc: f32, sums: __m128i, bscale: *const f32) -> f32 {
+    unsafe {
+        let prod = _mm_mul_ps(_mm_cvtepi32_ps(sums), _mm_loadu_ps(bscale));
+        let mut out = [0f32; 4];
+        _mm_storeu_ps(out.as_mut_ptr(), prod);
+        (((acc + out[0]) + out[1]) + out[2]) + out[3]
+    }
+}
+
+/// Block-scaled int8 dot with the per-block horizontal reductions GROUPED
+/// four at a time (vein 8). The i32 block sums are exact whichever way the
+/// lanes are added, and the f32 products and their summation order match
+/// `dot_i8_blocked_legacy` term for term, so the result is bit-identical;
+/// what changes is ~11 reduction instructions per four blocks instead of ~40.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+// SAFETY: caller must ensure avx2, and that `w`/`bscale`/`xu` are long enough
+// for `nblocks*blk`. Guarded by `have_avx2()` at the call sites.
+unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, blk: usize) -> f32 {
+    unsafe {
+        let wp = w.as_ptr();
+        let xp = xu.as_ptr();
+        let mut acc = 0f32;
+        let mut b = 0;
+        while b + 4 <= nblocks {
+            let p0 = block_partials(wp, xp, b * blk, blk);
+            let p1 = block_partials(wp, xp, (b + 1) * blk, blk);
+            let p2 = block_partials(wp, xp, (b + 2) * blk, blk);
+            let p3 = block_partials(wp, xp, (b + 3) * blk, blk);
+            acc = fold4(acc, sum4(p0, p1, p2, p3), bscale.as_ptr().add(b));
+            b += 4;
+        }
+        while b < nblocks {
+            let p = block_partials(wp, xp, b * blk, blk);
+            let s = _mm_add_epi32(_mm256_castsi256_si128(p), _mm256_extracti128_si256(p, 1));
+            let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b01_00_11_10));
+            let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b00_01_00_01));
+            acc += _mm_cvtsi128_si32(s) as f32 * *bscale.get_unchecked(b);
+            b += 1;
+        }
+        acc
+    }
+}
+
+/// Two rows at once (vein 8): one load of each activation block feeds both
+/// rows' `maddubs`. Per-row arithmetic and order are exactly
+/// [`dot_i8_blocked`]'s.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
+// SAFETY: as `dot_i8_blocked`, for both rows.
+unsafe fn dot_i8_blocked_x2(
+    wa: &[i8],
+    wb: &[i8],
+    sa: &[f32],
+    sb: &[f32],
+    xu: &[u8],
+    nblocks: usize,
+    blk: usize,
+) -> (f32, f32) {
+    unsafe {
+        let ones = _mm256_set1_epi16(1);
+        let (wpa, wpb) = (wa.as_ptr(), wb.as_ptr());
+        let xp = xu.as_ptr();
+        let (mut acc_a, mut acc_b) = (0f32, 0f32);
+        let mut b = 0;
+        while b + 4 <= nblocks {
+            let mut pa = [_mm256_setzero_si256(); 4];
+            let mut pb = [_mm256_setzero_si256(); 4];
+            for g in 0..4 {
+                let base = (b + g) * blk;
+                let mut o = 0;
+                while o < blk {
+                    let x0 = _mm256_loadu_si256(xp.add(base + o).cast::<__m256i>());
+                    let w0 = _mm256_loadu_si256(wpa.add(base + o).cast::<__m256i>());
+                    let w1 = _mm256_loadu_si256(wpb.add(base + o).cast::<__m256i>());
+                    pa[g] = _mm256_add_epi32(
+                        pa[g],
+                        _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones),
+                    );
+                    pb[g] = _mm256_add_epi32(
+                        pb[g],
+                        _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w1), ones),
+                    );
+                    o += 32;
+                }
+            }
+            acc_a = fold4(acc_a, sum4(pa[0], pa[1], pa[2], pa[3]), sa.as_ptr().add(b));
+            acc_b = fold4(acc_b, sum4(pb[0], pb[1], pb[2], pb[3]), sb.as_ptr().add(b));
+            b += 4;
+        }
+        while b < nblocks {
+            let base = b * blk;
+            let mut pa = _mm256_setzero_si256();
+            let mut pb = _mm256_setzero_si256();
+            let mut o = 0;
+            while o < blk {
+                let x0 = _mm256_loadu_si256(xp.add(base + o).cast::<__m256i>());
+                let w0 = _mm256_loadu_si256(wpa.add(base + o).cast::<__m256i>());
+                let w1 = _mm256_loadu_si256(wpb.add(base + o).cast::<__m256i>());
+                pa = _mm256_add_epi32(pa, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w0), ones));
+                pb = _mm256_add_epi32(pb, _mm256_madd_epi16(_mm256_maddubs_epi16(x0, w1), ones));
+                o += 32;
+            }
+            for (p, acc, sc) in [(pa, &mut acc_a, sa), (pb, &mut acc_b, sb)] {
+                let s = _mm_add_epi32(_mm256_castsi256_si128(p), _mm256_extracti128_si256(p, 1));
+                let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b01_00_11_10));
+                let s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0b00_01_00_01));
+                *acc += _mm_cvtsi128_si32(s) as f32 * *sc.get_unchecked(b);
+            }
+            b += 1;
+        }
+        (acc_a, acc_b)
+    }
+}
+
 #[cfg(not(target_arch = "x86_64"))]
 // SAFETY: non-x86 stub. It is `unsafe fn` only to match the signature of the
 // x86 kernel it stands in for, and its body is `unreachable!` - the runtime
@@ -315,6 +551,114 @@ unsafe fn dot_i8_blocked(w: &[i8], bscale: &[f32], xu: &[u8], nblocks: usize, bl
 // so there is no reachable code here to be unsound.
 unsafe fn dot_i8_blocked(_w: &[i8], _b: &[f32], _xu: &[u8], _n: usize, _k: usize) -> f32 {
     unreachable!("guarded by have_avx2()")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+// SAFETY: non-x86 stub, as above.
+unsafe fn dot_i8_blocked_legacy(_w: &[i8], _b: &[f32], _xu: &[u8], _n: usize, _k: usize) -> f32 {
+    unreachable!("guarded by have_avx2()")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[allow(clippy::too_many_arguments)]
+// SAFETY: non-x86 stub, as above.
+unsafe fn dot_i8_blocked_x2(
+    _wa: &[i8],
+    _wb: &[i8],
+    _sa: &[f32],
+    _sb: &[f32],
+    _xu: &[u8],
+    _n: usize,
+    _k: usize,
+) -> (f32, f32) {
+    unreachable!("guarded by have_avx2()")
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod reduction_tests {
+    use super::*;
+
+    /// The grouped and two-row kernels must reproduce the legacy kernel to
+    /// the bit on every block count, including the <4 remainder and
+    /// multi-step blocks.
+    #[test]
+    fn grouped_and_paired_kernels_match_legacy_bitwise() {
+        if !have_avx2() {
+            return;
+        }
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for &(nblocks, blk) in &[
+            (12usize, 32usize),
+            (13, 32),
+            (5, 64),
+            (3, 32),
+            (1, 32),
+            (40, 32),
+        ] {
+            let d = nblocks * blk;
+            let wa: Vec<i8> = (0..d).map(|_| (next() % 255) as i8).collect();
+            let wb: Vec<i8> = (0..d).map(|_| (next() % 255) as i8).collect();
+            let xu: Vec<u8> = (0..d).map(|_| (next() % 128) as u8).collect();
+            let sa: Vec<f32> = (0..nblocks)
+                .map(|_| (next() % 1000) as f32 * 1e-3 + 1e-3)
+                .collect();
+            let sb: Vec<f32> = (0..nblocks)
+                .map(|_| (next() % 1000) as f32 * 1e-3 + 1e-3)
+                .collect();
+            // SAFETY: avx2 checked above; every slice is exactly nblocks*blk.
+            let (la, lb, ga, gb, (xa, xb)) = unsafe {
+                (
+                    dot_i8_blocked_legacy(&wa, &sa, &xu, nblocks, blk),
+                    dot_i8_blocked_legacy(&wb, &sb, &xu, nblocks, blk),
+                    dot_i8_blocked(&wa, &sa, &xu, nblocks, blk),
+                    dot_i8_blocked(&wb, &sb, &xu, nblocks, blk),
+                    dot_i8_blocked_x2(&wa, &wb, &sa, &sb, &xu, nblocks, blk),
+                )
+            };
+            assert_eq!(
+                la.to_bits(),
+                ga.to_bits(),
+                "grouped row a, nblocks {nblocks} blk {blk}"
+            );
+            assert_eq!(
+                lb.to_bits(),
+                gb.to_bits(),
+                "grouped row b, nblocks {nblocks} blk {blk}"
+            );
+            assert_eq!(
+                la.to_bits(),
+                xa.to_bits(),
+                "paired row a, nblocks {nblocks} blk {blk}"
+            );
+            assert_eq!(
+                lb.to_bits(),
+                xb.to_bits(),
+                "paired row b, nblocks {nblocks} blk {blk}"
+            );
+        }
+    }
+
+    /// The branchless quantiser rounds exactly like `f32::round` on the
+    /// clamped range the kernel feeds it, ties included.
+    #[test]
+    fn quantiser_rounding_matches_round() {
+        let mut v = -64.0f32;
+        while v <= 63.0 {
+            for dv in [0.0f32, 0.25, 0.5, 0.75, 0.499_999_97, 0.500_000_06] {
+                let x = (v + dv).clamp(-64.0, 63.0);
+                let legacy = x.round() as i32;
+                let fast = ffai_core::fastmath::round_ties_away_i32(x);
+                assert_eq!(legacy, fast, "x = {x}");
+            }
+            v += 1.0;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

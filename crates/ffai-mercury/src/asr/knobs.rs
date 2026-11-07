@@ -89,6 +89,44 @@ impl Flag {
     }
 }
 
+/// A presence knob: true when the variable is set to ANYTHING, matching the
+/// `env::var(..).is_ok()` / `.is_err()` form the TTS switches used (vein 9).
+pub struct Present {
+    name: &'static str,
+    v: AtomicI64,
+}
+
+impl Present {
+    #[must_use]
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            v: AtomicI64::new(UNSET),
+        }
+    }
+
+    #[inline]
+    pub fn get(&self) -> bool {
+        let cur = self.v.load(Ordering::Relaxed);
+        if cur != UNSET {
+            return cur != 0;
+        }
+        let on = std::env::var_os(self.name).is_some();
+        self.v.store(i64::from(on), Ordering::Relaxed);
+        on
+    }
+
+    /// Override for the duration of a measurement. Not for shipped code paths.
+    pub fn set(&self, on: bool) {
+        self.v.store(i64::from(on), Ordering::Relaxed);
+    }
+
+    /// Drop back to whatever the environment says.
+    pub fn reset(&self) {
+        self.v.store(UNSET, Ordering::Relaxed);
+    }
+}
+
 /// A numeric knob with a validity filter and a default, matching the
 /// `parse().filter().unwrap_or()` form these replaced.
 pub struct Num {
@@ -180,6 +218,73 @@ pub static GEMV_PAD_DISABLED: Flag = Flag::new("FFAI_GEMV_PAD", "off");
 /// orientation plus `transpose(2,3).contiguous()`. Per-call, so both arms can
 /// be interleaved in one process.
 pub static ENC_KT_DISABLED: Flag = Flag::new("FFAI_ENC_KT", "off");
+
+// ---------------------------------------------------------------------------
+// TTS switches (vein 9). These were `std::env::var` reads INSIDE the per-conv,
+// per-layer-norm and per-GELU paths of `tts::vits` — about 250 allocating,
+// environment-locking reads per synthesized sentence. Same names, same
+// presence semantics, one relaxed load each.
+// ---------------------------------------------------------------------------
+
+/// `FFAI_CANDLE_FFN` set: text-encoder FFN / fused QKV through candle conv1d.
+pub static TTS_CANDLE_FFN: Present = Present::new("FFAI_CANDLE_FFN");
+/// `FFAI_SERIAL_ATTN` set: relative attention rows serial.
+pub static TTS_SERIAL_ATTN: Present = Present::new("FFAI_SERIAL_ATTN");
+/// `FFAI_CANDLE_LN` set: layer norm through candle ops.
+pub static TTS_CANDLE_LN: Present = Present::new("FFAI_CANDLE_LN");
+/// `FFAI_PAR_SPLINE` set: parallel spline columns.
+pub static TTS_PAR_SPLINE: Present = Present::new("FFAI_PAR_SPLINE");
+/// `FFAI_CANDLE_FLOW` set: candle flow instead of the flat flow.
+pub static TTS_CANDLE_FLOW: Present = Present::new("FFAI_CANDLE_FLOW");
+/// `FFAI_CANDLE_DEC` set: candle decoder instead of the flat decoder.
+pub static TTS_CANDLE_DEC: Present = Present::new("FFAI_CANDLE_DEC");
+/// `FFAI_CANDLE_CONV` set: candle conv1d for the direct-kernel convs.
+pub static TTS_CANDLE_CONV: Present = Present::new("FFAI_CANDLE_CONV");
+/// `FFAI_DP_DIRECT_1X1` set: duration-predictor dense convs on the direct kernel.
+pub static TTS_DP_DIRECT_1X1: Present = Present::new("FFAI_DP_DIRECT_1X1");
+/// `FFAI_CANDLE_GELU` set: candle's erf-GELU.
+pub static TTS_CANDLE_GELU: Present = Present::new("FFAI_CANDLE_GELU");
+/// `FFAI_PROFILE` set: the TTS kernels print their per-op breakdown.
+pub static PROFILE_ON: Present = Present::new("FFAI_PROFILE");
+
+/// Forget every cached value so the next read consults the environment
+/// again. For harnesses that flip variables with `set_var` between arms.
+pub fn reset_all() {
+    for p in [
+        &TTS_CANDLE_FFN,
+        &TTS_SERIAL_ATTN,
+        &TTS_CANDLE_LN,
+        &TTS_PAR_SPLINE,
+        &TTS_CANDLE_FLOW,
+        &TTS_CANDLE_DEC,
+        &TTS_CANDLE_CONV,
+        &TTS_DP_DIRECT_1X1,
+        &TTS_CANDLE_GELU,
+        &PROFILE_ON,
+    ] {
+        p.reset();
+    }
+    for f in [
+        &KV_F16_DISABLED,
+        &DEC_F16_DISABLED,
+        &MLP_INT8_ENABLED,
+        &MLP_INT8_DISABLED,
+        &PAR_HEADS,
+        &GEMV_PAD_DISABLED,
+        &ENC_KT_DISABLED,
+        &VEINS_OFF,
+    ] {
+        f.reset();
+    }
+    DECODE_MIN_KEYS.reset();
+    VOCAB_BLK.reset();
+}
+
+/// `FFAI_VEINS=off` turns off every brick of the instruction-veins campaign
+/// (`docs/plans/mercury-instruction-veins.md`) that kept its legacy arm alive,
+/// so a harness can interleave before/after inside one process. Per-call: a
+/// single relaxed load at each site.
+pub static VEINS_OFF: Flag = Flag::new("FFAI_VEINS", "off");
 
 // `FFAI_PREV_CONTEXT` and `FFAI_ADAPTIVE_CTX` are deliberately NOT here:
 // they are per-transcribe decisions read directly from the environment in

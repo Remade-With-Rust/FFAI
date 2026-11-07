@@ -41,6 +41,7 @@
 mod proofs;
 
 pub mod asr;
+mod buf;
 pub mod clock;
 pub mod manifests;
 pub mod par;

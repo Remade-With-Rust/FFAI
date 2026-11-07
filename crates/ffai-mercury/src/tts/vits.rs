@@ -81,6 +81,16 @@ pub struct Vits {
     /// Per-layer fused QKV projection (weights concatenated at load): one
     /// conv dispatch instead of three, identical arithmetic.
     fused_qkv: Vec<(Tensor, Tensor)>,
+    /// Every conv's weight, bias and geometry under its canonical name, so a
+    /// call is ONE map lookup instead of two `format!`s and three lookups
+    /// (vein 9).
+    conv_cache: HashMap<String, ConvEntry>,
+    /// Every layer norm's gamma/beta under its base name (vein 9).
+    ln_cache: HashMap<String, (Tensor, Tensor)>,
+    /// The text encoder's per-layer weight names, formatted once (vein 9).
+    enc_names: Vec<EncLayerNames>,
+    /// `DDSConv` stacks' per-layer names by base (vein 9).
+    dds_names: HashMap<String, [DdsLayerNames; 3]>,
     pub sample_rate: u32,
     pub id_map: PhonemeIdMap,
     pub defaults: SynthesisOptions,
@@ -92,6 +102,43 @@ struct ConvGeom {
     stride: usize,
     pad: usize,
     dilation: usize,
+}
+
+/// One conv's operands, resolved once at load (vein 9).
+struct ConvEntry {
+    weight: Tensor,
+    bias: Option<Tensor>,
+    geom: ConvGeom,
+}
+
+/// The names one text-encoder layer touches, formatted at load (vein 9).
+struct EncLayerNames {
+    rel_k: String,
+    rel_v: String,
+    conv_o: String,
+    norm1: String,
+    ffn_conv1: String,
+    ffn_conv2: String,
+    norm2: String,
+}
+
+/// The names one `DDSConv` layer touches (vein 9).
+struct DdsLayerNames {
+    sep: String,
+    norm1: String,
+    one_by_one: String,
+    norm2: String,
+}
+
+impl DdsLayerNames {
+    fn for_base(base: &str) -> [Self; 3] {
+        std::array::from_fn(|i| Self {
+            sep: format!("{base}.convs_sep.{i}"),
+            norm1: format!("{base}.norms_1.{i}"),
+            one_by_one: format!("{base}.convs_1x1.{i}"),
+            norm2: format!("{base}.norms_2.{i}"),
+        })
+    }
 }
 
 impl Vits {
@@ -261,6 +308,59 @@ impl Vits {
             v
         };
 
+        // Vein 9: resolve every conv and layer norm ONCE. Tensor clones are
+        // refcounted handles, so the caches hold no second copy of a weight.
+        let mut conv_cache = HashMap::new();
+        let mut ln_cache = HashMap::new();
+        for (key, t) in &w {
+            if let Some(name) = key.strip_suffix(".weight")
+                && t.rank() == 3
+            {
+                conv_cache.insert(
+                    name.to_string(),
+                    ConvEntry {
+                        weight: t.clone(),
+                        bias: w.get(&format!("{name}.bias")).cloned(),
+                        geom: geom.get(name).copied().unwrap_or(ConvGeom {
+                            transpose: false,
+                            stride: 1,
+                            pad: 0,
+                            dilation: 1,
+                        }),
+                    },
+                );
+            }
+            if let Some(base) = key.strip_suffix(".gamma")
+                && let Some(beta) = w.get(&format!("{base}.beta"))
+            {
+                ln_cache.insert(base.to_string(), (t.clone(), beta.clone()));
+            }
+        }
+        let enc_names = (0..N_LAYERS)
+            .map(|i| {
+                let base = format!("enc_p.encoder.attn_layers.{i}");
+                let ffn = format!("enc_p.encoder.ffn_layers.{i}");
+                EncLayerNames {
+                    rel_k: format!("{base}.emb_rel_k"),
+                    rel_v: format!("{base}.emb_rel_v"),
+                    conv_o: format!("{base}.conv_o"),
+                    norm1: format!("enc_p.encoder.norm_layers_1.{i}"),
+                    ffn_conv1: format!("{ffn}.conv_1"),
+                    ffn_conv2: format!("{ffn}.conv_2"),
+                    norm2: format!("enc_p.encoder.norm_layers_2.{i}"),
+                }
+            })
+            .collect();
+        let dds_names = [
+            "dp.convs",
+            "dp.flows.3.convs",
+            "dp.flows.5.convs",
+            "dp.flows.7.convs",
+        ]
+        .into_iter()
+        .map(|b| (b.to_string(), DdsLayerNames::for_base(b)))
+        .collect();
+
         Ok(Self {
             w,
             geom,
@@ -268,6 +368,10 @@ impl Vits {
             flat_dec,
             flat_flow,
             fused_qkv,
+            conv_cache,
+            ln_cache,
+            enc_names,
+            dds_names,
             sample_rate,
             id_map,
             defaults,
@@ -309,13 +413,12 @@ impl Vits {
             .e()?;
 
         for i in 0..N_LAYERS {
-            let base = format!("enc_p.encoder.attn_layers.{i}");
-            let y = self.rel_attention(&base, i, &x, t_len)?;
-            x =
-                self.layer_norm_named(&format!("enc_p.encoder.norm_layers_1.{i}"), &(&x + y).e()?)?;
-            let y = self.ffn(&format!("enc_p.encoder.ffn_layers.{i}"), &x)?;
-            x =
-                self.layer_norm_named(&format!("enc_p.encoder.norm_layers_2.{i}"), &(&x + y).e()?)?;
+            // Names formatted once at load (vein 9): zero `format!` per layer.
+            let names = &self.enc_names[i];
+            let y = self.rel_attention(i, &x, t_len)?;
+            x = self.layer_norm_named(&names.norm1, &(&x + y).e()?)?;
+            let y = self.ffn_named(&names.ffn_conv1, &names.ffn_conv2, &x)?;
+            x = self.layer_norm_named(&names.norm2, &(&x + y).e()?)?;
         }
         let stats = self.conv("enc_p.proj", &x)?;
         let m_p = stats.narrow(1, 0, HIDDEN).e()?;
@@ -326,7 +429,8 @@ impl Vits {
     /// Multi-head attention with windowed relative position embeddings —
     /// the exact arithmetic of VITS `attentions.MultiHeadAttention`
     /// (window 4, both key and value relative embeddings).
-    fn rel_attention(&self, base: &str, layer: usize, x: &Tensor, t_len: usize) -> Result<Tensor> {
+    fn rel_attention(&self, layer: usize, x: &Tensor, t_len: usize) -> Result<Tensor> {
+        let names = &self.enc_names[layer];
         let head_dim = HIDDEN / HEADS;
         let scale = 1.0 / (head_dim as f64).sqrt();
         // One fused QKV projection (weights concatenated at load) — the
@@ -335,13 +439,13 @@ impl Vits {
         // through the matmul directly rather than candle's conv1d wrapper,
         // which measured a 1.71x tax on the sibling k=3 shapes.
         let (wf, bf) = &self.fused_qkv[layer];
-        let qkv = if std::env::var("FFAI_CANDLE_FFN").is_err() {
-            super::decoder_kernels::conv1d_k1_gemm(x, wf, Some(bf), &self.device)?
-        } else {
+        let qkv = if crate::asr::knobs::TTS_CANDLE_FFN.get() {
             x.conv1d(wf, 0, 1, 1, 1)
                 .e()?
                 .broadcast_add(&bf.reshape((1, 3 * HIDDEN, 1)).e()?)
                 .e()?
+        } else {
+            super::decoder_kernels::conv1d_k1_gemm(x, wf, Some(bf), &self.device)?
         };
 
         // FLAT fused relative attention. The tensor formulation needed ~60
@@ -352,29 +456,57 @@ impl Vits {
         // Work is ~12 M MACs at T≈90 — the op tax was the stage, not the
         // arithmetic. m_p oracle gates it (reassociation-level deltas only).
         let hd = HIDDEN / HEADS;
-        let qkv_v: Vec<f32> = qkv.flatten_all().e()?.to_vec1().e()?; // [3*192][T]
-        let relk = self.rel_table(&format!("{base}.emb_rel_k"), t_len)?; // [(2T-1)*hd]
-        let relv = self.rel_table(&format!("{base}.emb_rel_v"), t_len)?;
+        let relk = self.rel_table(&names.rel_k, t_len)?; // [(2T-1)*hd]
+        let relv = self.rel_table(&names.rel_v, t_len)?;
 
         // Contiguous [h][t][d] copies of q/k/v (one transpose pass each) —
         // the first version used per-row Vec allocations and nested-Vec
         // indexing, and was 2× SLOWER than the tensor path it replaced.
         // Layout is the speed; the arithmetic was never the problem.
-        let mut q = vec![0f32; HEADS * t_len * hd];
-        let mut kk = vec![0f32; HEADS * t_len * hd];
-        let mut vv = vec![0f32; HEADS * t_len * hd];
-        for h in 0..HEADS {
-            for d in 0..hd {
-                let cq = (h * hd + d) * t_len;
-                let ck = (HIDDEN + h * hd + d) * t_len;
-                let cv = (2 * HIDDEN + h * hd + d) * t_len;
-                for t in 0..t_len {
-                    q[(h * t_len + t) * hd + d] = (f64::from(qkv_v[cq + t]) * scale) as f32;
-                    kk[(h * t_len + t) * hd + d] = qkv_v[ck + t];
-                    vv[(h * t_len + t) * hd + d] = qkv_v[cv + t];
+        //
+        // Read straight out of the projection's storage (vein 7) and written
+        // into buffers that get no zero pass first (vein 15): every (h, t, d)
+        // is assigned below.
+        let qkv = if qkv.is_contiguous() {
+            qkv
+        } else {
+            qkv.contiguous().e()?
+        };
+        let n_hd = HEADS * t_len * hd;
+        let (q, kk, vv) = crate::buf::with_f32(&qkv, |qkv_v| {
+            let q = crate::buf::filled_f32(n_hd, |q| {
+                for h in 0..HEADS {
+                    for d in 0..hd {
+                        let cq = (h * hd + d) * t_len;
+                        for t in 0..t_len {
+                            q[(h * t_len + t) * hd + d] = (f64::from(qkv_v[cq + t]) * scale) as f32;
+                        }
+                    }
                 }
-            }
-        }
+            });
+            let kk = crate::buf::filled_f32(n_hd, |kk| {
+                for h in 0..HEADS {
+                    for d in 0..hd {
+                        let ck = (HIDDEN + h * hd + d) * t_len;
+                        for t in 0..t_len {
+                            kk[(h * t_len + t) * hd + d] = qkv_v[ck + t];
+                        }
+                    }
+                }
+            });
+            let vv = crate::buf::filled_f32(n_hd, |vv| {
+                for h in 0..HEADS {
+                    for d in 0..hd {
+                        let cv = (2 * HIDDEN + h * hd + d) * t_len;
+                        for t in 0..t_len {
+                            vv[(h * t_len + t) * hd + d] = qkv_v[cv + t];
+                        }
+                    }
+                }
+            });
+            (q, kk, vv)
+        })
+        .e()?;
 
         // Each output row (h, i) reads all of k/v/relk/relv but writes only its
         // own hd values, so the (h, i) grid is embarrassingly parallel. It ran
@@ -386,21 +518,36 @@ impl Vits {
         // transpose once into the [C][T] the output conv wants. Per-row
         // arithmetic and its summation order are untouched, so this is
         // BIT-IDENTICAL to the serial form.
-        let mut outh = vec![0f32; HEADS * t_len * hd];
+        // Vein 15: the relative tables are zero outside the ±WINDOW band
+        // (`rel_table` gathers window-4 embeddings into a (2T-1)-row table
+        // and leaves the rest zero), so for the ~90 % of (i, j) pairs outside
+        // it the `+ rr[d]` is an add of +0.0 — which cannot change a value
+        // (x + 0.0 == x for every x but -0.0, and a -0.0 operand yields the
+        // same product sign-folded into a sum that is never -0.0 itself).
+        // Those pairs take the plain dot; only the band pays for the table.
+        let in_band = |i: usize, j: usize| i.abs_diff(j) <= WINDOW;
         let row_kernel = |p: &mut Vec<f32>, hi: usize, orow: &mut [f32]| {
             let (h, i) = (hi / t_len, hi % t_len);
             let qr = &q[(h * t_len + i) * hd..(h * t_len + i + 1) * hd];
             for (j, pj) in p.iter_mut().enumerate() {
                 let kr = &kk[(h * t_len + j) * hd..(h * t_len + j + 1) * hd];
-                let rr = &relk[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
                 let mut s = 0f32;
-                for d in 0..hd {
-                    s += qr[d] * (kr[d] + rr[d]);
+                if in_band(i, j) {
+                    let rr = &relk[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
+                    for d in 0..hd {
+                        s += qr[d] * (kr[d] + rr[d]);
+                    }
+                } else {
+                    for d in 0..hd {
+                        s += qr[d] * kr[d];
+                    }
                 }
                 *pj = s;
             }
-            // Softmax over the row, in place.
-            let m = p.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            // Softmax over the row, in place. The max is the vectorised
+            // reduction (vein 15): max is associative on these finite scores,
+            // so the value is the fold's to the bit.
+            let m = ffai_core::fastmath::max_f32(p);
             let mut sum = 0f32;
             for pj in p.iter_mut() {
                 *pj = ffai_core::fastmath::exp(*pj - m);
@@ -412,9 +559,15 @@ impl Vits {
             for (j, pj) in p.iter().enumerate() {
                 let w = pj * inv;
                 let vr = &vv[(h * t_len + j) * hd..(h * t_len + j + 1) * hd];
-                let rr = &relv[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
-                for d in 0..hd {
-                    orow[d] += w * (vr[d] + rr[d]);
+                if in_band(i, j) {
+                    let rr = &relv[(j + t_len - 1 - i) * hd..(j + t_len - i) * hd];
+                    for d in 0..hd {
+                        orow[d] += w * (vr[d] + rr[d]);
+                    }
+                } else {
+                    for d in 0..hd {
+                        orow[d] += w * vr[d];
+                    }
                 }
             }
         };
@@ -427,31 +580,37 @@ impl Vits {
         // -- there isn't one in the range that occurs. It also means the 1.04x
         // this change bought on ~88-phoneme sentences UNDERSTATES it badly for
         // long-form text: the same code is worth ~9.6x at T=1024.
-        let parallel = HEADS * t_len >= 32 && std::env::var("FFAI_SERIAL_ATTN").is_err();
-        if parallel {
-            use crate::par::prelude::*;
-            outh.par_chunks_mut(hd).enumerate().for_each_init(
-                || vec![0f32; t_len],
-                |p, (hi, orow)| row_kernel(p, hi, orow),
-            );
-        } else {
-            let mut p = vec![0f32; t_len];
-            for (hi, orow) in outh.chunks_mut(hd).enumerate() {
-                row_kernel(&mut p, hi, orow);
-            }
-        }
-
-        let mut out = vec![0f32; HIDDEN * t_len];
-        for h in 0..HEADS {
-            for i in 0..t_len {
-                let src = &outh[(h * t_len + i) * hd..(h * t_len + i + 1) * hd];
-                for (d, s) in src.iter().enumerate() {
-                    out[(h * hd + d) * t_len + i] = *s;
+        let parallel = HEADS * t_len >= 32 && !crate::asr::knobs::TTS_SERIAL_ATTN.get();
+        // Every row of `outh` is zeroed-then-accumulated by `row_kernel`, and
+        // every element of `out` is assigned by the transpose: no zero passes
+        // (vein 15).
+        let outh = crate::buf::filled_f32(HEADS * t_len * hd, |outh| {
+            if parallel {
+                use crate::par::prelude::*;
+                outh.par_chunks_mut(hd).enumerate().for_each_init(
+                    || vec![0f32; t_len],
+                    |p, (hi, orow)| row_kernel(p, hi, orow),
+                );
+            } else {
+                let mut p = vec![0f32; t_len];
+                for (hi, orow) in outh.chunks_mut(hd).enumerate() {
+                    row_kernel(&mut p, hi, orow);
                 }
             }
-        }
+        });
+
+        let out = crate::buf::filled_f32(HIDDEN * t_len, |out| {
+            for h in 0..HEADS {
+                for i in 0..t_len {
+                    let src = &outh[(h * t_len + i) * hd..(h * t_len + i + 1) * hd];
+                    for (d, s) in src.iter().enumerate() {
+                        out[(h * hd + d) * t_len + i] = *s;
+                    }
+                }
+            }
+        });
         let out = Tensor::from_vec(out, (1, HIDDEN, t_len), &self.device).e()?;
-        self.conv(&format!("{base}.conv_o"), &out)
+        self.conv(&names.conv_o, &out)
     }
 
     /// The `[(2T-1) × head_dim]` relative table, flat: window-4 learned
@@ -460,6 +619,12 @@ impl Vits {
         let emb = self.t(name)?; // [1, 2*WINDOW+1, hd]
         let hd = emb.dim(2).e()?;
         let ev: Vec<f32> = emb.flatten_all().e()?.to_vec1().e()?;
+        {
+            let c = crate::asr::profile::counters();
+            c.rel_table_builds.hit();
+            c.tts_copy_bytes
+                .add_n((ev.len() + (2 * t_len - 1) * hd) * 4);
+        }
         let span = 2 * t_len - 1;
         let mut rows = vec![0f32; span * hd];
         for r in 0..span {
@@ -475,8 +640,7 @@ impl Vits {
     /// One encoder layer's attention half, exposed for `enc_anatomy`.
     #[doc(hidden)]
     pub fn enc_attn_probe(&self, layer: usize, x: &Tensor, t_len: usize) -> Result<Tensor> {
-        let base = format!("enc_p.encoder.attn_layers.{layer}");
-        self.rel_attention(&base, layer, x, t_len)
+        self.rel_attention(layer, x, t_len)
     }
 
     /// One encoder layer's feed-forward half, exposed for `enc_anatomy`.
@@ -518,10 +682,28 @@ impl Vits {
         // (16/31, z = +0.18 against a clean 1.019 null arm), so it was removed
         // as complexity that buys nothing. The GEMM itself is the whole win:
         // 1.456x CPU time (29/31, z = +4.85) and 1.719x wall against candle.
-        let use_gemm = std::env::var("FFAI_CANDLE_FFN").is_err();
+        self.ffn_named(&format!("{base}.conv_1"), &format!("{base}.conv_2"), x)
+    }
+
+    /// [`Self::ffn`] with the two conv names already formatted (vein 9).
+    fn ffn_named(&self, conv_1: &str, conv_2: &str, x: &Tensor) -> Result<Tensor> {
+        let use_gemm = !crate::asr::knobs::TTS_CANDLE_FFN.get();
         let conv = |name: &str, x: &Tensor| -> Result<Tensor> {
-            let w = self.t(&format!("{name}.weight"))?;
-            let b = self.t(&format!("{name}.bias"))?;
+            // One lookup for weight + bias (vein 9).
+            let (w, b) = match self.conv_cache.get(name) {
+                Some(ConvEntry {
+                    weight,
+                    bias: Some(bias),
+                    ..
+                }) => {
+                    crate::asr::profile::counters().name_lookups.hit();
+                    (weight, bias)
+                }
+                _ => (
+                    self.t(&format!("{name}.weight"))?,
+                    self.t(&format!("{name}.bias"))?,
+                ),
+            };
             let c = b.dim(0).e()?;
             if use_gemm {
                 return super::decoder_kernels::conv1d_k3_gemm(x, w, b, &self.device);
@@ -531,8 +713,8 @@ impl Vits {
                 .broadcast_add(&b.reshape((1, c, 1)).e()?)
                 .e()
         };
-        let h = conv(&format!("{base}.conv_1"), x)?.relu().e()?;
-        conv(&format!("{base}.conv_2"), &h)
+        let h = conv(conv_1, x)?.relu().e()?;
+        conv(conv_2, &h)
     }
 
     // ---------------------------------------------------------------- stage 2
@@ -633,12 +815,21 @@ impl Vits {
             Some(g) => (x + g).e()?,
             None => x.clone(),
         };
-        for i in 0..3 {
-            let y = self.conv(&format!("{base}.convs_sep.{i}"), &x)?;
-            let y = self.layer_norm_named(&format!("{base}.norms_1.{i}"), &y)?;
+        // Names formatted once at load for the four stacks the graph has
+        // (vein 9); anything else formats on the spot as before.
+        let fallback;
+        let names = if let Some(n) = self.dds_names.get(base) {
+            n
+        } else {
+            fallback = DdsLayerNames::for_base(base);
+            &fallback
+        };
+        for n in names {
+            let y = self.conv(&n.sep, &x)?;
+            let y = self.layer_norm_named(&n.norm1, &y)?;
             let y = gelu_erf(&y)?;
-            let y = self.conv(&format!("{base}.convs_1x1.{i}"), &y)?;
-            let y = self.layer_norm_named(&format!("{base}.norms_2.{i}"), &y)?;
+            let y = self.conv(&n.one_by_one, &y)?;
+            let y = self.layer_norm_named(&n.norm2, &y)?;
             let y = gelu_erf(&y)?;
             x = (x + y).e()?;
         }
@@ -646,27 +837,42 @@ impl Vits {
     }
 
     fn layer_norm_named(&self, base: &str, x: &Tensor) -> Result<Tensor> {
-        let c = self.t(&format!("{base}.gamma"))?.dim(0).e()?;
+        // One lookup for gamma + beta (vein 9), read in place (vein 7).
+        let (gamma, beta) = match self.ln_cache.get(base) {
+            Some((g, b)) => {
+                crate::asr::profile::counters().name_lookups.hit();
+                (g, b)
+            }
+            None => (
+                self.t(&format!("{base}.gamma"))?,
+                self.t(&format!("{base}.beta"))?,
+            ),
+        };
+        let c = gamma.dim(0).e()?;
         // Nine allocating tensor ops (mean/sub/sqr/mean/add/sqrt/div/mul/add)
         // for what is two passes over 66 KB. The duration predictor runs 24 of
         // these per sentence and the text encoder 12, so the tensor spelling
         // costs ~216 intermediate allocations per utterance -- and dp measured
         // 8.4 GFLOP/s, i.e. almost entirely plumbing rather than arithmetic.
         // `FFAI_CANDLE_LN=1` restores the tensor path for A/B.
-        if std::env::var("FFAI_CANDLE_LN").is_err() {
+        if !crate::asr::knobs::TTS_CANDLE_LN.get() {
             let (_, cc, t) = x.dims3().e()?;
-            let xv: Vec<f32> = x.flatten_all().e()?.to_vec1().e()?;
-            let g: Vec<f32> = self.t(&format!("{base}.gamma"))?.to_vec1().e()?;
-            let b: Vec<f32> = self.t(&format!("{base}.beta"))?.to_vec1().e()?;
-            let out = super::decoder_kernels::layer_norm_flat(&xv, cc, t, &g, &b, 1e-5);
+            let xc = if x.is_contiguous() {
+                x.clone()
+            } else {
+                x.contiguous().e()?
+            };
+            let out = flat3(&xc, gamma, beta, |xv, g, b| {
+                super::decoder_kernels::layer_norm_flat(xv, cc, t, g, b, 1e-5)
+            })?;
             return Tensor::from_vec(out, (1, cc, t), &self.device).e();
         }
         let mean = x.mean_keepdim(1).e()?;
         let centered = x.broadcast_sub(&mean).e()?;
         let var = centered.sqr().e()?.mean_keepdim(1).e()?;
         let normed = centered.broadcast_div(&(var + 1e-5).e()?.sqrt().e()?).e()?;
-        let gamma = self.t(&format!("{base}.gamma"))?.reshape((1, c, 1)).e()?;
-        let beta = self.t(&format!("{base}.beta"))?.reshape((1, c, 1)).e()?;
+        let gamma = gamma.reshape((1, c, 1)).e()?;
+        let beta = beta.reshape((1, c, 1)).e()?;
         normed.broadcast_mul(&gamma).e()?.broadcast_add(&beta).e()
     }
 
@@ -719,7 +925,7 @@ impl Vits {
         //
         // The de-plumbing above (three heap Vecs per column -> stack arrays) is
         // kept separately, on byte-identity and strictly-less-work.
-        let out: Vec<f32> = if t_len >= 32 && std::env::var("FFAI_PAR_SPLINE").is_ok() {
+        let out: Vec<f32> = if t_len >= 32 && crate::asr::knobs::TTS_PAR_SPLINE.get() {
             use crate::par::prelude::*;
             (0..t_len).into_par_iter().map(column).collect()
         } else {
@@ -767,7 +973,7 @@ impl Vits {
         // Flat is the default (42/45 paired wins, §6.14);
         // FFAI_CANDLE_FLOW=1 restores the candle path for A/B.
         if let Some(flat_flow) = &self.flat_flow
-            && std::env::var("FFAI_CANDLE_FLOW").is_err()
+            && !crate::asr::knobs::TTS_CANDLE_FLOW.get()
         {
             let len = z_p.dim(2).e()?;
             let mut zv: Vec<f32> = z_p.flatten_all().e()?.to_vec1().e()?;
@@ -824,7 +1030,7 @@ impl Vits {
     /// in the flat Vec domain — see [`super::decoder_kernels::FlatDecoder`].
     /// `FFAI_CANDLE_DEC=1` switches to the candle-op reference path for A/B.
     pub fn decode(&self, z: &Tensor) -> Result<Vec<f32>> {
-        if std::env::var("FFAI_CANDLE_DEC").is_err() {
+        if !crate::asr::knobs::TTS_CANDLE_DEC.get() {
             let len = z.dim(2).e()?;
             let zv: Vec<f32> = z.flatten_all().e()?.to_vec1().e()?;
             return Ok(self.flat_dec.run(&zv, len));
@@ -860,6 +1066,7 @@ impl Vits {
     // ------------------------------------------------------------- plumbing
 
     fn t(&self, name: &str) -> Result<&Tensor> {
+        crate::asr::profile::counters().name_lookups.hit();
         self.w
             .get(name)
             .ok_or_else(|| Error::Model(format!("vits weight `{name}` missing from safetensors")))
@@ -874,14 +1081,24 @@ impl Vits {
     /// set leaves cache. `FFAI_CANDLE_CONV=1` switches back for A/B; the
     /// kernels' scalar twin IS candle's conv (see their tests).
     fn conv(&self, name: &str, x: &Tensor) -> Result<Tensor> {
-        let weight = self.t(&format!("{name}.weight"))?;
-        let g = self.geom.get(name).copied().unwrap_or(ConvGeom {
-            transpose: false,
-            stride: 1,
-            pad: 0,
-            dilation: 1,
-        });
-        let bias = self.w.get(&format!("{name}.bias"));
+        // One lookup resolves weight, bias and geometry (vein 9); the
+        // formatted-name path stays for a conv the cache never saw.
+        let (weight, g, bias) = match self.conv_cache.get(name) {
+            Some(entry) => {
+                crate::asr::profile::counters().name_lookups.hit();
+                (&entry.weight, entry.geom, entry.bias.as_ref())
+            }
+            None => (
+                self.t(&format!("{name}.weight"))?,
+                self.geom.get(name).copied().unwrap_or(ConvGeom {
+                    transpose: false,
+                    stride: 1,
+                    pad: 0,
+                    dilation: 1,
+                }),
+                self.w.get(&format!("{name}.bias")),
+            ),
+        };
         // Routing, settled by measurement per stage: dec.* on the direct
         // kernels (4× there), dp's DEPTHWISE convs on the serial depthwise
         // kernel (395 → 254 ms per 20 sentences), and enc_p/flow REVERTED to
@@ -889,7 +1106,7 @@ impl Vits {
         // (serial 1×1s lose to candle's threaded matmul at 192×192×T) while
         // flow measured flat. `FFAI_CANDLE_CONV=1` restores candle end to end.
         let use_direct = (name.starts_with("dec.") || name.starts_with("dp."))
-            && std::env::var("FFAI_CANDLE_CONV").is_err()
+            && !crate::asr::knobs::TTS_CANDLE_CONV.get()
             && (g.transpose || g.stride == 1);
         if use_direct {
             let in_per_group = weight.dim(1).e()?;
@@ -901,23 +1118,32 @@ impl Vits {
             }
             if in_per_group == 1 && x_ch == weight.dim(0).e()? {
                 let (_, c, len) = x.dims3().e()?;
-                let xv: Vec<f32> = x.flatten_all().e()?.to_vec1().e()?;
-                let wv: Vec<f32> = weight.flatten_all().e()?.to_vec1().e()?;
-                let bvv: Option<Vec<f32>> = match bias {
-                    Some(b) => Some(b.flatten_all().e()?.to_vec1().e()?),
-                    None => None,
-                };
                 let k = weight.dim(2).e()?;
-                let (out, l_out) = super::decoder_kernels::conv1d_depthwise_flat(
-                    &xv,
-                    c,
-                    len,
-                    &wv,
-                    bvv.as_deref(),
-                    k,
-                    g.pad,
-                    g.dilation,
-                );
+                // Operands read in place (vein 7): no `to_vec1` copies of the
+                // activation, the weight or the bias.
+                let xc = if x.is_contiguous() {
+                    x.clone()
+                } else {
+                    x.contiguous().e()?
+                };
+                let wc = if weight.is_contiguous() {
+                    weight.clone()
+                } else {
+                    weight.contiguous().e()?
+                };
+                let run = |xv: &[f32], wv: &[f32], bv: Option<&[f32]>| {
+                    super::decoder_kernels::conv1d_depthwise_flat(
+                        xv, c, len, wv, bv, k, g.pad, g.dilation,
+                    )
+                };
+                let (out, l_out) = match bias {
+                    Some(b) => flat3(&xc, &wc, b, |xv, wv, bv| run(xv, wv, Some(bv)))?,
+                    None => crate::buf::with_f32(&xc, |xv| {
+                        crate::buf::with_f32(&wc, |wv| run(xv, wv, None))
+                    })
+                    .e()?
+                    .e()?,
+                };
                 return Tensor::from_vec(out, (1, c, l_out), &self.device).e();
             }
             if x_ch / in_per_group == 1 {
@@ -931,7 +1157,7 @@ impl Vits {
                 // ones fall through. `FFAI_DP_DIRECT_1X1=1` restores the old
                 // routing for A/B.
                 let dp_dense_to_candle =
-                    name.starts_with("dp.") && std::env::var("FFAI_DP_DIRECT_1X1").is_err();
+                    name.starts_with("dp.") && !crate::asr::knobs::TTS_DP_DIRECT_1X1.get();
                 if !dp_dense_to_candle {
                     return super::decoder_kernels::conv1d_direct(
                         x, weight, bias, g.pad, g.dilation,
@@ -955,7 +1181,7 @@ impl Vits {
             && weight.dim(2).e()? == 1
             && g.pad == 0
             && g.stride == 1
-            && std::env::var("FFAI_CANDLE_FFN").is_err()
+            && !crate::asr::knobs::TTS_CANDLE_FFN.get()
         {
             return super::decoder_kernels::conv1d_k1_gemm(x, weight, bias, &self.device);
         }
@@ -996,13 +1222,34 @@ fn leaky_relu(x: &Tensor, slope: f64) -> Result<Tensor> {
 /// Exact-erf GELU. The graph specifies `Erf`, so the function is fixed; the
 /// evaluation is ours. `FFAI_CANDLE_GELU=1` restores candle's own.
 fn gelu_erf(x: &Tensor) -> Result<Tensor> {
-    if std::env::var("FFAI_CANDLE_GELU").is_ok() {
+    if crate::asr::knobs::TTS_CANDLE_GELU.get() {
         return x.gelu_erf().e();
     }
     let dims = x.dims().to_vec();
-    let xv: Vec<f32> = x.flatten_all().e()?.to_vec1().e()?;
-    let out = super::decoder_kernels::gelu_erf_flat(&xv);
+    // Read in place (vein 7); the one copy left is the output itself.
+    let xc = if x.is_contiguous() {
+        x.clone()
+    } else {
+        x.contiguous().e()?
+    };
+    let out = crate::buf::with_f32(&xc, super::decoder_kernels::gelu_erf_flat).e()?;
     Tensor::from_vec(out, dims, x.device()).e()
+}
+
+/// Borrow three contiguous f32 tensors at once (vein 7) — the layer norm's
+/// `(x, gamma, beta)` and the depthwise conv's `(x, weight, bias)`.
+fn flat3<R>(
+    a: &Tensor,
+    b: &Tensor,
+    c: &Tensor,
+    f: impl FnOnce(&[f32], &[f32], &[f32]) -> R,
+) -> Result<R> {
+    crate::buf::with_f32(a, |av| {
+        crate::buf::with_f32(b, |bv| crate::buf::with_f32(c, |cv| f(av, bv, cv)))
+    })
+    .e()?
+    .e()?
+    .e()
 }
 
 /// `[h, T, 2T-1]` relative logits → `[h, T, T]` absolute (the VITS pad /
