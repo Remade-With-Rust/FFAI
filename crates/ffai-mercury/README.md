@@ -152,7 +152,7 @@ ffai_media::save_wav("out.wav".as_ref(), &audio)?;
 |---|---|
 | `speed` | playback rate; 1.0 = the voice's own timing |
 | `noise_scale` / `noise_w` | acoustic and duration variation; `0.0` = fully deterministic audio |
-| `seed` | noise seed — same text + same seed = **byte-identical WAV** |
+| `seed` | noise seed — same text + same seed = the same WAV, except about 3–5 % of processes land on a second exact waveform (see Determinism below) |
 | `sentence_silence_s` | gap between sentences of long-form input |
 
 Long-form input is segmented into sentences, synthesized per sentence, and joined — `ffai tts` on a paragraph just works.
@@ -184,9 +184,12 @@ input text. Never our own ASR; no self-grading.
   **1.58× faster wall-clock while using 5 % less total CPU.**
 - **Load: 0.64 s against 6.69 s** — the one large difference that barely varies.
 - **Footprint: parity**, 214 MiB steady against 217.
-- **Determinism**: same text + same seed = byte-identical WAV, verified at
-  library and file-hash level. Piper structurally cannot offer this — it samples
-  noise inside its ONNX graph with no seed control.
+- **Determinism, with one open defect**: same text + same seed gives the same
+  WAV, verified at library and file-hash level, which piper cannot offer since it
+  samples noise inside its ONNX graph with no seed control. But it is not yet
+  true of every process: in 150 runs of 8 sentences, about 3–5 % of processes
+  produced a second, equally exact waveform. There are exactly two outcomes, and
+  the cause is not yet found (see `docs/plans/mercury-instruction-veins-ledger.md`).
 
 **Both engines are scored across draws, because one of them has to be.** Piper
 cannot repeat a run, so its WER is the mean of independent draws with the range
