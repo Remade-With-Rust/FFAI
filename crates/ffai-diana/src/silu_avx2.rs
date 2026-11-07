@@ -242,6 +242,15 @@ pub unsafe fn silu_bias_in_place(x: &mut [f32], bias: f32) {
 
 #[cfg(not(target_arch = "x86_64"))]
 #[allow(unsafe_code)]
+pub unsafe fn silu_bias_res_in_place(x: &mut [f32], bias: f32, res: &[f32]) {
+    assert_eq!(x.len(), res.len(), "silu_avx2: residual length mismatch");
+    for (v, &r) in x.iter_mut().zip(res) {
+        *v = crate::silu::silu_scalar_pub(*v + bias) + r;
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[allow(unsafe_code)]
 pub unsafe fn silu_into(src: &[f32], dst: &mut [f32]) {
     for (d, s) in dst.iter_mut().zip(src) {
         *d = crate::silu::silu_scalar_pub(*s);

@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-wasm"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffai-core",
  "ffai-diana",

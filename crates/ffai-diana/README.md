@@ -33,7 +33,7 @@ cargo add ffai-diana ffai-core ffai-media
 
 ```toml
 [dependencies]
-ffai-diana = "0.9"
+ffai-diana = "0.10"
 ffai-core = "0.9"
 ffai-media = "0.7"
 ```
@@ -409,7 +409,8 @@ Measured against Ultralytics 8.4.113 and ONNX Runtime on a hash-pinned
 | ultralytics-yolo26n-rect | 0.7014 | 310 MiB |
 | ort-yolo26n (square only) | 0.6865 | 163 MiB |
 
-**mAP is identical to PyTorch to four decimals**, and memory is the
+**mAP is identical to PyTorch to four decimals** (measured on 0.9; 0.10's
+arithmetic changes pass the same per-tier oracle), and memory is the
 unambiguous win — **0.4x Ultralytics, 0.75x ONNX Runtime**. Model load is
 68 ms.
 
@@ -468,11 +469,44 @@ anyone would guess:
   traversal instead of three.
 
 What did **not** move it, each refuted with numbers: im2col tiling (twice),
-direct convolution (four shapes, including an AVX2 microkernel), implicit
+general direct convolution (four shapes, including an AVX2 microkernel; the
+3-channel stem is the one exception, below), implicit
 GEMM, the im2col zero-fill, elementwise traffic fusion, Intel MKL (within
 noise of candle's GEMM), thread width beyond 4–6, cache pollution (flat across
 44x residency), and content-adaptive dispatch. **Nothing in this graph leaves
 L3**, so every prize priced at DRAM bandwidth was overstated by 3–15x.
+
+### 0.10: a third fewer instructions, counted rather than timed
+
+The 0.10 campaign was run on callgrind's instruction count, which resolves a
+0.05 % change on a shared machine where the clock cannot:
+
+| yolo26n, 640 | 0.9 | 0.10 | change |
+|---|---:|---:|---:|
+| detect, instructions per frame | 1,075 M | 703 M | **−34.6 %** |
+| tracker, instructions per frame | 21.3 M | 16.1 M | **−24.3 %** |
+
+Forty-five changes, each counted alone and kept only if it removed more than
+100,000 instructions with byte-identical output. The largest: im2col rows as
+`memcpy`, GEMM output left uninitialised instead of zero-filled, a depthwise
+kernel with bias and SiLU fused, the SPPF max-pool chain and every C3k2/C3k
+branch written straight into its concat buffer, the head's 1×1 convs as one
+matmul, attention transposes as strided views, and residuals folded into the
+epilogue that produces them. A direct kernel now serves the 3-channel stem,
+bit-identical to the GEMM it replaces.
+
+Two steps change the arithmetic and are on by default: **Winograd
+F(2×2, 3×3)** for 3×3 convolutions with at least 16 channels, and a polynomial
+`exp` in attention's softmax. Both pass the full-graph oracle against the
+official model on all five tiers (worst 1.1e-5 relative), and depth's oracle
+too. `FFAI_DIANA_NO_WINOGRAD=1` and `FFAI_DIANA_SOFTMAX_LIBM=1` restore 0.9's
+arithmetic.
+
+**The wall-clock tables above predate 0.10 and have not been re-measured.**
+Fewer instructions usually means less time, but this page does not claim a
+speedup it has not timed. Every count, and every refuted attempt with its
+number:
+[docs/plans/diana-ir-veins.md](https://github.com/Remade-With-Rust/FFAI/blob/master/docs/plans/diana-ir-veins.md).
 
 Not yet `stable`: the footprint gate passes by **1 MiB** (160 against ORT's
 161), which is not a margin — mimalloc retains ~130 MiB of allocator churn

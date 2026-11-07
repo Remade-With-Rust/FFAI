@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.9.0...ffai-diana-v0.10.0) - 2026-11-07
+
+### Changed
+
+- **Breaking:** `dwconv::depthwise3x3` takes an `act: bool` and fuses bias and SiLU into its own pass.
+- Default arithmetic changed in two places, both behind knobs: Winograd F(2x2,3x3) for 3x3 convolutions with at least 16 channels (`FFAI_DIANA_NO_WINOGRAD=1` restores the GEMM), and a polynomial `exp` in attention's softmax (`FFAI_DIANA_SOFTMAX_LIBM=1` restores libm). Both pass the full-graph and depth oracles on all five tiers.
+
+### Performance
+
+- 34.6 % fewer instructions per detect (1,075 M to 703 M, callgrind, yolo26n at 640) and 24.3 % fewer per tracker frame. Forty-five changes, each counted alone and byte-identical; ledger in `docs/plans/diana-ir-veins.md`. Wall time not re-measured.
+
+### Added
+
+- `maxpool`, `softmax`, `stem`, `upcat` and `winograd` modules; `cpuop::matmul2`, `matmul2_batched`, `matmul2_into`, `write_block`, `add_assign`, `cat_channels`, `cat_last`, `split_qkv`, `SliceOp2`; `conv3x3::conv3x3_residual`; `epilogue::apply_residual`; flat cost-matrix API in `track::assign` (`CostMat`, `assign_flat`, `assign_gated_flat`).
+- Direct dependency on `gemm` 0.19 (already in the tree through candle).
+
 ## [0.9.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.8.0...ffai-diana-v0.9.0) - 2026-10-31
 
 ### Changed

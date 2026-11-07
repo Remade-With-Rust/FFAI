@@ -21,6 +21,7 @@
 //! the output is the GEMM path's to the bit — asserted by the test and by
 //! the full-graph `fnv` anchor. `FFAI_DIANA_NO_STEM=1` restores the GEMM.
 
+#[cfg(target_arch = "x86_64")]
 use candle_core::{Result, Tensor};
 
 /// `FFAI_DIANA_NO_STEM=1` restores the im2col + GEMM path for the stem.
@@ -80,6 +81,7 @@ pub fn conv3x3_s2_direct(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>, act
 /// Even/odd de-interleave of one input row into `[0, odd..., 0]` and
 /// `[even..., (0)]` so every tap of a stride-2 window is a contiguous load:
 /// output `ox` reads `kx=0 -> oddp[ox]`, `kx=1 -> even[ox]`, `kx=2 -> oddp[ox+1]`.
+#[cfg(target_arch = "x86_64")]
 fn deinterleave_padded(row: &[f32], even: &mut [f32], oddp: &mut [f32]) {
     let w = row.len();
     let half = w / 2;

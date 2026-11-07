@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-wasm-v0.3.0...ffai-wasm-v0.4.0) - 2026-11-07
+
+### Changed
+
+- Requires `ffai-diana` 0.10: about a third fewer instructions per detection, and Winograd 3x3 convolutions plus a polynomial softmax `exp` by default (see ffai-diana's CHANGELOG for the knobs that restore the old arithmetic).
+
 ## [0.3.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-wasm-v0.2.0...ffai-wasm-v0.3.0) - 2026-10-31
 
 ### Changed
