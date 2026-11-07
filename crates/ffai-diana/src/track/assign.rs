@@ -34,6 +34,90 @@ pub fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
     }
 }
 
+/// A row-major cost matrix in ONE allocation.
+///
+/// `Vec<Vec<f32>>` cost one allocation per row — three matrices per frame,
+/// tens of rows each — in a tracker whose instruction census was 42 %
+/// malloc/free. Same values at the same `(i, j)`; only the storage changes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostMat {
+    /// Rows (tracks).
+    pub n: usize,
+    /// Columns (detections).
+    pub m: usize,
+    /// `n * m` values, row-major.
+    pub d: Vec<f32>,
+}
+
+impl CostMat {
+    #[inline]
+    #[must_use]
+    pub fn at(&self, i: usize, j: usize) -> f32 {
+        self.d[i * self.m + j]
+    }
+
+    /// From the row-of-rows form (the public API's shape).
+    #[must_use]
+    pub fn from_rows(rows: &[Vec<f32>]) -> Self {
+        let n = rows.len();
+        let m = rows.first().map_or(0, Vec::len);
+        let mut d = Vec::with_capacity(n * m);
+        for r in rows {
+            d.extend_from_slice(&r[..m]);
+        }
+        Self { n, m, d }
+    }
+}
+
+/// `1 - IoU`, flat.
+#[must_use]
+pub fn cost_matrix_flat(tracks: &[[f32; 4]], dets: &[[f32; 4]]) -> CostMat {
+    let mut d = Vec::with_capacity(tracks.len() * dets.len());
+    for t in tracks {
+        d.extend(dets.iter().map(|dt| 1.0 - iou(*t, *dt)));
+    }
+    CostMat { n: tracks.len(), m: dets.len(), d }
+}
+
+/// `1 - IoU * score`, flat. See [`cost_matrix_fused`].
+#[must_use]
+pub fn cost_matrix_fused_flat(tracks: &[[f32; 4]], dets: &[[f32; 4]], scores: &[f32]) -> CostMat {
+    let mut d = Vec::with_capacity(tracks.len() * dets.len());
+    for t in tracks {
+        d.extend(dets.iter().zip(scores).map(|(dt, sc)| 1.0 - iou(*t, *dt) * sc));
+    }
+    CostMat { n: tracks.len(), m: dets.len(), d }
+}
+
+/// [`forbid_cross_class`] on the flat form.
+pub fn forbid_cross_class_flat(cost: &mut CostMat, track_cls: &[u32], det_cls: &[u32]) {
+    let m = cost.m;
+    if m == 0 {
+        // No detections: nothing to forbid, and `chunks_exact_mut(0)` panics.
+        return;
+    }
+    for (i, row) in cost.d.chunks_exact_mut(m).enumerate() {
+        for (j, c) in row.iter_mut().enumerate() {
+            if track_cls.get(i) != det_cls.get(j) {
+                *c = f32::MAX / 4.0;
+            }
+        }
+    }
+}
+
+/// [`assign`] on the flat form.
+#[must_use]
+pub fn assign_flat(cost: &CostMat, max_cost: f32) -> Vec<(usize, usize)> {
+    assign_gated_flat(cost, cost, max_cost)
+}
+
+/// [`assign_gated`] on the flat form — the solver proper. The `Vec<Vec>`
+/// entry points convert and call this, so there is one solver.
+#[must_use]
+pub fn assign_gated_flat(rank_cost: &CostMat, gate_cost: &CostMat, max_cost: f32) -> Vec<(usize, usize)> {
+    solve(rank_cost.n, rank_cost.m, |i, j| rank_cost.at(i, j), |i, j| gate_cost.at(i, j), max_cost)
+}
+
 /// `1 - IoU`, the cost the assignment minimises.
 #[must_use] 
 pub fn cost_matrix(tracks: &[[f32; 4]], dets: &[[f32; 4]]) -> Vec<Vec<f32>> {
@@ -93,14 +177,6 @@ pub fn forbid_cross_class(cost: &mut [Vec<f32>], track_cls: &[u32], det_cls: &[u
     }
 }
 
-/// Row/column swap, so the transposed solve gates on the transposed matrix.
-fn transpose(m: &[Vec<f32>]) -> Vec<Vec<f32>> {
-    if m.is_empty() {
-        return Vec::new();
-    }
-    (0..m[0].len()).map(|j| m.iter().map(|r| r[j]).collect()).collect()
-}
-
 /// Optimal one-to-one assignment minimising total cost, for a rectangular
 /// matrix. Returns `(row, col)` pairs whose cost is at most `max_cost`.
 ///
@@ -136,31 +212,29 @@ pub fn assign_gated(
     gate_cost: &[Vec<f32>],
     max_cost: f32,
 ) -> Vec<(usize, usize)> {
-    let cost = rank_cost;
-    let n = cost.len();
-    if n == 0 {
+    assign_gated_flat(&CostMat::from_rows(rank_cost), &CostMat::from_rows(gate_cost), max_cost)
+}
+
+/// Jonker-Volgenant on `rows x cols`, reading costs through closures so the
+/// flat matrix, its transpose (when `rows > cols`) and the gate matrix all
+/// share one solver with no copies.
+fn solve(
+    rows: usize,
+    cols: usize,
+    rank_at: impl Fn(usize, usize) -> f32,
+    gate_at: impl Fn(usize, usize) -> f32,
+    max_cost: f32,
+) -> Vec<(usize, usize)> {
+    if rows == 0 || cols == 0 {
         return Vec::new();
     }
-    let m = cost[0].len();
-    if m == 0 {
-        return Vec::new();
-    }
-    // The Jonker-Volgenant formulation below REQUIRES rows <= cols. With more
-    // tracks than detections it silently produced a wrong assignment — caught
-    // by `rectangular_more_tracks_than_detections`, which is the common case in
-    // tracking (objects leave the frame). Transpose, solve, swap back.
-    if n > m {
-        let t: Vec<Vec<f32>> = (0..m)
-            .map(|j| (0..n).map(|i| cost[i][j]).collect())
-            .collect();
-        let mut out: Vec<(usize, usize)> =
-            assign_gated(&t, &transpose(gate_cost), max_cost)
-                .into_iter()
-                .map(|(a, b)| (b, a))
-                .collect();
-        out.sort_unstable();
-        return out;
-    }
+    // The formulation below REQUIRES rows <= cols (see the module doc and
+    // `rectangular_more_tracks_than_detections`): solve the transpose by
+    // swapping the indices, swap the pairs back.
+    let swapped = rows > cols;
+    let (n, m) = if swapped { (cols, rows) } else { (rows, cols) };
+    let rank = |i: usize, j: usize| if swapped { rank_at(j, i) } else { rank_at(i, j) };
+    let gate = |i: usize, j: usize| if swapped { gate_at(j, i) } else { gate_at(i, j) };
     const INF: f32 = f32::INFINITY;
 
     // u/v are dual potentials, p maps column -> assigned row (1-indexed via the
@@ -169,12 +243,19 @@ pub fn assign_gated(
     let mut v = vec![0.0f32; m + 1];
     let mut p = vec![0usize; m + 1];
     let mut way = vec![0usize; m + 1];
+    // Per-row scratch, allocated ONCE per solve and refilled. These two were
+    // allocated inside the row loop — 2n allocations per solve, ~2 000 solves
+    // per 600-frame clip — and malloc/free were 42 % of the tracker's
+    // instructions on the callgrind census. `fill` writes the same values
+    // the fresh `vec!` held, so the solve is unchanged.
+    let mut minv = vec![INF; m + 1];
+    let mut used = vec![false; m + 1];
 
     for i in 1..=n {
         p[0] = i;
         let mut j0 = 0usize;
-        let mut minv = vec![INF; m + 1];
-        let mut used = vec![false; m + 1];
+        minv.fill(INF);
+        used.fill(false);
         loop {
             used[j0] = true;
             let i0 = p[j0];
@@ -184,7 +265,7 @@ pub fn assign_gated(
                 if used[j] {
                     continue;
                 }
-                let cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                let cur = rank(i0 - 1, j - 1) - u[i0] - v[j];
                 if cur < minv[j] {
                     minv[j] = cur;
                     way[j] = j0;
@@ -224,8 +305,8 @@ pub fn assign_gated(
     let mut out = Vec::new();
     for j in 1..=m {
         let i = p[j];
-        if i >= 1 && i <= n && gate_cost[i - 1][j - 1] <= max_cost {
-            out.push((i - 1, j - 1));
+        if i >= 1 && i <= n && gate(i - 1, j - 1) <= max_cost {
+            out.push(if swapped { (j - 1, i - 1) } else { (i - 1, j - 1) });
         }
     }
     out.sort_unstable();

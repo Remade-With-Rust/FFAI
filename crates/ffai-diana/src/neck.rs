@@ -85,24 +85,27 @@ impl Neck {
     /// Forward keeping every layer output, for the oracle. Layer indices
     /// are the graph's own, so a divergence names the layer directly.
     pub fn forward_traced(&self, b: &BackboneOutput) -> Result<NeckTrace> {
-        let (_, _, h, w) = b.p5.dims4()?;
-        let l11 = b.p5.upsample_nearest2d(h * 2, w * 2)?;
-        let l12 = Tensor::cat(&[&l11, &b.p4], 1)?;
+        // upsample + cat in one pass (`crate::upcat`): the `l11`/`l14`
+        // intermediates exist only for the trace, as views of the fused
+        // buffer's first channels — no second copy.
+        let (_, ca, _, _) = b.p5.dims4()?;
+        let l12 = crate::upcat::upsample2x_cat(&b.p5, &b.p4)?;
+        let l11 = l12.narrow(1, 0, ca)?;
         let l13 = self.l13.forward(&l12)?;
 
-        let (_, _, h, w) = l13.dims4()?;
-        let l14 = l13.upsample_nearest2d(h * 2, w * 2)?;
-        let l15 = Tensor::cat(&[&l14, &b.p3], 1)?;
+        let (_, ca, _, _) = l13.dims4()?;
+        let l15 = crate::upcat::upsample2x_cat(&l13, &b.p3)?;
+        let l14 = l15.narrow(1, 0, ca)?;
         let l16 = self.l16.forward(&l15)?;
 
         let l17 = self.l17.forward(&l16)?;
         // 18 concatenates with 13 — the FPN intermediate, not the backbone.
-        let l18 = Tensor::cat(&[&l17, &l13], 1)?;
+        let l18 = crate::cpuop::cat_channels(&[&l17, &l13])?;
         let l19 = self.l19.forward(&l18)?;
 
         let l20 = self.l20.forward(&l19)?;
         // 21 concatenates with the backbone's P5 (layer 10), not with 11.
-        let l21 = Tensor::cat(&[&l20, &b.p5], 1)?;
+        let l21 = crate::cpuop::cat_channels(&[&l20, &b.p5])?;
         let l22 = self.l22.forward(&l21)?;
 
         Ok(NeckTrace {

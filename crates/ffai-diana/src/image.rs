@@ -99,7 +99,27 @@ pub fn letterbox_with(
         PixelFormat::Rgb8 => 3,
         PixelFormat::Rgba8 => 4,
     };
-    let mut out = vec![PAD_VALUE; 3 * size_h * size_w];
+    // The canvas is NOT filled with the pad value and then overwritten: the
+    // content rectangle is written in full by the vertical pass below, so
+    // only the pad bands (top, bottom, left, right) are filled. 860 000
+    // floats of constant fill per call, two thirds of which were overwritten.
+    let n_out = 3 * size_h * size_w;
+    let mut out: Vec<f32> = Vec::with_capacity(n_out);
+    // SAFETY: `f32` is plain data; the pad bands are filled just below and the
+    // content rectangle `[pad_y, pad_y + nh) x [pad_x, pad_x + nw)` of every
+    // channel is written by `vfill` before the tensor is read.
+    #[allow(unsafe_code)]
+    unsafe {
+        out.set_len(n_out);
+    }
+    for chan in out.chunks_mut(size_h * size_w) {
+        chan[..pad_y * size_w].fill(PAD_VALUE);
+        chan[(pad_y + nh) * size_w..].fill(PAD_VALUE);
+        for row in chan[pad_y * size_w..(pad_y + nh) * size_w].chunks_mut(size_w) {
+            row[..pad_x].fill(PAD_VALUE);
+            row[pad_x + nw..].fill(PAD_VALUE);
+        }
+    }
 
     // Horizontal sample positions, computed ONCE.
     //
@@ -129,40 +149,109 @@ pub fn letterbox_with(
     // moves. The `/ 255.0` stays a division for that reason — `* (1.0/255.0)`
     // is a different function in the last ulp, and this graph has already had
     // one oracle breached by exactly that class of substitution.
-    let plane = size_h * size_w;
-    let fill_row = |(c, oy): (usize, usize), row: &mut [f32]| {
-        let y = oy - pad_y;
-        let sy = ((y as f32 + 0.5) / scale - 0.5).clamp(0.0, (h0 - 1) as f32);
-        let y0 = sy.floor() as usize;
-        let y1 = (y0 + 1).min(h0 - 1);
-        let fy = sy - y0 as f32;
+    // `u8 -> f32 / 255` has 256 possible answers. Computed once each, here,
+    // with the SAME expression the per-pixel code used — so every table entry
+    // is the bit pattern the convert-and-divide produced, and the output is
+    // byte-identical. The pixel loop did the conversion and the division
+    // four times per output element (3.3 M times per 640x425 image); now it
+    // does four loads.
+    let lut: [f32; 256] = std::array::from_fn(|v| f32::from(v as u8) / 255.0);
+    // Bilinear as the two passes it is: horizontal on each SOURCE row the
+    // output touches, then vertical between two of those. The one-pass form
+    // interpolated each source row horizontally TWICE — once as some output
+    // row's `y0` and again as the previous row's `y1` — and for an upscale
+    // more often still. Same two expressions per element, same operand
+    // order, so the bytes are identical; each horizontal result is simply
+    // computed once and read twice.
+    //
+    // Which source rows: `y0` and `y1` of every content row, de-duplicated.
+    // For a downscale that is a fraction of the source; never more than `h0`.
+    let vert: Vec<(usize, usize, f32)> = (0..nh)
+        .map(|y| {
+            let sy = ((y as f32 + 0.5) / scale - 0.5).clamp(0.0, (h0 - 1) as f32);
+            let y0 = sy.floor() as usize;
+            (y0, (y0 + 1).min(h0 - 1), sy - y0 as f32)
+        })
+        .collect();
+    let mut pos = vec![usize::MAX; h0];
+    let mut rows_needed: Vec<usize> = Vec::with_capacity(nh + 1);
+    for &(y0, y1, _) in &vert {
+        for yy in [y0, y1] {
+            if pos[yy] == usize::MAX {
+                pos[yy] = rows_needed.len();
+                rows_needed.push(yy);
+            }
+        }
+    }
+    let nrows = rows_needed.len();
+    // Pass 1: hbuf[c][k][x] = horizontal lerp of source row rows_needed[k].
+    let mut hbuf = vec![0f32; 3 * nrows * nw];
+    // Byte offsets of the two taps within a source row, computed once per
+    // column rather than once per (row, column): `x * channels` is the same
+    // multiply 1 278 times over for every column otherwise.
+    let xoff: Vec<(u32, u32, f32)> =
+        xs.iter().map(|&(x0, x1, fx)| ((x0 * channels) as u32, (x1 * channels) as u32, fx)).collect();
+    let row_bytes = w0 * channels;
+    let hfill = |c: usize, yy: usize, dst: &mut [f32]| {
         // Gray8 broadcasts its single channel; Rgba8 drops alpha.
         let src_c = if channels == 1 { 0 } else { c };
-        let at = |yy: usize, xx: usize| -> f32 {
-            f32::from(image.data[(yy * w0 + xx) * channels + src_c]) / 255.0
-        };
-        for (x, &(x0, x1, fx)) in xs.iter().enumerate() {
-            let top = at(y0, x0) * (1.0 - fx) + at(y0, x1) * fx;
-            let bot = at(y1, x0) * (1.0 - fx) + at(y1, x1) * fx;
-            row[x + pad_x] = top * (1.0 - fy) + bot * fy;
+        let line = &image.data[yy * row_bytes..(yy + 1) * row_bytes];
+        // The tap offsets are `x * channels + src_c` with `x <= w0 - 1` and
+        // `src_c < channels`, so every one is below `row_bytes == line.len()`:
+        // the bound is established where `xs` is built, which is why the
+        // per-element check can go. It was two checked gathers per output
+        // (8.2 M Ir on the line census, a third of the pass).
+        debug_assert!(xoff.iter().all(|&(a, b, _)| (a as usize + src_c) < line.len() && (b as usize + src_c) < line.len()));
+        for (d, &(o0, o1, fx)) in dst.iter_mut().zip(&xoff) {
+            // SAFETY: bounds argued just above; `lut` is indexed by a `u8`.
+            #[allow(unsafe_code)]
+            let (a, b) = unsafe {
+                (
+                    lut[*line.get_unchecked(o0 as usize + src_c) as usize],
+                    lut[*line.get_unchecked(o1 as usize + src_c) as usize],
+                )
+            };
+            *d = a * (1.0 - fx) + b * fx;
         }
     };
-    let rows = |c: usize, chan: &mut [f32]| {
-        chan.chunks_mut(size_w)
-            .enumerate()
-            .filter(|(oy, _)| *oy >= pad_y && *oy < pad_y + nh)
-            .for_each(|(oy, row)| fill_row((c, oy), row));
+    // Pass 2: one output row from two horizontal rows.
+    let plane = size_h * size_w;
+    let vfill = |y: usize, hb: &[f32], row: &mut [f32]| {
+        let (y0, y1, fy) = vert[y];
+        let top = &hb[pos[y0] * nw..(pos[y0] + 1) * nw];
+        let bot = &hb[pos[y1] * nw..(pos[y1] + 1) * nw];
+        let dst = &mut row[pad_x..pad_x + nw];
+        for ((d, &t), &b) in dst.iter_mut().zip(top).zip(bot) {
+            *d = t * (1.0 - fy) + b * fy;
+        }
     };
     if crate::parallel::serial_kernels() {
-        out.chunks_mut(plane).enumerate().for_each(|(c, ch)| rows(c, ch));
+        for (c, hb) in hbuf.chunks_mut(nrows * nw).enumerate() {
+            for (k, dst) in hb.chunks_mut(nw).enumerate() {
+                hfill(c, rows_needed[k], dst);
+            }
+        }
+        for (c, chan) in out.chunks_mut(plane).enumerate() {
+            let hb = &hbuf[c * nrows * nw..(c + 1) * nrows * nw];
+            for (y, row) in chan[pad_y * size_w..(pad_y + nh) * size_w].chunks_mut(size_w).enumerate() {
+                vfill(y, hb, row);
+            }
+        }
     } else {
-        out.par_chunks_mut(plane).enumerate().for_each(|(c, ch)| {
-            // Nested fan-out: three channels alone would leave a four-worker
-            // pool a quarter idle, and the rows are independent.
-            ch.par_chunks_mut(size_w)
+        // Parallel over (channel, source row), then over (channel, output
+        // row). Three channels alone would leave a four-worker pool a
+        // quarter idle, and the rows are independent.
+        hbuf.par_chunks_mut(nw).enumerate().for_each(|(i, dst)| {
+            let (c, k) = (i / nrows, i % nrows);
+            hfill(c, rows_needed[k], dst);
+        });
+        let hbuf = &hbuf;
+        out.par_chunks_mut(plane).enumerate().for_each(|(c, chan)| {
+            let hb = &hbuf[c * nrows * nw..(c + 1) * nrows * nw];
+            chan[pad_y * size_w..(pad_y + nh) * size_w]
+                .par_chunks_mut(size_w)
                 .enumerate()
-                .filter(|(oy, _)| *oy >= pad_y && *oy < pad_y + nh)
-                .for_each(|(oy, row)| fill_row((c, oy), row));
+                .for_each(|(y, row)| vfill(y, hb, row));
         });
     }
 

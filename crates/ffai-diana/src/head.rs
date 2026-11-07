@@ -68,8 +68,22 @@ impl BoxBranch {
 
 impl Module for BoxBranch {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.out.forward(&self.c1.forward(&self.c0.forward(x)?)?)
+        raw_1x1(&self.out, &self.c1.forward(&self.c0.forward(x)?)?)
     }
+}
+
+/// The raw (activation-free) 1x1 that ends each branch, as the matmul it is.
+///
+/// candle's `Conv2d::forward` reaches the SAME `[c_out, c_in] @ [c_in, h*w]`
+/// matmul for a 1x1 kernel — but wraps it in an element-by-element copy of
+/// the input into a fresh `Vec` (through a rayon fan-out), a zero-filled
+/// output it then copies the result into, and a `broadcast_add` for the
+/// bias. callgrind: 31.2 M instructions for six convolutions whose
+/// arithmetic is a fraction of that. `pointwise_matmul` runs the identical
+/// matmul on a reshape and adds the bias in place: same products, same
+/// sums, same bytes.
+fn raw_1x1(conv: &Conv2d, x: &Tensor) -> Result<Tensor> {
+    crate::blocks::pointwise_matmul(x, conv.weight(), conv.bias(), false)
 }
 
 /// One level's class branch: two depthwise-separable pairs then a raw 1x1.
@@ -106,7 +120,7 @@ impl Module for ClsBranch {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = self.pw0.forward(&self.dw0.forward(x)?)?;
         let x = self.pw1.forward(&self.dw1.forward(&x)?)?;
-        self.out.forward(&x)
+        raw_1x1(&self.out, &x)
     }
 }
 
@@ -163,7 +177,12 @@ impl Head {
             bs.push(b.reshape((n, 4, h * w))?);
             ss.push(s.reshape((n, self.nc, h * w))?);
         }
-        Ok((Tensor::cat(&bs, 2)?, Tensor::cat(&ss, 2)?))
+        // Row-wise `memcpy`s into one buffer (`cpuop::cat_last`): candle's
+        // `cat` along the last axis went through `copy2d` with per-row layout
+        // work and a zeroed destination for the same bytes.
+        let bs: Vec<&Tensor> = bs.iter().collect();
+        let ss: Vec<&Tensor> = ss.iter().collect();
+        Ok((crate::cpuop::cat_last(&bs)?, crate::cpuop::cat_last(&ss)?))
     }
 
     /// The anchor grid, as three `(h, w, stride)` levels rather than 8400
@@ -217,7 +236,13 @@ impl Head {
     ) -> Result<Vec<DecodedBox>> {
         let (_, _, a) = boxes.dims3()?;
         let nc = self.nc;
-        let b = boxes.flatten_all()?.to_vec1::<f32>()?;
+        // Borrow the head's outputs IN PLACE. `flatten_all().to_vec1()` copied
+        // `(4 + nc) * A` floats — half a megabyte per image at the n tier —
+        // to read them once. `storage_and_layout` hands out the buffer the
+        // tensor already owns; both tensors are fresh `cat` outputs, so the
+        // layout is contiguous and the view is the whole buffer.
+        let (b_store, b_layout) = boxes.storage_and_layout();
+        let b = crate::cpuop::storage_f32(&b_store, b_layout)?;
 
         // RAW LOGITS. The sigmoid is deferred to the survivors.
         //
@@ -230,22 +255,27 @@ impl Head {
         // The transform is exact, not approximate: same survivors, same
         // order, same reported scores, because sigmoid is still applied — to
         // the ones that survive.
-        let s = scores.flatten_all()?.to_vec1::<f32>()?;
+        let (s_store, s_layout) = scores.storage_and_layout();
+        let s = crate::cpuop::storage_f32(&s_store, s_layout)?;
 
         // Stage one: best class per anchor, then the top `k` anchors.
         let k = max_det.min(a);
-        let mut best: Vec<(usize, f32)> = (0..a)
-            .map(|i| {
-                let mut m = f32::NEG_INFINITY;
-                for c in 0..nc {
-                    let v = s[c * a + i];
-                    if v > m {
-                        m = v;
-                    }
+        // Class-OUTER, anchor-inner. The scores are `[nc, A]`, so the per-
+        // anchor maximum is a reduction down a column — the anchor-outer
+        // form read every element at stride `A` and could not vectorize.
+        // Walking each class row against a running-max row is contiguous on
+        // both sides and compiles to packed compares. Same strict `>`, so
+        // the maximum (and its treatment of NaN) is unchanged; the result
+        // only records the value, never which class produced it.
+        let mut maxes = vec![f32::NEG_INFINITY; a];
+        for row in s[..nc * a].chunks_exact(a) {
+            for (m, &v) in maxes.iter_mut().zip(row) {
+                if v > *m {
+                    *m = v;
                 }
-                (i, m)
-            })
-            .collect();
+            }
+        }
+        let mut best: Vec<(usize, f32)> = maxes.into_iter().enumerate().collect();
         // Partition, do not sort. Stage one only needs the top-k SET — its
         // order is irrelevant because stage two re-ranks the whole block. A
         // full sort of 8400 to keep 300 is ~13x the comparisons of a
@@ -256,10 +286,30 @@ impl Head {
         }
 
         // Stage two: top `k` over those anchors' full class block.
+        //
+        // With a lower bound first. Every surviving anchor's own maximum is
+        // one of the `k * nc` candidates, so the k-th largest of those maxima
+        // (`floor`) is at most the k-th largest candidate overall: a candidate
+        // strictly below `floor` cannot be in the top `k` and need not be
+        // materialised, let alone partitioned. On a real image that is the
+        // bulk of the block — most of an anchor's 80 class logits sit far
+        // under its best one. Candidates at or above `floor` are kept
+        // unconditionally, so the set the selection sees is the same at and
+        // above the boundary.
+        // Only when stage one actually truncated: with `k >= a` there are
+        // fewer maxima than slots and the bound does not hold.
+        let floor = if best.len() == k && k < a {
+            best.iter().map(|&(_, m)| m).fold(f32::INFINITY, f32::min)
+        } else {
+            f32::NEG_INFINITY
+        };
         let mut cand: Vec<(usize, usize, f32)> = Vec::with_capacity(k * nc);
         for &(i, _) in &best {
             for c in 0..nc {
-                cand.push((i, c, s[c * a + i]));
+                let v = s[c * a + i];
+                if v >= floor {
+                    cand.push((i, c, v));
+                }
             }
         }
         // Here the order IS read, so: select the k best, then sort only

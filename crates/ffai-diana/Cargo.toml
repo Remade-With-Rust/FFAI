@@ -40,6 +40,11 @@ candle-core = { workspace = true }
 candle-nn = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The GEMM candle links, called directly so the output buffer can be left
+# uninitialised (candle zero-fills it and then overwrites it). Pinned to the
+# version in candle's own Cargo.toml: a different version is a different
+# microkernel and a different last bit.
+gemm = "0.19.0"
 
 # wasm32 needs getrandom's browser backend selected explicitly; it is pulled
 # transitively by candle and cannot configure itself. Costs nothing on native.

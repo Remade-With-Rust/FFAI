@@ -185,6 +185,47 @@ const PAR_THRESHOLD: usize = 1 << 16;
 /// side. It previously did `to_vec1()` in and `from_vec` out, which for an
 /// activation whose whole cost is memory traffic meant paying that traffic
 /// three times over.
+/// `SiLU` in place on a slice, through the same kernel choice `silu` makes
+/// for a serial call: the AVX2 kernel when the host has it, else the scalar
+/// twin. For fusing the activation into a kernel that already holds the
+/// buffer — `dwconv` — rather than paying a second op for it.
+pub fn silu_slice_in_place(x: &mut [f32]) {
+    if avx2_enabled() {
+        // SAFETY: `avx2_enabled()` verified avx2+fma at runtime.
+        #[allow(unsafe_code)]
+        unsafe {
+            crate::silu_avx2::silu_in_place(x);
+        }
+    } else if old_rounding() {
+        for v in x.iter_mut() {
+            *v = silu_scalar_legacy_round(*v);
+        }
+    } else {
+        for v in x.iter_mut() {
+            *v = silu_scalar(*v);
+        }
+    }
+}
+
+/// `silu(x + bias)` in place, same kernel choice as [`silu_slice_in_place`].
+pub fn silu_bias_slice_in_place(x: &mut [f32], bias: f32) {
+    if avx2_enabled() {
+        // SAFETY: `avx2_enabled()` verified avx2+fma at runtime.
+        #[allow(unsafe_code)]
+        unsafe {
+            crate::silu_avx2::silu_bias_in_place(x, bias);
+        }
+    } else if old_rounding() {
+        for v in x.iter_mut() {
+            *v = silu_scalar_legacy_round(*v + bias);
+        }
+    } else {
+        for v in x.iter_mut() {
+            *v = silu_scalar(*v + bias);
+        }
+    }
+}
+
 pub fn silu(x: &Tensor) -> Result<Tensor> {
     // SiLU CANNOT BE PRICED BY ABLATION — measured, not assumed.
     //

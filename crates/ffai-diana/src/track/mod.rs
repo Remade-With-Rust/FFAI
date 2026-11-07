@@ -384,23 +384,23 @@ impl ByteTrack {
         // Pass 1 only. The second pass is by construction low-confidence, so
         // multiplying by a score that is always small would push every pair
         // past the gate and disable the very recovery it exists for.
-        let mut gate = assign::cost_matrix(&t_boxes, &d_boxes);
+        let mut gate = assign::cost_matrix_flat(&t_boxes, &d_boxes);
         if self.cfg.class_aware {
             let tc: Vec<u32> = unmatched_tracks.iter().map(|&i| self.tracks[i].class_id).collect();
             let dc: Vec<u32> = hi.iter().map(|&i| classes[i]).collect();
-            assign::forbid_cross_class(&mut gate, &tc, &dc);
+            assign::forbid_cross_class_flat(&mut gate, &tc, &dc);
         }
         let pairs = match self.cfg.fuse_mode {
             // Rank by confidence-weighted overlap, ADMIT by overlap.
             1 => {
                 let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
-                let mut rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                let mut rank = assign::cost_matrix_fused_flat(&t_boxes, &d_boxes, &d_scores);
                 if self.cfg.class_aware {
                     let tc: Vec<u32> = unmatched_tracks.iter().map(|&i| self.tracks[i].class_id).collect();
                     let dc: Vec<u32> = hi.iter().map(|&i| classes[i]).collect();
-                    assign::forbid_cross_class(&mut rank, &tc, &dc);
+                    assign::forbid_cross_class_flat(&mut rank, &tc, &dc);
                 }
-                assign::assign_gated(&rank, &gate, self.cfg.match_thresh)
+                assign::assign_gated_flat(&rank, &gate, self.cfg.match_thresh)
             }
             // BOTH fused — the reference's literal behaviour. Gating on the
             // fused cost is what makes a LOW `track_thresh` survivable: a 0.25
@@ -409,15 +409,15 @@ impl ByteTrack {
             // threshold and worse at a low one, which is why both exist.
             2 => {
                 let d_scores: Vec<f32> = hi.iter().map(|&i| scores[i]).collect();
-                let mut rank = assign::cost_matrix_fused(&t_boxes, &d_boxes, &d_scores);
+                let mut rank = assign::cost_matrix_fused_flat(&t_boxes, &d_boxes, &d_scores);
                 if self.cfg.class_aware {
                     let tc: Vec<u32> = unmatched_tracks.iter().map(|&i| self.tracks[i].class_id).collect();
                     let dc: Vec<u32> = hi.iter().map(|&i| classes[i]).collect();
-                    assign::forbid_cross_class(&mut rank, &tc, &dc);
+                    assign::forbid_cross_class_flat(&mut rank, &tc, &dc);
                 }
-                assign::assign(&rank, self.cfg.match_thresh)
+                assign::assign_flat(&rank, self.cfg.match_thresh)
             }
-            _ => assign::assign(&gate, self.cfg.match_thresh),
+            _ => assign::assign_flat(&gate, self.cfg.match_thresh),
         };
 
         let mut still_unmatched: Vec<usize> = unmatched_tracks.clone();
@@ -447,13 +447,13 @@ impl ByteTrack {
             // A LOOSER gate on the second pass: these boxes are already known to
             // be poor, and demanding the same IoU as a confident one would
             // discard exactly the occlusions this pass exists to recover.
-            let mut c2 = assign::cost_matrix(&t_boxes, &d_boxes);
+            let mut c2 = assign::cost_matrix_flat(&t_boxes, &d_boxes);
             if self.cfg.class_aware {
                 let tc: Vec<u32> = pass2.iter().map(|&i| self.tracks[i].class_id).collect();
                 let dc: Vec<u32> = lo.iter().map(|&i| classes[i]).collect();
-                assign::forbid_cross_class(&mut c2, &tc, &dc);
+                assign::forbid_cross_class_flat(&mut c2, &tc, &dc);
             }
-            let pairs = assign::assign(&c2, 0.5);
+            let pairs = assign::assign_flat(&c2, 0.5);
             let mut left = unmatched_tracks.clone();
             for (ti, di) in &pairs {
                 let track_idx = pass2[*ti];
@@ -478,13 +478,13 @@ impl ByteTrack {
                 let t_boxes: Vec<[f32; 4]> =
                     unconfirmed.iter().map(|&i| self.tracks[i].xyxy()).collect();
                 let d_boxes: Vec<[f32; 4]> = rest.iter().map(|&i| boxes[i]).collect();
-                let mut c3 = assign::cost_matrix(&t_boxes, &d_boxes);
+                let mut c3 = assign::cost_matrix_flat(&t_boxes, &d_boxes);
                 if self.cfg.class_aware {
                     let tc: Vec<u32> = unconfirmed.iter().map(|&i| self.tracks[i].class_id).collect();
                     let dc: Vec<u32> = rest.iter().map(|&i| classes[i]).collect();
-                    assign::forbid_cross_class(&mut c3, &tc, &dc);
+                    assign::forbid_cross_class_flat(&mut c3, &tc, &dc);
                 }
-                let pairs = assign::assign(&c3, self.cfg.unconfirmed_thresh);
+                let pairs = assign::assign_flat(&c3, self.cfg.unconfirmed_thresh);
                 for (ti, di) in &pairs {
                     let det = rest[*di];
                     self.apply(unconfirmed[*ti], boxes[det], scores[det], classes[det]);

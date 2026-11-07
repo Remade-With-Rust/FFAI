@@ -94,24 +94,41 @@ impl InplaceOp1 for Epilogue {
         let act = self.act;
         let avx2 = act && crate::silu::avx2_enabled();
         let bias = self.bias.as_deref();
-        let apply = |(c, chunk): (usize, &mut [f32])| {
-            if let Some(b) = bias {
-                let bo = b[c];
-                for e in chunk.iter_mut() {
-                    *e += bo;
+        // ONE traversal per channel: bias and activation together. The bias
+        // used to be its own pass — 9.1 M instructions per image on the Ir
+        // census over 13.4 M elements that the activation pass then re-read.
+        // `avx2` implies `act` (see its definition above).
+        let apply = |(c, chunk): (usize, &mut [f32])| match (avx2, bias.map(|b| b[c])) {
+            (true, Some(bo)) => {
+                // SAFETY: `avx2_enabled()` verified avx2+fma at runtime.
+                #[allow(unsafe_code)]
+                unsafe {
+                    crate::silu_avx2::silu_bias_in_place(chunk, bo);
                 }
             }
-            if avx2 {
-                // SAFETY: `avx2_enabled()` verified avx2+fma at runtime.
+            (true, None) => {
+                // SAFETY: as above.
                 #[allow(unsafe_code)]
                 unsafe {
                     crate::silu_avx2::silu_in_place(chunk);
                 }
-            } else if act {
+            }
+            (false, Some(bo)) if act => {
+                for e in chunk.iter_mut() {
+                    *e = crate::silu::silu_scalar_pub(*e + bo);
+                }
+            }
+            (false, Some(bo)) => {
+                for e in chunk.iter_mut() {
+                    *e += bo;
+                }
+            }
+            (false, None) if act => {
                 for e in chunk.iter_mut() {
                     *e = crate::silu::silu_scalar_pub(*e);
                 }
             }
+            (false, None) => {}
         };
         if crate::parallel::serial_kernels() {
             data.chunks_mut(n).enumerate().for_each(apply);
@@ -136,6 +153,75 @@ pub fn apply(y: Tensor, bias: Option<Vec<f32>>, per_channel: usize, act: bool) -
     }
     y.inplace_op1(&Epilogue { bias, per_channel, act })?;
     Ok(y)
+}
+
+/// Bias, `SiLU` AND the residual add in one in-place pass over `y`
+/// (`[c_out, per_channel]`), reading `res` (same element count) once.
+///
+/// Without this the residual was its own in-place op after the epilogue: a
+/// second load/add/store traversal of a buffer the epilogue had just written.
+/// Falls back to the two-op form whenever the fused kernel does not apply
+/// (no bias, no activation, no AVX2, or the out-of-place A/B knob).
+pub fn apply_residual(y: Tensor, bias: Option<Vec<f32>>, per_channel: usize, act: bool, res: &Tensor) -> Result<Tensor> {
+    if out_of_place() || bias.is_none() || y.elem_count() != res.elem_count() || (act && !crate::silu::avx2_enabled()) {
+        let y = apply(y, bias, per_channel, act)?;
+        return crate::cpuop::add_assign(y, res);
+    }
+    let res2 = if res.is_contiguous() { res.clone() } else { res.contiguous()? };
+    y.inplace_op2(&res2, &EpilogueRes { bias: bias.expect("checked"), per_channel, act })?;
+    Ok(y)
+}
+
+struct EpilogueRes {
+    bias: Vec<f32>,
+    per_channel: usize,
+    act: bool,
+}
+
+impl candle_core::InplaceOp2 for EpilogueRes {
+    fn name(&self) -> &'static str {
+        "ffai-conv-epilogue-residual"
+    }
+
+    fn cpu_fwd(&self, s1: &mut CpuStorage, l1: &Layout, s2: &CpuStorage, l2: &Layout) -> Result<()> {
+        let res = crate::cpuop::contiguous_f32(s2, l2)?;
+        let CpuStorage::F32(buf) = s1 else {
+            candle_core::bail!("ffai epilogue: expected f32 storage");
+        };
+        let Some(range) = l1.contiguous_offsets() else {
+            candle_core::bail!("ffai epilogue: non-contiguous storage");
+        };
+        let data = &mut buf[range.0..range.1];
+        let n = self.per_channel;
+        if n == 0 || data.len() % n != 0 || data.len() != res.len() {
+            candle_core::bail!("ffai epilogue: {} elements vs {} residual, {n} per channel", data.len(), res.len());
+        }
+        let bias = &self.bias;
+        let act = self.act;
+        let apply = |(c, (chunk, r)): (usize, (&mut [f32], &[f32]))| {
+            if act {
+                // SAFETY: `avx2_enabled()` verified avx2+fma in `apply_residual`.
+                #[allow(unsafe_code)]
+                unsafe {
+                    crate::silu_avx2::silu_bias_res_in_place(chunk, bias[c], r);
+                }
+            } else {
+                // Activation-free: `(e + bias) + res`, the order the two
+                // separate passes used.
+                let bo = bias[c];
+                for (e, &rv) in chunk.iter_mut().zip(r) {
+                    *e = (*e + bo) + rv;
+                }
+            }
+        };
+        if crate::parallel::serial_kernels() {
+            data.chunks_mut(n).zip(res.chunks(n)).enumerate().for_each(apply);
+        } else {
+            use crate::par::prelude::*;
+            data.par_chunks_mut(n).zip(res.par_chunks(n)).enumerate().for_each(apply);
+        }
+        Ok(())
+    }
 }
 
 /// `FFAI_DIANA_NO_INPLACE=1` restores the allocating epilogue for A/B.

@@ -73,21 +73,44 @@ pub fn transpose_last2(x: &Tensor) -> Result<Tensor> {
     }
     let (rows, cols) = (dims[dims.len() - 2], dims[dims.len() - 1]);
     let planes: usize = dims[..dims.len() - 2].iter().product();
-    let src = x.flatten_all()?.to_vec1::<f32>()?;
-    let mut out = vec![0f32; src.len()];
-    let plane = rows * cols;
-    for p in 0..planes {
-        transpose_plane(
-            &src[p * plane..(p + 1) * plane],
-            rows,
-            cols,
-            &mut out[p * plane..(p + 1) * plane],
-        );
-    }
     let mut shape = dims;
     let n = shape.len();
     shape.swap(n - 2, n - 1);
-    Tensor::from_vec(out, shape, x.device())
+    let shape: candle_core::Shape = shape.into();
+    // Read the input IN PLACE and write the output ONCE. This did
+    // `flatten_all().to_vec1()` (a full copy of the input) and `vec![0.0; n]`
+    // (a zero fill the transpose then overwrote) around a kernel that only
+    // permutes floats: on the attention shapes the two were as many
+    // instructions as the transpose itself (2.8 M against 3.4 M).
+    let x = if x.is_contiguous() { x.clone() } else { x.contiguous()? };
+    crate::cpuop::SliceOp::new("ffai-transpose-last2", move |src, _| {
+        let plane = rows * cols;
+        let n = src.len();
+        // Uninitialised output: a transpose writes every element exactly
+        // once, so the zero fill was a second full write (`calloc`, 1.4 M Ir
+        // per image on the attention shapes).
+        let mut out: Vec<f32> = Vec::with_capacity(n);
+        let spare = &mut out.spare_capacity_mut()[..n];
+        // SAFETY: `f32` is plain data; `transpose_plane` writes all `plane`
+        // elements of each of the `planes` output planes before `set_len`.
+        #[allow(unsafe_code)]
+        let dst: &mut [f32] = unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<f32>(), n) };
+        for p in 0..planes {
+            transpose_plane(
+                &src[p * plane..(p + 1) * plane],
+                rows,
+                cols,
+                &mut dst[p * plane..(p + 1) * plane],
+            );
+        }
+        // SAFETY: every element written above.
+        #[allow(unsafe_code)]
+        unsafe {
+            out.set_len(n);
+        }
+        Ok((out, shape.clone()))
+    })
+    .run(&x)
 }
 
 #[cfg(test)]

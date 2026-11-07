@@ -62,6 +62,13 @@ fn conv3x3_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var_os("FFAI_DIANA_NO_CONV3").is_some())
 }
 
+/// `FFAI_DIANA_NO_MAXPOOL=1` restores candle's padded max-pool for A/B.
+fn maxpool_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("FFAI_DIANA_NO_MAXPOOL").is_some())
+}
+
 /// Escape hatch back to candle's own 1x1 convolution path.
 fn pointwise_disabled() -> bool {
     use std::sync::OnceLock;
@@ -81,13 +88,46 @@ fn pointwise_disabled() -> bool {
 /// (`examples/conv_scaling.rs`), at both 1 and 24 threads. This is the
 /// "look for hot loops that are secretly matmuls" law: a tuned GEMM beats a
 /// hand-rolled loop, and candle already ships the tuned GEMM.
-fn pointwise_matmul(x: &Tensor, w: &Tensor, b: Option<&Tensor>, act: bool) -> Result<Tensor> {
+pub(crate) fn pointwise_matmul(x: &Tensor, w: &Tensor, b: Option<&Tensor>, act: bool) -> Result<Tensor> {
+    let bias_v: Option<Vec<f32>> = match b {
+        Some(b) => Some(crate::cpuop::bias_vec(b)?),
+        None => None,
+    };
+    pointwise_matmul_with(x, w, b, bias_v.as_deref(), act)
+}
+
+/// [`pointwise_matmul`] with the bias ALREADY extracted to a slice.
+///
+/// Every call used to run `flatten_all().to_vec1()` on the bias — a tensor
+/// walk and an allocation for `c_out` floats that never change — ~100 times
+/// per image. `ConvAct` now extracts it once at construction and passes it
+/// down; the tensor form is still taken for the `broadcast_add` fallback.
+pub(crate) fn pointwise_matmul_with(
+    x: &Tensor,
+    w: &Tensor,
+    b: Option<&Tensor>,
+    bias_v: Option<&[f32]>,
+    act: bool,
+) -> Result<Tensor> {
+    pointwise_matmul_res(x, w, b, bias_v, act, None)
+}
+
+/// [`pointwise_matmul_with`] with an optional residual added in the epilogue's
+/// own pass (`epilogue::apply_residual`).
+pub(crate) fn pointwise_matmul_res(
+    x: &Tensor,
+    w: &Tensor,
+    b: Option<&Tensor>,
+    bias_v: Option<&[f32]>,
+    act: bool,
+    res: Option<&Tensor>,
+) -> Result<Tensor> {
     let (n, c_in, h, wd) = x.dims4()?;
     let c_out = w.dim(0)?;
     // (Co, Ci, 1, 1) -> (Co, Ci); (1, Ci, H, W) -> (Ci, H*W)
-    let w_mat = w.reshape((c_out, c_in))?;
+    let w_mat = crate::conv3x3::weight_mat_cached(w, c_out, c_in)?;
     let x_mat = x.reshape((n * c_in, h * wd))?;
-    let y = w_mat.matmul(&x_mat)?; // (Co, H*W)
+    let y = crate::cpuop::matmul2(&w_mat, &x_mat)?; // (Co, H*W)
 
     // Bias and activation in ONE traversal of the matmul's output.
     //
@@ -102,23 +142,31 @@ fn pointwise_matmul(x: &Tensor, w: &Tensor, b: Option<&Tensor>, act: bool) -> Re
     // `codec-measurement` §11: a refutation expires when its baseline moves.
     // Re-tested here rather than assumed dead, and gated so the A/B needs no
     // rebuild.
-    if fuse_disabled() || !act {
+    if fuse_disabled() {
         let mut y = y;
         if let Some(b) = b {
             y = y.broadcast_add(&b.reshape((c_out, 1))?)?;
         }
-        return y.reshape((n, c_out, h, wd));
+        let y = y.reshape((n, c_out, h, wd))?;
+        return match res {
+            Some(r) => crate::cpuop::add_assign(y, r),
+            None => Ok(y),
+        };
     }
     let hw = h * wd;
-    let bias_v: Option<Vec<f32>> = match b {
-        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
-        None => None,
-    };
+    let bias_v: Option<Vec<f32>> = bias_v.map(<[f32]>::to_vec);
+    // The nine activation-free Convs take the SAME in-place path with `act =
+    // false`: one bias add on the hot buffer, where `broadcast_add` allocated
+    // a second tensor and traversed both. Same `e + bias` per element, so the
+    // output is bit-identical.
     // IN PLACE on the matmul's own buffer — see `crate::epilogue`. The
     // previous form allocated a fresh Vec and wrote into it, which is an
     // allocation plus a write to cold memory the write-allocate policy has to
     // fetch first. The matmul just wrote this buffer; it is hot.
-    let out = crate::epilogue::apply(y, bias_v, hw, true)?;
+    let out = match res {
+        Some(r) => crate::epilogue::apply_residual(y, bias_v, hw, act, &r.reshape((c_out, hw))?)?,
+        None => crate::epilogue::apply(y, bias_v, hw, act)?,
+    };
     out.reshape((n, c_out, h, wd))
 }
 
@@ -143,6 +191,8 @@ pub struct ConvAct {
     /// shape that kernel implements.
     depthwise: bool,
     kind: ConvKind,
+    /// The bias as plain floats, extracted ONCE here rather than per call.
+    bias_v: Option<Vec<f32>>,
 }
 
 /// Which convolution family this is — for the profiler's info tier, and for
@@ -179,7 +229,12 @@ impl ConvAct {
         } else {
             ConvKind::Other
         };
-        Ok(Self { conv: conv2d(c_in, c_out, k, cfg, vb)?, act, depthwise, kind })
+        let conv = conv2d(c_in, c_out, k, cfg, vb)?;
+        let bias_v = match conv.bias() {
+            Some(b) => Some(crate::cpuop::bias_vec(b)?),
+            None => None,
+        };
+        Ok(Self { conv, act, depthwise, kind, bias_v })
     }
 
     /// The common case: 1-stride, undivided groups, `SiLU`.
@@ -190,6 +245,62 @@ impl ConvAct {
 
 
 impl ConvAct {
+    /// A 1x1 conv written straight into channels `[c0, c0 + c_out)` of `dst`
+    /// (a `(1, C, h, w)` concatenation buffer): the GEMM lands in its slot and
+    /// the epilogue runs on that slot, so the concatenation copies nothing
+    /// for this part. Returns the view of the written channels.
+    ///
+    /// `Some` only when this conv takes the fused pointwise path; the caller
+    /// falls back to `forward` + a copy otherwise.
+    pub(crate) fn forward_into(&self, x: &Tensor, dst: &Tensor, c0: usize) -> Result<Option<Tensor>> {
+        let pw = self.kind == ConvKind::Pointwise && !self.depthwise && !pointwise_disabled() && !fuse_disabled();
+        if !pw {
+            return Ok(None);
+        }
+        let (n, c_in, h, wd) = x.dims4()?;
+        let (_, c_dst, _, _) = dst.dims4()?;
+        let c_out = self.conv.weight().dim(0)?;
+        if n != 1 || c0 + c_out > c_dst || !x.is_contiguous() {
+            return Ok(None);
+        }
+        let w_mat = self.conv.weight().reshape((c_out, c_in))?;
+        let x_mat = x.reshape((c_in, h * wd))?;
+        let dst_mat = dst.reshape((c_dst, h * wd))?;
+        crate::cpuop::matmul2_into(&dst_mat, c0, &w_mat, &x_mat)?;
+        let slot = dst_mat.narrow(0, c0, c_out)?;
+        let act = self.act && !silu_disabled();
+        if self.bias_v.is_some() || act {
+            slot.inplace_op1(&crate::epilogue::Epilogue { bias: self.bias_v.clone(), per_channel: h * wd, act })?;
+        }
+        Ok(Some(dst.narrow(1, c0, c_out)?))
+    }
+
+    /// `forward(x) + res`, with the add folded into the conv epilogue when
+    /// this conv takes the dense 3x3 path with the fused `SiLU` — the only
+    /// shape the Bottleneck's residual ever lands on. Anything else gets the
+    /// plain forward and an in-place add, so the graph is the same either way.
+    pub(crate) fn forward_residual(&self, x: &Tensor, res: &Tensor) -> Result<Tensor> {
+        let fusable = self.kind == ConvKind::Dense3x3
+            && !self.depthwise
+            && self.act
+            && !silu_disabled()
+            && !fuse_disabled()
+            && !conv3x3_disabled();
+        if fusable {
+            return crate::profile::timed(|p| &p.conv, || {
+                crate::conv3x3::conv3x3_residual(x, self.conv.weight(), self.conv.bias(), true, res)
+            });
+        }
+        let pw = self.kind == ConvKind::Pointwise && !self.depthwise && !pointwise_disabled() && !fuse_disabled();
+        if pw {
+            let act = self.act && !silu_disabled();
+            return crate::profile::timed(|p| &p.conv1x1, || {
+                pointwise_matmul_res(x, self.conv.weight(), self.conv.bias(), self.bias_v.as_deref(), act, Some(res))
+            });
+        }
+        crate::cpuop::add_assign(self.forward(x)?, res)
+    }
+
     /// Eligible for the paired NHWC run: a dense 3x3, not depthwise, with the
     /// fused epilogue actually in play. Every condition MIRRORS the dispatch in
     /// `forward` rather than approximating it - a mismatch here is a wrong
@@ -242,6 +353,7 @@ impl Module for ConvAct {
                 && !self.depthwise
                 && self.kind == ConvKind::Pointwise
                 && !pointwise_disabled();
+            let dw_fused = self.act && !silu_disabled() && !fuse_disabled() && self.depthwise && !dwconv_disabled();
             // `FFAI_DIANA_NO_DWCONV=1` restores candle's grouped path — the
             // A/B arm and the shipped fallback in one knob, so the oracle
             // comparison needs no rebuild.
@@ -251,7 +363,7 @@ impl Module for ConvAct {
                     if dwconv_disabled() {
                         self.conv.forward(x)
                     } else {
-                        crate::dwconv::depthwise3x3(x, self.conv.weight(), self.conv.bias())
+                        crate::dwconv::depthwise3x3(x, self.conv.weight(), self.conv.bias(), dw_fused)
                     }
                 })?
             } else if self.kind == ConvKind::Stride2 {
@@ -270,7 +382,7 @@ impl Module for ConvAct {
                 })?
             } else if self.kind == ConvKind::Pointwise && !pointwise_disabled() {
                 crate::profile::timed(|p| &p.conv1x1, || {
-                    pointwise_matmul(x, self.conv.weight(), self.conv.bias(), pw_fused)
+                    pointwise_matmul_with(x, self.conv.weight(), self.conv.bias(), self.bias_v.as_deref(), pw_fused)
                 })?
             } else if self.kind == ConvKind::Dense3x3 {
                 crate::profile::timed(|p| &p.conv3x3, || {
@@ -337,7 +449,7 @@ impl Module for ConvAct {
             // test of either piece: both are individually correct. It surfaced
             // as the determinism test reporting "no detections to compare",
             // sixty layers downstream of the mistake.
-            if self.act && !pw_fused && !k3_fused {
+            if self.act && !pw_fused && !k3_fused && !dw_fused {
                 crate::profile::timed(|p| &p.act, || {
                     if silu_disabled() {
                         candle_nn::ops::silu(&y)
@@ -420,11 +532,14 @@ impl Module for Bottleneck {
                 self.cv2.b(),
                 self.cv2.act_on(),
             )?
+        } else if self.add {
+            // Residual fused into cv2's epilogue pass (`forward_residual`).
+            return self.cv2.forward_residual(&self.cv1.forward(x)?, x);
         } else {
             self.cv2.forward(&self.cv1.forward(x)?)?
         };
         if self.add {
-            x + y
+            crate::cpuop::add_assign(y, x)
         } else {
             Ok(y)
         }
@@ -466,8 +581,22 @@ impl Module for C3k {
         for b in &self.m {
             y = b.forward(&y)?;
         }
-        let skip = self.cv2.forward(x)?;
-        { let t = Tensor::cat(&[&y, &skip], 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv3.forward(&t) }
+        // cv2's output GEMM lands directly in the second half of the
+        // concatenation buffer (`forward_into`); only `y` is copied in.
+        let (_, cy, h, w) = y.dims4()?;
+        let c_skip = self.cv2.conv.weight().dim(0)?;
+        // SAFETY: [0, cy) written by `write_block`, [cy, cy + c_skip) by
+        // `forward_into`, before cv3 reads the buffer.
+        #[allow(unsafe_code)]
+        let big = unsafe { crate::cpuop::uninit_chw(cy + c_skip, h, w, x.device())? };
+        if self.cv2.forward_into(x, &big, cy)?.is_none() {
+            let skip = self.cv2.forward(x)?;
+            let t = crate::cpuop::cat_channels(&[&y, &skip])?;
+            return self.cv3.forward(&t);
+        }
+        crate::cpuop::write_block(&big, 0, &y)?;
+        crate::profile::record_plumb("cat(channel)", big.elem_count() as u64);
+        self.cv3.forward(&big)
     }
 }
 
@@ -509,23 +638,29 @@ impl Module for Attention {
 }
 
 impl Attention {
+    /// `forward(x) + res`, the add fused into `proj`'s epilogue.
+    pub(crate) fn forward_residual(&self, x: &Tensor, res: &Tensor) -> Result<Tensor> {
+        crate::profile::timed(|p| &p.attn, || self.forward_inner_res(x, Some(res)))
+    }
+
     fn forward_inner(&self, x: &Tensor) -> Result<Tensor> {
+        self.forward_inner_res(x, None)
+    }
+
+    fn forward_inner_res(&self, x: &Tensor, res: Option<&Tensor>) -> Result<Tensor> {
         let (b, c, h, w) = x.dims4()?;
         let n = h * w;
         let qkv = self.qkv.forward(x)?;
         let qkv = qkv.reshape((b, self.num_heads, self.key_dim * 2 + self.head_dim, n))?;
-        let q = qkv.narrow(2, 0, self.key_dim)?;
-        let k = qkv.narrow(2, self.key_dim, self.key_dim)?;
-        let v = qkv.narrow(2, self.key_dim * 2, self.head_dim)?;
-
         let scale = (self.key_dim as f64).powf(-0.5);
-        // (q * scale)ᵀ @ k  ->  (b, heads, n, n)
-        let qs = (q * scale)?;
-        let qt = crate::profile::timed(|p| &p.attn_t, || {
-            crate::transpose::transpose_last2(&qs)
-        })?;
-        let attn = qt.matmul(&k.contiguous()?)?;
-        let attn = candle_nn::ops::softmax(&attn, D::Minus1)?;
+        // One pass over qkv: scaled q (`x * mul + 0.0`, candle's affine to the
+        // bit), contiguous k, contiguous v (`cpuop::split_qkv`) — was a strided
+        // `affine` and two strided `contiguous()` copies, three ops.
+        let (qs, k, vc) = crate::cpuop::split_qkv(&qkv, self.key_dim, self.head_dim, scale as f32)?;
+        // `(q * scale)ᵀ @ k  ->  (b, heads, n, n)`, the transpose as a view.
+        let qt = qs.t()?;
+        let attn = qt.matmul(&k)?;
+        let attn = crate::softmax::softmax_last(&attn)?;
 
         // v @ attnᵀ  ->  (b, heads, head_dim, n)  ->  (b, c, h, w)
         //
@@ -537,14 +672,17 @@ impl Attention {
         //
         // Made once, used twice. Same arithmetic, one fewer traversal of a
         // buffer that is already hot.
-        let vc = v.contiguous()?;
-        let out = vc
-            .matmul(&crate::profile::timed(|p| &p.attn_t, || {
-                crate::transpose::transpose_last2(&attn)
-            })?)?
-            .reshape((b, c, h, w))?;
+        // `v @ attnᵀ` with the transpose as a VIEW: candle's matmul hands the
+        // operand strides to `gemm`, which packs the panel either way, so the
+        // products and their order are unchanged — and the 2 x n x n copy the
+        // transpose kernel made (3.4 M Ir per image) is not made. "Issue
+        // fewer ops": the op was a copy.
+        let out = vc.matmul(&attn.t()?)?.reshape((b, c, h, w))?;
         let pe = self.pe.forward(&vc.reshape((b, c, h, w))?)?;
-        self.proj.forward(&(out + pe)?)
+        match res {
+            Some(r) => self.proj.forward_residual(&(out + pe)?, r),
+            None => self.proj.forward(&(out + pe)?),
+        }
     }
 }
 
@@ -569,13 +707,14 @@ impl PsaBlock {
 
 impl Module for PsaBlock {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let a = self.attn.forward(x)?;
-        let x = if self.add { (x + a)? } else { a };
-        let f = self.ffn1.forward(&self.ffn0.forward(&x)?)?;
+        // Both residuals fused into the producing 1x1's epilogue pass
+        // (`forward_residual`): no separate add traversal.
+        let x = if self.add { self.attn.forward_residual(x, x)? } else { self.attn.forward(x)? };
+        let h = self.ffn0.forward(&x)?;
         if self.add {
-            &x + f
+            self.ffn1.forward_residual(&h, &x)
         } else {
-            Ok(f)
+            self.ffn1.forward(&h)
         }
     }
 }
@@ -660,14 +799,38 @@ impl C3k2 {
 
 impl Module for C3k2 {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let y0 = self.cv1.forward(x)?;
-        let mut parts = vec![y0.narrow(1, 0, self.c)?, y0.narrow(1, self.c, self.c)?];
+        // The concatenation buffer FIRST: cv1's two halves are written into
+        // its head by the GEMM itself (`forward_into`), and each inner
+        // block's output is copied once into its slot. The old form built
+        // cv1's output, split it into views, and then `cat` copied the two
+        // halves AND the inner outputs into a fresh buffer.
+        let (_, _, h, w) = x.dims4()?;
+        let c_all = (2 + self.m.len()) * self.c;
+        // SAFETY: channels [0, 2c) are written by `forward_into`, every later
+        // block of `c` channels by `write_block`, before cv2 reads the buffer.
+        #[allow(unsafe_code)]
+        let big = unsafe { crate::cpuop::uninit_chw(c_all, h, w, x.device())? };
+        let Some(y0) = self.cv1.forward_into(x, &big, 0)? else {
+            // Fallback (A/B knobs off the fused path): the copying form.
+            let y0 = self.cv1.forward(x)?;
+            let mut parts = vec![y0.narrow(1, 0, self.c)?, y0.narrow(1, self.c, self.c)?];
+            for inner in &self.m {
+                let next = inner.forward(parts.last().expect("cv1 gives two halves"))?;
+                parts.push(next);
+            }
+            let t = crate::cpuop::cat_channels(&parts.iter().collect::<Vec<_>>())?;
+            return self.cv2.forward(&t);
+        };
         crate::profile::record_plumb("narrow(channel)", y0.elem_count() as u64);
-        for inner in &self.m {
-            let next = inner.forward(parts.last().expect("cv1 gives two halves"))?;
-            parts.push(next);
+        let mut last = y0.narrow(1, self.c, self.c)?;
+        for (i, inner) in self.m.iter().enumerate() {
+            let next = inner.forward(&last)?;
+            let c0 = (2 + i) * self.c;
+            crate::cpuop::write_block(&big, c0 * h * w, &next)?;
+            last = big.narrow(1, c0, self.c)?;
         }
-        { let t = Tensor::cat(&parts, 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t) }
+        crate::profile::record_plumb("cat(channel)", big.elem_count() as u64);
+        self.cv2.forward(&big)
     }
 }
 
@@ -697,7 +860,16 @@ impl Sppf {
 
 impl Module for Sppf {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut ys = vec![self.cv1.forward(x)?];
+        let x1 = self.cv1.forward(x)?;
+        if !maxpool_disabled() {
+            // The whole pyramid — cv1's output and its n cumulative pools —
+            // written straight into the concatenated buffer cv2 reads.
+            let t = crate::maxpool::maxpool_chain_cat(&x1, self.k, self.n)?;
+            crate::profile::record_plumb("cat(channel)", t.elem_count() as u64);
+            let y = self.cv2.forward(&t)?;
+            return if self.add { crate::cpuop::add_assign(y, x) } else { Ok(y) };
+        }
+        let mut ys = vec![x1];
         for _ in 0..self.n {
             let prev = ys.last().expect("seeded with cv1");
             // MaxPool2d(k, stride=1, padding=k/2). candle has no padded
@@ -708,15 +880,24 @@ impl Module for Sppf {
             // unchanged. Zero padding would NOT be equivalent — these
             // activations are signed, and a zero would win wherever the
             // true window maximum is negative.
-            let pad = self.k / 2;
-            let padded = prev
-                .pad_with_same(D::Minus1, pad, pad)?
-                .pad_with_same(D::Minus2, pad, pad)?;
-            ys.push(padded.max_pool2d_with_stride(self.k, 1)?);
+            //
+            // Done as the separable, index-clamped pass in `crate::maxpool`
+            // (bit-identical to the padded candle path, by test); the two
+            // `pad_with_same` tensors and the 25-tap generic pool were 6.6 %
+            // of detect's instructions for a max of 25 numbers.
+            ys.push(if maxpool_disabled() {
+                let pad = self.k / 2;
+                let padded = prev
+                    .pad_with_same(D::Minus1, pad, pad)?
+                    .pad_with_same(D::Minus2, pad, pad)?;
+                padded.max_pool2d_with_stride(self.k, 1)?
+            } else {
+                crate::maxpool::maxpool_same_s1(prev, self.k)?
+            });
         }
-        let y = { let t = Tensor::cat(&ys, 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t)? };
+        let y = { let t = crate::cpuop::cat_channels(&ys.iter().collect::<Vec<_>>())?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t)? };
         if self.add {
-            &y + x
+            crate::cpuop::add_assign(y, x)
         } else {
             Ok(y)
         }
@@ -756,7 +937,7 @@ impl Module for C2psa {
         for blk in &self.m {
             b = blk.forward(&b)?;
         }
-        { let t = Tensor::cat(&[&a, &b], 1)?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t) }
+        { let t = crate::cpuop::cat_channels(&[&a, &b])?; crate::profile::record_plumb("cat(channel)", t.elem_count() as u64); self.cv2.forward(&t) }
     }
 }
 

@@ -191,7 +191,7 @@ fn conv3x3_tiled(
     // like a regression when it is not being compared like for like.
     if act && !crate::blocks::fuse_disabled() {
         let bias_v: Option<Vec<f32>> = match bias {
-            Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+            Some(b) => Some(crate::cpuop::bias_vec(b)?),
             None => None,
         };
         let avx2 = crate::silu::avx2_enabled();
@@ -348,6 +348,26 @@ fn mode() -> u8 {
 /// Keyed by candle's own tensor id, which is unique per tensor and stable for
 /// the model's lifetime. The entry holds a `Tensor`, so the cache keeps the
 /// weights alive and an id cannot be recycled underneath it.
+/// `weight.reshape((rows, cols))`, built once per weight tensor and reused.
+///
+/// A reshape of a constant costs a `Shape` and a `Layout` allocation and an
+/// `Arc` clone on every call; the 3x3 and 1x1 paths did one per convolution.
+pub(crate) fn weight_mat_cached(weight: &Tensor, rows: usize, cols: usize) -> Result<Tensor> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<candle_core::TensorId, Tensor>>> = Mutex::new(None);
+
+    let key = weight.id();
+    let mut g = CACHE.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    if let Some(t) = m.get(&key) {
+        return Ok(t.clone());
+    }
+    let t = weight.reshape((rows, cols))?;
+    m.insert(key, t.clone());
+    Ok(t)
+}
+
 fn weight_t_cached(weight: &Tensor, c_out: usize, k: usize) -> Result<Tensor> {
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -457,7 +477,7 @@ fn weight_nhwc_cached(weight: &Tensor, c_out: usize, c_in: usize) -> Result<Tens
         return Ok(t.clone());
     }
     let k = c_in * 9;
-    let ws = weight.flatten_all()?.to_vec1::<f32>()?;
+    let ws = crate::cpuop::bias_vec(weight)?;
     let mut out = vec![0.0f32; k * c_out];
     for o in 0..c_out {
         for c in 0..c_in {
@@ -542,7 +562,7 @@ pub fn conv3x3_pair_nhwc(
     let wt1 = weight_t_cached(w1, mid, k1)?;
     let y1 = crate::profile::timed(|p| &p.gemm, || col1.matmul(&wt1))?;
     let bias1 = match b1 {
-        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+        Some(b) => Some(crate::cpuop::bias_vec(b)?),
         None => None,
     };
     let y1 = crate::profile::timed(|p| &p.conv_wrap, || {
@@ -560,7 +580,7 @@ pub fn conv3x3_pair_nhwc(
     let wt2 = weight_nhwc_cached(w2, c_out, mid)?;
     let y2 = crate::profile::timed(|p| &p.gemm, || col2.matmul(&wt2))?;
     let bias2 = match b2 {
-        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+        Some(b) => Some(crate::cpuop::bias_vec(b)?),
         None => None,
     };
     let out = crate::profile::timed(|p| &p.conv_wrap, || {
@@ -599,7 +619,7 @@ fn conv3x3_nhwc(
     let y_t = crate::profile::timed(|p| &p.gemm, || col.matmul(&w_t))?;
 
     let bias_v = match bias {
-        Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+        Some(b) => Some(crate::cpuop::bias_vec(b)?),
         None => None,
     };
     // Transpose FUSED into the epilogue: one pass instead of two.
@@ -619,6 +639,60 @@ pub fn conv3x3_strided(
     // activation-free Convs in this graph.
     act: bool,
 ) -> Result<Tensor> {
+    // Vein 1: the large stride-1 convolutions go through Winograd F(2x2, 3x3)
+    // (`crate::winograd`) — 2.25x fewer GEMM multiplies, no im2col. It
+    // changes the result in the last bits, so it is gated by the full-graph
+    // oracle and has its own knob; everything below is the exact GEMM path.
+    if crate::winograd::applies(x.dim(1)?, weight.dim(0)?, stride) {
+        return crate::winograd::conv3x3_winograd(x, weight, bias, act, None);
+    }
+    // Vein 12: the stem (`c_in <= 4`, stride 2) as a direct FMA kernel with
+    // the GEMM's own accumulation order — bit-identical, no im2col.
+    #[cfg(target_arch = "x86_64")]
+    if crate::stem::applies(x.dim(1)?, stride) {
+        return crate::stem::conv3x3_s2_direct(x, weight, bias, act);
+    }
+    conv3x3_gemm(x, weight, bias, stride, act)
+}
+
+/// Stride-1 3x3 with a residual `res` (same shape as the output) added in the
+/// epilogue's own pass — the Bottleneck's `x + cv2(cv1(x))` without a second
+/// traversal. Takes whichever kernel `conv3x3_strided` would.
+pub fn conv3x3_residual(x: &Tensor, weight: &Tensor, bias: Option<&Tensor>, act: bool, res: &Tensor) -> Result<Tensor> {
+    if crate::winograd::applies(x.dim(1)?, weight.dim(0)?, 1) {
+        return crate::winograd::conv3x3_winograd(x, weight, bias, act, Some(res));
+    }
+    conv3x3_gemm_res(x, weight, bias, 1, act, Some(res))
+}
+
+/// The im2col + GEMM path, with Winograd never taken — the oracle the
+/// Winograd kernel is tested against.
+pub(crate) fn conv3x3_gemm(
+    x: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    stride: usize,
+    act: bool,
+) -> Result<Tensor> {
+    conv3x3_gemm_res(x, weight, bias, stride, act, None)
+}
+
+fn conv3x3_gemm_res(
+    x: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    stride: usize,
+    act: bool,
+    res: Option<&Tensor>,
+) -> Result<Tensor> {
+    // The residual fusion lives in the default path's epilogue only; the
+    // A/B arms below get the two-op form.
+    if let Some(r) = res
+        && (nhwc_enabled() || !tiling_disabled() || (stride == 1 && !act && crate::direct3x3::enabled()))
+    {
+        let y = conv3x3_gemm_res(x, weight, bias, stride, act, None)?;
+        return crate::cpuop::add_assign(y, r);
+    }
     // Direct convolution first: it never builds the 9x-expanded operand,
     // which is the only thing that moves the GEMM's arithmetic intensity.
     // Falls through to im2col for shapes it declines (stride 2, w < 2).
@@ -697,65 +771,76 @@ pub fn conv3x3_strided(
     // single image and is pure overhead inside a parallel batch.
     let im2col_channel = |(c, block): (usize, &mut [std::mem::MaybeUninit<f32>])| {
         let plane = &xs[c * hw..(c + 1) * hw];
+        // STRIDE 2: deinterleave every source row ONCE, then all nine taps
+        // are contiguous copies.
+        //
+        // `sx = 2*ox + kx - 1`, so the three horizontal taps of a row read
+        // its odd elements shifted by one (kx = 0), its even elements
+        // (kx = 1) and its odd elements (kx = 2). The gather that wrote
+        // `dst[ox] = src[2*ox + kx - 1]` one element at a time was the single
+        // most expensive line in the crate on the Ir census — 49.0 M of
+        // 1,075 M instructions per image, ~6.3 per element, because LLVM
+        // could not prove the index and emitted a bounds check and a scalar
+        // move for each. Splitting the plane into its even and odd columns
+        // first costs one streamed pass that vectorises (a pair deinterleave),
+        // after which each tap row is a `memcpy`. Each source row serves up
+        // to six (ky, kx) taps, so the deinterleave is amortised six-fold.
+        //
+        // Lengths: `ow = (w-1)/2 + 1 = ceil(w/2)` = the even half; the odd
+        // half is `w/2`, which is `ow` for even `w` and `ow - 1` for odd `w`.
+        let (half_e, half_o) = (w.div_ceil(2), w / 2);
+        // One scratch allocation per channel, not two: even rows then odd rows
+        // in a single `Vec` (2 124 mallocs per image became 1 062).
+        let eo = if stride == 2 { deinterleave_rows(plane, w) } else { Vec::new() };
+        let (ev, od) = eo.split_at(if stride == 2 { h * half_e } else { 0 });
+        // Loop order is (ky, oy, kx): the source row and the padding test
+        // are per (ky, oy), and the three horizontal taps of that row are
+        // written together. The previous (ky, kx, oy) order re-derived the
+        // row and re-tested the padding three times per output row.
         for ky in 0..3usize {
-            for kx in 0..3usize {
-                let row: &mut [std::mem::MaybeUninit<f32>] =
-                    &mut block[(ky * 3 + kx) * ohw..(ky * 3 + kx + 1) * ohw];
-                for oy in 0..oh {
-                    // Source row for this vertical tap. Outside the image the
-                    // destination is the PADDING, and must now be written
-                    // explicitly — the buffer is no longer pre-zeroed.
-                    let sy = oy * stride + ky;
-                    let dst = &mut row[oy * ow..(oy + 1) * ow];
-                    if sy == 0 || sy > h {
-                        for d in dst.iter_mut() {
-                            d.write(0.0);
-                        }
-                        continue;
-                    }
+            let (t0, t12) = block[ky * 3 * ohw..(ky * 3 + 3) * ohw].split_at_mut(ohw);
+            let (t1, t2) = t12.split_at_mut(ohw);
+            for oy in 0..oh {
+                let (o0, o1) = (oy * ow, (oy + 1) * ow);
+                let (d0, d1, d2) = (&mut t0[o0..o1], &mut t1[o0..o1], &mut t2[o0..o1]);
+                // Source row for this vertical tap. Outside the image the
+                // destination is the PADDING, and must now be written
+                // explicitly — the buffer is no longer pre-zeroed.
+                let sy = oy * stride + ky;
+                if sy == 0 || sy > h {
+                    write_zero(d0);
+                    write_zero(d1);
+                    write_zero(d2);
+                    continue;
+                }
+                if stride == 1 {
+                    // Contiguous copy with a horizontal offset. The one
+                    // column the shift leaves uncovered is padding.
                     let src = &plane[(sy - 1) * w..sy * w];
-                    if stride == 1 {
-                        // Contiguous copy with a horizontal offset. The one
-                        // column the shift leaves uncovered is padding.
-                        match kx {
-                            0 => {
-                                dst[0].write(0.0);
-                                for (d, s) in dst[1..].iter_mut().zip(&src[..w - 1]) {
-                                    d.write(*s);
-                                }
-                            }
-                            1 => {
-                                for (d, s) in dst.iter_mut().zip(src) {
-                                    d.write(*s);
-                                }
-                            }
-                            _ => {
-                                for (d, s) in dst[..w - 1].iter_mut().zip(&src[1..]) {
-                                    d.write(*s);
-                                }
-                                dst[w - 1].write(0.0);
-                            }
-                        }
-                    } else {
-                        // sx = 2*ox + kx - 1. Solve the in-bounds range once
-                        // so the inner loop is branch-free.
-                        //   sx >= 0    <=> 2*ox >= 1 - kx
-                        //   sx <= w-1  <=> ox <= (w - kx)/2
-                        let lo = if kx == 0 { 1 } else { 0 };
-                        let hi =
-                            if w >= kx { ((w - kx) / 2 + 1).min(ow) } else { 0 };
-                        // Everything outside [lo, hi) is padding and is now
-                        // written rather than inherited.
-                        for d in &mut dst[..lo.min(ow)] {
-                            d.write(0.0);
-                        }
-                        for ox in lo..hi {
-                            dst[ox].write(src[ox * 2 + kx - 1]);
-                        }
-                        for d in &mut dst[hi.min(ow)..] {
-                            d.write(0.0);
-                        }
-                    }
+                    d0[0].write(0.0);
+                    write_copy(&mut d0[1..], &src[..w - 1]);
+                    write_copy(d1, src);
+                    write_copy(&mut d2[..w - 1], &src[1..]);
+                    d2[w - 1].write(0.0);
+                } else {
+                    // Row `sy - 1` of the deinterleaved halves. The in-bounds
+                    // ranges are the ones the scalar gather solved
+                    // (`sx >= 0 <=> 2*ox >= 1 - kx`, `sx <= w-1 <=> ox <=
+                    // (w-kx)/2`); here they fall out of the half lengths, and
+                    // the padding outside them is still written rather than
+                    // inherited.
+                    let r = sy - 1;
+                    let ev_row = &ev[r * half_e..(r + 1) * half_e];
+                    let od_row = &od[r * half_o..(r + 1) * half_o];
+                    // kx = 0: sx = 2*ox - 1, the odd elements shifted right.
+                    d0[0].write(0.0);
+                    write_copy(&mut d0[1..], &od_row[..ow - 1]);
+                    // kx = 1: sx = 2*ox, the even elements, exactly `ow`.
+                    write_copy(d1, ev_row);
+                    // kx = 2: sx = 2*ox + 1, the odd elements; one trailing
+                    // pad column when `w` is odd.
+                    write_copy(&mut d2[..half_o], od_row);
+                    write_zero(&mut d2[half_o..]);
                 }
             }
         }
@@ -778,8 +863,8 @@ pub fn conv3x3_strided(
         .run(x)
     })?;
 
-    let w_mat = weight.reshape((c_out, c_in * 9))?;
-    let y = crate::profile::timed(|p| &p.gemm, || w_mat.matmul(&col))?; // (Cout, OH*OW)
+    let w_mat = weight_mat_cached(weight, c_out, c_in * 9)?;
+    let y = crate::profile::timed(|p| &p.gemm, || crate::cpuop::matmul2(&w_mat, &col))?; // (Cout, OH*OW)
     // The wrapper, timed separately: bias broadcast and reshape were inside
     // the parent bucket and therefore invisible.
     crate::profile::timed(|p| &p.conv_wrap, || {
@@ -802,14 +887,64 @@ pub fn conv3x3_strided(
             return y.reshape((n, c_out, oh, ow));
         }
         let bias_v: Option<Vec<f32>> = match bias {
-            Some(b) => Some(b.flatten_all()?.to_vec1::<f32>()?),
+            Some(b) => Some(crate::cpuop::bias_vec(b)?),
             None => None,
         };
         // IN PLACE — one library op per convolution instead of two. See
         // `crate::epilogue` for the counted reason.
-        let out = crate::epilogue::apply(y, bias_v, ohw, act)?;
+        let out = match res {
+            Some(r) => crate::epilogue::apply_residual(y, bias_v, ohw, act, &r.reshape((c_out, ohw))?)?,
+            None => crate::epilogue::apply(y, bias_v, ohw, act)?,
+        };
         out.reshape((n, c_out, oh, ow))
     })
+}
+
+/// Copy `src` into an uninitialised `dst` of the same length.
+///
+/// `MaybeUninit<f32>` has the layout of `f32`, so this is one `memcpy`. It
+/// exists because the element-wise `zip(..).write(..)` loops it replaces
+/// measured as scalar moves on the Ir census rather than as the block copy
+/// they describe.
+#[inline(always)]
+fn write_copy(dst: &mut [std::mem::MaybeUninit<f32>], src: &[f32]) {
+    // `assert_eq!` + `memcpy`, deliberately — both alternatives were measured
+    // worse: an inline eight-float copy loop +25.9 M Ir (glibc's memcpy is
+    // ~22 instructions flat at these 80–640-byte rows), and `debug_assert` +
+    // `min()` +2.0 M (two instructions per call, 940 000 calls).
+    assert_eq!(dst.len(), src.len(), "im2col write_copy: length mismatch");
+    // SAFETY: equal lengths checked above; the ranges cannot overlap (`dst`
+    // is uninitialised column storage, `src` the activation).
+    #[allow(unsafe_code)]
+    unsafe {
+        std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr().cast::<f32>(), src.len());
+    }
+}
+
+fn write_zero(dst: &mut [std::mem::MaybeUninit<f32>]) {
+    // SAFETY: writing zero bytes to uninitialised f32 storage is a valid
+    // initialisation; the length is the slice's own.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::ptr::write_bytes(dst.as_mut_ptr(), 0, dst.len());
+    }
+}
+
+fn deinterleave_rows(plane: &[f32], w: usize) -> Vec<f32> {
+    let (half_e, half_o) = (w.div_ceil(2), w / 2);
+    let rows = plane.len() / w.max(1);
+    let mut out = Vec::with_capacity(rows * (half_e + half_o));
+    // Even samples of every row, then odd samples of every row.
+    for row in plane.chunks_exact(w) {
+        out.extend(row.chunks_exact(2).map(|p| p[0]));
+        if w % 2 == 1 {
+            out.push(row[w - 1]);
+        }
+    }
+    for row in plane.chunks_exact(w) {
+        out.extend(row.chunks_exact(2).map(|p| p[1]));
+    }
+    out
 }
 
 /// Total im2col output elements produced since process start.
