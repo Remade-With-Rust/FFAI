@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.11.0...ffai-diana-v0.11.1) - 2026-11-08
+
+### Fixed
+
+- *(diana)* clear the 8 clippy -D warnings failing the harden gate
+
 ## [0.11.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-diana-v0.10.0...ffai-diana-v0.11.0) - 2026-11-07
 
 ### Changed
