@@ -9,4 +9,7 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # A fourth, same scope: extract() aborts on a symlink entry with a huge
+    # declared size. candle never calls extract. Added 2026-11-08.
+    "RUSTSEC-2026-0429",
 ]
