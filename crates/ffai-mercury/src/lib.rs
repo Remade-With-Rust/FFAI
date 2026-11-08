@@ -43,11 +43,13 @@ mod proofs;
 pub mod asr;
 mod buf;
 pub mod clock;
+mod gemm_pin;
 pub mod manifests;
 pub mod par;
 pub mod tts;
 
 pub use asr::{OxiWhisper, WhisperCandle};
+pub use gemm_pin::pin_gemm_blocking;
 pub use tts::{AnyTts, PiperCandle, Voirs};
 
 use std::sync::Arc;

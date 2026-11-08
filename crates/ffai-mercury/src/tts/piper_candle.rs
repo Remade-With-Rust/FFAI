@@ -85,6 +85,7 @@ impl PiperCandle {
     fn load(&self) -> Result<&Loaded> {
         self.loaded
             .get_or_init(|| {
+                crate::pin_gemm_blocking();
                 let voice = self.manifest(DEFAULT_VOICE)?;
                 // Fetch the files piper itself ships and read the ONNX
                 // directly — no conversion step, no Python, no ONNX runtime.

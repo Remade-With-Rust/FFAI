@@ -6,7 +6,7 @@ description = "Mercury — FFai's voice component: pure-Rust ASR (Whisper/Whispe
 # to 0.6.1 -- the API is purely additive, but this crate advertises byte-stable
 # determinism, so a changed waveform is a compatibility break for anyone who
 # pinned bytes. Its dependencies stay at the published 0.6.1.
-version = "1.2.0"
+version = "1.2.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -32,6 +32,9 @@ serde_json = { workspace = true }
 # panicking in someone's browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+# Same version candle-core's gemm links: src/gemm_pin.rs initializes its
+# process-wide cache detection, which only works on the shared static.
+gemm-common = "0.19"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # getrandom 0.3 needs its `wasm_js` FEATURE in addition to the

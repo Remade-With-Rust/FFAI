@@ -506,6 +506,37 @@ run lands in alongside per-stage hashes (encoder, duration predictor, flow,
 decoder) to find the first stage that differs, then check thread-count- or
 dispatch-dependent reductions in that stage.
 
+**Root cause found, and fixed (2026-11-07).** The two modes are the two core
+types of the hybrid i7-14650HX. candle's CPU matmul runs on `gemm`, which reads
+cache sizes with CPUID on first use and caches them for the process. CPUID
+answers for the core the thread is on: a P-core reports a 48 KiB 12-way L1, an
+E-core a 32 KiB 8-way L1. gemm derives its k-block from the L1, so every
+multiply with an inner dimension above 512 splits its sum differently:
+
+| Inner dimension | k-block on P-core | k-block on E-core |
+|---:|---:|---:|
+| 192 | 192 | 192 |
+| 576 | 576 | 288 |
+| 960 | 960 | 480 |
+| 2304 | 768 | 461 |
+
+Pinning proved it. The shipped binary pinned to P-cores gave the usual output
+6 of 6 times, and pinned to E-cores gave the alternate 6 of 6 times. That
+alternate is the same output as the 12 of 300 rare unpinned runs above.
+
+The fix (`src/gemm_pin.rs`) forces gemm's detection at model load, on a helper
+thread pinned to the lowest allowed logical CPU, which is CPU 0 when unpinned.
+With CPU 0 plus the eight E-cores allowed, the old binary gave the alternate
+6 of 6 times and the fixed binary the usual output 6 of 6 times. The fixed
+binary's usual output is byte-identical to the committed baseline. A mask with
+only E-cores still gives the alternate, by design: the answer is fixed per
+machine and mask, not across them.
+
+The full fixed harness (13 clips + 8 sentences) is byte-identical to the
+committed baseline, and 20 unpinned TTS-only runs all gave the usual output.
+At the old 3–5 % rate, 20 clean runs alone would not prove the fix; the
+CPU-0-plus-E-cores test above is the discriminating one.
+
 ### Timing pass (2026-11-07): no admissible verdict on this box
 
 Batched after the counts, per `codec-measurement`: the two release harness

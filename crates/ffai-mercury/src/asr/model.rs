@@ -157,6 +157,7 @@ impl LoadedWhisper {
     /// the same three artefacts to [`Self::assemble`], so a model built here
     /// is the model built there.
     pub fn from_bytes(w: WhisperBytes, device: Device, precision: Precision) -> Result<Self> {
+        crate::pin_gemm_blocking();
         let config: Config = serde_json::from_str(&w.config)
             .map_err(|e| Error::Model(format!("parsing config.json: {e}")))?;
         let tokenizer = WhisperTokenizer::from_bytes(&w.tokenizer, "supplied bytes")?;

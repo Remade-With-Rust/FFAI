@@ -48,6 +48,7 @@ impl Aligner {
     /// into the crate otherwise — so word timestamps work without a `models/`
     /// directory beside the caller.
     pub fn from_manifest_source(dir: Option<&Path>, name: &str, device: Device) -> Result<Self> {
+        crate::pin_gemm_blocking();
         let manifest = crate::manifests::resolve(dir, name).map_err(|e| {
             Error::Model(format!(
                 "{e} — word timestamps need a CTC alignment model (default: {DEFAULT_MODEL})"

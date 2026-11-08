@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "candle-nn",
  "candle-transformers",
@@ -1389,6 +1389,7 @@ dependencies = [
  "ffai-core",
  "ffai-media",
  "ffai-models",
+ "gemm-common 0.19.0",
  "getrandom 0.3.4",
  "half",
  "proptest",

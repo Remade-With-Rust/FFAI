@@ -353,6 +353,7 @@ pub struct EcapaTdnn {
 
 impl EcapaTdnn {
     pub fn load(cfg: Config, vb: VarBuilder, device: Device) -> Result<Self> {
+        crate::pin_gemm_blocking();
         let first = TdnnBlock::load(
             cfg.n_mels,
             cfg.channels[0],

@@ -356,6 +356,7 @@ unsafe fn dot_i8_blocked_legacy(
     nblocks: usize,
     blk: usize,
 ) -> f32 {
+    // SAFETY: the fn's contract (avx2 present, slices hold nblocks*blk) covers this body.
     unsafe {
         let ones = _mm256_set1_epi16(1);
         let wp = w.as_ptr();
@@ -488,6 +489,7 @@ unsafe fn dot_i8_blocked_x2(
     nblocks: usize,
     blk: usize,
 ) -> (f32, f32) {
+    // SAFETY: the fn's contract (avx2 present, slices hold nblocks*blk) covers this body.
     unsafe {
         let ones = _mm256_set1_epi16(1);
         let (wpa, wpb) = (wa.as_ptr(), wb.as_ptr());

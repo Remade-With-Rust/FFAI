@@ -152,6 +152,7 @@ impl Vits {
     /// against the Python converter's output by
     /// `examples/onnx_vs_safetensors.rs`.
     pub fn load_onnx(onnx: &Path, config_json: &Path) -> Result<Self> {
+        crate::pin_gemm_blocking();
         let device = Device::Cpu;
         // Scoped so the 63 MB of file bytes are freed before the tensors are
         // built — the peak, not the steady state, is what the footprint gate
@@ -190,6 +191,7 @@ impl Vits {
     /// Kept as the in-repo path and as the oracle the ONNX loader is gated
     /// against.
     pub fn load(dir: &Path) -> Result<Self> {
+        crate::pin_gemm_blocking();
         let device = Device::Cpu;
         let w = ffai_core::candle::safetensors::load(dir.join("vits.safetensors"), &device)
             .map_err(|e| Error::Model(format!("vits weights: {e}")))?;

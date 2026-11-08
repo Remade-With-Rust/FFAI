@@ -115,6 +115,7 @@ impl Diarizer {
 
     /// Load from an already-parsed manifest.
     pub fn from_manifest(manifest: &ffai_models::ModelManifest, device: Device) -> Result<Self> {
+        crate::pin_gemm_blocking();
         let resolved = manifest.fetch()?;
         let weights = resolved.file("embedding_model.ckpt")?.to_path_buf();
 

@@ -460,6 +460,7 @@ impl Wav2Vec2Ctc {
 
     /// `quantized` puts the transformer projections through `Q8_0`.
     pub fn load_with(cfg: Config, vb: VarBuilder, device: Device, quantized: bool) -> Result<Self> {
+        crate::pin_gemm_blocking();
         let root = vb.pp("wav2vec2");
         let features = FeatureExtractor::load(&cfg, root.pp("feature_extractor"))?;
         let last_conv = *cfg.conv_dim.last().expect("conv_dim is never empty");
