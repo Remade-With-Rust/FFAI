@@ -27,7 +27,7 @@ regex = { workspace = true }
 # Only the synthetic-corpus generator examples use these; the library needs
 # neither a rasterizer nor a PNG encoder.
 fontdue = "0.9"
-png = "0.17"
+png = "0.18"
 # TESTS ONLY, and only one test: `vlm::tests::a_stub_engine_refuses_...` needs
 # a registered stub VLM engine to prove the harness refuses it. Keeping this
 # out of [dependencies] matters — ffai-bench must not gain a dependency on a
