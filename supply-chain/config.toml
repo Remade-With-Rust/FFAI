@@ -430,6 +430,10 @@ criteria = "safe-to-deploy"
 version = "0.10.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.ffai-cli]]
+version = "0.11.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.ffai-core]]
 version = "0.7.2"
 criteria = "safe-to-deploy"
@@ -440,6 +444,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ffai-diana]]
 version = "0.10.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-diana]]
+version = "0.11.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.ffai-media]]
@@ -468,6 +476,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ffai-wasm]]
 version = "0.4.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ffai-wasm]]
+version = "0.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
