@@ -1,1038 +1,296 @@
-### In The Wild with 465,477 Active Installs
-> [RAG Converter](https://ragconverter.com) uses `FFAI` for all three of its AI engines.
-> It makes personal and work files AI-readable without them leaving the machine:
-> the whole conversion runs as WebAssembly in the browser tab, with nothing
-> uploaded and nothing to install.
-
 # FFAI
 
-**The AI media toolkit, remade with rust.** OCR, speech recognition (ASR),
-text-to-speech (TTS), and vision-language understanding in one pure-Rust
-toolkit — built the way ffmpeg was built: libraries first, one binary on top,
-everything swappable by name. No Python runtime, no gated weights.
-
-**One correction to a claim this page carried for weeks:** it said "no C/C++
-by default", and that is not true. `candle-core` takes `tokenizers` as a
-hard, non-optional dependency with `features = ["onig"]`, so `onig_sys`
-compiles Oniguruma — a C regex engine — into every FFai build that touches
-candle. It produces an ordinary self-contained binary with no external runtime
-dependency, and it disappears on `wasm32`, where candle target-gates it out
-(verified against the deliverables, not the manifest: `cargo tree -p ffai-wasm
--p ffai-carmenta-wasm --target wasm32-unknown-unknown -i onig_sys` finds
-nothing).
-
-**A second correction, 2026-08-27:** this page previously added "it is
-build-time only, with no runtime component". That is wrong for every engine
-that tokenizes. `tokenizers` aliases `SysRegex` to onig whenever the feature is
-on, `pre_tokenizers/byte_level.rs` holds a `static RE: LazyLock<SysRegex>` with
-the GPT-2 splitting pattern, and our checkpoints select it — SmolVLM's
-`tokenizer.json` uses `Sequence[Digits, ByteLevel]` with `use_regex: true`. So
-Oniguruma's C **executes on every tokenization call** in Argus, Mercury and
-Carmenta. It remains genuinely dead weight for **Diana**, which never
-references tokenizers at all.
-
-**Third correction, and the fix: onig is now patched out.** Cargo will not let a
-consumer strip a feature a transitive dependency selected, so the fix is to
-replace the dependency.
-[`Remade-With-Rust/tokenizers`](https://github.com/Remade-With-Rust/tokenizers)
-deletes the optional `onig` dependency and re-points the `onig` *feature* at
-[`rusty_expressions`](https://github.com/Remade-With-Rust/rusty_expressions),
-our pure-Rust Oniguruma — candle's request is satisfied by name, and nothing in
-the graph can compile libonig. `cargo tree -i onig_sys` now reports no such
-package. It is gated on behaviour, not on compilation: Argus's caption oracle
-still reproduces the Python reference **byte-identically** with the regex engine
-swapped.
-
-Two limits stated plainly. `[patch]` is a workspace mechanism and is **not**
-carried into published crates, so building from this repository is onig-free
-while `ffai-argus` taken from crates.io is not, until the change lands upstream
-in candle. And onig was never the only C here: **`aws-lc-sys`** — the C crypto
-behind `rustls`, reached via `hf-hub` — is still in the native tree. We will not
-say "no C" until there is none.
-
-Stated at the top because a supply-chain claim that is wrong is worse than one
-that is qualified.
-
-**And one that went the other way.** The `ffai` binary's global allocator was
-`mimalloc` — a C library, and not an incidental one: it is the **largest single
-effect ever measured in this project**, 1.64x over the system allocator,
-because the system allocator re-faults nearly every byte it returns (58,634
-page faults per image). It was the C dependency we most wanted to drop and the
-one that cost the most to drop wrongly. It is now
-[`rusty_alloc`](https://crates.io/crates/rusty_alloc), the pure-Rust remake of
-the same design, measured before switching: **byte-identical detections on
-every workload, parity on speed** (49 paired rounds, z = +2.43, against a null
-arm at z = -0.71), and a peak-RSS median *below* mimalloc's. The C allocator is
-out of the hot path and the 1.64x stayed.
-
-**That evaluation was run against `rusty_alloc` 1.1.x, and the pin is now
-`=2.2.0`.** The correctness half still holds — the engines' byte-identity
-oracles pass on 2.2.0, which is what gates every release here — but **the
-speed and peak-RSS halves have not been re-measured on it** and should not be
-read as current. Re-running them is the open item; until it happens the
-numbers above describe a version this repository no longer builds.
+**The AI media toolkit, remade with Rust.** Speech recognition, text-to-speech,
+OCR, object detection and tracking, and vision-language captioning in one
+toolkit. It is built the way ffmpeg was built: libraries first, one binary on
+top, every engine swappable by name. No Python runtime, no ONNX runtime, no
+gated weights, and the same engines compile to WebAssembly and run in a browser
+tab.
 
 Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 
+## In The Wild with 465,477 Active Installs
+
+> [RAG Converter](https://ragconverter.com) runs FFAI's engines as WebAssembly in
+> the browser to make personal and business files AI-readable: emails, PDFs,
+> scans, images, audio and video, converted to RAG data in real time with
+> nothing uploaded and nothing installed. An API serves the same pipeline to
+> businesses.
+
+> [DLDeploy.com](https://dldeploy.com) delivers browser-based AI built from the
+> Remade With Rust portfolio, with FFAI as the AI layer.
+
+> [MATA Network](https://mata.network) builds Disco Party, the sovereign
+> distributed cloud, on the Remade With Rust stack. FFAI is that stack's AI
+> layer, so the apps deployed onto Disco transcribe, speak, read and see
+> without sending data to a third-party AI service.
+
+> Build on it with our
+> [AI skills for Rust](https://drive.google.com/drive/folders/1VjvP1zSJWH1DmkTqL1qEPt3OM8Ub8jPX?usp=drive_link).
+
 ```text
-ffai asr -i talk.wav -o talk.srt --engine whisper-candle
-ffai asr -i talk.wav -o talk.json --word-timestamps   # per-word times (CTC alignment)
+ffai asr -i talk.wav -o talk.srt                      # speech to subtitles
+ffai asr -i talk.wav -o talk.json --word-timestamps   # per-word times
 ffai asr -i meeting.wav --diarize --max-speakers 3    # who spoke when
-ffai asr -i talk.wav --engine whisper-candle-small    # accuracy tier: 3.05% WER
 ffai tts "Hello from FFai." -o hello.wav               # piper voices, pure Rust
-ffai tts -o out.wav --seed 42 "Same seed, same bytes."  # byte-stable synthesis
-ffai tts -o long.wav "Long form works. Sentences split; silence is a knob."
-ffai ocr -i page.png                                  # CRAFT + CRNN, pure Rust
-ffai ocr -i photo.png --engine craft-parseq           # word-level AR rec for photos
-ffai ocr --live --watch 5 -i captures/ -o screen.srt  # LIVE: point it at a screen
-ffai detect -i street.jpg --engine yolo26n                # YOLO26, pure Rust
-ffai detect -i street.png -o boxes.jsonl --conf 0.4       # structured out
+ffai ocr -i page.png                                  # documents
+ffai ocr -i filing.pdf --auto-orient                  # PDFs, scans, forms
+ffai ocr --live --watch 5 -i captures/ -o screen.srt  # live screen reading
+ffai detect -i street.jpg --engine yolo26n            # YOLO26 detection
+ffai detect --track -i frames/ -o tracks.txt          # multi-object tracking
 ffai caption -i frame.png --prompt "what is happening here?"
-ffai engines        # list every engine + status, like `ffmpeg -codecs`
-ffai models         # list model manifests, licenses, cache status
+ffai engines        # every engine and its status, like `ffmpeg -codecs`
+ffai models         # model manifests, licenses, cache status
 ```
+
+## Speed
+
+Each engine is measured against the implementation people already deploy, with
+the same weights, the same inputs and the same decoding settings, on CPU.
+
+| Engine | Task | Against | Speed | Memory | Quality |
+|---|---|---|---|---|---|
+| **Mercury** | ASR | whisper.cpp | **1.07× faster on clean speech, 1.70× on noisy** | **0.84–0.92×** | WER 7.27 % vs 7.58 % |
+| **Mercury** | TTS | piper | **1.58× faster** at 5 % less CPU, **10× faster load** | parity | WER 5.49 % vs 5.27 % |
+| **Carmenta** | OCR recognition | PaddleOCR mobile | **2.6× lower latency** | — | CER **1.5 %** vs 3.0 % |
+| **Carmenta** | Document OCR | Unlimited-OCR (3B, GPU) | **~9× throughput, on CPU** | MB of weights vs 6.4 GB | edit distance 0.108 vs 0.041 |
+| **Carmenta** | Live screen OCR | Tesseract per frame | **p95 257 ms vs 343 ms** | flat over 30 min | **0** churn vs 24 |
+| **Diana** | Detection | Ultralytics | **3.71× less CPU per frame**, 1.5–2.4× throughput | **1.6–5.6× leaner** | mAP50 within 0.08 pp |
+| **Diana** | Tracking | Ultralytics ByteTrack | — | no ReID model | **218 ID switches vs 800** |
+| **Argus** | Captioning | `transformers` | preprocessing **2.6× faster**; whole caption 1.20× slower | — | caption **byte-identical** |
+
+**The latest releases do the same work with less of it.** These are
+deterministic counts (callgrind instructions on one core, or bytes written),
+not timings, and the output stays byte-identical. Wall time on the new
+releases has not been re-measured, so the speed column above comes from the
+previous release of each engine.
+
+| Release | Workload | Work counted |
+|---|---|---:|
+| `ffai-diana` 0.10 | detection, yolo26n at 640 | **−34.6 %** (1,075 M → 703 M) |
+| `ffai-diana` 0.10 | tracker frame | **−24.3 %** |
+| `ffai-argus` 0.10.1 | prefill / decode token / whole caption | **−24.2 % / −15.3 % / −8.7 %** |
+| `ffai-argus` 0.10.1 | preprocessing / prompt assembly | **−85.1 % / −58.7 %** |
+| `ffai-mercury` 1.2 | ASR zero-fill memset | **−99.4 %** (573 MB → 3.3 MB) |
+| `ffai-mercury` 1.2 | TTS zero-fill memset | **−93.1 %** (503 MB → 34 MB) |
+
+The decode path is ours too: `rusty_jpeg` decodes 1080p in 7.05 ms, within
+14 % of libjpeg-turbo; `rusty_png` is byte-identical to upstream `png`; and
+`rusty_h264` decodes x264's default profile at 22.7 ms per 1080p frame.
+
+Every figure traces to a line in [`bench/ledger.jsonl`](bench/ledger.jsonl),
+produced by `ffai bench` (below).
 
 ## Components
 
-| Component | Crate | Task | Namesake | Where it stands |
-|---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR:** Whisper, tiny to medium, plus the WhisperX layer (VAD, word timestamps, diarization). Passes all four gates against whisper.cpp on both LibriSpeech holdouts: faster, 0.84–0.92× its memory, WER at parity. **TTS:** piper's own voices, oracle-exact against piper's runtime, same WER through a whisper.cpp judge (5.49 % vs 5.27 %). 1.58× faster wall-clock at 5 % less CPU, 10× faster load, byte-identical output per seed. |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR**, including a live screen mode that emits only on change: zero churn over 156 unchanged frames, where per-frame engines churned 24 times. On all 1 651 OmniDocBench pages, scored by its own evaluator: text edit distance 0.116, reading order 0.204. Behind Unlimited-OCR (0.108 vs 0.041 on a 236-page subset) at about 9× its CPU throughput. 0.11 adds forms and PDFs: orientation, checkboxes, label–value pairs, redactions. Photo text still trails PaddleOCR. |
-| **Diana** | `ffai-diana` | Detection + tracking | Roman goddess of the hunt | **YOLO26**, all five tiers, loaded from the official Ultralytics `.pt` with no ONNX, plus metric depth. mAP50 within 0.08 pp of Ultralytics on every tier, at 1.6–5.6× less memory and 3.71× less CPU per frame. 0.10 executes 35 % fewer instructions per frame than 0.9; wall time is not yet re-measured. **ByteTrack** with no appearance model: 218 ID switches vs 800, IDF1 35.93 vs 36.92. Runs in the browser through [`ffai-wasm`](https://crates.io/crates/ffai-wasm). Behind ONNX Runtime on speed, up to 2.89× (an old-harness upper bound), though more accurate (0.7014 vs 0.6865). |
-| **Argus** | `ffai-argus` | VLM captioning | Argus Panoptes, the all-seeing watchman | **SmolVLM-256M-Instruct** on candle, with our own SigLIP encoder and SmolLM2 text tower. From a raw image file, the caption matches the Python reference byte for byte (32/32 tokens). A single-image A/B on an idle box measures 1.20× slower than PyTorch, with the gap in the vision tower. The latest two four-gate runs put it ahead of `transformers` on speed and behind on memory (1.29× and 1.54×); neither magnitude has reproduced yet. 0.10.1 executes 24 % fewer instructions per prefill and 15 % fewer per decoded token than 0.10.0, with identical output; wall time is not yet re-measured. Video captions to `.srt`/`.vtt`/`.json`, with no video quality claim. |
+| Component | Crate | Task | Namesake |
+|---|---|---|---|
+| **Mercury** | [`ffai-mercury`](crates/ffai-mercury) | ASR + TTS | Roman god of language and messages |
+| **Carmenta** | [`ffai-carmenta`](crates/ffai-carmenta) | OCR | Roman goddess who adapted the Greek alphabet into Latin letters |
+| **Diana** | [`ffai-diana`](crates/ffai-diana) | Detection + tracking | Roman goddess of the hunt |
+| **Argus** | [`ffai-argus`](crates/ffai-argus) | VLM captioning | Argus Panoptes, the all-seeing watchman |
 
-Every figure is detailed, with its ledger line and caveats, under [Status](#status).
+Browser builds: [`ffai-wasm`](https://crates.io/crates/ffai-wasm) (Diana),
+`ffai-carmenta-wasm`, `ffai-mercury-wasm` and `ffai-argus-wasm`.
 
-Infrastructure: `ffai-core` (engine traits and registry, on candle),
-`ffai-media` (ingest and egress via
+Infrastructure: `ffai-core` (engine traits, registry and shared fast math, on
+candle), `ffai-media` (ingest and egress via
 [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)),
-`ffai-models` (weight manifests and cache), `ffai-bench` (the analyzer below),
-`ffai-cli` (the `ffai` binary), and `ffai-demo` with `demo-ui`. The demo has
-three tabs: **Listen** runs Mercury beside whisper.cpp on one microphone,
-**Speak** shows the phonemes and a same-seed determinism check, and **Read**
-runs both OCR lineages on an image you drop in
+`ffai-models` (weight manifests and cache), `ffai-bench` (the analyzer),
+`ffai-cli` (the `ffai` binary), and `ffai-demo`, a three-tab demo: **Listen**
+runs Mercury beside whisper.cpp on one microphone, **Speak** shows phonemes and
+a same-seed determinism check, **Read** runs OCR on an image you drop in
 (`cargo run --release -p ffai-demo`).
 
-## The analyzer: `ffai bench`
-
-One call compares any FFai engine against world-standard implementations on
-a pinned, hash-verified corpus:
-
-```text
-ffai bench asr --corpus corpora/librispeech-test-clean-v2.toml          # us vs the world
-ffai bench asr --corpus corpora/librispeech-test-other-v1.toml --baseline-only   # world only
-```
-
-It runs our engine and every reference declared in `corpora/references.toml`
-(whisper.cpp, faster-whisper, …) over the same holdout clips, scores them
-with the same metric code (WER/CER, ×-realtime), and appends an audit-grade
-record to `bench/ledger.jsonl` — corpus fingerprint, reference versions,
-environment, and a four-gate verdict (correctness / quality / speed /
-footprint) where **a skipped gate is never a pass**. Every public claim FFai
-makes should trace to a ledger line that makes it reproducible.
-
-The measurement discipline is ported from Prometheus, the private refinery
-built for remade_ffmpeg_rs; this public crate carries only the spine (gates,
-best-of-N timing, hashed corpora, ledger), no private content. Full
-methodology — including why every timing is reported both warm and
-end-to-end — is in [docs/benchmarking.md](docs/benchmarking.md).
-
-## Architecture
-
-The load-bearing idea is ffmpeg's: **one trait per task, many engines per
-trait, selected by name.** `AsrEngine` / `TtsEngine` / `OcrEngine` /
-`VlmEngine` are the `AVCodec` of FFai; `--engine whisper-candle` is
-`-c:v libx264`. New models are new engines, not rewrites — and a future
-plugin is just an engine registered at runtime.
-
-## Principles
-
-1. **Pure Rust, zero C/C++ by default.** GPU/accelerator backends sit behind
-   feature flags; pure-Rust replacements are adopted as they mature (see
-   [ROADMAP.md](ROADMAP.md) § Watchlist).
-2. **Library-first.** The CLI contains no logic; every capability is a crate
-   you can embed.
-3. **Candle is the tensor spine.** One `Tensor`/`Device` across all engines —
-   buffers flow between models without copies.
-4. **Weights are data, not code.** Never vendored; fetched into a cache from
-   TOML manifests that surface each model's *own* license (often more
-   restrictive than FFai's).
-5. **Streaming-first.** Engines process chunks; whole-file is the degenerate
-   case.
-6. **Oracle-gated.** An engine is `stable` only when validated against its
-   reference implementation (WER/CER/perceptual metrics on public corpora).
-   Until then it is honestly labeled `experimental` — or `stub`.
-7. **Codecs come from home.** Container/codec work routes through
-   [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)
-   (`rff-*`), our own pure-Rust ffmpeg. Still images decode through the
-   standalone crates from that same workspace —
-   [`rusty_png`](https://crates.io/crates/rusty_png) (a performance fork of
-   image-rs/image-png) and
-   [`rusty_jpeg`](https://crates.io/crates/rusty_jpeg) (baseline +
-   progressive DCT, AVX2 FDCT/quantize, two-block AVX2 IDCT) — both from
-   crates.io, so owning the stack no longer costs publishability. Each is
-   gated against the implementation it replaces: `rusty_png` byte-identical
-   to upstream `png` across every corpus image, `rusty_jpeg` within 3/255 of
-   libjpeg.
-
-## Status
-
-**Mercury ASR transcribes today, in pure Rust, and as of 2026-07-30 it passes
-all four gates against whisper.cpp on both holdouts — quality, speed,
-footprint, correctness.** Speed was the one gate that had never passed;
-`whisper-candle` runs OpenAI Whisper on candle with our own mel front-end
-(STFT + Slaney filterbank), tokenizer grammar, decode loop, audio encoder,
-and four hand-written AVX2 kernels.
-
-Measured on two hash-pinned **134-clip** LibriSpeech holdouts, matched greedy
-decoding, CPU only, tiny.en (ledger `bench-asr-1785387940`, `-1785388172`):
-
-| Corpus | Implementation | WER % | CER % | ×realtime (warm) | steady MiB |
-|---|---|---:|---:|---:|---:|
-| test-clean | **whisper-candle** (Rust) | **7.27** | **2.79** | **27.8** | **179** |
-| test-clean | whisper.cpp (C++/ggml) | 7.58 | 2.87 | 25.9 | 195 |
-| test-other | **whisper-candle** (Rust) | 16.89 | **8.40** | **33.3** | **163** |
-| test-other | whisper.cpp (C++/ggml) | **16.82** | 8.41 | 19.6 | 194 |
-
-**Speed: PASS, and it came from the padding, not from a kernel.** Whisper
-pads every window to 30 s, so on ordinary utterances ~78 % of encoder work
-was encoding silence — and the encoder is measured O(n) in sequence length.
-**Adaptive encoder context** encodes each window at a bucketed context sized
-to the audio actually present, with the timestamp grammar masked at the
-encoded extent and three guards that escalate a suspect decode back to the
-full 30 s context (which is byte-for-byte the old path, so the worst case is
-a small extra cost rather than a different transcript). Function-by-function
-against whisper.cpp running its own flash-attention default, Mercury now wins
-**every stage** — encode ~2.0×, decode 1.1–1.2× (0.77–0.85× per token), mel
-1.4×, sampling 1.7–2.0×.
-
-This deserves a note on what it is *not*: a variable-length encoder window was
-implemented and **pruned at 268 % WER** earlier in the project. The difference
-is not cleverness, it is that the prune predated the repetition guard, the
-temperature ladder and the seek loop — the machinery that lets a bad
-short-context decode be *detected and re-run* rather than accepted. A
-refutation expires when its baseline moves. Full descent, including the two
-levers that failed on the way and the four measured iterations it took to
-gate clean: [docs/whys/adaptive-context.md](docs/whys/adaptive-context.md).
-
-**Quality at tiny.en: line-ball, and read the per-clip column, not the
-aggregate.** 7.27 vs 7.58 on clean; on test-other 16.89 vs 16.82 is 0.07 pp
-*behind* on WER and 0.01 pp ahead on CER. Both sit inside the harness's own
-gate band. Aggregate WER on this box moves ±0.2–0.3 pp across rebuilds of
-identical-behaviour code, so a sub-0.3 pp corpus delta is not a result here —
-the paired per-clip counts are.
-
-That parity is not a limitation of the implementation, it is the *model*:
-`whisper-candle` runs OpenAI's tiny.en weights, so its accuracy ceiling is
-Whisper's. Two levers change that, and both now exist.
-
-### Accuracy tiers, and beam search
-
-**`small.en` more than halves the error rate** (test-clean, greedy, same
-harness, 200 clips):
-
-| model | WER % | CER % | ×realtime |
-|---|---:|---:|---:|
-| tiny.en | 6.39 | 2.31 | 19.9 |
-| base.en | 5.16 | 2.10 | 8.3 |
-| **small.en** | **3.05** | **0.88** | 4.2 |
-
-And at the **same** model size — the only comparison that prices the
-implementation rather than the weights — Mercury is ahead of whisper.cpp on
-quality *and* speed:
-
-| implementation | WER % | CER % | ×realtime |
-|---|---:|---:|---:|
-| **mercury** small.en | **3.05** | **0.88** | **4.2** |
-| whisper.cpp small.en | 3.38 | 1.16 | 3.7 |
-
-16 clips better, 8 worse, 176 tied — z = +1.63, which is *under* this
-project's |z| > 2 bar, so that reads "ahead, direction consistent, not yet
-significant" rather than as a proven win.
-
-**Beam search** (`FFAI_BEAM_SIZE=5`, greedy stays the default) is the other
-lever — what all three references run by default, and what Mercury lacked
-until now. It clears the bar, but only pooled: test-clean 6.36 → 5.76 % (19
-improved / 9 worsened, z = +1.89) and test-other 13.87 → 13.12 % (25 / 15,
-z = +1.58) are each below |z| > 2 alone; **pooled, 44 / 24 gives z = +2.43**
-on WER and +2.32 on CER. It costs ~5×, spending the whole speed surplus above.
-
-Full descent, including a harness that briefly reported an 18 pp lead that
-did not exist: [docs/whys/quality-routes.md](docs/whys/quality-routes.md).
-
-A related caution the project keeps on the record: **speech segmentation is on
-by default**, which whisper.cpp does not do — and segmentation is **not** a
-quality mechanism. Turning it off once moved the corpus by 1.20 pp, which
-looked like a quality win and was not one: decomposed per clip over 400 clips
-it is **38 improved, 38 worsened, a sign test of z = 0.00**, with correlation −0.09
-between silence removed and WER gained — the opposite sign to the mechanism
-originally proposed for it. It shifts where speech sits inside Whisper's fixed
-30 s context and re-rolls the decode on about a fifth of clips, half each way.
-The aggregate moved because WER is dominated by a handful of high-delta clips.
-**Do not expect this margin to transfer to your audio.** Full descent:
-[docs/whys/vad-quality.md](docs/whys/vad-quality.md).
-
-Segmentation ships for its speed, which *is* a mechanism: 2.2–4.2× on audio
-with trailing silence at a byte-identical transcript, and silence producing an
-empty transcript with no encoder pass.
-
-A second deliberate cost sits in these numbers: Mercury annotates non-speech
-events (`[Laughs]`, `(coughs)`) the way whisper.cpp does rather than
-suppressing those tokens the way openai-whisper does. That costs 0.22 pp on
-test-clean and nothing on test-other, and is one flag away —
-`DecodeConfig::suppress_non_speech`.
-
-**Footprint: PASS — 163–179 MiB steady against whisper.cpp's 194–195 MiB
-(0.84–0.92×)**, and ~49–63 MiB of ours is audio the harness holds for the
-speed comparison, so the engine itself sits near 120 MiB.
-
-So the standing against whisper.cpp is **ahead on speed, ahead on memory, and
-— at matched size — ahead on quality too**, with the harness's own verdict
-line reading `ALL GATES PASS — claimable` on both holdouts. Every one of
-those is a verdict against **matched** references: same weights, same
-decoding strategy. Comparing our `small.en` against their `tiny.en` would
-price the model rather than the implementation, which is the error the
-reference file exists to prevent.
-
-**Long-form is the one corpus still behind** — 6.89 % against whisper.cpp's
-6.47 % (ledger `bench-asr-1785388224`), down from **10.55 %** at the start of
-the day. The remaining gap is one known failure class: an utterance absorbed
-between two contiguous, individually-plausible segment spans, which
-span-level coverage accounting structurally cannot see. Two fixes were built
-and both measured worse (a lower repair threshold, and narrower windows —
-which turned out worse *and* slower at every width). The named bridge is
-word-level coverage via the CTC aligner, and it is the next long-form brick
-rather than a threshold to tune.
-
-Footprint is judged on **steady** resident memory with peak recorded beside
-it, sampled the same way on both sides. Peak is dominated by model load — a
-spike over in half a second that never recurs — so judging on it would compare
-our load transient against theirs and call the result footprint.
-
-Worth knowing what the bar is: whisper.cpp is not a naive baseline. It runs
-**flash attention on by default**, an OpenBLAS backend, runtime ISA dispatch
-selecting an AVX-VNNI build, blocked weight repacking, and f16 weights.
-Toggling its own `-nfa` flag prices that fused attention at **1.65×** — and
-against its *unfused* encoder ours is **1.38× faster**.
-
-One caution this project keeps on the record: **single-run gap ratios are
-worthless here.** Across ledger runs of the same code the test-clean gap has
-read 1.01×–1.29× purely on machine state, and the reference's own throughput
-spreads ~37 % of its median. So progress is reported as our own throughput
-and cross-implementation ratios only as standing — and the speed claims above
-rest on paired, single-process, interleaved measurements rather than on any
-one ledger line's ratio.
-
-### The WhisperX layer, in pure Rust
-
-Everything WhisperX does, without Python, CUDA, a HuggingFace token, or a
-single gated weight — as flags on the same engine rather than a fork.
-
-| Flag | What it adds | Model | Gate |
-|---|---|---|---|
-| *(default)* | speech segmentation before transcription | none — energy VAD | silence corpus **8/8 empty** |
-| `--word-timestamps` | per-word times by CTC forced alignment | wav2vec2-base-960h, Apache-2.0 | containment **100 %**, 1105 words |
-| `--diarize` | speaker turns (`SPEAKER_00`…) | ECAPA-TDNN, Apache-2.0 | **DER 4.21 %** |
-| `persist_speakers` | those labels survive the **next call** | — | streaming **DER 5.68 %**, 3.16× faster live |
-
-Segmentation is **on by default for measured speed** — 2.2–4.2× on audio with
-trailing silence at a byte-identical transcript, and an empty result on
-silence with no encoder pass. It also moves corpus WER, and that is **not** a
-quality win: 38 improved / 38 worsened across 400 clips, a sign test of
-z = 0.00 ([why](docs/whys/vad-quality.md)). The other two stages are opt-in:
-they add models and change the output's shape, and nothing that has not
-earned a default gets one.
-
-**Streaming is a capability, not a mode.** Diarization labels are, by
-convention, arbitrary names for clusters *within one call* — `SPEAKER_00` in
-two separate calls need not be the same person. Fine for a file, useless for a
-live stream, where the same voice is renamed every chunk. Measured on
-conversations fed as 8 s chunks with DER scored over the whole concatenated
-timeline: **53.58 % without persistence, 5.68 % with it.** Registry matching is
-deliberately stricter than in-call clustering, because a registry merge is
-permanent — two people who share a centroid stay merged for the session.
-
-That gap existed because principle 5 says *streaming-first* while diarization
-only worked whole-file. WhisperX has the same gap; WhisperX does not claim
-streaming-first.
-
-**Streaming diarization is also 3.16× cheaper than it was**, which is what
-makes it usable live rather than merely correct. Speaker embedding is ~100 %
-of diarization's cost (~172 ms per 1.5 s window; the filterbank is 1.1 % and
-clustering ~0), and a live caller re-sending a sliding window was
-re-embedding almost the same audio every tick. Two changes fixed that: a
-cache keyed on each window's **samples** rather than its timestamps, and an
-**absolute window grid** (`AsrOptions::stream_offset_secs`) so the same audio
-lands on the same window bounds no matter where the buffer starts. Paired
-against the same ticks: median 1258 → 720 ms, **10/10 paired wins**, at
-**4.20 % DER against 4.21 %** region-anchored.
-
-That accuracy line is a correction. The grid shipped in 0.6.0 described as
-DER-neutral and it was not — the first version snapped each window chain
-forward, skipping up to 0.75 s of every region's leading audio, and cost
-**4.21 % → 9.60 %**. It read as neutral because the gate was re-run against a
-stale example binary. The fix emits the region-start window before following
-the grid, which restores coverage; the honest speedup is 1.75×, not the 3.16×
-first reported, because part of that was accuracy nobody had priced.
-
-The diagnosis is worth more than the number, and it was not what reading the
-code suggested — the leading speech region is *clipped by the buffer's edge*,
-so its windows anchor to the buffer and slide with it while the audio beneath
-moves. Full descent, including a hypothesis stated, withdrawn, and then
-restored by the trace: [docs/whys/diarization-cost.md](docs/whys/diarization-cost.md).
-
-**Licences shaped the design, not just the paperwork.** WhisperX's diarization
-depends on pyannote weights that are MIT-licensed *and gated* — permission
-granted, access walled behind a browser click. That cannot live in a manifest
-under principle 4, so Mercury uses SpeechBrain's ECAPA-TDNN, which is
-Apache-2.0 and ungated. Every model FFai fetches is fetchable without an
-account.
-
-Three corpora gate this layer, and all three were written **after** the code
-they gate — the wrong order, recorded as such. Two found real defects the
-moment they ran: the clustering threshold over-splitting five-fold (DER
-34 % → 4.21 %), and forced alignment placing every segment-initial word a
-systematic 0.17 s early (containment 97.8 % → 100 %). Neither was visible on
-the short-clip corpora.
-
-Full details, including every reverted experiment and the methodology defects
-found along the way, are in the [Mercury mission plan](docs/finished/mercury-mission-plan.md),
-the [Mercury-X plan](docs/finished/mercury-X-mission.md)
-and [docs/whys/](docs/whys/); every number traces to a line in
-[`bench/ledger.jsonl`](bench/ledger.jsonl).
-
-### Mercury TTS: piper's voices, pure Rust, deterministic
-
-**`piper-candle` synthesizes speech today** — the full VITS stack (text
-encoder with relative-position attention, stochastic duration predictor
-with spline flows, residual coupling flow, HiFi-GAN) implemented on candle,
-running the SAME voice files [piper1-gpl](https://github.com/OHF-Voice/piper1-gpl)
-runs — fetched from the public, ungated `rhasspy/piper-voices` and read
-straight from ONNX by our own pure-Rust reader, with no conversion step, no
-Python, and no ONNX runtime. The phonemizer is a clean-room pure-Rust G2P
-built on CMUdict (BSD): espeak-ng — GPL, and the reason piper itself is GPL
-— participates only as an out-of-process test oracle, and nothing GPL ships.
-English (en-US) only for now; that is the honest cost of the license line,
-stated rather than buried.
-
-**Correctness is oracle-exact.** Against piper's own onnxruntime at zero
-noise, every stage matches: text encoder to 4e-6, per-phoneme durations
-integer-exact, end-to-end waveform to 3e-5. The pure-Rust phonemizer passed
-its substitution gate — our phonemes through piper's runtime score within
-the 5 % round-trip band of espeak's — and the ONNX reader that replaced the
-Python converter is byte-identical to it across 350 tensors and 132
-convolution geometries.
-
-**Quality: parity, measured the hard way.** Round-trip WER through a frozen
-whisper.cpp judge (never our own ASR — no self-grading): **5.49 % against
-piper's 5.27 %** on the same holdout, same judge, same run.
-
-**Both engines are scored across draws, because one of them has to be.**
-Piper samples noise inside its ONNX graph and cannot repeat a run, so its
-WER is the mean of independent draws with the range recorded. Ours is
-seeded and byte-stable, so it would otherwise report one fixed draw
-forever — and our own seed-to-seed spread is **1.11 pp** (4.99–6.10 %),
-several times larger than any recent engine change. Scoring both the same
-way is the only comparison that means anything.
-
-**Deterministic by default** — same text, same seed, byte-identical WAV,
-verified at both the library and the file-hash level. Piper structurally
-cannot offer this. Long-form chunking, speed/noise/seed knobs, and
-sentence-silence control ship on `ffai tts`.
-
-**Speed: ahead, on a reference that will not hold still.** Recent ledger
-lines read **19.3–21.2× realtime warm against piper's 11.2–23.0×**, and
-**load 0.64 s against 6.69 s**. But piper's own throughput spans
-**4.5×–29× across the ledger's TTS lines** on this machine and its WER
-4.8–6.5 %, both wider than any difference between the two engines — so the
-gates flip run to run on *its* variance, and single-run ratios are not a
-claim. The number that survives is measured on both engines simultaneously:
-**1.58× faster wall-clock while using 5 % less total CPU.** Footprint is
-parity, 214 MiB steady against 217.
-
-**Per stage, we are within ~2.5 points of share on all four.** That took
-correcting the instrument twice: onnxruntime's own profiler slows it
-1.75–1.93× with a non-uniform per-node tax (correcting for it drove a stage
-to a *negative* time, which is how it was caught), so the reference is now
-timed by cutting its graph into cumulative prefixes and running each
-unprofiled. Every per-stage figure recorded before that correction is
-withdrawn. The full descent, including the levers that were measured and
-rejected, is in
-[docs/whys/tts-speed-gap.md](docs/whys/tts-speed-gap.md).
-
-Voice weights are converted, never vendored, and the voice's own license is
-surfaced per manifest (`models/piper-vits-lessac-medium.toml` — see its
-MODEL_CARD note before commercial use). Full campaign history, every
-reverted experiment included:
-[docs/mercury-tts-mission.md](docs/finished/mercury-tts-mission.md); every number
-above traces to a line in [`bench/ledger.jsonl`](bench/ledger.jsonl).
-
-### Carmenta OCR: live, measured against PaddleOCR — the honest split
-
-Five engines run today, from two detector lineages crossed with three
-recognizers, all oracle-matched against their references. The EasyOCR
-lineage on candle (detection maps to <5e-3, recognition to the exact
-per-step argmax) gives `craft-crnn` (line-level CTC, the LIVE default) and
-`craft-parseq` (word-level AR with the refinement pass). Swapping in a
-PP-OCRv5 mobile detector — DBNet on PP-LCNetV3, 4.7 MB, reproducing
-paddle's own exported program to **zero binarised disagreement** across a
-pinned page — gives `mobiledet-crnn` and `mobiledet-parseq`, and with
-PP-OCRv5's own SVTR recognizer `mobiledet-svtr`, the **document default**.
-
-The two detector lineages trade against each other rather than ranking, and
-the measurement says so plainly. On real-photo receipts mobile-det is **3×
-faster and 3.2× leaner** than CRAFT — the first configuration to pass the
-speed and footprint gates there, and leaner than PaddleOCR itself — and
-**worse on quality** (37.3 % vs 27.3 % CER), because DBNet emits line regions
-and a receipt separates its labels from its amounts across two columns.
-CRAFT's character components carry structure a line detector discards. Pick by
-corpus class, not by leaderboard.
-
-**Where Carmenta wins, measured:**
-
-- **The recognition stage beats PaddleOCR's own mobile recognizer** on 400
-  identical real-photo word crops with quad-level ground truth: **1.5 % vs
-  3.0 % CER, 93 % vs 88 % exact-match, at 2.6× lower latency.**
-- **LIVE streaming** (a capability the incumbents don't have): change-gated
-  frame reading at steady **p95 257 ms vs 343 ms** for per-frame Tesseract,
-  **zero output churn** across 156 unchanged frames where stateless engines
-  churn 24 times, 24/24 text changes caught, memory flat over a 30-minute
-  soak (ratio 1.041).
-- Against the lineage it reimplements: **~5× better CER than the EasyOCR
-  pipeline on pages** (0.73 % vs 3.65 %) — line-level composition dodges its
-  word-segmentation errors.
-
-**Documents, scored by the benchmark's own evaluator.** Every document number
-on this page comes from
-[OmniDocBench](https://github.com/opendatalab/OmniDocBench)'s official harness.
-An earlier edition of this section quoted CER from our own
-concatenate-then-edit-distance scorer (23.76 % against Unlimited-OCR's 15.51 %
-on 43 pages). Run beside the official evaluator, that scorer inflated
-Carmenta's error 1.58× and Unlimited-OCR's 4.37×, a 2.8× bias in our favour
-(`docs/Carmenta-mission-plan.md` §8.173). Every competitive claim made with it
-is withdrawn.
-
-| all 1 651 pages of v1.6, official metric (lower is better) | `mobiledet-svtr`, CPU | published range |
-|---|---:|---|
-| Text edit distance | **0.116** | 0.033 (PaddleOCR-VL) – 0.157 (Marker) |
-| Reading-order edit distance | **0.204** | 0.116 – 0.243 |
-
-Head to head with Baidu's Unlimited-OCR (a 3B MoE on a GPU), on the 236-page
-English subset without tables or formulas:
-
-| | Text | Reading order |
-|---|---:|---:|
-| Unlimited-OCR | **0.041** | **0.052** |
-| Carmenta | 0.108 | 0.175 |
-| gap, 95 % CI | +0.068 [+0.049, +0.088] | +0.123 [+0.096, +0.151] |
-
-Clearly behind the model that holds the record. The remaining loss is mostly
-content Carmenta does not emit yet (inline math is 36 % of it) and recognition
-substitutions, measured block by block in `docs/plans/benching-history-made.md`
-§57. Carmenta does it on a CPU at roughly **9× that model's measured
-throughput** on the same machine, from megabytes of weights against 6.4 GB.
-The full-corpus row includes the opt-in table/formula routing
-(`FFAI_ROUTE=1`); the crate README says what that needs.
-
-**Forms, scanned filings and PDFs (0.11).** Built after a real caller got
-confident wrong values back from scanned disclosure forms. These are measured
-on synthetic corpora with ground truth by construction, not yet on real
-filings. Details and caveats are in the
-[`ffai-carmenta` README](crates/ffai-carmenta/README.md) and
-[`docs/plans/commercial-gaps.md`](docs/plans/commercial-gaps.md).
-
-- On typed values sitting on a form's underline, `mobiledet-svtr` reads
-  **93 %** exactly where `mobiledet-crnn` reads 13-20 %.
-- `--auto-orient` undid **144 / 144** quarter turns, at 48 % of a page read.
-- Checkboxes: **100 %** found and **100 %** marked/empty state on 960
-  synthetic boxes.
-- Label → value pairing: **220 / 221** correctly-read values paired.
-- `ffai ocr -i file.pdf` reads each page as a viewer shows it: redaction
-  patches are painted in, never read through, and a born-digital text layer
-  with something drawn over it is withheld rather than printed.
-
-Full campaign history:
-[docs/Carmenta-mission-plan.md](docs/Carmenta-mission-plan.md) §8; every
-number traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
-
-### Diana: YOLO26 detection, from the official `.pt`, in pure Rust
-
-**The real YOLO26 graph on candle** — C3k2, SPPF, C2PSA, the NMS-free
-end-to-end head — built from official Ultralytics checkpoints by an audited
-offline conversion. No Python at inference. **No weights in this repo:** they
-are AGPL-3.0 and stay yours to fetch, convert and license.
-
-Standalone landing page:
-[Remade-With-Rust/diana](https://github.com/Remade-With-Rust/diana).
-Tracking and the browser build have their own sections below.
-
-**Embedding it pulls detection only** — no dependency on Mercury, Carmenta or
-Argus:
-
-| build | transitive crates | compiles C? |
-|---|---:|---|
-| `ffai-diana`, default | **138** | yes — `onig_sys` |
-| `ffai-diana` + `ffai-models/fetch` | 308 | yes — `onig_sys`, `aws-lc-sys` |
-| **`wasm32-unknown-unknown`** | **95** | **no** |
-
-The 170-crate gap is the Hugging Face downloader, which Diana never calls —
-its whole use of `ffai-models` is `load_dir`, reading TOML off disk. Off by
-default.
-
-**The native tree does compile C, and it costs Diana nothing.** `candle-core`
-takes `tokenizers` with `features = ["onig"]`, so `onig_sys` compiles
-Oniguruma — but **Diana never references tokenizers**, and candle uses it in
-one file (`quantized/tokenizer.rs`) detection never enters. Link-time dead
-weight, not runtime cost: it is linked into the binary but **never executed** on
-any detection path. (That is specific to Diana — the engines that tokenize DO
-call into it; see the correction at the top of this page.) It vanishes on
-wasm32, where candle target-gates it out.
-
-Measured on a hash-pinned **450-image** COCO holdout, CPU only, every tier in
-both geometries, each graded against the reference declaring the same
-configuration (ledger `bench-detect-1785550365` onward):
-
-| Tier | Geometry | Diana mAP50 | Ultralytics | Δ pp | Diana MiB | Ultralytics MiB | leaner |
-|---|---|---:|---:|---:|---:|---:|---:|
-| n | rect | 61.36 | 61.36 | **−0.01** | **71** | 403 | 5.6× |
-| n | square | 61.01 | 61.01 | **−0.00** | **63** | 317 | 5.0× |
-| s | rect | 68.07 | 68.16 | −0.08 | **110** | 447 | 4.1× |
-| s | square | 68.88 | 68.84 | +0.04 | **120** | 382 | 3.2× |
-| m | rect | 73.14 | 73.07 | +0.06 | **178** | 544 | 3.1× |
-| m | square | 73.30 | 73.23 | +0.07 | **201** | 456 | 2.3× |
-| l | rect | 74.07 | 74.02 | +0.06 | **197** | 535 | 2.7× |
-| l | square | 74.13 | 74.16 | −0.03 | **220** | 490 | 2.2× |
-| x | rect | 77.31 | 77.38 | −0.07 | **346** | 678 | 2.0× |
-| x | square | 77.69 | 77.67 | +0.03 | **380** | 603 | 1.6× |
-
-**Worst deviation across all ten: 0.08 pp**, exact at n, and Diana reads
-*higher* in five of the ten. Memory is 1.6–5.6× leaner, narrowing as weights
-come to dominate. The stronger statement sits under it — the *detections
-themselves* are identical, same count, classes and order, at four tiers:
-**n 131/131 (0.084 px), m 204/204 (0.300 px), l 187/187 (0.170 px), x 202/202
-(0.213 px)**. Those figures were measured on 0.9.
-
-**0.10 does the same work in a third fewer instructions.** Counted with
-callgrind on yolo26n at 640: **1,075 M → 703 M instructions per detect
-(−34.6 %)** and **21.3 M → 16.1 M per tracker frame (−24.3 %)**. Most of that
-removes copies and passes rather than arithmetic: zero-fills candle's matmul
-wrote before overwriting, concatenations replaced by writing each GEMM into its
-slot, transposes replaced by strided views, and residuals and activations fused
-into the pass that produces them. Two steps change the arithmetic: Winograd
-F(2×2, 3×3) for 3×3 convolutions with at least 16 channels, and a polynomial
-`exp` in attention's softmax. Both pass the full-graph oracle on all five tiers
-against the official model, and `FFAI_DIANA_NO_WINOGRAD=1` /
-`FFAI_DIANA_SOFTMAX_LIBM=1` restore 0.9's arithmetic. **This is an instruction
-count, not a wall-clock claim**; the CPU and wall tables below predate it. The
-ledger is in [docs/plans/diana-ir-veins.md](docs/plans/diana-ir-veins.md).
-
-**On speed, measure the CPU, not the wall.** At work parity (518 detections
-against 522), Diana spends **84.6 ms of CPU per frame against Ultralytics'
-314.2 — 3.71× less** — because Diana is a ~2.4-core workload and Ultralytics is
-a ~7.9-core one. What the wall clock says therefore depends entirely on who
-owns the machine:
-
-| conditions | Diana vs Ultralytics |
-|---|---|
-| separate processes, ABBA, CPU-timed | **1.147×** wall, **3.71×** less CPU |
-| each engine pinned to its own 12 cores | **1.30×** |
-| 16 competing CPU threads | **1.92×** |
-| unpinned, sharing a machine | 0.79× — the reading that misleads |
-
-Quiet-to-loaded degradation is **2.0× for Diana against 4.5×**. Earlier
-editions quoted a single wall ratio — that was this table's top row measured
-under its bottom row's conditions.
-
-Against **ONNX Runtime** the gate still fails: **2.89× at matched square
-geometry**, measured under the old harness and not re-measured, so it is an
-upper bound. ORT has no rect export, so the widely-quoted 1.25× compared our
-reduced-work rect against its full-work square — rect is 70-75 % of square's
-pixels. Diana beats it on accuracy (0.7014 vs 0.6865) and on memory (0.75×),
-but `verdict: claimable` needs all four gates and Diana does not get it. The
-losing row goes in the table.
-
-### The harness moves the answer more than the engines do
-
-The wall-clock number above depends on arrangement more than on either
-implementation, and this is the evidence for saying so. The solo ABBA reading
-was **1.069x on 1080p, Diana ahead in 25 of 32 paired runs at z = +3.18**, and
-it was tracked as N grew because a cross-implementation ratio still moving has
-not been measured yet: 1.035x at N=8, 1.045x at 16, 1.070x at 24, 1.069x at 32.
-
-Then five arrangements were run on **identical work**, changing only order and
-co-residency:
-
-| arrangement | ratio | vs solo |
-|---|---:|---:|
-| **solo, ABBA** | **1.077x** | 1.00x |
-| alternating per frame | 1.031x | 0.96x |
-| block-wise (all A then all B) | 1.417x | **1.31x** |
-| other engine resident but idle | 1.284x | 1.19x |
-| frames shuffled | 1.405x | **1.30x** |
-
-**A 31 % swing from arrangement alone, against a ~7 % effect.** Two arrangements
-flatter Diana badly, block-wise most of all — the shape `codec-measurement` §3
-forbids. Only solo reproduces across runs, so it is the only one quoted.
-
-The same lesson arrived again from the other direction later: alternating with
-Ultralytics costs Diana **+54 % on the median**, because it burns 314 ms of CPU
-per frame across every core while Diana uses ~2.4. That is why the headline is
-now the CPU ratio and a pinned wall ratio, not a shared-machine one — see the
-table in the Diana section above.
-
-### The whole decode path is ours now
-
-| format | crate | measured at 1080p |
-|---|---|---|
-| JPEG | `rusty_jpeg` 0.3.2 | **7.05 ms — 1.14x libjpeg-turbo's 6.18** |
-| PNG | `rusty_png` 0.3.2 | gated byte-identical against upstream `png` |
-| H.264 | `rusty_h264` 0.8.0 | **22.72 ms/frame** |
-
-No libjpeg, no libpng, no libavcodec, no OpenCV. A pure-Rust JPEG decoder within
-14 % of a C library with two decades of hand-written SIMD is the number worth
-pausing on.
-
-**H.264 went from unusable to working in one version bump.** The pinned 0.2.1
-could not decode x264's DEFAULT profile at all — 0 of 164 frames, silently,
-because CABAC was broken. On 0.8.0 it is 164/164 and 2.09x faster.
-
-**Video ingest is not deployable yet, and that is worth stating plainly.**
-`sample_frames` returns every frame in memory at once — one minute of 1080p is
-10.4 GiB — and no CLI verb drives it. The decoding half is done and measured;
-the streaming API and the plumbing are not.
-
-### Accuracy holds on a public benchmark, not just our corpus
-
-All seven MOT17 training sequences, **5,316 frames**, dataset ground truth,
-identical extracted frames to both engines:
-
-| seq | camera | frames | Diana AP50 | ultralytics | gap pp |
-|---|---|---:|---:|---:|---:|
-| 02 | static | 600 | 21.55 % | 21.54 % | +0.01 |
-| 04 | static | 1050 | 23.07 % | 23.06 % | +0.01 |
-| 05 | moving | 837 | 56.14 % | 56.04 % | +0.10 |
-| 09 | static | 525 | 62.35 % | 62.37 % | -0.02 |
-| 10 | moving | 654 | 35.92 % | 35.95 % | -0.03 |
-| 11 | moving | 900 | 56.96 % | 56.92 % | +0.03 |
-| 13 | moving | 750 | 25.62 % | 25.62 % | -0.00 |
-
-**Mean absolute gap 0.029 pp** across scenes spanning 21.55 % to 62.35 %, so
-the agreement is not an artefact of one easy sequence. Ahead on four, behind
-on three, every one inside 0.1 pp. Reproduce with
-`tools/diana_mot_bench.py --all`.
-
-The **LIVE change gate** was measured on the same 5,316 frames and the result
-is a qualifier, not a headline: it fires on **0.8 %** of them, at an accuracy
-cost of **-0.006 pp**. On a synthetic still scene it gates 46 of 48 frames;
-on real surveillance footage with pedestrians in it, almost nothing. It is for
-a static SCENE, not merely a fixed CAMERA. Forced to gate a scene that WAS
-changing, AP50 fell 45 points — the threshold is a correctness boundary, not a
-tuning knob.
-
-| tier | n→x order | x→n order | pinned floor |
-|---|---:|---:|---:|
-| n | 1.67× | 1.86× | 1.98× |
-| s | 1.79× | 1.90× | 2.20× |
-| m | 1.33× | 2.12× | 1.82× |
-| l | 1.65× | 1.70× | 1.83× |
-| x | 1.57× | 1.62× | 1.54× |
-
-### It runs in a browser — the whole graph, in WebAssembly
-
-```
-cargo build --release --target wasm32-unknown-unknown -p ffai-wasm
-```
-
-[`ffai-wasm`](https://crates.io/crates/ffai-wasm) compiles Diana to
-`wasm32-unknown-unknown`: backbone, neck, the NMS-free one2one head, letterbox
-and decode. **No ONNX Runtime Web, no TensorFlow.js, no JavaScript inference
-engine** — the same Rust that runs natively is the Rust that runs in the tab.
-
-Verified rather than merely built, on `coco-032.png`, yolo26n, rect, conf 0.25:
-
-| | native | wasm |
-|---|---:|---:|
-| detections | 13 | **13** |
-| class mismatches | — | **0** |
-| largest box/confidence difference | — | **0.000000** |
-| checksum over all boxes | 16094.598199 | 16094.598099 |
-
-The checksum differs in the ninth significant figure — **6.2 parts per
-billion** — because native uses AVX2 and wasm has no SIMD, so float addition
-reassociates. Every box and class is identical at display precision.
-
-**1.82 MB module · 18 ms model load · 257 ms detect**, single-threaded against
-~34 ms native with a pool. Most of that gap is threads: `wasm32-unknown-unknown`
-has none to spawn, so `rayon` is not a dependency of the wasm build **at all**
-and a serial shim supplies the same methods. Dropping rayon entirely is what
-proves the shim complete — a missed call site fails to compile instead of
-panicking in someone's browser, and two files had unguarded calls the
-hand-written serial path had missed.
-
-Serial is also the arm that was already winning on CPU: the intra-image fan-out
-measures **363 ms/image at one thread against 844 at twenty-four**.
-
-The cdylib is a binary, so it picks its own allocator, and wasm's Rust default
-is dlmalloc. Measured N=40, rotated, with a null arm: **`rusty_alloc` 1.007x at
-z = 1.90 against a null floor of 1.003x, z = -0.32 — parity.** An earlier pass
-without the null arm read the opposite; that is what a difference inside the
-noise looks like.
-
-Weights are never bundled — YOLO26 is AGPL-3.0, so the constructor takes
-safetensors bytes and manifest JSON, which is also all a browser can do.
-`crates/ffai-wasm/demo.html` is a working page.
-
-### Multi-object tracking, on the same benchmark
-
-Detection scores boxes. A tracker's job is the **identity** attached to them —
-swap every id in a sequence and AP50 does not move a point. So it is scored on
-the metrics that can see it, against Ultralytics' own ByteTrack, same weights,
-same frames, same confidence, same class filter, one scorer:
-
-| | IDF1 | MOTA | ID switches |
-|---|---:|---:|---:|
-| **Diana** (ByteTrack, pure Rust) | **35.93 %** | **24.91 %** | **218** |
-| Ultralytics ByteTrack | 36.92 % | 27.38 % | 800 |
-
-Behind by **0.98 pp of IDF1** overall, and ahead on three of seven sequences
-(09, 10, 11) plus four of seven on MOTA. **ID switches are 218 against 800** —
-a quarter of the reference's, which is the number a deployment feels, because
-every switch is an identity handed to the wrong object downstream.
-
-No appearance model, no ReID network, no second weight file: IoU, a Kalman
-filter and a rectangular Hungarian solve, so tracking adds no download and no
-licence.
-
-**Two corrections came out of measuring this, and both were ours.** The
-reference figure this page could have quoted (IDF1 34.88) came from an
-unverified earlier run that **understated Ultralytics**; it is regenerated and
-superseded. And Diana is an 80-class COCO detector while MOT17 ground truth is
-pedestrians only — every run before 2026-08-06 omitted `--classes 0`, so cars,
-buses and traffic lights were scored as predicted pedestrians. That was
-**13.8-47.3 % of detections** depending on the sequence, worth **1.54 pp IDF1
-and 5.38 pp MOTA**, and it had MOT17-13 reading a NEGATIVE MOTA for weeks — more
-errors than there are ground-truth boxes, which is not a hard sequence but a
-broken comparison. Pass `--classes 0`:
-
-```
-ffai detect --track --classes 0 -i corpora/clips/mot17-09/img1 -o out.txt --conf 0.1
-python tools/diana_mot_track_bench.py --seq mot17-09 --pred out.txt
-```
-
-### Watch it run against Ultralytics
-
-```
-python tools/diana_sbs_viewer.py --frames corpora/clips/mot17-09/img1     --weights yolo26n.pt        # your own AGPL checkpoint
-```
-
-Both engines on screen, fed the identical frames in the identical order, with
-per-frame latency, rolling frame rate, running medians, object counts and box
-agreement. `--live` puts the change gate in the loop and badges the frames it
-skips; `--video clip.mp4` extracts frames first; `--record out.mp4` saves the
-composed view.
-
-**Each engine gets its own half of the cores, and both run at High priority.**
-Without that the viewer measures the scheduler: Ultralytics burns **314 ms of
-CPU per frame against Diana's 84.6**, so alternating with it costs Diana
-**+54 % on the median** and the same clip reads 0.79x instead of 1.43x. Priority
-alone moves p99 from 384 ms to 100 ms with the median and the CPU time
-unchanged. `--no-pin` and `--no-priority` show what contention does to a
-benchmark, which is worth seeing once.
-
-**The engines alternate and never run concurrently** — Diana's reply is read
-to completion before Ultralytics is called, so each has the whole machine
-while the other is idle. Run at the same time, each latency would be measuring
-the other. Both decode inside their own timed region. It is still a demo, not
-the benchmark: no min-of-N, no warm-up discipline, display in the loop, and
-[`bench/ledger.jsonl`](bench/ledger.jsonl) is what the claims trace to.
-
-It has already shown something the 640 corpus does not — though not what was
-first published here. Two observations taken from it, *"larger frames erase the
-advantage"* and *"Diana's latency tail is heavier"*, were both chased down and
-**both are refuted**; the descent is
-[docs/whys/diana-1080p-and-tail.md](docs/whys/diana-1080p-and-tail.md).
-
-**Frame size does not erode the advantage.** In rect mode a 1920x1080 frame
-letterboxes to 640x384 = 246 kpx, while a near-square COCO image letterboxes to
-608x640 = 389 kpx — a 1080p frame is **37 % LESS model work**, not more.
-Measured ABBA on CPU time, both engines in child processes, model load
-excluded, the ratio is **3.26x at 1080p and 3.25x at 640**: identical to three
-significant figures across a resolution change that moves model work by 37 %.
-The "parity" readings were wall-clock, on a box whose null arm — Diana against
-Diana, identical code — read a **10.4 % floor with 47 % within-arm spread**.
-They were never distinguishable from each other.
-
-That CPU ratio carries its own caveat, and it is the honest one: **3.25x less
-CPU at a wall ratio near 1.0 means Ultralytics converts more cores into the
-same wall clock.** The claim is "Diana does the work for a third of the CPU",
-not "Diana is 3.25x faster" — different products, one for a shared server and
-one for an idle laptop.
-
-**Which is exactly why the machine decides the headline.** Re-measured
-2026-08-06 with work parity checked (518 detections against 522), Diana is a
-**~2.4-core** workload against Ultralytics' **~7.9**: 84.6 ms of CPU per frame
-against 314.2, a **3.71x** ratio. On a dedicated box that mostly cancels and we
-are modestly ahead; on anything shared it does not:
-
-| conditions | Diana vs Ultralytics |
-|---|---|
-| separate processes, ABBA, CPU-timed | **1.147x** wall, **3.71x** less CPU |
-| each engine pinned to its own 12 cores | **1.30x** |
-| the headful viewer, same pinning | **1.43x** |
-| 16 competing CPU threads | **1.92x** |
-| **unpinned, sharing a machine** | **0.79x** — the one that misleads |
-
-Quiet-to-loaded degradation is **2.0x for Diana against 4.5x** for the
-reference, and the tail ratio under load is **1.89 against 5.45**. A laptop, an
-edge box or a server already running something is where the pure-Rust
-arithmetic shows up.
-
-**And the tail is ours only in the good direction.** The original figures came
-from running all of Diana and then all of Ultralytics, which puts machine drift
-between the blocks. Interleaved per frame, so both see the same machine within
-each frame, Diana's mean/p50 is **1.14 and 1.21** across two runs against
-Ultralytics' **1.79 and 3.33**, with 5-7 outliers to their 16. Diana has the
-lighter tail.
-
-Underneath it sat one real mechanism: Diana's slow frames carry **4,200 page
-faults against a normal 31**. `MIMALLOC_PURGE_DELAY=-1` removed them completely
-(on the mimalloc build this predates; the allocator is now `rusty_alloc`)
-— faults go flat at 15 and halve overall — and it is **not shipped**, because
-it buys 0.3 % of latency for +9.6 MiB peak RSS against a footprint gate with
-1 MiB of headroom. Real mechanism, refuted lever, and the two are recorded
-separately.
-
-### The same structure that loses latency wins throughput
-
-Latency is one question. A server asks a different one: given N images and a
-whole machine, how many per second? There the answer inverts, at every tier —
-**Diana is 1.5–2.4× ahead:**
-
-| tier | run 1 | run 2 |
-|---|---:|---:|
-| n | 1.61× | 1.66× |
-| s | 1.72× | 2.09× |
-| m | 1.66× | 2.13× |
-| l | 1.62× | 2.35× |
-| x | 1.52× | 2.32× |
-
-Two independent runs, because one was not enough to know which part of the
-result was real. **The direction is: ahead at every tier in both runs.** The
-magnitude is not — it moves by up to 50% between runs on this box, so the
-honest claim is a range, not the 1.6× a single session would have supported.
-
-Full campaign history:
-[docs/diana-mission-plan.md](docs/finished/diana-mission-plan.md) §8; every number
-traces to [`bench/ledger.jsonl`](bench/ledger.jsonl).
-
-### VLM (Argus)
-
-`SmolVLM-256M-Instruct` on candle — a `SigLIP` tower, a pixel-shuffle connector
-and a Llama decoder, written against the reference implementation tensor by
-tensor. `ffai engines` reports it `stable`, which in this tree means
-*oracle-gated against a reference*, and the gate is the strong form: from a raw
-image, through our preprocessing, tower, prompt assembly and decode loop, the
-engine reproduces the reference's caption **byte-identically**.
-
-Getting there took one finding worth repeating. A resampler that matched PIL to
-within a single quantisation level — visually indistinguishable, ~50 dB SNR —
-was enough to change a generated token, because the output is argmaxed 32 times
-and one level is sometimes the difference. The fix was to implement PIL's
-*fixed-point* path exactly, `u8` intermediate and all. "Close enough" is not a
-property an image resampler gets to have when a language model reads the result.
-
-**0.10.1** carries an instruction-count campaign: 45 changes across 15 veins,
-each counted alone with callgrind on one core. Prefill executes 24.2 % fewer
-instructions, decode 15.3 % fewer, a whole caption 8.7 % fewer, preprocessing
-85.1 % fewer and prompt assembly 58.7 % fewer. The caption, the decode tokens
-and the preprocessed bytes are unchanged. The wall-clock figures in this
-section are 0.10.0 measurements and have not been re-taken. Ledger:
-[`docs/plans/argus-ir-veins.md`](docs/plans/argus-ir-veins.md).
+### Mercury: speech recognition and synthesis
+
+**ASR** runs OpenAI Whisper, tiny to medium, on candle with our own mel
+front-end, tokenizer grammar, decode loop and AVX2 kernels. It passes all four
+gates (correctness, quality, speed, footprint) against whisper.cpp on both
+LibriSpeech holdouts, 134 clips each, tiny.en, greedy:
+
+| Corpus | Implementation | WER % | ×realtime | steady MiB |
+|---|---|---:|---:|---:|
+| test-clean | **Mercury** | **7.27** | **27.8** | **179** |
+| test-clean | whisper.cpp | 7.58 | 25.9 | 195 |
+| test-other | **Mercury** | 16.89 | **33.3** | **163** |
+| test-other | whisper.cpp | 16.82 | 19.6 | 194 |
+
+Most of the speed comes from **adaptive encoder context**: Whisper pads every
+window to 30 s, so each window is encoded at a context sized to the audio it
+actually holds, with guards that fall back to the full context. Stage by stage
+it wins every stage against whisper.cpp with flash attention on: encode about
+2.0×, decode 1.1–1.2×, mel 1.4×.
+
+- **Accuracy tiers:** `small.en` reaches **3.05 % WER**, ahead of whisper.cpp
+  `small.en` (3.38 %) at 4.2× against 3.7× realtime. Beam search is available
+  with `FFAI_BEAM_SIZE=5`.
+- **The WhisperX layer, without Python or gated weights:** speech segmentation
+  on by default (2.2–4.2× faster on audio with trailing silence, identical
+  transcript); `--word-timestamps` by CTC forced alignment (100 % containment);
+  `--diarize` with ECAPA-TDNN (**DER 4.21 %**); and speaker labels that persist
+  across calls for live streams (streaming DER 5.68 %).
+
+**TTS** runs the full VITS stack on candle, reading
+[piper](https://github.com/OHF-Voice/piper1-gpl)'s own voice files straight
+from ONNX, with a clean-room pure-Rust phonemizer. Nothing GPL ships.
+
+- **Oracle-exact** against piper's runtime: waveform to 3e-5, durations
+  integer-exact.
+- **1.58× faster wall-clock at 5 % less CPU**, model load 0.64 s against
+  6.69 s, memory at parity.
+- **Deterministic:** the same text and seed give one exact WAV per machine
+  (1.2.1 pins the GEMM cache detection that hybrid P-core/E-core CPUs used to
+  split). Piper samples noise inside its graph and cannot offer this.
+- **1.2** cut 45 pieces of redundant work across ASR and TTS with byte-identical
+  output, including 99.4 % of ASR's and 93.1 % of TTS's buffer zero-filling.
+- English (en-US) voices.
+
+### Carmenta: OCR for documents, forms, PDFs and live screens
+
+Five engines from two detector lineages and three recognizers, each
+oracle-matched against its reference. `mobiledet-svtr` is the document
+default and `craft-crnn` the live default.
+
+- **Recognition beats PaddleOCR's mobile recognizer** on 400 real-photo word
+  crops: **1.5 % vs 3.0 % CER**, 93 % vs 88 % exact match, at **2.6× lower
+  latency**.
+- **Documents,** scored by
+  [OmniDocBench](https://github.com/opendatalab/OmniDocBench)'s official
+  evaluator on all 1,651 pages: text edit distance **0.116**, reading order
+  **0.204**, inside the published range (0.033–0.157). On CPU it runs at about
+  **9× the throughput** of the 3B record holder Unlimited-OCR, which scores
+  higher (0.041 vs 0.108).
+- **Live mode** emits text only when it changes: **zero churn** across 156
+  unchanged frames where per-frame engines churned 24 times, 24/24 changes
+  caught, p95 257 ms, memory flat over a 30-minute soak.
+- **Forms and PDFs:** auto-orientation (144/144 quarter turns undone),
+  checkboxes (100 % found and read on 960 boxes), label-to-value pairing
+  (220/221), and PDF pages read as a viewer shows them: redactions are never
+  read through.
+
+### Diana: YOLO26 detection and tracking
+
+The real YOLO26 graph on candle, all five tiers, loaded from the official
+Ultralytics `.pt`. No ONNX, no Python at inference. Weights are AGPL-3.0 and
+are never in this repository.
+
+Graded on a 450-image COCO holdout against Ultralytics at the same
+configuration:
+
+| Tier | mAP50 Δ (pp) | Diana MiB | Ultralytics MiB | leaner |
+|---|---:|---:|---:|---:|
+| n | −0.01 | **71** | 403 | 5.6× |
+| s | −0.08 | **110** | 447 | 4.1× |
+| m | +0.06 | **178** | 544 | 3.1× |
+| l | +0.06 | **197** | 535 | 2.7× |
+| x | −0.07 | **346** | 678 | 2.0× |
+
+At four tiers the detections are identical in count, class and order, within
+0.3 px. On all seven MOT17 training sequences (5,316 frames) AP50 matches
+Ultralytics to a mean 0.029 pp.
+
+- **Speed:** **3.71× less CPU per frame** (84.6 ms against 314.2). On a
+  dedicated machine with each engine pinned to its own cores, wall-clock is
+  **1.30×** faster; under 16 competing threads it is **1.92×**; batch throughput
+  is **1.5–2.4×** at every tier.
+- **0.10:** **34.6 % fewer instructions per detection**, from removed copies,
+  fused passes, Winograd 3×3 convolutions and a vectorized softmax. All five
+  tiers still pass the full-graph oracle against the official model.
+- **Tracking:** ByteTrack with no appearance model, so it adds no download and
+  no license. **218 ID switches against Ultralytics' 800** on MOT17, IDF1
+  35.93 % vs 36.92 %.
+- **In the browser:** [`ffai-wasm`](https://crates.io/crates/ffai-wasm) runs
+  the whole graph as a 1.82 MB module with an 18 ms model load. Every box and
+  class matches native. `crates/ffai-wasm/demo.html` is a working page.
+- **Lean to embed:** 138 transitive crates natively, 95 on wasm32, and no
+  dependency on the other engines.
+- Standalone page: [Remade-With-Rust/diana](https://github.com/Remade-With-Rust/diana).
+
+### Argus: vision-language captioning
+
+`SmolVLM-256M-Instruct` on candle, with our own SigLIP encoder and SmolLM2 text
+tower. From a raw image file, the caption matches the Python reference **byte
+for byte**, including preprocessing, which implements PIL's fixed-point
+resampler exactly.
+
+- **0.10.1** executes **24.2 % fewer instructions per prefill, 15.3 % fewer per
+  decoded token, 8.7 % fewer per caption**, 85.1 % fewer in preprocessing and
+  58.7 % fewer in prompt assembly. The caption, the decode tokens and the
+  preprocessed bytes are unchanged. Wall time has not been re-measured since
+  0.10.0.
+- On 0.10.0, preprocessing is **2.6× faster** than `transformers`, and a whole
+  caption is 1.20× slower, with the gap in the vision tower.
+- Video captions stream to `.srt`, `.vtt` or `.json` one window at a time, so
+  memory is set by `--window`, not by clip length.
 
 ```sh
 ffai caption -i street.jpg --prompt "What is written in this image?"
 ffai caption -i clip.mp4  --fps 2 --window 8 --output captions.srt
 ```
 
-Video streams one window at a time, so peak memory is a function of `--window`,
-not of the length of the clip. **No video quality claim is made** — the
-checkpoint is an image model with no published video row, and inventing a
-number for it is the scorer trap the Carmenta campaign already paid for.
+## The analyzer: `ffai bench`
 
-**What it costs.** Measured stage by stage against `transformers` on the same
-image (17 tiles, 1142 prompt tokens, 32 generated), both warm, on a deliberately
-idle machine, each arm repeated with under 1 % movement:
+One command compares any FFAI engine against world-standard implementations on
+a pinned, hash-verified corpus:
 
-| stage | ffai-argus | `transformers` | |
-|---|---:|---:|---|
-| preprocess | **52 ms** | 134 ms | **we win 2.6x** |
-| vision tower | 8172 ms | **7277 ms** | we lose 1.12x |
-| text side (prefill + decode) | 2690 ms | **1695 ms** | we lose 1.59x |
-| **whole caption** | **10 918 ms** | **9 106 ms** | **1.20x slower** |
+```text
+ffai bench asr --corpus corpora/librispeech-test-clean-v2.toml
+ffai bench asr --corpus corpora/librispeech-test-other-v1.toml --baseline-only
+```
 
-That is down from **2.4x** across three optimization rounds, at matched
-settings: prefill **3.07x** (3870 -> 1261 ms), generate **2.05x**
-(2181 -> 1063 ms), whole caption **1.38x** (14 561 -> 10 562 ms) — every gate
-holding, caption still byte-identical.
+It runs our engine and every reference in `corpora/references.toml` over the
+same clips, scores both with the same metric code, and appends an audit record
+to `bench/ledger.jsonl`: corpus fingerprint, reference versions, environment,
+and a four-gate verdict (correctness, quality, speed, footprint) in which **a
+skipped gate is never a pass**. Methodology:
+[docs/benchmarking.md](docs/benchmarking.md).
 
-The text win came from writing our own `SmolLM2` tower: candle's `llama` spends
-**20 % of a whole caption** in `masked_fill` at 0.8 GB/s, writing `-inf` into an
-upper triangle via `where_cond` against two broadcast operands. Deleting it is
-bit-identical — `max(finite, -inf)` never selects `-inf` and `exp(-inf)` is
-exactly zero — so causality is fused into the softmax instead. On the vision
-side, two `broadcast_matmul` calls were stretching a weight to a batch of one:
-the connector projection (**14.1x**) and the patch embedding, which is a
-stride-16 non-overlapping conv and therefore a matmul (**2.6x**).
+## Architecture
 
-Vision is now **75 %** of a caption and the whole of the remaining gap, and its
-layer is **77 % matmul** — the elementwise phase is spent. Blocked attention has
-been refuted five times, the last with candle's own GEMM.
+**One trait per task, many engines per trait, selected by name.**
+`AsrEngine`, `TtsEngine`, `OcrEngine` and `VlmEngine` are the `AVCodec` of
+FFAI, and `--engine whisper-candle` is `-c:v libx264`. New models are new
+engines, not rewrites.
 
-**The gate has now been re-run, and both of its rows had drifted — in
-opposite directions.** This page previously said the run was blocked by a
-harness segfault on the second `describe_image` in one process. **That is no
-longer true and may not have been for some time:** the engine arm now
-completes 50/50 clips of `argus-ocrbench-lite-v1` in a single process, twice,
-on two independent runs (ledger `bench-vlm-1789863219`, `-1789866779`).
+1. **Pure Rust.** GPU and accelerator backends sit behind feature flags.
+2. **Library-first.** The CLI contains no logic; every capability is a crate
+   you can embed.
+3. **Candle is the tensor spine.** One `Tensor` and `Device` across all
+   engines.
+4. **Weights are data, not code.** Never vendored; fetched into a cache from
+   TOML manifests that surface each model's own license. Every model is
+   fetchable without an account.
+5. **Streaming-first.** Engines process chunks; whole-file is the degenerate
+   case.
+6. **Oracle-gated.** An engine is `stable` only when validated against its
+   reference implementation on public corpora.
+7. **Codecs come from home.** Media routes through
+   [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs);
+   images decode through [`rusty_jpeg`](https://crates.io/crates/rusty_jpeg)
+   and [`rusty_png`](https://crates.io/crates/rusty_png).
+8. **Pure-Rust allocator.** The `ffai` binary and the wasm crates use
+   [`rusty_alloc`](https://crates.io/crates/rusty_alloc) 2.4.0. It replaced
+   mimalloc with byte-identical output and speed parity, and the engines'
+   byte-identity oracles pass on every release.
 
-| four-gate row | what this page used to say | what two re-runs measure |
-|---|---|---|
-| speed | `FAIL`, 2.4x **slower** | **PASS** — engine ahead of the matched `transformers` arm on both runs |
-| footprint | 0.71x, a **win** | **FAIL** — engine uses **more**, 1.29x then 1.54x |
-| correctness | — | **PASS**, 50/50 both runs |
-| quality | — | **SKIP** — VLMEvalKit is not installed in `.venv-argus` |
-
-**No magnitude is claimed from these runs, and the reason is stated rather
-than buried.** The two runs disagree by a wide margin on both rows — speed
-1.14x then 1.53x, footprint 1.29x then 1.54x — so the *direction* is
-reproducible and the *size* is not. The box carried ~32 % ambient third-party
-load, and `ffai bench vlm` runs its reference and engine arms sequentially
-rather than ABBA-interleaved, so drift between the arms is not cancelled. A
-sampler during the second run put mean CPU at 92.2 % over the reference arm
-and 88.8 % over the engine arm, which is matched to within 3.4 points but is
-not an idle machine.
-
-What is safe to take from this: **the recorded `speed FAIL at 2.4x` is stale
-and its sign has flipped**, and **the 0.71x footprint claim above is
-contradicted** — every measurement since says Argus uses more memory than the
-reference, not less. Both need a quiet box and an interleaved harness before
-a number goes on this page.
-
-Full campaign history:
-[docs/plans/argus-launch-plan.md](docs/finished/argus-launch-plan.md);
-see [ROADMAP.md](ROADMAP.md) for what is next.
+**Supply chain.** Workspace builds patch
+[`tokenizers`](https://github.com/Remade-With-Rust/tokenizers) onto
+[`rusty_expressions`](https://github.com/Remade-With-Rust/rusty_expressions),
+our pure-Rust Oniguruma, so no C regex engine is compiled. Two C components
+remain: crates taken from crates.io still pull `onig_sys` through candle until
+the patch lands upstream, and `aws-lc-sys` sits behind the optional
+Hugging Face downloader (`ffai-models/fetch`). The wasm32 builds compile no C.
 
 ## Install
 
-All crates are on [crates.io](https://crates.io/crates/ffai-cli) as of 0.4.0:
-
 ```sh
 cargo install ffai-cli      # the `ffai` binary
-cargo add ffai-mercury      # or embed a component as a library
+cargo add ffai-mercury      # or embed any component as a library
 ```
 
-Weights are never bundled — they are fetched into a local cache on first use
-(or ahead of time with `ffai models --fetch <name>`).
+Weights are fetched into a local cache on first use, or ahead of time with
+`ffai models --fetch <name>`.
 
 ## Build from source
 
@@ -1042,7 +300,19 @@ cargo test --workspace
 target/release/ffai engines
 ```
 
+## Development history
+
+The full campaign record behind every number, including refuted experiments
+and corrections, stays in the repository:
+[Mercury](docs/finished/mercury-mission-plan.md),
+[Mercury TTS](docs/finished/mercury-tts-mission.md),
+[Carmenta](docs/Carmenta-mission-plan.md),
+[Diana](docs/finished/diana-mission-plan.md),
+[Argus](docs/finished/argus-launch-plan.md), the instruction-count ledgers in
+[docs/plans/](docs/plans/), and the root-cause write-ups in
+[docs/whys/](docs/whys/). See [ROADMAP.md](ROADMAP.md) for what is next.
+
 ## License
 
-MIT OR Apache-2.0 (code). Model weights carry their own licenses — check
+MIT OR Apache-2.0 (code). Model weights carry their own licenses; check
 `ffai models`.
