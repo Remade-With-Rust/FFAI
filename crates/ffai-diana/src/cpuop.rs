@@ -181,7 +181,7 @@ pub fn matmul2_batched(a: &Tensor, b: &Tensor) -> Result<Tensor> {
 /// # Safety
 ///
 /// Every element must be written before it is read.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, clippy::uninit_vec)]
 pub unsafe fn uninit_f32(n: usize) -> Vec<f32> {
     let mut v: Vec<f32> = Vec::with_capacity(n);
     // SAFETY: the caller's contract above.

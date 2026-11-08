@@ -122,7 +122,7 @@ fn input_transform(xs: &[f32], c_in: usize, h: usize, w: usize, th: usize, tw: u
             // — two constant fills of the input per convolution.
             let half = w / 2;
             {
-                let (ed, od) = (&mut e[..half], &mut o[1..half + 1]);
+                let (ed, od) = (&mut e[..half], &mut o[1..=half]);
                 for ((ed, od), pair) in ed.iter_mut().zip(od.iter_mut()).zip(row.chunks_exact(2)) {
                     *ed = pair[0];
                     *od = pair[1];
@@ -163,7 +163,7 @@ fn input_transform(xs: &[f32], c_in: usize, h: usize, w: usize, th: usize, tw: u
                     &mut [], &mut [], &mut [], &mut [], &mut [], &mut [], &mut [], &mut [],
                     &mut [], &mut [], &mut [], &mut [], &mut [], &mut [], &mut [], &mut [],
                 ];
-                for slot in out.iter_mut() {
+                for slot in &mut out {
                     let (head, tail) = rest.split_at_mut(tw);
                     *slot = head;
                     rest = tail;

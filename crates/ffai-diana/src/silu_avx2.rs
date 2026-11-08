@@ -110,7 +110,7 @@ pub unsafe fn silu_bias_in_place(x: &mut [f32], bias: f32) {
 #[target_feature(enable = "avx2,fma")]
 #[allow(unsafe_code)]
 unsafe fn silu_ptr<const BIAS: bool>(src: *const f32, dst: *mut f32, n: usize, bias: f32) { unsafe {
-    silu_ptr_res::<BIAS, false>(src, dst, n, bias, std::ptr::null())
+    silu_ptr_res::<BIAS, false>(src, dst, n, bias, std::ptr::null());
 }}
 
 /// `silu(x + bias) + res[i]` in place: the residual connection folded into the

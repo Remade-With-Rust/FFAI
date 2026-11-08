@@ -88,7 +88,7 @@ fn deinterleave_padded(row: &[f32], even: &mut [f32], oddp: &mut [f32]) {
     // Equal-length zips so the split vectorizes (no per-element index
     // checks); only the pad cells beyond the data are zeroed.
     {
-        let (e, o) = (&mut even[..half], &mut oddp[1..half + 1]);
+        let (e, o) = (&mut even[..half], &mut oddp[1..=half]);
         for ((e, o), pair) in e.iter_mut().zip(o.iter_mut()).zip(row.chunks_exact(2)) {
             *e = pair[0];
             *o = pair[1];

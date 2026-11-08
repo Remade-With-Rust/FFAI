@@ -108,7 +108,7 @@ pub fn letterbox_with(
     // SAFETY: `f32` is plain data; the pad bands are filled just below and the
     // content rectangle `[pad_y, pad_y + nh) x [pad_x, pad_x + nw)` of every
     // channel is written by `vfill` before the tensor is read.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, clippy::uninit_vec)]
     unsafe {
         out.set_len(n_out);
     }

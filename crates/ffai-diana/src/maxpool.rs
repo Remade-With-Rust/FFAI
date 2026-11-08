@@ -36,7 +36,7 @@ use candle_core::{Result, Tensor};
 /// # Safety
 ///
 /// The caller must write all `n` elements before reading any.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, clippy::uninit_vec)]
 unsafe fn uninit_f32(n: usize) -> Vec<f32> {
     let mut v: Vec<f32> = Vec::with_capacity(n);
     // SAFETY: `f32` has no invalid bit patterns, and the caller's contract
@@ -220,7 +220,7 @@ fn row_max(src: &[f32], dst: &mut [f32], r: usize) {
     // shifted slices of the same length so the loop vectorizes.
     let n = w - 2 * r;
     if r == 2 {
-        max5_into(&mut dst[r..r + n], [&src[..n], &src[1..n + 1], &src[2..n + 2], &src[3..n + 3], &src[4..n + 4]]);
+        max5_into(&mut dst[r..r + n], [&src[..n], &src[1..=n], &src[2..n + 2], &src[3..n + 3], &src[4..n + 4]]);
     } else {
         let interior = &mut dst[r..r + n];
         interior.copy_from_slice(&src[..n]);
