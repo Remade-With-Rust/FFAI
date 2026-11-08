@@ -349,6 +349,10 @@ pub fn resize_lanczos_u8(
         src.to_vec()
     } else {
         let t = build_fixed_taps(sw, dw);
+        let avx2 = have_avx2();
+        // Consumed only by the x86_64 arm below.
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = avx2;
         let mut out = vec![0u8; sh * dw * channels];
         // One task per output row. Rows share only immutable inputs, so this
         // is bit-identical to the serial loop — the arithmetic within a row is
@@ -356,17 +360,17 @@ pub fn resize_lanczos_u8(
         out.par_chunks_mut(dw * channels)
             .enumerate()
             .for_each(|(y, orow)| {
-                for x in 0..dw {
-                    let (start, n) = (t.starts[x], t.lens[x]);
-                    let row = &t.k[x * t.ksize..x * t.ksize + t.ksize];
-                    for c in 0..channels {
-                        let mut acc: i32 = 1 << (PRECISION_BITS - 1);
-                        for (kk, &w) in row.iter().enumerate().take(n) {
-                            acc += i32::from(src[(y * sw + start + kk) * channels + c]) * w;
-                        }
-                        orow[x * channels + c] = clip8(acc);
+                let srow = &src[y * sw * channels..(y + 1) * sw * channels];
+                #[cfg(target_arch = "x86_64")]
+                if avx2 {
+                    // SAFETY: `avx2` was probed by `have_avx2()` above.
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        horizontal_row_avx2(orow, srow, &t, channels);
                     }
+                    return;
                 }
+                horizontal_row(orow, srow, &t, channels);
             });
         out
     };
@@ -375,23 +379,134 @@ pub fn resize_lanczos_u8(
     }
     // Vertical: (sh, dw) -> (dh, dw), on the u8 intermediate.
     let t = build_fixed_taps(sh, dh);
-    let mut out = vec![0u8; dh * dw * channels];
-    out.par_chunks_mut(dw * channels)
+    let wide = dw * channels;
+    let avx2 = have_avx2();
+    // Consumed only by the x86_64 arm below.
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = avx2;
+    let mut out = vec![0u8; dh * wide];
+    // Tap loop OUTSIDE, row loop inside: for one output row, each tap is a
+    // contiguous source row scaled by one weight and added into an i32
+    // accumulator row -- an AXPY the compiler widens. The per-sample form it
+    // replaces walked the taps down a column (`mid[((start + kk) * dw + x) *
+    // channels + c]`), recomputing a strided index and a bounds check per MAC,
+    // and could not vectorise. Integer arithmetic, and PIL's precision budget
+    // means no partial sum overflows, so the reordering is byte-identical.
+    out.par_chunks_mut(wide)
         .enumerate()
-        .for_each(|(y, orow)| {
-            let (start, n) = (t.starts[y], t.lens[y]);
-            let row = &t.k[y * t.ksize..y * t.ksize + t.ksize];
-            for x in 0..dw {
-                for c in 0..channels {
-                    let mut acc: i32 = 1 << (PRECISION_BITS - 1);
-                    for (kk, &w) in row.iter().enumerate().take(n) {
-                        acc += i32::from(mid[((start + kk) * dw + x) * channels + c]) * w;
+        .for_each_init(
+            || vec![0i32; wide],
+            |acc, (y, orow)| {
+                let (start, n) = (t.starts[y], t.lens[y]);
+                let row = &t.k[y * t.ksize..y * t.ksize + t.ksize];
+                #[cfg(target_arch = "x86_64")]
+                if avx2 {
+                    // SAFETY: `avx2` was probed by `have_avx2()` above.
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        vertical_row_avx2(acc, orow, &mid, start, &row[..n], wide);
                     }
-                    orow[x * channels + c] = clip8(acc);
+                    return;
                 }
-            }
-        });
+                vertical_row(acc, orow, &mid, start, &row[..n], wide);
+            },
+        );
     out
+}
+
+/// One output row of the vertical pass: `orow = clip8(seed + SUM_k w_k * src_k)`
+/// where `src_k` is input row `start + k`, `wide` samples long.
+#[inline(always)]
+fn vertical_row(acc: &mut [i32], orow: &mut [u8], mid: &[u8], start: usize, taps: &[i32], wide: usize) {
+    acc.fill(1 << (PRECISION_BITS - 1));
+    for (kk, &w) in taps.iter().enumerate() {
+        let src = &mid[(start + kk) * wide..(start + kk + 1) * wide];
+        for (a, &s) in acc.iter_mut().zip(src) {
+            *a += i32::from(s) * w;
+        }
+    }
+    for (o, &a) in orow.iter_mut().zip(acc.iter()) {
+        *o = clip8(a);
+    }
+}
+
+/// One output row of the horizontal pass, from one input row `srow`.
+///
+/// The RGB case -- every image this crate preprocesses, since `to_rgb8` runs
+/// first -- reads each tap's three samples from one window slice and keeps the
+/// three accumulators side by side: one weight load feeds three MACs, and no
+/// per-tap index (`(y * sw + start + kk) * channels + c`) or bounds check is
+/// recomputed. Same products, same order per channel: byte-identical.
+#[inline(always)]
+fn horizontal_row(orow: &mut [u8], srow: &[u8], t: &FixedTaps, channels: usize) {
+    let seed: i32 = 1 << (PRECISION_BITS - 1);
+    if channels == 3 {
+        for (x, o) in orow.chunks_exact_mut(3).enumerate() {
+            let (start, n) = (t.starts[x], t.lens[x]);
+            let taps = &t.k[x * t.ksize..x * t.ksize + n];
+            let win = &srow[start * 3..(start + n) * 3];
+            let (mut r, mut g, mut b) = (seed, seed, seed);
+            for (px, &w) in win.chunks_exact(3).zip(taps) {
+                r += i32::from(px[0]) * w;
+                g += i32::from(px[1]) * w;
+                b += i32::from(px[2]) * w;
+            }
+            o[0] = clip8(r);
+            o[1] = clip8(g);
+            o[2] = clip8(b);
+        }
+        return;
+    }
+    for (x, o) in orow.chunks_exact_mut(channels).enumerate() {
+        let (start, n) = (t.starts[x], t.lens[x]);
+        let taps = &t.k[x * t.ksize..x * t.ksize + n];
+        for (c, o) in o.iter_mut().enumerate() {
+            let mut acc = seed;
+            for (kk, &w) in taps.iter().enumerate() {
+                acc += i32::from(srow[(start + kk) * channels + c]) * w;
+            }
+            *o = clip8(acc);
+        }
+    }
+}
+
+/// [`vertical_row`] compiled for AVX2: the same integer arithmetic, so the
+/// bytes are identical; `vpmulld` makes the i32 AXPY eight lanes wide where the
+/// SSE2 baseline (no `pmulld`) has to emulate the multiply.
+///
+/// # Safety
+/// The caller must have verified `avx2`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_code)]
+unsafe fn vertical_row_avx2(acc: &mut [i32], orow: &mut [u8], mid: &[u8], start: usize, taps: &[i32], wide: usize) {
+    vertical_row(acc, orow, mid, start, taps, wide);
+}
+
+/// [`horizontal_row`] compiled for AVX2 -- same arithmetic, byte-identical.
+///
+/// # Safety
+/// The caller must have verified `avx2`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_code)]
+unsafe fn horizontal_row_avx2(orow: &mut [u8], srow: &[u8], t: &FixedTaps, channels: usize) {
+    horizontal_row(orow, srow, t, channels);
+}
+
+/// AVX2 present? Always `false` off x86_64, where the plain kernels are the
+/// only ones (NEON and simd128 are those targets' baselines, so the plain build
+/// already uses them).
+#[allow(clippy::missing_const_for_fn)]
+fn have_avx2() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
 }
 
 /// The vision encoder wants both dimensions to be exact multiples of the tile
@@ -512,9 +627,21 @@ pub fn preprocess_rgb8_opts(
     const TILE: usize = 512;
 
     let (aw, ah) = fit_longest_edge(width, height, LONGEST);
-    let a = resize_lanczos_u8(rgb, width, height, aw, ah, 3);
+    // An identity resize is BORROWED. `resize_lanczos_u8` returns a copy when
+    // the size does not change, and for a square image step 2 never changes
+    // it (2048x2048 is already a tile multiple): a 12.6 MB `to_vec` per image
+    // to produce bytes identical to its input.
+    let a: std::borrow::Cow<'_, [u8]> = if (aw, ah) == (width, height) {
+        std::borrow::Cow::Borrowed(rgb)
+    } else {
+        std::borrow::Cow::Owned(resize_lanczos_u8(rgb, width, height, aw, ah, 3))
+    };
     let (bw, bh) = vision_encoder_size(aw, ah, TILE);
-    let b = resize_lanczos_u8(&a, aw, ah, bw, bh, 3);
+    let b: std::borrow::Cow<'_, [u8]> = if (bw, bh) == (aw, ah) {
+        std::borrow::Cow::Borrowed(&a)
+    } else {
+        std::borrow::Cow::Owned(resize_lanczos_u8(&a, aw, ah, bw, bh, 3))
+    };
 
     let (rows, cols) = if split {
         tile_grid(bw, bh, TILE)
@@ -529,31 +656,42 @@ pub fn preprocess_rgb8_opts(
     let tiles = rows * cols + 1;
     let mut pixel_values = vec![0.0f32; tiles * per];
 
-    let mut write_tile = |idx: usize, src: &[u8]| {
-        let norm = normalize_u8(src);
-        // Interleaved HWC -> planar CHW: the tower's layout.
+    // `src` holds `TILE` rows of `TILE` RGB pixels, row `y` starting at
+    // `y * stride` bytes.
+    let mut write_tile = |idx: usize, src: &[u8], stride: usize| {
+        // Interleaved HWC -> planar CHW (the tower's layout), normalised on
+        // the way. The form this replaces built a 3 MB `normalize_u8` Vec per
+        // tile and then gathered from it; this reads each pixel once and
+        // writes its three planes. `v / 127.5 - 1` is `normalize_u8`'s own
+        // expression, so the floats are identical.
         let base = idx * per;
-        for c in 0..3 {
-            for i in 0..TILE * TILE {
-                pixel_values[base + c * TILE * TILE + i] = norm[i * 3 + c];
+        let (r, rest) = pixel_values[base..base + per].split_at_mut(TILE * TILE);
+        let (g, bl) = rest.split_at_mut(TILE * TILE);
+        for y in 0..TILE {
+            let row = &src[y * stride..y * stride + TILE * 3];
+            let o = y * TILE..(y + 1) * TILE;
+            for (((px, r), g), bl) in
+                row.chunks_exact(3).zip(&mut r[o.clone()]).zip(&mut g[o.clone()]).zip(&mut bl[o])
+            {
+                *r = f32::from(px[0]) / 127.5 - 1.0;
+                *g = f32::from(px[1]) / 127.5 - 1.0;
+                *bl = f32::from(px[2]) / 127.5 - 1.0;
             }
         }
     };
 
-    let mut tile_buf = vec![0u8; per];
+    // Each grid tile is read in place from `b` at its row stride — the
+    // `tile_buf` this replaces copied every tile's rows out first.
     for r in 0..rows {
         for c in 0..cols {
-            for y in 0..TILE {
-                let s = ((r * TILE + y) * bw + c * TILE) * 3;
-                tile_buf[y * TILE * 3..(y + 1) * TILE * 3].copy_from_slice(&b[s..s + TILE * 3]);
-            }
-            write_tile(r * cols + c, &tile_buf);
+            let s = (r * TILE * bw + c * TILE) * 3;
+            write_tile(r * cols + c, &b[s..], bw * 3);
         }
     }
     // The thumbnail is LAST, matching the prompt's `<global-img>` placement
     // after every `<row_r_col_c>` block.
     let thumb = resize_lanczos_u8(&b, bw, bh, TILE, TILE, 3);
-    write_tile(rows * cols, &thumb);
+    write_tile(rows * cols, &thumb, TILE * 3);
 
     Preprocessed {
         pixel_values,

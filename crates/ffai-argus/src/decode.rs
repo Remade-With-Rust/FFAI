@@ -473,14 +473,25 @@ impl TextDecoder {
             // One token at a time, cache-appended — the step the KV cache
             // exists for. Re-running the whole prefix each step would be
             // correct and quadratic.
-            let ids = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
-            let emb = self.embed(&ids)?;
-            logits = self.forward_embeds(&emb, pos)?;
+            logits = self.step(next, pos)?;
             if let Some(t) = trace.as_deref_mut() {
                 t.steps_ms.push(t_step.elapsed().as_secs_f64() * 1e3);
             }
         }
         Ok(out)
+    }
+
+    /// One decode step: embed `next` and run it at `pos`, returning the logits.
+    ///
+    /// The body of [`Self::generate_traced`]'s loop, callable on its own so
+    /// `examples/ir_argus decode` counts exactly what a caption runs.
+    ///
+    /// # Errors
+    /// Propagates `candle` errors from the forward pass.
+    pub fn step(&mut self, next: u32, pos: usize) -> CandleResult<Tensor> {
+        let ids = Tensor::new(&[next], &self.device)?.unsqueeze(0)?;
+        let emb = self.embed(&ids)?;
+        self.forward_embeds(&emb, pos)
     }
 
     #[must_use]
@@ -497,7 +508,36 @@ impl TextDecoder {
 /// `>=` would keep the last and could disagree with the reference on an exact
 /// tie. Ties are rare and this is exactly the kind of detail that produces a
 /// one-token difference nobody can explain later.
-fn argmax(logits: &Tensor) -> CandleResult<u32> {
+pub fn argmax(logits: &Tensor) -> CandleResult<u32> {
+    // The vectorised max (exact: `max` is associative on non-NaN floats), then
+    // the FIRST index holding it — the same tie rule as the `>` scan in
+    // `argmax_copy`, which keeps the first maximum the way `torch.argmax`
+    // does. Read in place: the scan this replaces first copied all 49 280
+    // logits out through `to_vec1`.
+    let fast = {
+        let (store, layout) = logits.storage_and_layout();
+        match (&*store, layout.contiguous_offsets()) {
+            (candle_core::Storage::Cpu(candle_core::CpuStorage::F32(v)), Some((o, e))) => {
+                let v = &v[o..e];
+                let m = ffai_core::fastmath::max_f32(v);
+                // EXACT equality on purpose: `m` is one of `v`'s own elements,
+                // so this finds its first occurrence — no tolerance applies.
+                #[allow(clippy::float_cmp)]
+                let first = v.iter().position(|&x| x == m).unwrap_or(0);
+                Some(first)
+            }
+            _ => None,
+        }
+    };
+    match fast {
+        Some(best) => u32::try_from(best)
+            .map_err(|e| candle_core::Error::Msg(format!("token id overflow: {e}"))),
+        None => argmax_copy(logits),
+    }
+}
+
+/// [`argmax`] for a non-contiguous or non-CPU tensor: copy out, then scan.
+fn argmax_copy(logits: &Tensor) -> CandleResult<u32> {
     let v = logits.flatten_all()?.to_vec1::<f32>()?;
     let mut best = 0usize;
     let mut best_v = f32::NEG_INFINITY;

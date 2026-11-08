@@ -196,7 +196,7 @@ impl SmolVlmVision {
         let (b, n, k) = x.dims3()?;
         let w = self.proj.to_dtype(x.dtype())?.t()?;
         let out = w.dim(1)?;
-        x.reshape((b * n, k))?.matmul(&w)?.reshape((b, n, out))
+        crate::mm::matmul(&x.reshape((b * n, k))?, &w)?.reshape((b, n, out))
     }
 }
 

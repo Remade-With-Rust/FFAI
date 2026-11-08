@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-core-v0.9.0...ffai-core-v0.9.1) - 2026-11-08
+
+### Added
+
+- `fastmath::silu_mul_inplace`, `silu_mul_into` and `silu_mul_scalar`: SwiGLU's `silu(gate) * up` in one pass, with an AVX2 twin (no FMA) that is bit-identical to the scalar oracle.
+- `fastmath::gelu_tanh_bias_into`: bias add and tanh-GELU fused into one pass, with an AVX2 twin.
+- `fastmath::exp_sub_rowmax_sum_inplace`: a softmax row's `exp(x - max)` and its sum in one pass.
+- `fastmath::RowKernels` / `row_kernels()`: the row max and exp-sum kernels picked once per op instead of once per row.
+
 ## [0.9.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-core-v0.8.0...ffai-core-v0.9.0) - 2026-10-31
 
 ### Added

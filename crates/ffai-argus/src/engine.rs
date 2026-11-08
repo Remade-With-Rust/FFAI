@@ -36,8 +36,11 @@ use ffai_core::types::{ImageBuffer, PixelFormat, TimedSegment, VideoFrame};
 
 use crate::decode::TextDecoder;
 use crate::preprocess::preprocess_rgb8_opts;
-use crate::prompt::{merge_image_embeddings, PromptLayout};
+use crate::prompt::PromptLayout;
 use crate::vision::SmolVlmVision;
+
+/// Memoised token ids of each `(rows, cols)` image block.
+type BlockIds = std::collections::HashMap<(usize, usize), std::sync::Arc<[u32]>>;
 
 /// The checkpoint this engine is gated against.
 ///
@@ -165,6 +168,12 @@ struct Model {
     /// beside it because a checkpoint that disagreed with its own tokenizer
     /// would otherwise run to the token budget every time.
     stop_ids: Vec<u32>,
+    /// Token ids of each `(rows, cols)` image block, tokenized once.
+    ///
+    /// A 17-tile still's block is 1088 `<image>` tokens and 34 markers — an
+    /// 8.5 KB string of nothing but added special tokens and newlines, whose
+    /// ids depend only on the grid. See [`assemble`].
+    block_ids: Mutex<BlockIds>,
     /// The text tower's position budget. Read from the checkpoint so the
     /// overflow error can name the real number rather than a guess, and so a
     /// larger SmolVLM raises the ceiling without a code change.
@@ -448,18 +457,21 @@ fn tile_workers(tiles: usize) -> usize {
 /// immutable weights — there is no accumulation order to change.
 fn run_tower(
     vision: &crate::vision::SmolVlmVision,
-    pre: &crate::preprocess::Preprocessed,
+    pre: crate::preprocess::Preprocessed,
     device: &Device,
 ) -> Result<(Vec<Tensor>, Vec<f64>)> {
-    let per = 3 * pre.tile * pre.tile;
     let workers = tile_workers(pre.tiles);
-    if workers <= 1 || pre.tiles <= 1 {
-        let mut out = Vec::with_capacity(pre.tiles);
-        let mut ms = Vec::with_capacity(pre.tiles);
-        for t in 0..pre.tiles {
+    // ONE move of the preprocessed pixels into a tensor; each tile is then a
+    // contiguous `narrow` of it. The per-tile `to_vec()` this replaces copied
+    // 3 MB per tile purely to hand candle bytes it could have owned.
+    let (tiles, tile) = (pre.tiles, pre.tile);
+    let all = Tensor::from_vec(pre.pixel_values, (tiles, 3, tile, tile), device)?;
+    if workers <= 1 || tiles <= 1 {
+        let mut out = Vec::with_capacity(tiles);
+        let mut ms = Vec::with_capacity(tiles);
+        for t in 0..tiles {
             let t0 = crate::clock::Instant::now();
-            let px = pre.pixel_values[t * per..(t + 1) * per].to_vec();
-            let tensor = Tensor::from_vec(px, (1, 3, pre.tile, pre.tile), device)?;
+            let tensor = all.narrow(0, t, 1)?;
             out.push(vision.forward(&tensor)?.squeeze(0)?);
             ms.push(t0.elapsed().as_secs_f64() * 1e3);
         }
@@ -500,7 +512,7 @@ fn run_tower(
     };
     let prev = crate::siglip::set_kernels_parallel(kernels_on);
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let slots: Mutex<Vec<Option<(Tensor, f64)>>> = Mutex::new((0..pre.tiles).map(|_| None).collect());
+    let slots: Mutex<Vec<Option<(Tensor, f64)>>> = Mutex::new((0..tiles).map(|_| None).collect());
     let failed: Mutex<Option<String>> = Mutex::new(None);
 
     std::thread::scope(|scope| {
@@ -511,12 +523,12 @@ fn run_tower(
                 // worker of a fixed split waits on whichever core the OS
                 // descheduled.
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if i >= pre.tiles {
+                if i >= tiles {
                     break;
                 }
                 let t0 = crate::clock::Instant::now();
-                let px = pre.pixel_values[i * per..(i + 1) * per].to_vec();
-                let done = Tensor::from_vec(px, (1, 3, pre.tile, pre.tile), device)
+                let done = all
+                    .narrow(0, i, 1)
                     .and_then(|t| vision.forward(&t))
                     .and_then(|o| o.squeeze(0));
                 match done {
@@ -546,8 +558,8 @@ fn run_tower(
     let done = slots
         .into_inner()
         .map_err(|_| Error::Other("argus: tile results poisoned".into()))?;
-    let mut out = Vec::with_capacity(pre.tiles);
-    let mut ms = Vec::with_capacity(pre.tiles);
+    let mut out = Vec::with_capacity(tiles);
+    let mut ms = Vec::with_capacity(tiles);
     for (i, slot) in done.into_iter().enumerate() {
         let (block, t) = slot.ok_or_else(|| Error::Model(format!("tile {i} produced nothing")))?;
         out.push(block);
@@ -565,6 +577,13 @@ fn run_tower(
 enum Piece<'a> {
     Text(&'a str),
     Image(&'a ImageBuffer),
+}
+
+/// One segment of an assembled user turn: literal text, or the image block
+/// for a `(rows, cols)` grid (whose ids [`assemble`] memoises).
+enum Seg<'a> {
+    Text(&'a str),
+    Block(usize, usize),
 }
 
 impl SmolVlm {
@@ -625,10 +644,10 @@ impl SmolVlm {
         // block in the string is the Nth image's blocks in the tensor. Two
         // separate walks is how those get out of order.
         let mut blocks: Vec<Tensor> = Vec::new();
-        let mut text = String::new();
+        let mut segs: Vec<Seg<'_>> = Vec::with_capacity(pieces.len());
         for piece in pieces {
             match piece {
-                Piece::Text(t) => text.push_str(t),
+                Piece::Text(t) => segs.push(Seg::Text(t)),
                 Piece::Image(img) => {
                     let t_pre = crate::clock::Instant::now();
                     let rgb = to_rgb8(img)?;
@@ -650,7 +669,8 @@ impl SmolVlm {
                         ));
                     }
                     let t_tower = crate::clock::Instant::now();
-                    let (tiles, per_tile_ms) = run_tower(&m.vision, &pre, &m.device)?;
+                    let (rows, cols) = (pre.rows, pre.cols);
+                    let (tiles, per_tile_ms) = run_tower(&m.vision, pre, &m.device)?;
                     blocks.extend(tiles);
                     if let Some(tr) = trace.as_deref_mut() {
                         // WALL time, not the sum of the per-tile timings. The
@@ -662,42 +682,17 @@ impl SmolVlm {
                         tr.tower_ms += t_tower.elapsed().as_secs_f64() * 1e3;
                         tr.tower_per_tile_ms.extend(per_tile_ms);
                     }
-                    text.push_str(&m.layout.image_block(pre.rows, pre.cols));
+                    segs.push(Seg::Block(rows, cols));
                 }
             }
         }
-
-        // The chat turn. `user_turn` would rebuild the image block, so the
-        // template is applied to the text already assembled.
-        let t_asm = crate::clock::Instant::now();
-        let templated = format!("<|im_start|>User:{text}<end_of_utterance>\nAssistant:");
-        let enc = m
-            .tokenizer
-            .encode(templated.as_str(), true)
-            .map_err(|e| Error::Model(format!("tokenize: {e}")))?;
-        let ids: Vec<i64> = enc.get_ids().iter().map(|&i| i64::from(i)).collect();
-        // Backstop. The geometry check above bounds the IMAGE tokens; this
-        // catches a prompt whose TEXT pushes it over — a long question, or a
-        // template that grew. Kept because the two failures have different
-        // causes and a caller shouldn't have to guess which one they hit.
-        if ids.len() >= m.max_positions {
-            return Err(Error::Other(format!(
-                "argus: assembled prompt is {} tokens but the text tower holds {} — \
-                 {planned_tokens} of those are image tokens, so the rest is text",
-                ids.len(),
-                m.max_positions
-            )));
-        }
-
-        let image_hidden = Tensor::stack(&blocks, 0)?;
-        let id_tensor = Tensor::from_vec(enc.get_ids().to_vec(), (1, ids.len()), &m.device)?;
 
         let mut dec = m
             .decoder
             .lock()
             .map_err(|_| Error::Other("argus: decoder mutex poisoned".into()))?;
-        let text_embeds = dec.embed(&id_tensor)?;
-        let merged = merge_image_embeddings(&text_embeds, &image_hidden, &ids, m.image_token_id)?;
+        let t_asm = crate::clock::Instant::now();
+        let (ids, merged) = assemble(m, &dec, &segs, &blocks, planned_tokens)?;
 
         let mut dtrace = crate::decode::DecodeTrace::default();
         if let Some(tr) = trace.as_deref_mut() {
@@ -730,6 +725,119 @@ impl SmolVlm {
             tr.detokenize_ms = t_detok.elapsed().as_secs_f64() * 1e3;
         }
         Ok(answer)
+    }
+}
+
+/// Chat template, tokenize, embed, splice: the assembled `inputs_embeds`.
+///
+/// Factored out of `caption_traced` so `examples/ir_argus assemble` counts
+/// exactly the code a caption runs.
+fn assemble(
+    m: &Model,
+    dec: &TextDecoder,
+    segs: &[Seg<'_>],
+    blocks: &[Tensor],
+    planned_tokens: usize,
+) -> Result<(Vec<i64>, Tensor)> {
+    // The chat turn, tokenized a segment at a time.
+    //
+    // Every token an image block is made of is an ADDED special token with no
+    // strip or normalise flags, and this tokenizer has no post-processor, so
+    // the tokenizer splits added tokens out before it looks at anything else:
+    // tokenizing `text | block | text` as one string and as three gives the
+    // same ids. That makes a block's ids a function of `(rows, cols)` alone,
+    // computed once ([`Model::block_ids`]), and leaves only the user's text and
+    // the template to tokenize per caption -- ~100 bytes instead of 8.5 KB.
+    let tokenize = |s: &str, ids: &mut Vec<u32>| -> Result<()> {
+        if !s.is_empty() {
+            let enc = m
+                .tokenizer
+                .encode(s, true)
+                .map_err(|e| Error::Model(format!("tokenize: {e}")))?;
+            ids.extend_from_slice(enc.get_ids());
+        }
+        Ok(())
+    };
+    let mut raw: Vec<u32> = Vec::with_capacity(planned_tokens + 64);
+    let mut buf = String::from("<|im_start|>User:");
+    for seg in segs {
+        match seg {
+            Seg::Text(t) => buf.push_str(t),
+            Seg::Block(r, c) => {
+                tokenize(&buf, &mut raw)?;
+                buf.clear();
+                let cached = m
+                    .block_ids
+                    .lock()
+                    .map_err(|_| Error::Other("argus: block-id cache poisoned".into()))?
+                    .get(&(*r, *c))
+                    .cloned();
+                let block = if let Some(b) = cached {
+                    b
+                } else {
+                    let mut b = Vec::new();
+                    tokenize(&m.layout.image_block(*r, *c), &mut b)?;
+                    let b: std::sync::Arc<[u32]> = b.into();
+                    if let Ok(mut g) = m.block_ids.lock() {
+                        g.insert((*r, *c), b.clone());
+                    }
+                    b
+                };
+                raw.extend_from_slice(&block);
+            }
+        }
+    }
+    buf.push_str("<end_of_utterance>\nAssistant:");
+    tokenize(&buf, &mut raw)?;
+    let ids: Vec<i64> = raw.iter().map(|&i| i64::from(i)).collect();
+    // Backstop. The geometry check bounds the IMAGE tokens; this catches a
+    // prompt whose TEXT pushes it over — a long question, or a template that
+    // grew. Kept because the two failures have different causes and a caller
+    // shouldn't have to guess which one they hit.
+    if ids.len() >= m.max_positions {
+        return Err(Error::Other(format!(
+            "argus: assembled prompt is {} tokens but the text tower holds {} —              {planned_tokens} of those are image tokens, so the rest is text",
+            ids.len(),
+            m.max_positions
+        )));
+    }
+    let image_hidden = Tensor::stack(blocks, 0)?;
+    // Embed only the TEXT positions: every image position's embedding was
+    // looked up and then overwritten by the merge.
+    let text_ids: Vec<u32> = raw
+        .iter()
+        .zip(&ids)
+        .filter(|&(_, &i)| i != m.image_token_id)
+        .map(|(&r, _)| r)
+        .collect();
+    let n_text = text_ids.len();
+    let id_tensor = Tensor::from_vec(text_ids, (1, n_text), &m.device)?;
+    let text_embeds = dec.embed(&id_tensor)?;
+    let merged = crate::prompt::merge_compact(&text_embeds, &image_hidden, &ids, m.image_token_id)?;
+    Ok((ids, merged))
+}
+
+impl SmolVlm {
+    /// Prompt assembly for a `rows x cols` split image whose tower output is
+    /// `blocks` — for `examples/ir_argus assemble` only.
+    ///
+    /// # Errors
+    /// Whatever assembly would return inside a caption.
+    pub fn assemble_for_probe(
+        &self,
+        rows: usize,
+        cols: usize,
+        question: &str,
+        blocks: &[Tensor],
+    ) -> Result<Tensor> {
+        let m = self.model()?;
+        let segs = [Seg::Block(rows, cols), Seg::Text(question)];
+        let planned = (rows * cols + 1) * m.layout.tokens_per_tile;
+        let dec = m
+            .decoder
+            .lock()
+            .map_err(|_| Error::Other("argus: decoder mutex poisoned".into()))?;
+        Ok(assemble(m, &dec, &segs, blocks, planned)?.1)
     }
 }
 
@@ -913,6 +1021,7 @@ fn build(
 
     Ok(Model {
         vision,
+        block_ids: Mutex::new(std::collections::HashMap::new()),
         decoder: Mutex::new(decoder),
         tokenizer,
         layout,

@@ -59,6 +59,11 @@ on **token equality with the Python reference**:
   tower has since taken a further **1.199x (16.6 %)**, verified by interleaved
   in-process A/B against a null arm; the end-to-end figure has not been
   re-measured since, and is not extrapolated here ([below](#performance)).
+- **0.10.1 executes 24 % fewer instructions per prefill** and 15 % fewer per
+  decoded token than 0.10.0, counted with callgrind on one core, with the
+  caption, the tokens and the preprocessed bytes unchanged. Wall time is not
+  re-measured, so the PyTorch comparison above is still the 0.10.0 figure
+  ([below](#counted-010-1)).
 - **Deterministic by default.** Greedy decode, reproducible with no seed.
   Sampling is opt-in and *requires* `--seed`: passing `--temperature` alone is
   refused rather than quietly returning a caption you cannot reproduce.
@@ -117,6 +122,27 @@ in the native tree. We will not tell you there is "no C" until there is
 none.</sub>
 
 ### Performance
+
+<a id="counted-010-1"></a>
+**0.10.1, counted.** 45 changes across 15 veins, each kept only if it
+lowered the deterministic instruction count (callgrind Ir, one core, one
+thread) when counted alone. Outputs are gated byte-identical: the caption,
+all decode tokens, the preprocessed tiles and the assembled prompt.
+
+| instrument | 0.10.0 | 0.10.1 | |
+|---|---:|---:|---:|
+| prefill, 1142 tokens | 120.53 G | 91.35 G | **−24.2 %** |
+| decode, 8 tokens | 929.3 M | 786.9 M | **−15.3 %** |
+| caption, 16 tokens end to end | 81.98 G | 74.85 G | **−8.7 %** |
+| preprocess, 17 tiles | 7.32 G | 1.09 G | **−85.1 %** |
+| prompt assembly | 26.5 M | 11.0 M | **−58.7 %** |
+| one vision tile | 67.90 G | 67.35 G | −0.8 % |
+
+The tile barely moves because 94 % of it is candle's GEMM microkernel. The
+instruction counts do not price cache or memory traffic, so the wall-clock
+tables below are 0.10.0 measurements and have not been re-taken. The
+per-change ledger, including every refuted attempt with its number, is
+[`docs/plans/argus-ir-veins.md`](../../docs/plans/argus-ir-veins.md).
 
 **Against PyTorch, stage by stage** — the same image (17 tiles, 1142 prompt
 tokens, 32 generated), the same checkpoint, both warm, on an idle machine.

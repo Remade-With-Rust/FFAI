@@ -22,6 +22,7 @@ pub mod clock;
 pub mod cost;
 pub mod decode;
 pub mod engine;
+pub mod mm;
 pub mod par;
 pub mod preprocess;
 pub mod prompt;

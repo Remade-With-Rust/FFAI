@@ -1556,3 +1556,375 @@ unsafe fn gelu_tanh_simd128(xs: &mut [f32]) {
         }
     }
 }
+
+/// `gate[i] = silu(gate[i]) * up[i]` — `SwiGLU`'s activation and product, in place.
+///
+/// # Why a kernel
+///
+/// The obvious loop `*g = silu(*g) * u` is call-free and branch-free, and it
+/// still measured ~27 instructions per element in the text tower's prefill
+/// (52.6 M elements, 1.4 G Ir): on the SSE2 baseline the polynomial's
+/// float->int cast and the divide did not widen. This is the same lanes the
+/// GELU kernel uses, eight wide with FMA Horner.
+///
+/// Float-close to the scalar oracle (FMA contraction), gated by tolerance.
+pub fn silu_mul_inplace(gate: &mut [f32], up: &[f32]) {
+    debug_assert_eq!(gate.len(), up.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: both features probed immediately above.
+            #[allow(unsafe_code)]
+            unsafe { silu_mul_avx2(gate, up) };
+            return;
+        }
+    }
+    silu_mul_scalar(gate, up);
+}
+
+/// The oracle.
+pub fn silu_mul_scalar(gate: &mut [f32], up: &[f32]) {
+    for (g, &u) in gate.iter_mut().zip(up) {
+        *g = silu(*g) * u;
+    }
+}
+
+/// # Safety
+/// Caller must have verified `avx2` and `fma`.
+#[allow(clippy::many_single_char_names, clippy::wildcard_imports)]
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
+unsafe fn silu_mul_avx2(gate: &mut [f32], up: &[f32]) {
+    // SAFETY: the contract is stated on the `unsafe fn` signature above; every
+    // load/store below is at `i + 8 <= n <= len` of both slices.
+    unsafe {
+        use std::arch::x86_64::*;
+        const L1: f32 = std::f32::consts::LN_2;
+        const L2: f32 = L1 * L1 / 2.0;
+        const L3: f32 = L1 * L1 * L1 / 6.0;
+        const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+        const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+        let one = _mm256_set1_ps(1.0);
+        let nlog2e = _mm256_set1_ps(-std::f32::consts::LOG2_E);
+        let magic = _mm256_set1_ps(MAGIC);
+        let lo = _mm256_set1_ps(-125.0);
+        let hi = _mm256_set1_ps(125.0);
+        let (c1, c2, c3, c4, c5) = (
+            _mm256_set1_ps(L1),
+            _mm256_set1_ps(L2),
+            _mm256_set1_ps(L3),
+            _mm256_set1_ps(L4),
+            _mm256_set1_ps(L5),
+        );
+        let bias = _mm256_set1_epi32(127);
+        let n = gate.len().min(up.len());
+        let mut i = 0;
+        while i + 8 <= n {
+            let x = _mm256_loadu_ps(gate.as_ptr().add(i));
+            let u = _mm256_loadu_ps(up.as_ptr().add(i));
+            // exp(-x) == exp2(-x * log2(e)), clamped like the scalar.
+            let t = _mm256_mul_ps(x, nlog2e);
+            let t = _mm256_min_ps(_mm256_max_ps(t, lo), hi);
+            let r = _mm256_sub_ps(_mm256_add_ps(t, magic), magic);
+            let f = _mm256_sub_ps(t, r);
+            let p = _mm256_fmadd_ps(f, c5, c4);
+            let p = _mm256_fmadd_ps(f, p, c3);
+            let p = _mm256_fmadd_ps(f, p, c2);
+            let p = _mm256_fmadd_ps(f, p, c1);
+            let p = _mm256_fmadd_ps(f, p, one);
+            let e = _mm256_slli_epi32::<23>(_mm256_add_epi32(_mm256_cvtps_epi32(r), bias));
+            let ex = _mm256_mul_ps(p, _mm256_castsi256_ps(e));
+            let sl = _mm256_div_ps(x, _mm256_add_ps(one, ex));
+            _mm256_storeu_ps(gate.as_mut_ptr().add(i), _mm256_mul_ps(sl, u));
+            i += 8;
+        }
+        while i < n {
+            gate[i] = silu(gate[i]) * up[i];
+            i += 1;
+        }
+    }
+}
+
+#[cfg(test)]
+mod silu_mul_tests {
+    use super::*;
+
+    #[test]
+    fn the_silu_mul_kernel_matches_the_scalar_oracle() {
+        let n = 1029; // not a multiple of 8: the tail runs too
+        let g0: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.037).sin() * 9.0).collect();
+        let u: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.011).cos() * 3.0).collect();
+        let (mut a, mut b) = (g0.clone(), g0);
+        silu_mul_inplace(&mut a, &u);
+        silu_mul_scalar(&mut b, &u);
+        for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+            let err = (x - y).abs() / y.abs().max(1e-3);
+            assert!(err < 1e-5, "element {i}: kernel {x} vs scalar {y}");
+        }
+    }
+}
+
+/// `dst[i] = gelu_tanh(src[i] + bias[i])` — a bias add folded into the GELU.
+///
+/// The caller's two-pass form wrote `src + bias` into `dst` and then ran
+/// [`gelu_tanh_inplace`] over it: a full store and reload of the row for one
+/// add. Here the sum stays in a register. On `x86_64` it is the same f32 sum
+/// fed to the same AVX2 polynomial, so the result is byte-identical; other
+/// targets keep the two-pass form and their own SIMD twins.
+pub fn gelu_tanh_bias_into(dst: &mut [f32], src: &[f32], bias: &[f32]) {
+    debug_assert!(src.len() == dst.len() && bias.len() == dst.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: both features probed immediately above.
+            #[allow(unsafe_code)]
+            unsafe { gelu_tanh_bias_avx2(dst, src, bias) };
+            return;
+        }
+    }
+    for ((o, &v), &b) in dst.iter_mut().zip(src).zip(bias) {
+        *o = v + b;
+    }
+    gelu_tanh_inplace(dst);
+}
+
+/// [`gelu_tanh_avx2`] reading `src + bias` instead of `xs` in place.
+///
+/// # Safety
+/// Caller must have verified `avx2` and `fma`.
+#[allow(clippy::many_single_char_names, clippy::wildcard_imports, clippy::excessive_precision)]
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
+unsafe fn gelu_tanh_bias_avx2(dst: &mut [f32], src: &[f32], bias_v: &[f32]) {
+    // SAFETY: the contract is stated on the `unsafe fn` signature above; every
+    // load/store is at `i + 8 <= n`, `n` the shortest of the three slices.
+    unsafe {
+        use std::arch::x86_64::*;
+        const L1: f32 = std::f32::consts::LN_2;
+        const L2: f32 = L1 * L1 / 2.0;
+        const L3: f32 = L1 * L1 * L1 / 6.0;
+        const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+        const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+        let sq2pi = _mm256_set1_ps(0.797_884_56);
+        let k = _mm256_set1_ps(0.044_715);
+        let one = _mm256_set1_ps(1.0);
+        let m2 = _mm256_set1_ps(-2.0);
+        let log2e = _mm256_set1_ps(std::f32::consts::LOG2_E);
+        let magic = _mm256_set1_ps(MAGIC);
+        let lo = _mm256_set1_ps(-125.0);
+        let hi = _mm256_set1_ps(125.0);
+        let (c1, c2, c3, c4, c5) = (
+            _mm256_set1_ps(L1),
+            _mm256_set1_ps(L2),
+            _mm256_set1_ps(L3),
+            _mm256_set1_ps(L4),
+            _mm256_set1_ps(L5),
+        );
+        let bias = _mm256_set1_epi32(127);
+        let n = dst.len().min(src.len()).min(bias_v.len());
+        let mut i = 0;
+        while i + 8 <= n {
+            let x = _mm256_add_ps(
+                _mm256_loadu_ps(src.as_ptr().add(i)),
+                _mm256_loadu_ps(bias_v.as_ptr().add(i)),
+            );
+            let x2 = _mm256_mul_ps(x, x);
+            let z = _mm256_mul_ps(_mm256_mul_ps(sq2pi, x), _mm256_fmadd_ps(k, x2, one));
+            let t = _mm256_mul_ps(_mm256_mul_ps(m2, z), log2e);
+            let t = _mm256_min_ps(_mm256_max_ps(t, lo), hi);
+            let r = _mm256_sub_ps(_mm256_add_ps(t, magic), magic);
+            let f = _mm256_sub_ps(t, r);
+            let p = _mm256_fmadd_ps(f, c5, c4);
+            let p = _mm256_fmadd_ps(f, p, c3);
+            let p = _mm256_fmadd_ps(f, p, c2);
+            let p = _mm256_fmadd_ps(f, p, c1);
+            let p = _mm256_fmadd_ps(f, p, one);
+            let e = _mm256_slli_epi32::<23>(_mm256_add_epi32(_mm256_cvtps_epi32(r), bias));
+            let ex = _mm256_mul_ps(p, _mm256_castsi256_ps(e));
+            _mm256_storeu_ps(dst.as_mut_ptr().add(i), _mm256_div_ps(x, _mm256_add_ps(one, ex)));
+            i += 8;
+        }
+        while i < n {
+            dst[i] = gelu_tanh(src[i] + bias_v[i]);
+            i += 1;
+        }
+    }
+}
+
+#[cfg(test)]
+mod gelu_bias_tests {
+    use super::*;
+
+    #[test]
+    fn gelu_bias_is_the_two_pass_form_exactly() {
+        let n = 3075; // a tail too
+        let src: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.013).sin() * 6.0).collect();
+        let bias: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.007).cos()).collect();
+        let mut one = vec![0f32; n];
+        gelu_tanh_bias_into(&mut one, &src, &bias);
+        let mut two: Vec<f32> = src.iter().zip(&bias).map(|(a, b)| a + b).collect();
+        gelu_tanh_inplace(&mut two);
+        assert_eq!(one, two, "the fused GELU must equal add-then-GELU bit for bit");
+    }
+}
+
+/// [`exp_sub_sum_inplace`] for the softmax case, where `max` is the row's own
+/// maximum: `t = (x - max) * log2(e) <= 0` for every element, so the upper
+/// clamp at `+125` can never select and is dropped — one `vminps` per eight
+/// elements, over every score of every attention layer.
+///
+/// Byte-identical to [`exp_sub_sum_inplace`] under its precondition (`min(t,
+/// 125) == t` for `t <= 0`). Off `x86_64` it IS [`exp_sub_sum_inplace`].
+///
+/// # Precondition
+/// `max >= x` for every `x` in `row` (e.g. `max = max_f32(row)`). A smaller
+/// `max` could push `t` past 125 and overflow the exponent field.
+pub fn exp_sub_rowmax_sum_inplace(row: &mut [f32], max: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: both features probed immediately above.
+            #[allow(unsafe_code)]
+            return unsafe { exp_sub_rowmax_sum_avx2(row, max) };
+        }
+    }
+    exp_sub_sum_inplace(row, max)
+}
+
+/// # Safety
+/// Caller must have verified `avx2` and `fma`; `max` must be `>=` every element.
+#[allow(clippy::many_single_char_names, clippy::wildcard_imports)]
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(unsafe_code)]
+unsafe fn exp_sub_rowmax_sum_avx2(row: &mut [f32], max: f32) -> f32 {
+    // SAFETY: the contract is stated on the `unsafe fn` signature above.
+    unsafe {
+        use std::arch::x86_64::*;
+        const L1: f32 = std::f32::consts::LN_2;
+        const L2: f32 = L1 * L1 / 2.0;
+        const L3: f32 = L1 * L1 * L1 / 6.0;
+        const L4: f32 = L1 * L1 * L1 * L1 / 24.0;
+        const L5: f32 = L1 * L1 * L1 * L1 * L1 / 120.0;
+        let vmax = _mm256_set1_ps(max);
+        let log2e = _mm256_set1_ps(std::f32::consts::LOG2_E);
+        let magic = _mm256_set1_ps(MAGIC);
+        let lo = _mm256_set1_ps(-125.0);
+        let c1 = _mm256_set1_ps(L1);
+        let c2 = _mm256_set1_ps(L2);
+        let c3 = _mm256_set1_ps(L3);
+        let c4 = _mm256_set1_ps(L4);
+        let c5 = _mm256_set1_ps(L5);
+        let one = _mm256_set1_ps(1.0);
+        let bias = _mm256_set1_epi32(127);
+        let mut acc = _mm256_setzero_ps();
+        let n = row.len();
+        let mut i = 0;
+        while i + 8 <= n {
+            let x = _mm256_loadu_ps(row.as_ptr().add(i));
+            let t = _mm256_mul_ps(_mm256_sub_ps(x, vmax), log2e);
+            // Only the LOWER clamp: t <= 0 by the precondition.
+            let t = _mm256_max_ps(t, lo);
+            let r = _mm256_sub_ps(_mm256_add_ps(t, magic), magic);
+            let f = _mm256_sub_ps(t, r);
+            let p = _mm256_fmadd_ps(f, c5, c4);
+            let p = _mm256_fmadd_ps(f, p, c3);
+            let p = _mm256_fmadd_ps(f, p, c2);
+            let p = _mm256_fmadd_ps(f, p, c1);
+            let p = _mm256_fmadd_ps(f, p, one);
+            let e = _mm256_cvtps_epi32(r);
+            let e = _mm256_slli_epi32::<23>(_mm256_add_epi32(e, bias));
+            let out = _mm256_mul_ps(p, _mm256_castsi256_ps(e));
+            _mm256_storeu_ps(row.as_mut_ptr().add(i), out);
+            acc = _mm256_add_ps(acc, out);
+            i += 8;
+        }
+        let mut lanes = [0f32; 8];
+        _mm256_storeu_ps(lanes.as_mut_ptr(), acc);
+        let mut sum = ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3]))
+            + ((lanes[4] + lanes[5]) + (lanes[6] + lanes[7]));
+        while i < n {
+            let e = exp(row[i] - max);
+            row[i] = e;
+            sum += e;
+            i += 1;
+        }
+        sum
+    }
+}
+
+#[cfg(test)]
+mod rowmax_tests {
+    use super::*;
+
+    #[test]
+    fn dropping_the_upper_clamp_changes_nothing_when_max_is_the_row_max() {
+        let n = 1143;
+        let row: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.029).sin() * 40.0).collect();
+        let max = max_f32(&row);
+        let (mut a, mut b) = (row.clone(), row);
+        let sa = exp_sub_rowmax_sum_inplace(&mut a, max);
+        let sb = exp_sub_sum_inplace(&mut b, max);
+        assert_eq!(a, b);
+        assert_eq!(sa.to_bits(), sb.to_bits());
+    }
+}
+
+/// The row-softmax kernels this CPU runs, resolved ONCE.
+///
+/// [`max_f32`] and [`exp_sub_rowmax_sum_inplace`] each probe the CPU's
+/// features on every call. A softmax calls both once per ROW — 147 K rows per
+/// vision tile, 10 K per text layer in prefill — so the probes were a fixed
+/// tax on every row. Resolve the pair once per op and call through the table.
+/// The functions are the same, so the results are byte-identical.
+#[derive(Clone, Copy)]
+pub struct RowKernels {
+    /// [`max_f32`].
+    pub max: fn(&[f32]) -> f32,
+    /// [`exp_sub_rowmax_sum_inplace`] (same precondition: `max >= every x`).
+    pub exp_sub_rowmax_sum: fn(&mut [f32], f32) -> f32,
+}
+
+/// Probe once and hand back the kernels this CPU will run.
+#[must_use]
+pub fn row_kernels() -> RowKernels {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return RowKernels { max: max_f32_avx2_entry, exp_sub_rowmax_sum: exp_rowmax_avx2_entry };
+        }
+    }
+    RowKernels { max: max_f32, exp_sub_rowmax_sum: exp_sub_rowmax_sum_inplace }
+}
+
+/// Only reachable through [`row_kernels`], after its AVX2 probe.
+#[cfg(target_arch = "x86_64")]
+fn max_f32_avx2_entry(xs: &[f32]) -> f32 {
+    // SAFETY: this private fn is only handed out by `row_kernels`, and only
+    // after `is_x86_feature_detected!("avx2")` returned true.
+    #[allow(unsafe_code)]
+    unsafe {
+        max_f32_avx2(xs)
+    }
+}
+
+/// Only reachable through [`row_kernels`], after its AVX2+FMA probe.
+#[cfg(target_arch = "x86_64")]
+fn exp_rowmax_avx2_entry(row: &mut [f32], max: f32) -> f32 {
+    // SAFETY: as above — handed out only after both features were probed.
+    #[allow(unsafe_code)]
+    unsafe {
+        exp_sub_rowmax_sum_avx2(row, max)
+    }
+}
+
+/// `dst[i] = silu(gate[i]) * up[i]` — [`silu_mul_inplace`] writing a separate
+/// destination, for a caller whose gate and up halves share one buffer but
+/// whose consumer wants the product dense. Same arithmetic per element.
+pub fn silu_mul_into(dst: &mut [f32], gate: &[f32], up: &[f32]) {
+    debug_assert!(dst.len() == gate.len() && gate.len() == up.len());
+    dst.copy_from_slice(gate);
+    silu_mul_inplace(dst, up);
+}

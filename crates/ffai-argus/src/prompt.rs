@@ -190,7 +190,7 @@ pub fn merge_image_embeddings(
     input_ids: &[i64],
     image_token_id: i64,
 ) -> candle_core::Result<candle_core::Tensor> {
-    use candle_core::{IndexOp, Tensor};
+    use candle_core::Tensor;
 
     let (batch, seq, dim) = text_embeds.dims3()?;
     if batch != 1 {
@@ -227,19 +227,89 @@ pub fn merge_image_embeddings(
     // Build the merged sequence row by row. `index_select` on the text side
     // plus a scatter would be terser; this is chosen for auditability, and the
     // sequence is ~1k rows so the cost is irrelevant next to a vision tower.
-    let text = text_embeds.i(0)?;
-    let mut rows: Vec<Tensor> = Vec::with_capacity(seq);
+    // ONE output buffer, one row copy per position. The form this replaces
+    // made a `Tensor::i` view per position (a tensor, a layout, an Arc bump)
+    // and then `Tensor::stack`ed ~1142 of them; the floats are the same.
+    let text = text_embeds.contiguous()?;
+    let img = img.contiguous()?;
+    let (ts, tl) = text.storage_and_layout();
+    let (is, il) = img.storage_and_layout();
+    let (
+        candle_core::Storage::Cpu(candle_core::CpuStorage::F32(tv)),
+        candle_core::Storage::Cpu(candle_core::CpuStorage::F32(iv)),
+        Some((to, _)),
+        Some((io, _)),
+    ) = (&*ts, &*is, tl.contiguous_offsets(), il.contiguous_offsets())
+    else {
+        candle_core::bail!("merge expects contiguous f32 CPU tensors");
+    };
+    let mut out: Vec<f32> = Vec::with_capacity(seq * dim);
     let mut next = 0usize;
     for (i, &tok) in input_ids.iter().enumerate() {
-        if tok == image_token_id {
-            rows.push(img.i(next)?);
+        let src = if tok == image_token_id {
             next += 1;
+            &iv[io + (next - 1) * dim..io + next * dim]
         } else {
-            rows.push(text.i(i)?);
-        }
+            &tv[to + i * dim..to + (i + 1) * dim]
+        };
+        out.extend_from_slice(src);
     }
     debug_assert_eq!(next, n_img, "every image vector must be consumed");
-    Tensor::stack(&rows, 0)?.unsqueeze(0)
+    let device = text_embeds.device().clone();
+    drop((ts, is));
+    Tensor::from_vec(out, (1, seq, dim), &device)
+}
+
+/// [`merge_image_embeddings`] for `text_rows` that hold ONLY the text
+/// positions' embeddings, in order — the image positions' rows were never
+/// looked up. Same output as embedding every id and merging.
+///
+/// # Errors
+/// If the counts disagree with `input_ids`.
+pub fn merge_compact(
+    text_rows: &candle_core::Tensor,
+    image_hidden: &candle_core::Tensor,
+    input_ids: &[i64],
+    image_token_id: i64,
+) -> candle_core::Result<candle_core::Tensor> {
+    use candle_core::Tensor;
+    let tr = text_rows.flatten_to(text_rows.rank() - 2)?.contiguous()?;
+    let img = image_hidden.flatten_to(image_hidden.rank() - 2)?.contiguous()?;
+    let (n_text, dim) = tr.dims2()?;
+    let (n_img, img_dim) = img.dims2()?;
+    let n_img_pos = input_ids.iter().filter(|&&t| t == image_token_id).count();
+    if img_dim != dim || n_img_pos != n_img || n_text + n_img != input_ids.len() {
+        candle_core::bail!(
+            "merge: {n_text} text rows + {n_img} image vectors for {} ids ({n_img_pos} image positions)",
+            input_ids.len()
+        );
+    }
+    let (ts, tl) = tr.storage_and_layout();
+    let (is, il) = img.storage_and_layout();
+    let (
+        candle_core::Storage::Cpu(candle_core::CpuStorage::F32(tv)),
+        candle_core::Storage::Cpu(candle_core::CpuStorage::F32(iv)),
+        Some((to, _)),
+        Some((io, _)),
+    ) = (&*ts, &*is, tl.contiguous_offsets(), il.contiguous_offsets())
+    else {
+        candle_core::bail!("merge expects contiguous f32 CPU tensors");
+    };
+    let mut out: Vec<f32> = Vec::with_capacity(input_ids.len() * dim);
+    let (mut ti, mut ii) = (0usize, 0usize);
+    for &tok in input_ids {
+        let src = if tok == image_token_id {
+            ii += 1;
+            &iv[io + (ii - 1) * dim..io + ii * dim]
+        } else {
+            ti += 1;
+            &tv[to + (ti - 1) * dim..to + ti * dim]
+        };
+        out.extend_from_slice(src);
+    }
+    let device = text_rows.device().clone();
+    drop((ts, is));
+    Tensor::from_vec(out, (1, input_ids.len(), dim), &device)
 }
 
 #[cfg(test)]

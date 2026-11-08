@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-v0.10.0...ffai-argus-v0.10.1) - 2026-11-08
+
+### Changed
+
+- 45 instruction-count wins across 15 veins (callgrind Ir, one core, each change counted alone). Against 0.10.0: prefill (1142 tokens) −24.2 %, decode −15.3 %, a whole 16-token caption −8.7 %, preprocessing −85.1 %, prompt assembly −58.7 %, one vision tile −0.8 % (94 % of a tile is the GEMM microkernel). The caption, the decode tokens and the preprocessed bytes match 0.10.0 exactly, and `decode_oracle` still gives 32/32 tokens. Wall time is not re-measured.
+- The largest changes are: prefill attention skips the masked half of each causal block, causal softmax runs on vector kernels, the Lanczos resampler was rewritten as row AXPYs, SwiGLU is a single-pass kernel, and GEMM outputs are no longer zero-filled before gemm overwrites them (`mm`, calling the `gemm` 0.19 crate candle already links).
+- Requires `ffai-core` 0.9.1 for the new `fastmath` kernels.
+
+### Added
+
+- `TextDecoder::step`, `decode::argmax`, `prompt::merge_compact`, `Engine::assemble_for_probe`, and the `mm` module.
+- `FFAI_ARGUS_MATMUL_CANDLE=1` routes every product back through candle's matmul.
+
 ## [0.10.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-v0.9.0...ffai-argus-v0.10.0) - 2026-11-07
 
 ### Changed

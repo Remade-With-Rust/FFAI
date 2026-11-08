@@ -17,6 +17,10 @@ audited_as = "0.8.0"
 version = "0.10.0"
 audited_as = "0.9.0"
 
+[[unpublished.ffai-argus]]
+version = "0.10.1"
+audited_as = "0.10.0"
+
 [[unpublished.ffai-argus-wasm]]
 version = "0.1.3"
 audited_as = "0.1.2"
@@ -96,6 +100,10 @@ audited_as = "0.7.2"
 [[unpublished.ffai-core]]
 version = "0.9.0"
 audited_as = "0.8.0"
+
+[[unpublished.ffai-core]]
+version = "0.9.1"
+audited_as = "0.9.0"
 
 [[unpublished.ffai-diana]]
 version = "0.7.8"

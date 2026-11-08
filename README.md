@@ -1,5 +1,5 @@
 ### In The Wild with 465,477 Active Installs
-> **In the wild** — [RAG Converter](https://ragconverter.com) uses `FFAI` for all three of its AI engines.
+> [RAG Converter](https://ragconverter.com) uses `FFAI` for all three of its AI engines.
 > It makes personal and work files AI-readable without them leaving the machine:
 > the whole conversion runs as WebAssembly in the browser tab, with nothing
 > uploaded and nothing to install.
@@ -94,27 +94,24 @@ ffai models         # list model manifests, licenses, cache status
 
 ## Components
 
-| Component | Crate | Task | Namesake | Compare |
+| Component | Crate | Task | Namesake | Where it stands |
 |---|---|---|---|---|
-| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR live**: full WhisperX layer (VAD · word timestamps · diarization) in pure Rust, **all four gates PASS vs whisper.cpp on both holdouts** — and at matched model size ahead on WER, CER *and* speed. Sizes tiny→medium, beam search, 0.84–0.92× its memory. **TTS live**: piper's own voices on candle, oracle-exact vs piper's runtime, **quality parity** through a frozen judge (5.49 % vs 5.27 % WER), **1.58× faster wall-clock at 5 % less CPU**, 10× faster load, and byte-identical output per seed — which piper structurally cannot offer ([Status](#status)) |
-| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR live**, with a LIVE streaming mode no mainstream tool ships: change-gated, **zero churn across 156 unchanged frames** where stateless Tesseract churns 24 times. On all **1 651 OmniDocBench pages, scored by its own evaluator**: text edit distance **0.116**, reading order **0.204**, with reading order computed rather than learned. Clearly behind Baidu's Unlimited-OCR (0.041 vs 0.108 text on a 236-page subset), at roughly **9× its throughput on CPU**. Earlier figures from our own scorer are withdrawn: it was 2.8× biased in our favour. **New in 0.11, for forms and scanned PDFs:** quarter-turn orientation (144/144), checkboxes, label → value pairing, and PDF pages read as a viewer shows them, redactions included ([Status](#status)). Photo accuracy still trails PaddleOCR |
+| **Mercury** | `ffai-mercury` | ASR + TTS | Roman god of language and messages | **ASR:** Whisper, tiny to medium, plus the WhisperX layer (VAD, word timestamps, diarization). Passes all four gates against whisper.cpp on both LibriSpeech holdouts: faster, 0.84–0.92× its memory, WER at parity. **TTS:** piper's own voices, oracle-exact against piper's runtime, same WER through a whisper.cpp judge (5.49 % vs 5.27 %). 1.58× faster wall-clock at 5 % less CPU, 10× faster load, byte-identical output per seed. |
+| **Carmenta** | `ffai-carmenta` | OCR | Roman goddess who adapted the Greek alphabet into Latin letters | **OCR**, including a live screen mode that emits only on change: zero churn over 156 unchanged frames, where per-frame engines churned 24 times. On all 1 651 OmniDocBench pages, scored by its own evaluator: text edit distance 0.116, reading order 0.204. Behind Unlimited-OCR (0.108 vs 0.041 on a 236-page subset) at about 9× its CPU throughput. 0.11 adds forms and PDFs: orientation, checkboxes, label–value pairs, redactions. Photo text still trails PaddleOCR. |
 | **Diana** | `ffai-diana` | Detection + tracking | Roman goddess of the hunt | **YOLO26**, all five tiers, loaded from the official Ultralytics `.pt` with no ONNX, plus metric depth. mAP50 within 0.08 pp of Ultralytics on every tier, at 1.6–5.6× less memory and 3.71× less CPU per frame. 0.10 executes 35 % fewer instructions per frame than 0.9; wall time is not yet re-measured. **ByteTrack** with no appearance model: 218 ID switches vs 800, IDF1 35.93 vs 36.92. Runs in the browser through [`ffai-wasm`](https://crates.io/crates/ffai-wasm). Behind ONNX Runtime on speed, up to 2.89× (an old-harness upper bound), though more accurate (0.7014 vs 0.6865). |
-| **Argus** | `ffai-argus` | VLM captioning / video understanding | Argus Panoptes, the all-seeing watchman | **VLM live.** `SmolVLM-256M-Instruct` on candle — `SigLIP` tower, pixel-shuffle connector, Llama decoder, ported tensor by tensor, plus **our own `SmolLM2` text tower** and our own `SigLIP` encoder. The gate is the strong form: from a **raw image file** through our resize, tiling, tower, prompt assembly and decode loop, the caption is **byte-identical** to the reference — **32/32 tokens**, six stages each gated in isolation. Scored **525/1000 on OCRBench** through VLMEvalKit against the checkpoint's **published 526**. **1.20x off PyTorch end to end** (10 918 vs 9 106 ms, same image, idle box, both arms repeated), with the deficit concentrated in the vision tower — down from **2.4x** across three optimization rounds: prefill **3.07x**, generate **2.05x**, the connector's `broadcast_matmul` **14.1x**, the patch embedding as a matmul **2.6x**. A fourth round then took the **vision tower itself 1.199x (16.6 %)**: `candle_nn::Linear`'s bias is a *separate single-threaded pass* that evicted every GEMM's working set, and folding the four biases into ops that already touch every element restored the projections from **288-347 to 500-563 GF/s**; softmax's normalising divide moved past `attn.v` (786 K divides instead of 12.6 M), and the connector's two-permute pixel shuffle became one bit-identical pass. Eight counter-attempts were refuted, including a hand-written GEMM at **0.11x** — candle's GEMM rewards large batched calls, and every trade of call size for locality lost. A fifth round then found a **quadratic in the KV cache**: `Tensor::cat` recopied the whole history every step (**52.7 MB per token**, growing with position), which a preallocated in-place append took to **46 KB — decode 53.9 -> 42.6 ms/token, 1.27x**, worth ~900 ms at the reference 64-token budget and more for video. Decode now sits at **78-92 % of its memory floor** (591 MB read per token), so what remains there is a dtype decision, not an optimisation. Footprint **0.71x** PyTorch's — **contradicted by the two most recent gate runs, which measure 1.29x and 1.54x the reference's memory; see [Status](#status)**. Video captions to `.srt`/`.vtt`/`.json` at constant memory per window; **no video quality claim is made** — the checkpoint is an image model with no published video row ([Status](#status)) |
+| **Argus** | `ffai-argus` | VLM captioning | Argus Panoptes, the all-seeing watchman | **SmolVLM-256M-Instruct** on candle, with our own SigLIP encoder and SmolLM2 text tower. From a raw image file, the caption matches the Python reference byte for byte (32/32 tokens). A single-image A/B on an idle box measures 1.20× slower than PyTorch, with the gap in the vision tower. The latest two four-gate runs put it ahead of `transformers` on speed and behind on memory (1.29× and 1.54×); neither magnitude has reproduced yet. 0.10.1 executes 24 % fewer instructions per prefill and 15 % fewer per decoded token than 0.10.0, with identical output; wall time is not yet re-measured. Video captions to `.srt`/`.vtt`/`.json`, with no video quality claim. |
 
-Infrastructure: `ffai-core` (types, engine traits, registry — candle is the
-tensor spine), `ffai-media` (ingest/egress, backed by
+Every figure is detailed, with its ledger line and caveats, under [Status](#status).
+
+Infrastructure: `ffai-core` (engine traits and registry, on candle),
+`ffai-media` (ingest and egress via
 [remade_ffmpeg_rs](https://github.com/Remade-With-Rust/remade_ffmpeg_rs)),
-`ffai-models` (weight manifests + cache), `ffai-bench` (the analyzer — see
-below), `ffai-cli` (the `ffai` binary), `ffai-demo` + `demo-ui` (a live
-three-tab demo: **Listen** puts Mercury and whisper.cpp on the same microphone
-in real time with speaker labels holding steady across chunks, **Speak**
-synthesizes what you type while showing the phonemes our G2P produced, the
-sentence split, and a byte-identical-under-a-seed determinism check, and
-**Read** takes an image you drop or paste and runs both OCR lineages over the
-identical pixels — with the content classifier showing which one the pipeline
-would dispatch to, so the measured sign-flip is something you can falsify on
-your own screenshot rather than take on trust —
-`cargo run --release -p ffai-demo`).
+`ffai-models` (weight manifests and cache), `ffai-bench` (the analyzer below),
+`ffai-cli` (the `ffai` binary), and `ffai-demo` with `demo-ui`. The demo has
+three tabs: **Listen** runs Mercury beside whisper.cpp on one microphone,
+**Speak** shows the phonemes and a same-seed determinism check, and **Read**
+runs both OCR lineages on an image you drop in
+(`cargo run --release -p ffai-demo`).
 
 ## The analyzer: `ffai bench`
 
@@ -943,6 +940,14 @@ was enough to change a generated token, because the output is argmaxed 32 times
 and one level is sometimes the difference. The fix was to implement PIL's
 *fixed-point* path exactly, `u8` intermediate and all. "Close enough" is not a
 property an image resampler gets to have when a language model reads the result.
+
+**0.10.1** carries an instruction-count campaign: 45 changes across 15 veins,
+each counted alone with callgrind on one core. Prefill executes 24.2 % fewer
+instructions, decode 15.3 % fewer, a whole caption 8.7 % fewer, preprocessing
+85.1 % fewer and prompt assembly 58.7 % fewer. The caption, the decode tokens
+and the preprocessed bytes are unchanged. The wall-clock figures in this
+section are 0.10.0 measurements and have not been re-taken. Ledger:
+[`docs/plans/argus-ir-veins.md`](docs/plans/argus-ir-veins.md).
 
 ```sh
 ffai caption -i street.jpg --prompt "What is written in this image?"
