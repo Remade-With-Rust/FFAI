@@ -12,4 +12,11 @@ ignore = [
     # A fourth, same scope: extract() aborts on a symlink entry with a huge
     # declared size. candle never calls extract. Added 2026-11-08.
     "RUSTSEC-2026-0429",
+    # ocipkg 0.2.9 - path traversal when unpacking an OCI archive. AUDIT ONLY,
+    # deliberately not in deny.toml: it is in Cargo.lock solely as
+    # candle-core's optional `mkl` feature (intel-mkl-src -> ocipkg), which no
+    # crate here enables, so it is never compiled. cargo-deny resolves features
+    # and does not see it; cargo-audit scans every lockfile entry and does.
+    # Added 2026-11-08. Review 2026-11-15, or if anything enables `mkl`.
+    "RUSTSEC-2026-0450",
 ]
