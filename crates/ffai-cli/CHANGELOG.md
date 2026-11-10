@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-cli-v0.11.1...ffai-cli-v0.11.2) - 2026-11-10
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.11.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-cli-v0.11.0...ffai-cli-v0.11.1) - 2026-11-08
 
 ### Other
