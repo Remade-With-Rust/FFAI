@@ -9,7 +9,7 @@ tab.
 
 Part of [Remade With Rust](https://github.com/Remade-With-Rust).
 
-## In The Wild with 465,477 Active Installs
+## In The Wild with 580,129 Active Installs
 
 > [RAG Converter](https://ragconverter.com) runs FFAI's engines as WebAssembly in
 > the browser to make personal and business files AI-readable: emails, PDFs,
