@@ -10,7 +10,10 @@ struct Rng(u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         self.0 >> 33
     }
     fn f32(&mut self, scale: f32) -> f32 {
@@ -36,7 +39,11 @@ impl Rng {
         (0..n)
             .map(|_| {
                 let h = (self.next() & 0xffff) as u16;
-                if (h & 0x7c00) == 0x7c00 { h & 0xbfff } else { h }
+                if (h & 0x7c00) == 0x7c00 {
+                    h & 0xbfff
+                } else {
+                    h
+                }
             })
             .collect()
     }
@@ -55,16 +62,31 @@ fn simd_tiers() -> Vec<Isa> {
 #[test]
 fn this_host_has_a_simd_tier() {
     // A host without one would make every test below compare scalar with scalar.
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     assert!(simd_tiers().len() > 1, "{:?}", simd_tiers());
-    eprintln!("tiers: {:?}", simd_tiers().iter().map(|i| i.name()).collect::<Vec<_>>());
+    eprintln!(
+        "tiers: {:?}",
+        simd_tiers().iter().map(|i| i.name()).collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn ternary_gemv_matches_the_oracle() {
     let mut rng = Rng(1);
-    for (rows, cols) in [(1usize, 128usize), (3, 256), (17, 640), (9, 2560), (5, 6912)] {
-        let trits: Vec<i8> = (0..rows * cols).map(|_| (rng.next() % 3) as i8 - 1).collect();
+    for (rows, cols) in [
+        (1usize, 128usize),
+        (3, 256),
+        (17, 640),
+        (9, 2560),
+        (5, 6912),
+    ] {
+        let trits: Vec<i8> = (0..rows * cols)
+            .map(|_| (rng.next() % 3) as i8 - 1)
+            .collect();
         let packed = pack(&trits, rows, cols, 1.0).unwrap();
         let codes = &packed[..rows * cols / 4];
         for case in 0..4 {
@@ -72,7 +94,9 @@ fn ternary_gemv_matches_the_oracle() {
                 0 => (0..cols).map(|_| (rng.next() % 256) as i8).collect(),
                 1 => vec![-128; cols],
                 2 => vec![127; cols],
-                _ => (0..cols).map(|i| if i % 2 == 0 { -128 } else { 127 }).collect(),
+                _ => (0..cols)
+                    .map(|i| if i % 2 == 0 { -128 } else { 127 })
+                    .collect(),
             };
             let mut want = vec![0i32; rows];
             rusty_ternary::kernel::gemv_codes(codes, cols, &a, &mut want).unwrap();
@@ -99,13 +123,101 @@ fn ternary_gemv_matches_the_oracle() {
 }
 
 #[test]
+fn i8f_matvec_matches_the_oracle() {
+    let mut rng = Rng(12);
+    for (rows, n) in [
+        (1usize, 1usize),
+        (3, 15),
+        (4, 16),
+        (5, 17),
+        (7, 33),
+        (9, 128),
+        (5, 2560),
+        (3, 2567),
+    ] {
+        let q: Vec<i8> = (0..rows * n)
+            .map(|_| {
+                i8::try_from(rng.next() % 255)
+                    .unwrap_or(0)
+                    .wrapping_sub(127)
+            })
+            .collect();
+        let x: Vec<f32> = rng
+            .floats(n, 30.0)
+            .iter()
+            .map(|&v| num::round_f16(v))
+            .collect();
+        let mut want = vec![0f32; rows];
+        i8f_matvec_scalar(&q, &x, &mut want);
+        for isa in simd_tiers() {
+            let mut got = vec![0f32; rows];
+            i8f_matvec(isa, &q, &x, &mut got);
+            assert_eq!(bits(&got), bits(&want), "{} {rows}x{n}", isa.name());
+        }
+    }
+}
+
+#[test]
+fn i8_gemv_matches_the_oracle() {
+    let mut rng = Rng(11);
+    for (rows, n) in [
+        (1usize, 1usize),
+        (3, 15),
+        (4, 16),
+        (5, 31),
+        (7, 32),
+        (9, 33),
+        (17, 2560),
+        (3, 2575),
+    ] {
+        for case in 0..3 {
+            let pick = |rng: &mut Rng| -> i8 {
+                match case {
+                    0 => i8::try_from(rng.next() % 255)
+                        .unwrap_or(0)
+                        .wrapping_sub(127),
+                    1 => {
+                        if rng.next().is_multiple_of(2) {
+                            127
+                        } else {
+                            -127
+                        }
+                    }
+                    _ => 127,
+                }
+            };
+            let q: Vec<i8> = (0..rows * n).map(|_| pick(&mut rng)).collect();
+            let a: Vec<i8> = (0..n).map(|_| pick(&mut rng)).collect();
+            let mut want = vec![0i32; rows];
+            i8_gemv_scalar(&q, &a, &mut want);
+            for isa in simd_tiers() {
+                let mut got = vec![0i32; rows];
+                i8_gemv(isa, &q, &a, &mut got);
+                assert_eq!(got, want, "{} {rows}x{n} case {case}", isa.name());
+            }
+        }
+    }
+}
+
+#[test]
 fn f16_matvec_matches_the_oracle() {
     let mut rng = Rng(2);
-    for (rows, len) in [(1usize, 1usize), (3, 15), (4, 16), (5, 17), (7, 33), (9, 128), (3, 2560), (2, 2567)] {
+    for (rows, len) in [
+        (1usize, 1usize),
+        (3, 15),
+        (4, 16),
+        (5, 17),
+        (7, 33),
+        (9, 128),
+        (3, 2560),
+        (2, 2567),
+    ] {
         let m = rng.halves(rows * len);
         let mb: Vec<u8> = m.iter().flat_map(|h| h.to_le_bytes()).collect();
         let x = rng.floats(len, 3.0);
-        let want: Vec<f32> = (0..rows).map(|r| num::dot16_f16(&m[r * len..(r + 1) * len], &x)).collect();
+        let want: Vec<f32> = (0..rows)
+            .map(|r| num::dot16_f16(&m[r * len..(r + 1) * len], &x))
+            .collect();
         for isa in simd_tiers() {
             let mut got = vec![0f32; rows];
             f16_matvec_bytes(isa, &mb, &x, &mut got);
@@ -114,12 +226,18 @@ fn f16_matvec_matches_the_oracle() {
         // Strided: rows `stride` apart starting at `offset`, as in the KV cache.
         let (offset, stride) = (3usize, len + 5);
         let v = rng.halves(offset + rows * stride);
-        let want: Vec<f32> =
-            (0..rows).map(|r| num::dot16_f16(&v[offset + r * stride..offset + r * stride + len], &x)).collect();
+        let want: Vec<f32> = (0..rows)
+            .map(|r| num::dot16_f16(&v[offset + r * stride..offset + r * stride + len], &x))
+            .collect();
         for isa in simd_tiers() {
             let mut got = vec![0f32; rows];
             f16_matvec_strided(isa, &v, offset, stride, &x, &mut got);
-            assert_eq!(bits(&got), bits(&want), "{} strided {rows}x{len}", isa.name());
+            assert_eq!(
+                bits(&got),
+                bits(&want),
+                "{} strided {rows}x{len}",
+                isa.name()
+            );
         }
     }
 }
@@ -127,10 +245,22 @@ fn f16_matvec_matches_the_oracle() {
 #[test]
 fn weighted_sum_matches_the_oracle() {
     let mut rng = Rng(3);
-    for (n, len) in [(1usize, 1usize), (2, 7), (5, 16), (9, 31), (33, 128), (300, 128), (4, 130)] {
+    for (n, len) in [
+        (1usize, 1usize),
+        (2, 7),
+        (5, 16),
+        (9, 31),
+        (33, 128),
+        (300, 128),
+        (4, 130),
+    ] {
         let (offset, stride) = (7usize, len + 3);
         let v = rng.halves(offset + n * stride);
-        let p: Vec<f32> = rng.floats(n, 1.0).iter().map(|x| num::round_f16(x.abs())).collect();
+        let p: Vec<f32> = rng
+            .floats(n, 1.0)
+            .iter()
+            .map(|x| num::round_f16(x.abs()))
+            .collect();
         let mut want = vec![0f32; len];
         num::weighted_sum_f16(&p, &v[offset..], stride, &mut want);
         for isa in simd_tiers() {
@@ -157,7 +287,12 @@ fn act_quant_matches_the_oracle() {
             for isa in simd_tiers() {
                 let mut got = vec![0i8; n];
                 let gs = act_quant(isa, &x, &mut got);
-                assert_eq!(gs.to_bits(), ws.to_bits(), "{} n {n} scale {scale}", isa.name());
+                assert_eq!(
+                    gs.to_bits(),
+                    ws.to_bits(),
+                    "{} n {n} scale {scale}",
+                    isa.name()
+                );
                 assert_eq!(got, want, "{} n {n} scale {scale}", isa.name());
             }
         }
@@ -191,7 +326,12 @@ fn softmax_matches_the_oracle() {
             for isa in simd_tiers() {
                 let mut got = x.clone();
                 softmax(isa, &mut got, 0.088_388_35);
-                assert_eq!(bits(&got), bits(&want), "{} n {n} scale {scale}", isa.name());
+                assert_eq!(
+                    bits(&got),
+                    bits(&want),
+                    "{} n {n} scale {scale}",
+                    isa.name()
+                );
             }
         }
     }
@@ -200,7 +340,9 @@ fn softmax_matches_the_oracle() {
 #[test]
 fn exp_twins_match_on_a_dense_sweep() {
     // Softmax feeds exp with x - max <= 0; sweep that range densely plus the clamps.
-    let mut x: Vec<f32> = (0..=100_000).map(|i| -100.0 + 100.0 * (i as f32 / 100_000.0)).collect();
+    let mut x: Vec<f32> = (0..=100_000)
+        .map(|i| -100.0 + 100.0 * (i as f32 / 100_000.0))
+        .collect();
     x.extend([0.0, -0.0, -87.0, -87.000_01, -1e30, f32::NEG_INFINITY]);
     // Softmax of a row with a single 0 max: every element's exp is exp_canon(x).
     let want: Vec<u32> = x.iter().map(|&v| num::exp_canon(v).to_bits()).collect();
@@ -242,7 +384,12 @@ fn check_f2h(isa: Isa, src: &[f32]) {
     f32_to_f16(isa, src, &mut got);
     for (i, (&g, &w)) in got.iter().zip(&want).enumerate() {
         if src[i].is_nan() {
-            assert!((g & 0x7c00) == 0x7c00 && (g & 0x3ff) != 0, "{} NaN {:#010x} -> {g:#06x}", isa.name(), src[i].to_bits());
+            assert!(
+                (g & 0x7c00) == 0x7c00 && (g & 0x3ff) != 0,
+                "{} NaN {:#010x} -> {g:#06x}",
+                isa.name(),
+                src[i].to_bits()
+            );
         } else {
             assert_eq!(g, w, "{} f32 {:#010x}", isa.name(), src[i].to_bits());
         }
@@ -251,7 +398,16 @@ fn check_f2h(isa: Isa, src: &[f32]) {
     round_f16_slice(isa, &mut r);
     for (i, v) in r.iter().enumerate() {
         let w = num::round_f16(src[i]);
-        assert!(if w.is_nan() { v.is_nan() } else { v.to_bits() == w.to_bits() }, "{} round {:#010x}", isa.name(), src[i].to_bits());
+        assert!(
+            if w.is_nan() {
+                v.is_nan()
+            } else {
+                v.to_bits() == w.to_bits()
+            },
+            "{} round {:#010x}",
+            isa.name(),
+            src[i].to_bits()
+        );
     }
 }
 
@@ -260,8 +416,18 @@ fn f32_to_f16_matches_on_every_16th_float_and_the_boundaries() {
     // Every 16th bit pattern (268M) is too slow for a unit test; take every 4099th (a prime
     // stride, so every exponent and every low-mantissa residue is hit), plus every pattern
     // around the rounding and range boundaries.
-    let mut src: Vec<f32> = (0..=u32::MAX / 4099).map(|i| f32::from_bits(i * 4099)).collect();
-    for edge in [0x3880_0000u32, 0x3300_0000, 0x477f_e000, 0x4780_0000, 0x7f80_0000, 0x3380_0000, 0x387f_c000] {
+    let mut src: Vec<f32> = (0..=u32::MAX / 4099)
+        .map(|i| f32::from_bits(i * 4099))
+        .collect();
+    for edge in [
+        0x3880_0000u32,
+        0x3300_0000,
+        0x477f_e000,
+        0x4780_0000,
+        0x7f80_0000,
+        0x3380_0000,
+        0x387f_c000,
+    ] {
         for d in 0..4096u32 {
             for s in [0u32, 0x8000_0000] {
                 src.push(f32::from_bits((edge - 2048 + d) | s));
@@ -279,7 +445,9 @@ fn f32_to_f16_matches_on_every_16th_float_and_the_boundaries() {
 fn f32_to_f16_matches_on_every_float() {
     let chunk = 1usize << 24;
     for c in 0..256u32 {
-        let src: Vec<f32> = (0..chunk as u32).map(|i| f32::from_bits((c << 24) | i)).collect();
+        let src: Vec<f32> = (0..chunk as u32)
+            .map(|i| f32::from_bits((c << 24) | i))
+            .collect();
         for isa in simd_tiers().into_iter().skip(1) {
             check_f2h(isa, &src);
         }
@@ -290,7 +458,9 @@ fn f32_to_f16_matches_on_every_float() {
 fn elementwise_twins_match_the_oracles() {
     let mut rng = Rng(7);
     for n in [1usize, 3, 4, 7, 8, 9, 15, 16, 17, 64, 2560, 6913] {
-        let sum: Vec<i32> = (0..n).map(|_| (rng.next() % 1_769_473) as i32 - 884_736).collect();
+        let sum: Vec<i32> = (0..n)
+            .map(|_| (rng.next() % 1_769_473) as i32 - 884_736)
+            .collect();
         let mut want = vec![0f32; n];
         num::finish_rows(&sum, 37.25, 1.218_850_5, &mut want);
         let g = rng.floats(n, 8.0);
@@ -332,7 +502,11 @@ fn the_census_counts_the_tier_that_ran() {
     let mut y = [0f32; 4];
     add_assign(isa, &mut y, &[1.0; 4]);
     let snap = census::snapshot();
-    assert!(snap.iter().any(|&(k, t, n)| k == "elementwise" && t == isa.name() && n >= 4), "{snap:?}");
+    assert!(
+        snap.iter()
+            .any(|&(k, t, n)| k == "elementwise" && t == isa.name() && n >= 4),
+        "{snap:?}"
+    );
 }
 
 #[test]

@@ -65,7 +65,19 @@ def ours(exe, gguf, ids_file, new, work, n):
     if r.returncode != 0:
         raise SystemExit(f'minerva failed on p{n}:\n{r.stderr[-2000:]}')
     ids = [int(x) for x in r.stdout.strip().splitlines()[-1].split(',') if x]
-    return ids, r.stderr.strip().splitlines()[-1], probs
+    timing = next(l for l in r.stderr.splitlines() if l.startswith('minerva: load'))
+    return ids, timing, probs
+
+
+def ours_screened(exe, gguf, ids_file, new):
+    """The same prompt through the head screen (brick d): the ids must be the full head's."""
+    env = dict(os.environ, MINERVA_HEAD='screen')
+    r = subprocess.run([exe, 'generate', '--gguf', gguf, '--ids', ids_file, '--new', str(new)],
+                       capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise SystemExit('minerva (screen) failed:\n' + r.stderr[-2000:])
+    screen = next((l for l in r.stderr.splitlines() if l.startswith('screen:')), '')
+    return [int(x) for x in r.stdout.strip().splitlines()[-1].split(',') if x], screen
 
 
 def main():
@@ -93,6 +105,10 @@ def main():
         assert len(prompt) == n, f'p{n}.ids holds {len(prompt)} ids'
         mine, timing, probs = ours(a.minerva, a.gguf, f, a.new, a.work, n)
         assert len(mine) == a.new, f'p{n}: {len(mine)} ids out, want {a.new}'
+        screened, screen = ours_screened(a.minerva, a.gguf, f, a.new)
+        if screened != mine:
+            raise SystemExit(f'p{n}: the head screen chose other ids than the full head')
+        print(f'p{n}: head screen ids == full head ids | {screen}', flush=True)
         if a.poison:
             mine = mine[1:] + mine[:1]
         print(f'p{n}: ours {len(mine)} ids | {timing}', flush=True)

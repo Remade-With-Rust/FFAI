@@ -45,7 +45,10 @@ fn h2f4(h: __m128i) -> __m128 {
         _mm_set1_ps(f32::from_bits(0x3880_0000)),
     ));
     o = _mm_or_si128(_mm_and_si128(denorm, od), _mm_andnot_si128(denorm, o));
-    _mm_castsi128_ps(_mm_or_si128(o, _mm_slli_epi32::<16>(_mm_and_si128(h, _mm_set1_epi32(0x8000)))))
+    _mm_castsi128_ps(_mm_or_si128(
+        o,
+        _mm_slli_epi32::<16>(_mm_and_si128(h, _mm_set1_epi32(0x8000))),
+    ))
 }
 
 /// Eight `f16` at `p` to two `f32x4`.
@@ -58,7 +61,10 @@ unsafe fn load8h(p: *const u8) -> (__m128, __m128) {
     // SAFETY: the caller guarantees 16 readable bytes.
     let h = unsafe { _mm_loadu_si128(p.cast()) };
     let z = _mm_setzero_si128();
-    (h2f4(_mm_unpacklo_epi16(h, z)), h2f4(_mm_unpackhi_epi16(h, z)))
+    (
+        h2f4(_mm_unpacklo_epi16(h, z)),
+        h2f4(_mm_unpackhi_epi16(h, z)),
+    )
 }
 
 /// Four `f32` to `f16` bits (in the low half of each `u32` lane), round to nearest even
@@ -71,13 +77,21 @@ fn f2h4(v: __m128) -> __m128i {
     let x = _mm_xor_si128(x0, sign);
     let big = _mm_cmpgt_epi32(x, _mm_set1_epi32(0x477f_ffff));
     let nan = _mm_cmpgt_epi32(x, _mm_set1_epi32(0x7f80_0000));
-    let o_big = _mm_or_si128(_mm_and_si128(nan, _mm_set1_epi32(0x7e00)), _mm_andnot_si128(nan, _mm_set1_epi32(0x7c00)));
+    let o_big = _mm_or_si128(
+        _mm_and_si128(nan, _mm_set1_epi32(0x7e00)),
+        _mm_andnot_si128(nan, _mm_set1_epi32(0x7c00)),
+    );
     let small = _mm_cmplt_epi32(x, _mm_set1_epi32(0x3880_0000));
     let magic = _mm_set1_epi32(0x3f00_0000);
-    let o_small =
-        _mm_sub_epi32(_mm_castps_si128(_mm_add_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(magic))), magic);
+    let o_small = _mm_sub_epi32(
+        _mm_castps_si128(_mm_add_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(magic))),
+        magic,
+    );
     let odd = _mm_and_si128(_mm_srli_epi32::<13>(x), _mm_set1_epi32(1));
-    #[expect(clippy::cast_possible_wrap, reason = "a bit pattern: (15 - 127) << 23, plus 0xfff")]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "a bit pattern: (15 - 127) << 23, plus 0xfff"
+    )]
     let rebias = _mm_set1_epi32(0xc800_0fff_u32 as i32);
     let o_norm = _mm_srli_epi32::<13>(_mm_add_epi32(_mm_add_epi32(x, rebias), odd));
     let o = _mm_or_si128(_mm_and_si128(big, o_big), _mm_andnot_si128(big, o_norm));
@@ -131,7 +145,10 @@ fn exp4(v: __m128) -> __m128 {
 #[target_feature(enable = "avx2")]
 #[inline]
 fn exp8(v: __m256) -> __m256 {
-    let x = _mm256_min_ps(_mm256_max_ps(v, _mm256_set1_ps(E::LO)), _mm256_set1_ps(E::HI));
+    let x = _mm256_min_ps(
+        _mm256_max_ps(v, _mm256_set1_ps(E::LO)),
+        _mm256_set1_ps(E::HI),
+    );
     let n = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(_mm256_mul_ps(
         x,
         _mm256_set1_ps(E::LOG2E),
@@ -145,7 +162,10 @@ fn exp8(v: __m256) -> __m256 {
     let y = _mm256_mul_ps(p, _mm256_mul_ps(r, r));
     let y = _mm256_add_ps(y, r);
     let y = _mm256_add_ps(y, _mm256_set1_ps(1.0));
-    let scale = _mm256_slli_epi32::<23>(_mm256_add_epi32(_mm256_cvtps_epi32(n), _mm256_set1_epi32(127)));
+    let scale = _mm256_slli_epi32::<23>(_mm256_add_epi32(
+        _mm256_cvtps_epi32(n),
+        _mm256_set1_epi32(127),
+    ));
     _mm256_mul_ps(y, _mm256_castsi256_ps(scale))
 }
 
@@ -177,8 +197,14 @@ pub(super) unsafe fn gemv_ssse3(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32
                     ($sh:literal, $g:literal) => {
                         let q0 = _mm_and_si128(_mm_srli_epi16::<$sh>(c0), mask);
                         let q1 = _mm_and_si128(_mm_srli_epi16::<$sh>(c1), mask);
-                        s = _mm_add_epi16(s, _mm_maddubs_epi16(q0, _mm_loadu_si128(ab.add($g * 32).cast())));
-                        s = _mm_add_epi16(s, _mm_maddubs_epi16(q1, _mm_loadu_si128(ab.add($g * 32 + 16).cast())));
+                        s = _mm_add_epi16(
+                            s,
+                            _mm_maddubs_epi16(q0, _mm_loadu_si128(ab.add($g * 32).cast())),
+                        );
+                        s = _mm_add_epi16(
+                            s,
+                            _mm_maddubs_epi16(q1, _mm_loadu_si128(ab.add($g * 32 + 16).cast())),
+                        );
                     };
                 }
                 group!(6, 0);
@@ -209,20 +235,193 @@ pub(super) unsafe fn gemv_avx2(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]
                 let c = _mm256_loadu_si256(row.add(b * 32).cast());
                 let ab = a.as_ptr().add(b * 128);
                 let q = |v: __m256i| _mm256_and_si256(v, mask);
-                let mut s = _mm256_maddubs_epi16(q(_mm256_srli_epi16::<6>(c)), _mm256_loadu_si256(ab.cast()));
-                s = _mm256_add_epi16(
-                    s,
-                    _mm256_maddubs_epi16(q(_mm256_srli_epi16::<4>(c)), _mm256_loadu_si256(ab.add(32).cast())),
+                let mut s = _mm256_maddubs_epi16(
+                    q(_mm256_srli_epi16::<6>(c)),
+                    _mm256_loadu_si256(ab.cast()),
                 );
                 s = _mm256_add_epi16(
                     s,
-                    _mm256_maddubs_epi16(q(_mm256_srli_epi16::<2>(c)), _mm256_loadu_si256(ab.add(64).cast())),
+                    _mm256_maddubs_epi16(
+                        q(_mm256_srli_epi16::<4>(c)),
+                        _mm256_loadu_si256(ab.add(32).cast()),
+                    ),
                 );
-                s = _mm256_add_epi16(s, _mm256_maddubs_epi16(q(c), _mm256_loadu_si256(ab.add(96).cast())));
+                s = _mm256_add_epi16(
+                    s,
+                    _mm256_maddubs_epi16(
+                        q(_mm256_srli_epi16::<2>(c)),
+                        _mm256_loadu_si256(ab.add(64).cast()),
+                    ),
+                );
+                s = _mm256_add_epi16(
+                    s,
+                    _mm256_maddubs_epi16(q(c), _mm256_loadu_si256(ab.add(96).cast())),
+                );
                 acc = _mm256_add_epi32(acc, _mm256_madd_epi16(s, ones));
             }
-            let h = _mm_add_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256::<1>(acc));
+            let h = _mm_add_epi32(
+                _mm256_castsi256_si128(acc),
+                _mm256_extracti128_si256::<1>(acc),
+            );
             *out = hsum_epi32(h) - a_sum;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// int8 x int8 GEMV (the head screen): `pmaddubsw(|q|, a·sign(q))`, both in -127..=127, so a
+// pair is at most 2·127² = 32,258 (no saturation); `pmaddwd` widens every block.
+
+fn i8_tail(q: &[i8], a: &[i8], from: usize) -> i32 {
+    q[from..]
+        .iter()
+        .zip(&a[from..])
+        .map(|(&w, &v)| i32::from(w) * i32::from(v))
+        .sum()
+}
+
+/// # Safety
+/// SSSE3; `q.len() == y.len() * a.len()`.
+#[target_feature(enable = "ssse3")]
+pub(super) unsafe fn i8_gemv_ssse3(q: &[i8], a: &[i8], y: &mut [i32]) {
+    let n = a.len();
+    let ones = _mm_set1_epi16(1);
+    for (r, out) in y.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        let mut acc = _mm_setzero_si128();
+        for i in 0..n / 16 {
+            // SAFETY: bytes `16i..16i+16` of the row and of `a`.
+            unsafe {
+                let w = _mm_loadu_si128(row.as_ptr().add(16 * i).cast());
+                let v = _mm_loadu_si128(a.as_ptr().add(16 * i).cast());
+                let p = _mm_maddubs_epi16(_mm_abs_epi8(w), _mm_sign_epi8(v, w));
+                acc = _mm_add_epi32(acc, _mm_madd_epi16(p, ones));
+            }
+        }
+        *out = hsum_epi32(acc) + i8_tail(row, a, n / 16 * 16);
+    }
+}
+
+/// # Safety
+/// AVX2; `q.len() == y.len() * a.len()`.
+#[target_feature(enable = "avx2")]
+pub(super) unsafe fn i8_gemv_avx2(q: &[i8], a: &[i8], y: &mut [i32]) {
+    let n = a.len();
+    let ones = _mm256_set1_epi16(1);
+    for (r, out) in y.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        let mut acc = _mm256_setzero_si256();
+        for i in 0..n / 32 {
+            // SAFETY: bytes `32i..32i+32` of the row and of `a`.
+            unsafe {
+                let w = _mm256_loadu_si256(row.as_ptr().add(32 * i).cast());
+                let v = _mm256_loadu_si256(a.as_ptr().add(32 * i).cast());
+                let p = _mm256_maddubs_epi16(_mm256_abs_epi8(w), _mm256_sign_epi8(v, w));
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(p, ones));
+            }
+        }
+        let h = _mm_add_epi32(
+            _mm256_castsi256_si128(acc),
+            _mm256_extracti128_si256::<1>(acc),
+        );
+        *out = hsum_epi32(h) + i8_tail(row, a, n / 32 * 32);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// int8 x f32 mat-vec (the head screen) in the canonical 16-lane order.
+
+/// Sixteen int8 at `p` sign-extended to four `f32x4` (SSE2: unpack with itself, shift down).
+///
+/// # Safety
+/// `p` readable for 16 bytes.
+#[target_feature(enable = "sse2")]
+#[inline]
+unsafe fn load16_i8_f32(p: *const i8) -> [__m128; 4] {
+    // SAFETY: the caller guarantees 16 readable bytes.
+    let v = unsafe { _mm_loadu_si128(p.cast()) };
+    let lo16 = _mm_srai_epi16::<8>(_mm_unpacklo_epi8(v, v));
+    let hi16 = _mm_srai_epi16::<8>(_mm_unpackhi_epi8(v, v));
+    let w = |h: __m128i, low: bool| {
+        let u = if low {
+            _mm_unpacklo_epi16(h, h)
+        } else {
+            _mm_unpackhi_epi16(h, h)
+        };
+        _mm_cvtepi32_ps(_mm_srai_epi32::<16>(u))
+    };
+    [w(lo16, true), w(lo16, false), w(hi16, true), w(hi16, false)]
+}
+
+/// # Safety
+/// SSSE3; `q.len() == out.len() * x.len()`.
+#[target_feature(enable = "ssse3")]
+pub(super) unsafe fn i8f_matvec_ssse3(q: &[i8], x: &[f32], out: &mut [f32]) {
+    let n = x.len();
+    let n16 = n / LANES;
+    for (r, o) in out.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        // SAFETY: chunk `i < n16` reads row bytes and `x` floats `16i..16i+16`.
+        unsafe {
+            let (mut a0, mut a1, mut a2, mut a3) = (
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+            );
+            for i in 0..n16 {
+                let [w0, w1, w2, w3] = load16_i8_f32(row.as_ptr().add(16 * i));
+                let xp = x.as_ptr().add(16 * i);
+                a0 = _mm_add_ps(a0, _mm_mul_ps(w0, _mm_loadu_ps(xp)));
+                a1 = _mm_add_ps(a1, _mm_mul_ps(w1, _mm_loadu_ps(xp.add(4))));
+                a2 = _mm_add_ps(a2, _mm_mul_ps(w2, _mm_loadu_ps(xp.add(8))));
+                a3 = _mm_add_ps(a3, _mm_mul_ps(w3, _mm_loadu_ps(xp.add(12))));
+            }
+            if n.is_multiple_of(LANES) {
+                *o = reduce4_canon(_mm_add_ps(_mm_add_ps(a0, a2), _mm_add_ps(a1, a3)));
+            } else {
+                let mut acc = [0f32; LANES];
+                _mm_storeu_ps(acc.as_mut_ptr(), a0);
+                _mm_storeu_ps(acc.as_mut_ptr().add(4), a1);
+                _mm_storeu_ps(acc.as_mut_ptr().add(8), a2);
+                _mm_storeu_ps(acc.as_mut_ptr().add(12), a3);
+                *o = super::i8f_finish(acc, row, x, n16 * LANES);
+            }
+        }
+    }
+}
+
+/// # Safety
+/// AVX2; `q.len() == out.len() * x.len()`.
+#[target_feature(enable = "avx2")]
+pub(super) unsafe fn i8f_matvec_avx2(q: &[i8], x: &[f32], out: &mut [f32]) {
+    let n = x.len();
+    let n16 = n / LANES;
+    for (r, o) in out.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        // SAFETY: chunk `i < n16` reads row bytes and `x` floats `16i..16i+16`.
+        unsafe {
+            let (mut lo, mut hi) = (_mm256_setzero_ps(), _mm256_setzero_ps());
+            for i in 0..n16 {
+                let v = _mm_loadu_si128(row.as_ptr().add(16 * i).cast());
+                let w0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(v));
+                let w1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128::<8>(v)));
+                let xp = x.as_ptr().add(16 * i);
+                lo = _mm256_add_ps(lo, _mm256_mul_ps(w0, _mm256_loadu_ps(xp)));
+                hi = _mm256_add_ps(hi, _mm256_mul_ps(w1, _mm256_loadu_ps(xp.add(8))));
+            }
+            if n.is_multiple_of(LANES) {
+                let v = _mm256_add_ps(lo, hi);
+                *o = reduce4_canon(_mm_add_ps(
+                    _mm256_castps256_ps128(v),
+                    _mm256_extractf128_ps::<1>(v),
+                ));
+            } else {
+                let mut acc = [0f32; LANES];
+                _mm256_storeu_ps(acc.as_mut_ptr(), lo);
+                _mm256_storeu_ps(acc.as_mut_ptr().add(8), hi);
+                *o = super::i8f_finish(acc, row, x, n16 * LANES);
+            }
         }
     }
 }
@@ -233,13 +432,23 @@ pub(super) unsafe fn gemv_avx2(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]
 /// # Safety
 /// SSSE3; rows `r < out.len()` at `base + r·row_bytes` readable for `2 * x.len()` bytes.
 #[target_feature(enable = "ssse3")]
-pub(super) unsafe fn f16_matvec_ssse3(base: *const u8, row_bytes: usize, x: &[f32], out: &mut [f32]) {
+pub(super) unsafe fn f16_matvec_ssse3(
+    base: *const u8,
+    row_bytes: usize,
+    x: &[f32],
+    out: &mut [f32],
+) {
     let n16 = x.len() / LANES;
     for (r, o) in out.iter_mut().enumerate() {
         // SAFETY: chunk `i < n16` reads bytes `32i..32i+32` of row `r` and `x[16i..16i+16]`.
         unsafe {
             let row = base.add(r * row_bytes);
-            let (mut a0, mut a1, mut a2, mut a3) = (_mm_setzero_ps(), _mm_setzero_ps(), _mm_setzero_ps(), _mm_setzero_ps());
+            let (mut a0, mut a1, mut a2, mut a3) = (
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+            );
             for i in 0..n16 {
                 let p = row.add(32 * i);
                 let (h0, h1) = load8h(p);
@@ -267,7 +476,12 @@ pub(super) unsafe fn f16_matvec_ssse3(base: *const u8, row_bytes: usize, x: &[f3
 /// # Safety
 /// AVX2 + F16C; rows as [`f16_matvec_ssse3`].
 #[target_feature(enable = "avx2,f16c")]
-pub(super) unsafe fn f16_matvec_avx2(base: *const u8, row_bytes: usize, x: &[f32], out: &mut [f32]) {
+pub(super) unsafe fn f16_matvec_avx2(
+    base: *const u8,
+    row_bytes: usize,
+    x: &[f32],
+    out: &mut [f32],
+) {
     let n16 = x.len() / LANES;
     for (r, o) in out.iter_mut().enumerate() {
         // SAFETY: as `f16_matvec_ssse3`.
@@ -277,15 +491,27 @@ pub(super) unsafe fn f16_matvec_avx2(base: *const u8, row_bytes: usize, x: &[f32
             for i in 0..n16 {
                 let h = _mm256_loadu_si256(row.add(32 * i).cast());
                 let xp = x.as_ptr().add(16 * i);
-                lo = _mm256_add_ps(lo, _mm256_mul_ps(_mm256_cvtph_ps(_mm256_castsi256_si128(h)), _mm256_loadu_ps(xp)));
+                lo = _mm256_add_ps(
+                    lo,
+                    _mm256_mul_ps(
+                        _mm256_cvtph_ps(_mm256_castsi256_si128(h)),
+                        _mm256_loadu_ps(xp),
+                    ),
+                );
                 hi = _mm256_add_ps(
                     hi,
-                    _mm256_mul_ps(_mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h)), _mm256_loadu_ps(xp.add(8))),
+                    _mm256_mul_ps(
+                        _mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h)),
+                        _mm256_loadu_ps(xp.add(8)),
+                    ),
                 );
             }
             if x.len().is_multiple_of(LANES) {
                 let v = _mm256_add_ps(lo, hi);
-                *o = reduce4_canon(_mm_add_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps::<1>(v)));
+                *o = reduce4_canon(_mm_add_ps(
+                    _mm256_castps256_ps128(v),
+                    _mm256_extractf128_ps::<1>(v),
+                ));
             } else {
                 let mut acc = [0f32; LANES];
                 _mm256_storeu_ps(acc.as_mut_ptr(), lo);
@@ -314,12 +540,22 @@ fn weighted_tail(p: &[f32], base: *const u16, stride: usize, out: &mut [f32], fr
 /// # Safety
 /// SSSE3; rows `t < p.len()` at `base + t·stride` readable for `out.len()` values.
 #[target_feature(enable = "ssse3")]
-pub(super) unsafe fn weighted_sum_ssse3(p: &[f32], base: *const u16, stride: usize, out: &mut [f32]) {
+pub(super) unsafe fn weighted_sum_ssse3(
+    p: &[f32],
+    base: *const u16,
+    stride: usize,
+    out: &mut [f32],
+) {
     let n16 = out.len() / 16;
     for blk in 0..n16 {
         // SAFETY: values `16·blk..16·blk+16` of each row are inside it; `out` likewise.
         unsafe {
-            let (mut a0, mut a1, mut a2, mut a3) = (_mm_setzero_ps(), _mm_setzero_ps(), _mm_setzero_ps(), _mm_setzero_ps());
+            let (mut a0, mut a1, mut a2, mut a3) = (
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+                _mm_setzero_ps(),
+            );
             for (t, &pt) in p.iter().enumerate() {
                 let q = base.add(t * stride + 16 * blk).cast::<u8>();
                 let pv = _mm_set1_ps(pt);
@@ -343,22 +579,43 @@ pub(super) unsafe fn weighted_sum_ssse3(p: &[f32], base: *const u16, stride: usi
 /// # Safety
 /// AVX2 + F16C; rows as [`weighted_sum_ssse3`].
 #[target_feature(enable = "avx2,f16c")]
-pub(super) unsafe fn weighted_sum_avx2(p: &[f32], base: *const u16, stride: usize, out: &mut [f32]) {
+pub(super) unsafe fn weighted_sum_avx2(
+    p: &[f32],
+    base: *const u16,
+    stride: usize,
+    out: &mut [f32],
+) {
     let n32 = out.len() / 32;
     for blk in 0..n32 {
         // SAFETY: values `32·blk..32·blk+32` of each row are inside it; `out` likewise.
         unsafe {
-            let (mut a0, mut a1, mut a2, mut a3) =
-                (_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps());
+            let (mut a0, mut a1, mut a2, mut a3) = (
+                _mm256_setzero_ps(),
+                _mm256_setzero_ps(),
+                _mm256_setzero_ps(),
+                _mm256_setzero_ps(),
+            );
             for (t, &pt) in p.iter().enumerate() {
                 let q = base.add(t * stride + 32 * blk);
                 let pv = _mm256_set1_ps(pt);
                 let h01 = _mm256_loadu_si256(q.cast());
                 let h23 = _mm256_loadu_si256(q.add(16).cast());
-                a0 = _mm256_add_ps(a0, _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_castsi256_si128(h01))));
-                a1 = _mm256_add_ps(a1, _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h01))));
-                a2 = _mm256_add_ps(a2, _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_castsi256_si128(h23))));
-                a3 = _mm256_add_ps(a3, _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h23))));
+                a0 = _mm256_add_ps(
+                    a0,
+                    _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_castsi256_si128(h01))),
+                );
+                a1 = _mm256_add_ps(
+                    a1,
+                    _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h01))),
+                );
+                a2 = _mm256_add_ps(
+                    a2,
+                    _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_castsi256_si128(h23))),
+                );
+                a3 = _mm256_add_ps(
+                    a3,
+                    _mm256_mul_ps(pv, _mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h23))),
+                );
             }
             let o = out.as_mut_ptr().add(32 * blk);
             _mm256_storeu_ps(o, a0);
@@ -382,12 +639,18 @@ pub(super) unsafe fn act_quant_ssse3(x: &[f32], out: &mut [i8]) -> f32 {
     let mut m = _mm_setzero_ps();
     for i in 0..n / 4 {
         // SAFETY: `4i + 4 <= n`. `max(v, m)` returns `m` for a NaN `v`, as the oracle's fold.
-        m = _mm_max_ps(_mm_and_ps(unsafe { _mm_loadu_ps(x.as_ptr().add(4 * i)) }, abs), m);
+        m = _mm_max_ps(
+            _mm_and_ps(unsafe { _mm_loadu_ps(x.as_ptr().add(4 * i)) }, abs),
+            m,
+        );
     }
     let mut lanes = [0f32; 4];
     // SAFETY: four floats into a four-float array.
     unsafe { _mm_storeu_ps(lanes.as_mut_ptr(), m) };
-    let amax = lanes.iter().chain(x[n / 4 * 4..].iter()).fold(0f32, |a, v| a.max(v.abs()));
+    let amax = lanes
+        .iter()
+        .chain(x[n / 4 * 4..].iter())
+        .fold(0f32, |a, v| a.max(v.abs()));
     let s = act_scale(amax);
     let sv = _mm_set1_ps(s);
     let (lo, hi) = (_mm_set1_ps(-128.0), _mm_set1_ps(127.0));
@@ -422,12 +685,18 @@ pub(super) unsafe fn act_quant_avx2(x: &[f32], out: &mut [i8]) -> f32 {
     let mut m = _mm256_setzero_ps();
     for i in 0..n / 8 {
         // SAFETY: `8i + 8 <= n`.
-        m = _mm256_max_ps(_mm256_and_ps(unsafe { _mm256_loadu_ps(x.as_ptr().add(8 * i)) }, abs), m);
+        m = _mm256_max_ps(
+            _mm256_and_ps(unsafe { _mm256_loadu_ps(x.as_ptr().add(8 * i)) }, abs),
+            m,
+        );
     }
     let mut lanes = [0f32; 8];
     // SAFETY: eight floats into an eight-float array.
     unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), m) };
-    let amax = lanes.iter().chain(x[n / 8 * 8..].iter()).fold(0f32, |a, v| a.max(v.abs()));
+    let amax = lanes
+        .iter()
+        .chain(x[n / 8 * 8..].iter())
+        .fold(0f32, |a, v| a.max(v.abs()));
     let s = act_scale(amax);
     let sv = _mm256_set1_ps(s);
     let (lo, hi) = (_mm256_set1_ps(-128.0), _mm256_set1_ps(127.0));
@@ -443,7 +712,8 @@ pub(super) unsafe fn act_quant_avx2(x: &[f32], out: &mut [i8]) -> f32 {
         unsafe {
             let p = x.as_ptr().add(32 * i);
             let a = _mm256_packs_epi32(q(_mm256_loadu_ps(p)), q(_mm256_loadu_ps(p.add(8))));
-            let b = _mm256_packs_epi32(q(_mm256_loadu_ps(p.add(16))), q(_mm256_loadu_ps(p.add(24))));
+            let b =
+                _mm256_packs_epi32(q(_mm256_loadu_ps(p.add(16))), q(_mm256_loadu_ps(p.add(24))));
             // The packs work within 128-bit lanes; this puts the 4-byte groups back in order.
             let v = _mm256_permutevar8x32_epi32(_mm256_packs_epi16(a, b), order);
             _mm256_storeu_si256(out.as_mut_ptr().add(32 * i).cast(), v);
@@ -484,7 +754,10 @@ pub(super) unsafe fn rms_norm_ssse3(x: &[f32], w: &[f32], eps: f32, out: &mut [f
     for i in 0..n / 4 {
         // SAFETY: `4i + 4 <= n` for all three slices.
         unsafe {
-            let v = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(x.as_ptr().add(4 * i)), sv), _mm_loadu_ps(w.as_ptr().add(4 * i)));
+            let v = _mm_mul_ps(
+                _mm_mul_ps(_mm_loadu_ps(x.as_ptr().add(4 * i)), sv),
+                _mm_loadu_ps(w.as_ptr().add(4 * i)),
+            );
             _mm_storeu_ps(out.as_mut_ptr().add(4 * i), v);
         }
     }
@@ -529,7 +802,11 @@ pub(super) unsafe fn rms_norm_avx2(x: &[f32], w: &[f32], eps: f32, out: &mut [f3
 }
 
 fn hmax_tail(lanes: &[f32], rest: &[f32]) -> f32 {
-    lanes.iter().chain(rest).copied().fold(f32::NEG_INFINITY, f32::max)
+    lanes
+        .iter()
+        .chain(rest)
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max)
 }
 
 /// # Safety
@@ -577,7 +854,10 @@ pub(super) unsafe fn softmax_ssse3(x: &mut [f32], scale: f32) {
         *v = num::exp_canon(*v - max);
         acc[j] += f64::from(*v);
     }
-    #[expect(clippy::cast_possible_truncation, reason = "the oracle scales by an f32")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the oracle scales by an f32"
+    )]
     let inv = (1.0 / num::reduce4_f64(acc)) as f32;
     let iv = _mm_set1_ps(inv);
     for i in 0..n / 4 {
@@ -636,7 +916,10 @@ pub(super) unsafe fn softmax_avx2(x: &mut [f32], scale: f32) {
         *v = num::exp_canon(*v - max);
         acc[j % 4] += f64::from(*v);
     }
-    #[expect(clippy::cast_possible_truncation, reason = "the oracle scales by an f32")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the oracle scales by an f32"
+    )]
     let inv = (1.0 / num::reduce4_f64(acc)) as f32;
     let iv = _mm256_set1_ps(inv);
     for i in 0..n / 8 {
@@ -717,7 +1000,9 @@ pub(super) unsafe fn f2h_avx2(src: &[f32], dst: &mut [u16]) {
     for i in 0..n / 8 {
         // SAFETY: floats `8i..8i+8` and halves `8i..8i+8` are in bounds.
         unsafe {
-            let h = _mm256_cvtps_ph::<_MM_FROUND_TO_NEAREST_INT>(_mm256_loadu_ps(src.as_ptr().add(8 * i)));
+            let h = _mm256_cvtps_ph::<_MM_FROUND_TO_NEAREST_INT>(_mm256_loadu_ps(
+                src.as_ptr().add(8 * i),
+            ));
             _mm_storeu_si128(dst.as_mut_ptr().add(8 * i).cast(), h);
         }
     }
@@ -774,7 +1059,10 @@ pub(super) unsafe fn finish_ssse3(sum: &[i32], act: f32, w: f32, out: &mut [f32]
         // SAFETY: `4i + 4 <= n` for both slices.
         unsafe {
             let f = _mm_cvtepi32_ps(_mm_loadu_si128(sum.as_ptr().add(4 * i).cast()));
-            _mm_storeu_ps(out.as_mut_ptr().add(4 * i), _mm_mul_ps(_mm_div_ps(f, av), wv));
+            _mm_storeu_ps(
+                out.as_mut_ptr().add(4 * i),
+                _mm_mul_ps(_mm_div_ps(f, av), wv),
+            );
         }
     }
     num::finish_rows(&sum[n / 4 * 4..], act, w, &mut out[n / 4 * 4..]);
@@ -790,7 +1078,10 @@ pub(super) unsafe fn finish_avx2(sum: &[i32], act: f32, w: f32, out: &mut [f32])
         // SAFETY: `8i + 8 <= n` for both slices.
         unsafe {
             let f = _mm256_cvtepi32_ps(_mm256_loadu_si256(sum.as_ptr().add(8 * i).cast()));
-            _mm256_storeu_ps(out.as_mut_ptr().add(8 * i), _mm256_mul_ps(_mm256_div_ps(f, av), wv));
+            _mm256_storeu_ps(
+                out.as_mut_ptr().add(8 * i),
+                _mm256_mul_ps(_mm256_div_ps(f, av), wv),
+            );
         }
     }
     num::finish_rows(&sum[n / 8 * 8..], act, w, &mut out[n / 8 * 8..]);
@@ -807,7 +1098,10 @@ pub(super) unsafe fn relu2_mul_ssse3(g: &mut [f32], u: &[f32]) {
         unsafe {
             let p = g.as_mut_ptr().add(4 * i);
             let r = _mm_max_ps(_mm_loadu_ps(p), _mm_setzero_ps());
-            _mm_storeu_ps(p, _mm_mul_ps(_mm_mul_ps(r, r), _mm_loadu_ps(u.as_ptr().add(4 * i))));
+            _mm_storeu_ps(
+                p,
+                _mm_mul_ps(_mm_mul_ps(r, r), _mm_loadu_ps(u.as_ptr().add(4 * i))),
+            );
         }
     }
     num::relu2_mul(&mut g[n / 4 * 4..], &u[n / 4 * 4..]);
@@ -823,7 +1117,10 @@ pub(super) unsafe fn relu2_mul_avx2(g: &mut [f32], u: &[f32]) {
         unsafe {
             let p = g.as_mut_ptr().add(8 * i);
             let r = _mm256_max_ps(_mm256_loadu_ps(p), _mm256_setzero_ps());
-            _mm256_storeu_ps(p, _mm256_mul_ps(_mm256_mul_ps(r, r), _mm256_loadu_ps(u.as_ptr().add(8 * i))));
+            _mm256_storeu_ps(
+                p,
+                _mm256_mul_ps(_mm256_mul_ps(r, r), _mm256_loadu_ps(u.as_ptr().add(8 * i))),
+            );
         }
     }
     num::relu2_mul(&mut g[n / 8 * 8..], &u[n / 8 * 8..]);
@@ -838,7 +1135,10 @@ pub(super) unsafe fn add_assign_ssse3(x: &mut [f32], y: &[f32]) {
         // SAFETY: `4i + 4 <= n` for both slices.
         unsafe {
             let p = x.as_mut_ptr().add(4 * i);
-            _mm_storeu_ps(p, _mm_add_ps(_mm_loadu_ps(p), _mm_loadu_ps(y.as_ptr().add(4 * i))));
+            _mm_storeu_ps(
+                p,
+                _mm_add_ps(_mm_loadu_ps(p), _mm_loadu_ps(y.as_ptr().add(4 * i))),
+            );
         }
     }
     num::add_assign(&mut x[n / 4 * 4..], &y[n / 4 * 4..]);
@@ -853,7 +1153,10 @@ pub(super) unsafe fn add_assign_avx2(x: &mut [f32], y: &[f32]) {
         // SAFETY: `8i + 8 <= n` for both slices.
         unsafe {
             let p = x.as_mut_ptr().add(8 * i);
-            _mm256_storeu_ps(p, _mm256_add_ps(_mm256_loadu_ps(p), _mm256_loadu_ps(y.as_ptr().add(8 * i))));
+            _mm256_storeu_ps(
+                p,
+                _mm256_add_ps(_mm256_loadu_ps(p), _mm256_loadu_ps(y.as_ptr().add(8 * i))),
+            );
         }
     }
     num::add_assign(&mut x[n / 8 * 8..], &y[n / 8 * 8..]);
@@ -870,7 +1173,10 @@ pub(super) unsafe fn rope_ssse3(x: &mut [f32], cos: &[f32], sin: &[f32]) {
         unsafe {
             let (pl, ph) = (lo.as_mut_ptr().add(4 * i), hi.as_mut_ptr().add(4 * i));
             let (x0, x1) = (_mm_loadu_ps(pl), _mm_loadu_ps(ph));
-            let (c, s) = (_mm_loadu_ps(cos.as_ptr().add(4 * i)), _mm_loadu_ps(sin.as_ptr().add(4 * i)));
+            let (c, s) = (
+                _mm_loadu_ps(cos.as_ptr().add(4 * i)),
+                _mm_loadu_ps(sin.as_ptr().add(4 * i)),
+            );
             _mm_storeu_ps(pl, _mm_sub_ps(_mm_mul_ps(x0, c), _mm_mul_ps(x1, s)));
             _mm_storeu_ps(ph, _mm_add_ps(_mm_mul_ps(x0, s), _mm_mul_ps(x1, c)));
         }
@@ -893,9 +1199,18 @@ pub(super) unsafe fn rope_avx2(x: &mut [f32], cos: &[f32], sin: &[f32]) {
         unsafe {
             let (pl, ph) = (lo.as_mut_ptr().add(8 * i), hi.as_mut_ptr().add(8 * i));
             let (x0, x1) = (_mm256_loadu_ps(pl), _mm256_loadu_ps(ph));
-            let (c, s) = (_mm256_loadu_ps(cos.as_ptr().add(8 * i)), _mm256_loadu_ps(sin.as_ptr().add(8 * i)));
-            _mm256_storeu_ps(pl, _mm256_sub_ps(_mm256_mul_ps(x0, c), _mm256_mul_ps(x1, s)));
-            _mm256_storeu_ps(ph, _mm256_add_ps(_mm256_mul_ps(x0, s), _mm256_mul_ps(x1, c)));
+            let (c, s) = (
+                _mm256_loadu_ps(cos.as_ptr().add(8 * i)),
+                _mm256_loadu_ps(sin.as_ptr().add(8 * i)),
+            );
+            _mm256_storeu_ps(
+                pl,
+                _mm256_sub_ps(_mm256_mul_ps(x0, c), _mm256_mul_ps(x1, s)),
+            );
+            _mm256_storeu_ps(
+                ph,
+                _mm256_add_ps(_mm256_mul_ps(x0, s), _mm256_mul_ps(x1, c)),
+            );
         }
     }
     for i in half / 8 * 8..half {

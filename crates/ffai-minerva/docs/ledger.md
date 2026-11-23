@@ -218,3 +218,126 @@ ceiling. The f16 head is still 55.7 % of those bytes, which is brick d's target.
 - Prefill is still one GEMV per token. `rusty_ternary::kernel::gemm_codes` (pinned) plus a
   GEMM twin that decodes each weight row once for many tokens is the prefill lever.
 - Bandwidth rerun on a quiet box (still open from brick a).
+
+## Standing rule: engine comparisons run at EQUAL thread counts (Tim, 2026-11-23)
+
+Every Minerva vs bitnet.cpp (or any other engine) corpus comparison sets the thread count
+explicitly on both engines: Minerva's `--threads` and bitnet.cpp's `-t` / `-tb`. The count is
+recorded on every row, and each count is its own matched pair (8 vs 8, 24 vs 24). No
+cross-thread number goes in a report, this ledger or the README. The one bitnet.cpp CPU number
+we hold (25.8 tok/s decode at 8 threads, a 2026-11-21 WSL smoke run) is not comparable to any
+Minerva number above, all of which were taken at 24 threads.
+
+## Brick d: the int8 head screen, and the copies around the model (2026-11-23)
+
+Run through `codec-memory-copies`: instruments first, then each hop A/B'd.
+
+### Instruments added
+
+- `memstat` (Windows `K32GetProcessMemoryInfo`) at the end of `generate`: page faults, peak and
+  final working set, peak private commit.
+- `--features census-alloc`: a counting allocator. It reports allocations per phase (load,
+  prefill + first, decode) and is off in every timed build.
+- `tools/cold_ab.py`: a cold-cache load A/B. Each run gets a fresh `robocopy /J` (unbuffered)
+  copy of the model, then the same copy again warm as the control.
+- `tools/tier_ab.py --var X`: any env var as the A/B arm. Ids must be equal across arms, and the
+  logits hash equal within an arm.
+
+### Baseline (brick c plumbing, p64 + 64)
+
+- Load 0.41 s.
+- 1,220 MB peak private commit and ~301,600 page faults: the whole-file heap copy.
+- 409,688 allocations at load. These are the GGUF metadata's vocabulary strings (128,256
+  tokens + 280,147 merges) copied by `rusty_ternary::gguf::Gguf::parse`.
+- Decode: 3.83 allocations a token (~6 KB). At ~100 ns each that is under 1 us of a ~27 ms
+  token, priced as negligible and not chased.
+
+### Copy 1: the model memory-mapped instead of read onto the heap (native; wasm keeps the read)
+
+| | heap copy | map | map + prefetch hint |
+|---|---:|---:|---:|
+| warm load | 0.41 s | 0.04 s | 0.04-0.11 s |
+| peak private commit | 1,220 MB | 33 MB | 33 MB |
+| cold load + first token (`cold_ab.py`, 3 rounds, median) | 29.2 s / 32.4 s (two runs) | 34.0 s | **28.7 s** |
+| warm load + first token | 2.04 s / 1.79 s | 1.79 s | **1.62 s** |
+
+A plain map is 1.16x slower cold than the streamed read: the first token faults the file in
+page by page. `PrefetchVirtualMemory` (Windows) / `madvise(WILLNEED)` (unix) right after
+mapping is an async hint that fixes it, so the map now wins cold and warm. Cold numbers are
+disk-bound on this drive (~43 MB/s). Logits are unchanged (`f2f2db068ec651cb`).
+`MINERVA_LOAD=read` keeps the streamed read as the A/B arm.
+
+### The screen (`src/head.rs`, `simd::i8f_matvec`)
+
+The greedy head reads an int8 copy (328 MB, built at first use) instead of the f16 head
+(657 MB), with a proven per-row bound. Only the rows it cannot rule out are recomputed in f16.
+The token is the full head's by proof (the bound and its proof are in `head.rs`), and it
+follows rusty_sloth's `head_q8_*` design.
+
+- **Refuted first: an int8 activation (an integer screen).** Its bound term
+  `s ‖q‖ ‖x - t·a‖` ran 1.1-4.7x the weight term: this model's hidden state has outlier
+  channels (`max|x|/rms` 5.5-22.5). That left 98.8 and 38,751 survivors a step on two golden
+  prompts. The `simd::i8_gemv` kernel stays in tree, tested, but unused.
+- **Kept: int8 weights x f32 activation**, in the canonical 16-lane order. The products are
+  exact (8 + 11 bits), so the twins are bit-identical to the oracle at every tier.
+
+**Survivors a step** (rows recomputed exactly, of 128,256):
+
+| prompt | avg | most |
+|---|---:|---:|
+| golden 0 / 1 / 2 (16 steps) | 1.81 / 33.69 / 2.94 | 7 / 157 / 7 |
+| p64 / p256 / p512 / p1024 (48 steps) | 2.19 / 5.35 / 2.69 / 14.73 | 11 / 137 / 10 / 563 |
+
+**Validation:**
+
+- `MINERVA_HEAD=verify` runs the screen and the full head every step and errors on any
+  difference: 240 steps, no difference.
+- At scalar, ssse3 and avx2 the survivor sets are identical, and so are the ids.
+- The conformance gate passes: 190/192, worst gap 0.0154 (`docs/conformance-d.json`). The
+  full-head logits hashes are identical to brick c's, and the gate now also requires the
+  screened ids to equal the full head's on every bench prompt.
+- The census shows `i8f_matvec` at 100 % of its tier.
+
+**Copy 2: the f16 head released from the working set.** Building the int8 copy read the whole
+f16 head, and those pages stayed resident: the working set went **1,207 -> 1,538 MB**. The
+build now runs chunk by chunk and drops each chunk's f16 pages (`VirtualUnlock` /
+`madvise(DONTNEED)`; a later read re-faults them from the file cache):
+
+| p64 + 64 | full head | screen, no release | screen + release |
+|---|---:|---:|---:|
+| working set | 1,207 MB | 1,538 MB | **884 MB** (peak 897) |
+| peak private commit | 33 MB | 352 MB | 351 MB (the int8 copy) |
+
+This is rusty-sloth-05's predicted phone budget: 521 MB of codes + 328 MB int8 + KV. The
+screen adds no allocation a token (decode stays at 3.83).
+
+**Speed** (`tier_ab.py --var MINERVA_HEAD --arms full,screen,screen`, 12 rotated rounds, 24
+threads, p64 + 64; ids equal across arms). The box was loaded by another session's build
+(~11 % CPU):
+
+| head | decode tok/s median (min-max) | vs full |
+|---|---|---|
+| full | 31.30 (25.72-36.44) | 1.000x |
+| screen | 37.71 (29.00-41.31) | **1.168x, 12/12, z = +3.46** |
+| null (screen vs screen) | median 1.001, range 0.889-1.251 | |
+
+The screen won every round by 1.10-1.31x. The byte arithmetic (1,179.5 -> 851.6 MB a token)
+predicts at most 1.385x if decode were purely bandwidth-bound; at ~63 % of bandwidth, 1.17x
+is consistent. The screen's build costs a one-time ~0.2 s on the first token.
+
+### NEON executed (closes brick c's open item)
+
+On a Pixel 9 Pro XL (Android 17, aarch64, adb over Wi-Fi), with the test binary built with the
+NDK r27c linker: tiers `["scalar", "neon"]`, all 24 oracle tests pass, and **the exhaustive
+f32->f16 sweep (all 2^32) passes on NEON** (67.3 s). The binary was deleted from the phone
+afterwards. The CPU also has asimddp, i8mm and sve2, so dot-product and i8mm tiers are now
+testable.
+
+### Open
+
+- The 409,688 load-time allocations are in `rusty_ternary`'s metadata parse (the vocabulary).
+  Minerva does not need the vocabulary; a parse mode that skips arrays is a rusty_ternary
+  question for rusty-sloth.
+- A sidecar int8 head file would skip the build and never touch the f16 head at all. That is
+  an export-format question (keyed to the model's hash).
+- Prefill is still one GEMV a token (GEMM via `gemm_codes` is next).

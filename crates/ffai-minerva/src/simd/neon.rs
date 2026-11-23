@@ -24,7 +24,10 @@ fn h2f4(h: uint32x4_t) -> float32x4_t {
         vdupq_n_f32(f32::from_bits(0x3880_0000)),
     ));
     o = vbslq_u32(denorm, od, o);
-    vreinterpretq_f32_u32(vorrq_u32(o, vshlq_n_u32::<16>(vandq_u32(h, vdupq_n_u32(0x8000)))))
+    vreinterpretq_f32_u32(vorrq_u32(
+        o,
+        vshlq_n_u32::<16>(vandq_u32(h, vdupq_n_u32(0x8000))),
+    ))
 }
 
 /// Eight halves at `p` (any alignment) to two `f32x4`.
@@ -50,8 +53,13 @@ fn f2h4(v: float32x4_t) -> uint32x4_t {
     let o_big = vbslq_u32(nan, vdupq_n_u32(0x7e00), vdupq_n_u32(0x7c00));
     let small = vcltq_u32(x, vdupq_n_u32(0x3880_0000));
     let magic = vdupq_n_u32(0x3f00_0000);
-    let o_small =
-        vsubq_u32(vreinterpretq_u32_f32(vaddq_f32(vreinterpretq_f32_u32(x), vreinterpretq_f32_u32(magic))), magic);
+    let o_small = vsubq_u32(
+        vreinterpretq_u32_f32(vaddq_f32(
+            vreinterpretq_f32_u32(x),
+            vreinterpretq_f32_u32(magic),
+        )),
+        magic,
+    );
     let odd = vandq_u32(vshrq_n_u32::<13>(x), vdupq_n_u32(1));
     let o_norm = vshrq_n_u32::<13>(vaddq_u32(vaddq_u32(x, vdupq_n_u32(0xc800_0fff)), odd));
     let o = vbslq_u32(small, o_small, vbslq_u32(big, o_big, o_norm));
@@ -125,6 +133,75 @@ pub(super) unsafe fn gemv(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
             }
             *out = vaddvq_s32(acc) - a_sum;
         }
+    }
+}
+
+/// int8 x f32 mat-vec in the canonical 16-lane order.
+///
+/// # Safety
+/// NEON; `q.len() == out.len() * x.len()`.
+#[target_feature(enable = "neon")]
+pub(super) unsafe fn i8f_matvec(q: &[i8], x: &[f32], out: &mut [f32]) {
+    let n = x.len();
+    let n16 = n / LANES;
+    for (r, o) in out.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        // SAFETY: chunk `i < n16` reads row bytes and `x` floats `16i..16i+16`.
+        unsafe {
+            let z = vdupq_n_f32(0.0);
+            let (mut a0, mut a1, mut a2, mut a3) = (z, z, z, z);
+            for i in 0..n16 {
+                let v = vld1q_s8(row.as_ptr().add(16 * i));
+                let (l, h) = (vmovl_s8(vget_low_s8(v)), vmovl_high_s8(v));
+                let w0 = vcvtq_f32_s32(vmovl_s16(vget_low_s16(l)));
+                let w1 = vcvtq_f32_s32(vmovl_high_s16(l));
+                let w2 = vcvtq_f32_s32(vmovl_s16(vget_low_s16(h)));
+                let w3 = vcvtq_f32_s32(vmovl_high_s16(h));
+                let xp = x.as_ptr().add(16 * i);
+                a0 = vaddq_f32(a0, vmulq_f32(w0, vld1q_f32(xp)));
+                a1 = vaddq_f32(a1, vmulq_f32(w1, vld1q_f32(xp.add(4))));
+                a2 = vaddq_f32(a2, vmulq_f32(w2, vld1q_f32(xp.add(8))));
+                a3 = vaddq_f32(a3, vmulq_f32(w3, vld1q_f32(xp.add(12))));
+            }
+            if n.is_multiple_of(LANES) {
+                *o = reduce16(a0, a1, a2, a3);
+            } else {
+                let mut acc = [0f32; LANES];
+                vst1q_f32(acc.as_mut_ptr(), a0);
+                vst1q_f32(acc.as_mut_ptr().add(4), a1);
+                vst1q_f32(acc.as_mut_ptr().add(8), a2);
+                vst1q_f32(acc.as_mut_ptr().add(12), a3);
+                *o = super::i8f_finish(acc, row, x, n16 * LANES);
+            }
+        }
+    }
+}
+
+/// int8 x int8 GEMV: every product widened to `i16` (`vmull`), every pair to `i32` (`vpadal`).
+///
+/// # Safety
+/// NEON; `q.len() == y.len() * a.len()`.
+#[target_feature(enable = "neon")]
+pub(super) unsafe fn i8_gemv(q: &[i8], a: &[i8], y: &mut [i32]) {
+    let n = a.len();
+    for (r, out) in y.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        let mut acc = vdupq_n_s32(0);
+        for i in 0..n / 16 {
+            // SAFETY: bytes `16i..16i+16` of the row and of `a`.
+            unsafe {
+                let w = vld1q_s8(row.as_ptr().add(16 * i));
+                let v = vld1q_s8(a.as_ptr().add(16 * i));
+                acc = vpadalq_s16(acc, vmull_s8(vget_low_s8(w), vget_low_s8(v)));
+                acc = vpadalq_s16(acc, vmull_high_s8(w, v));
+            }
+        }
+        let tail: i32 = row[n / 16 * 16..]
+            .iter()
+            .zip(&a[n / 16 * 16..])
+            .map(|(&w, &v)| i32::from(w) * i32::from(v))
+            .sum();
+        *out = vaddvq_s32(acc) + tail;
     }
 }
 
@@ -217,25 +294,42 @@ pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> f32 {
         // SAFETY: `4i + 4 <= n`.
         m = vmaxnmq_f32(m, vabsq_f32(unsafe { vld1q_f32(x.as_ptr().add(4 * i)) }));
     }
-    let amax = [vgetq_lane_f32::<0>(m), vgetq_lane_f32::<1>(m), vgetq_lane_f32::<2>(m), vgetq_lane_f32::<3>(m)]
-        .iter()
-        .chain(x[n / 4 * 4..].iter())
-        .fold(0f32, |a, v| a.max(v.abs()));
+    let amax = [
+        vgetq_lane_f32::<0>(m),
+        vgetq_lane_f32::<1>(m),
+        vgetq_lane_f32::<2>(m),
+        vgetq_lane_f32::<3>(m),
+    ]
+    .iter()
+    .chain(x[n / 4 * 4..].iter())
+    .fold(0f32, |a, v| a.max(v.abs()));
     let s = act_scale(amax);
     let sv = vdupq_n_f32(s);
     let q = |v: float32x4_t| {
         let v = vmulq_f32(v, sv);
         let v = vbslq_f32(vceqq_f32(v, v), v, vdupq_n_f32(0.0));
-        let v = vminq_f32(vmaxq_f32(vrndnq_f32(v), vdupq_n_f32(-128.0)), vdupq_n_f32(127.0));
+        let v = vminq_f32(
+            vmaxq_f32(vrndnq_f32(v), vdupq_n_f32(-128.0)),
+            vdupq_n_f32(127.0),
+        );
         vcvtq_s32_f32(v)
     };
     for i in 0..n / 16 {
         // SAFETY: `16i + 16 <= n` for both slices.
         unsafe {
             let p = x.as_ptr().add(16 * i);
-            let a = vcombine_s16(vqmovn_s32(q(vld1q_f32(p))), vqmovn_s32(q(vld1q_f32(p.add(4)))));
-            let b = vcombine_s16(vqmovn_s32(q(vld1q_f32(p.add(8)))), vqmovn_s32(q(vld1q_f32(p.add(12)))));
-            vst1q_s8(out.as_mut_ptr().add(16 * i), vcombine_s8(vqmovn_s16(a), vqmovn_s16(b)));
+            let a = vcombine_s16(
+                vqmovn_s32(q(vld1q_f32(p))),
+                vqmovn_s32(q(vld1q_f32(p.add(4)))),
+            );
+            let b = vcombine_s16(
+                vqmovn_s32(q(vld1q_f32(p.add(8)))),
+                vqmovn_s32(q(vld1q_f32(p.add(12)))),
+            );
+            vst1q_s8(
+                out.as_mut_ptr().add(16 * i),
+                vcombine_s8(vqmovn_s16(a), vqmovn_s16(b)),
+            );
         }
     }
     for i in n / 16 * 16..n {
@@ -257,7 +351,12 @@ pub(super) unsafe fn rms_norm(x: &[f32], w: &[f32], eps: f32, out: &mut [f32]) {
         a01 = vaddq_f64(a01, vmulq_f64(lo, lo));
         a23 = vaddq_f64(a23, vmulq_f64(hi, hi));
     }
-    let mut acc = [vgetq_lane_f64::<0>(a01), vgetq_lane_f64::<1>(a01), vgetq_lane_f64::<0>(a23), vgetq_lane_f64::<1>(a23)];
+    let mut acc = [
+        vgetq_lane_f64::<0>(a01),
+        vgetq_lane_f64::<1>(a01),
+        vgetq_lane_f64::<0>(a23),
+        vgetq_lane_f64::<1>(a23),
+    ];
     for (j, &v) in x[n / 4 * 4..].iter().enumerate() {
         acc[j] += f64::from(v) * f64::from(v);
     }
@@ -266,7 +365,10 @@ pub(super) unsafe fn rms_norm(x: &[f32], w: &[f32], eps: f32, out: &mut [f32]) {
     for i in 0..n / 4 {
         // SAFETY: `4i + 4 <= n` for all three slices.
         unsafe {
-            let v = vmulq_f32(vmulq_f32(vld1q_f32(x.as_ptr().add(4 * i)), sv), vld1q_f32(w.as_ptr().add(4 * i)));
+            let v = vmulq_f32(
+                vmulq_f32(vld1q_f32(x.as_ptr().add(4 * i)), sv),
+                vld1q_f32(w.as_ptr().add(4 * i)),
+            );
             vst1q_f32(out.as_mut_ptr().add(4 * i), v);
         }
     }
@@ -294,11 +396,16 @@ pub(super) unsafe fn softmax(x: &mut [f32], scale: f32) {
     for v in &mut x[n / 4 * 4..] {
         *v *= scale;
     }
-    let max = [vgetq_lane_f32::<0>(m), vgetq_lane_f32::<1>(m), vgetq_lane_f32::<2>(m), vgetq_lane_f32::<3>(m)]
-        .iter()
-        .chain(x[n / 4 * 4..].iter())
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let max = [
+        vgetq_lane_f32::<0>(m),
+        vgetq_lane_f32::<1>(m),
+        vgetq_lane_f32::<2>(m),
+        vgetq_lane_f32::<3>(m),
+    ]
+    .iter()
+    .chain(x[n / 4 * 4..].iter())
+    .copied()
+    .fold(f32::NEG_INFINITY, f32::max);
     let mv = vdupq_n_f32(max);
     let (mut a01, mut a23) = (vdupq_n_f64(0.0), vdupq_n_f64(0.0));
     for i in 0..n / 4 {
@@ -311,12 +418,20 @@ pub(super) unsafe fn softmax(x: &mut [f32], scale: f32) {
             a23 = vaddq_f64(a23, vcvt_high_f64_f32(e));
         }
     }
-    let mut acc = [vgetq_lane_f64::<0>(a01), vgetq_lane_f64::<1>(a01), vgetq_lane_f64::<0>(a23), vgetq_lane_f64::<1>(a23)];
+    let mut acc = [
+        vgetq_lane_f64::<0>(a01),
+        vgetq_lane_f64::<1>(a01),
+        vgetq_lane_f64::<0>(a23),
+        vgetq_lane_f64::<1>(a23),
+    ];
     for (j, v) in x[n / 4 * 4..].iter_mut().enumerate() {
         *v = num::exp_canon(*v - max);
         acc[j] += f64::from(*v);
     }
-    #[expect(clippy::cast_possible_truncation, reason = "the oracle scales by an f32")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the oracle scales by an f32"
+    )]
     let inv = (1.0 / num::reduce4_f64(acc)) as f32;
     let iv = vdupq_n_f32(inv);
     for i in 0..n / 4 {
@@ -359,8 +474,14 @@ pub(super) unsafe fn f2h(src: &[f32], dst: &mut [u16]) {
         // SAFETY: floats `8i..8i+8`, halves `8i..8i+8`.
         unsafe {
             let p = src.as_ptr().add(8 * i);
-            let h = vcombine_u16(vmovn_u32(f2h4(vld1q_f32(p))), vmovn_u32(f2h4(vld1q_f32(p.add(4)))));
-            vst1q_u8(dst.as_mut_ptr().add(8 * i).cast::<u8>(), vreinterpretq_u8_u16(h));
+            let h = vcombine_u16(
+                vmovn_u32(f2h4(vld1q_f32(p))),
+                vmovn_u32(f2h4(vld1q_f32(p.add(4)))),
+            );
+            vst1q_u8(
+                dst.as_mut_ptr().add(8 * i).cast::<u8>(),
+                vreinterpretq_u8_u16(h),
+            );
         }
     }
     for i in n / 8 * 8..n {
@@ -413,7 +534,10 @@ pub(super) unsafe fn relu2_mul(g: &mut [f32], u: &[f32]) {
             let p = g.as_mut_ptr().add(4 * i);
             let v = vld1q_f32(p);
             let r = vbslq_f32(vcgtq_f32(v, z), v, z);
-            vst1q_f32(p, vmulq_f32(vmulq_f32(r, r), vld1q_f32(u.as_ptr().add(4 * i))));
+            vst1q_f32(
+                p,
+                vmulq_f32(vmulq_f32(r, r), vld1q_f32(u.as_ptr().add(4 * i))),
+            );
         }
     }
     num::relu2_mul(&mut g[n / 4 * 4..], &u[n / 4 * 4..]);
@@ -445,7 +569,10 @@ pub(super) unsafe fn rope(x: &mut [f32], cos: &[f32], sin: &[f32]) {
         unsafe {
             let (pl, ph) = (lo.as_mut_ptr().add(4 * i), hi.as_mut_ptr().add(4 * i));
             let (x0, x1) = (vld1q_f32(pl), vld1q_f32(ph));
-            let (c, s) = (vld1q_f32(cos.as_ptr().add(4 * i)), vld1q_f32(sin.as_ptr().add(4 * i)));
+            let (c, s) = (
+                vld1q_f32(cos.as_ptr().add(4 * i)),
+                vld1q_f32(sin.as_ptr().add(4 * i)),
+            );
             vst1q_f32(pl, vsubq_f32(vmulq_f32(x0, c), vmulq_f32(x1, s)));
             vst1q_f32(ph, vaddq_f32(vmulq_f32(x0, s), vmulq_f32(x1, c)));
         }

@@ -19,7 +19,10 @@ fn h2f4(h: v128) -> v128 {
     let infnan = i32x4_eq(e, u32x4_splat(0x0f80_0000));
     o = i32x4_add(o, v128_and(infnan, u32x4_splat(0x3800_0000)));
     let denorm = i32x4_eq(e, u32x4_splat(0));
-    let od = f32x4_sub(i32x4_add(o, u32x4_splat(0x0080_0000)), f32x4_splat(f32::from_bits(0x3880_0000)));
+    let od = f32x4_sub(
+        i32x4_add(o, u32x4_splat(0x0080_0000)),
+        f32x4_splat(f32::from_bits(0x3880_0000)),
+    );
     o = v128_bitselect(od, o, denorm);
     v128_or(o, i32x4_shl(v128_and(h, u32x4_splat(0x8000)), 16))
 }
@@ -31,7 +34,10 @@ fn h2f4(h: v128) -> v128 {
 unsafe fn load8h(p: *const u8) -> (v128, v128) {
     // SAFETY: the caller guarantees 16 readable bytes; `v128_load` has no alignment demand.
     let h = unsafe { v128_load(p.cast()) };
-    (h2f4(u32x4_extend_low_u16x8(h)), h2f4(u32x4_extend_high_u16x8(h)))
+    (
+        h2f4(u32x4_extend_low_u16x8(h)),
+        h2f4(u32x4_extend_high_u16x8(h)),
+    )
 }
 
 #[target_feature(enable = "simd128")]
@@ -68,7 +74,12 @@ fn reduce16(a0: v128, a1: v128, a2: v128, a3: v128) -> f32 {
 #[target_feature(enable = "simd128")]
 #[inline]
 fn lanes_f32(v: v128) -> [f32; 4] {
-    [f32x4_extract_lane::<0>(v), f32x4_extract_lane::<1>(v), f32x4_extract_lane::<2>(v), f32x4_extract_lane::<3>(v)]
+    [
+        f32x4_extract_lane::<0>(v),
+        f32x4_extract_lane::<1>(v),
+        f32x4_extract_lane::<2>(v),
+        f32x4_extract_lane::<3>(v),
+    ]
 }
 
 #[target_feature(enable = "simd128")]
@@ -93,7 +104,10 @@ fn exp4(v: v128) -> v128 {
 #[target_feature(enable = "simd128")]
 #[inline]
 fn widen(v: v128) -> (v128, v128) {
-    (f64x2_promote_low_f32x4(v), f64x2_promote_low_f32x4(i32x4_shuffle::<2, 3, 2, 3>(v, v)))
+    (
+        f64x2_promote_low_f32x4(v),
+        f64x2_promote_low_f32x4(i32x4_shuffle::<2, 3, 2, 3>(v, v)),
+    )
 }
 
 /// # Safety
@@ -133,6 +147,84 @@ pub(super) unsafe fn gemv(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
                 + i32x4_extract_lane::<3>(acc);
             *out = s - a_sum;
         }
+    }
+}
+
+/// int8 x f32 mat-vec in the canonical 16-lane order.
+///
+/// # Safety
+/// `q.len() == out.len() * x.len()`.
+#[target_feature(enable = "simd128")]
+pub(super) unsafe fn i8f_matvec(q: &[i8], x: &[f32], out: &mut [f32]) {
+    let n = x.len();
+    let n16 = n / LANES;
+    for (r, o) in out.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        // SAFETY: chunk `i < n16` reads row bytes and `x` floats `16i..16i+16`.
+        unsafe {
+            let z = f32x4_splat(0.0);
+            let (mut a0, mut a1, mut a2, mut a3) = (z, z, z, z);
+            for i in 0..n16 {
+                let v = v128_load(row.as_ptr().add(16 * i).cast());
+                let (l, h) = (i16x8_extend_low_i8x16(v), i16x8_extend_high_i8x16(v));
+                let w0 = f32x4_convert_i32x4(i32x4_extend_low_i16x8(l));
+                let w1 = f32x4_convert_i32x4(i32x4_extend_high_i16x8(l));
+                let w2 = f32x4_convert_i32x4(i32x4_extend_low_i16x8(h));
+                let w3 = f32x4_convert_i32x4(i32x4_extend_high_i16x8(h));
+                let xp = x.as_ptr().add(16 * i);
+                a0 = f32x4_add(a0, f32x4_mul(w0, v128_load(xp.cast())));
+                a1 = f32x4_add(a1, f32x4_mul(w1, v128_load(xp.add(4).cast())));
+                a2 = f32x4_add(a2, f32x4_mul(w2, v128_load(xp.add(8).cast())));
+                a3 = f32x4_add(a3, f32x4_mul(w3, v128_load(xp.add(12).cast())));
+            }
+            if n.is_multiple_of(LANES) {
+                *o = reduce16(a0, a1, a2, a3);
+            } else {
+                let mut acc = [0f32; LANES];
+                for (k, a) in [a0, a1, a2, a3].into_iter().enumerate() {
+                    acc[4 * k..4 * k + 4].copy_from_slice(&lanes_f32(a));
+                }
+                *o = super::i8f_finish(acc, row, x, n16 * LANES);
+            }
+        }
+    }
+}
+
+/// int8 x int8 GEMV: products widened (`extmul`), pairs widened (`extadd_pairwise`).
+///
+/// # Safety
+/// `q.len() == y.len() * a.len()`.
+#[target_feature(enable = "simd128")]
+pub(super) unsafe fn i8_gemv(q: &[i8], a: &[i8], y: &mut [i32]) {
+    let n = a.len();
+    for (r, out) in y.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        let mut acc = i32x4_splat(0);
+        for i in 0..n / 16 {
+            // SAFETY: bytes `16i..16i+16` of the row and of `a`.
+            unsafe {
+                let w = v128_load(row.as_ptr().add(16 * i).cast());
+                let v = v128_load(a.as_ptr().add(16 * i).cast());
+                acc = i32x4_add(
+                    acc,
+                    i32x4_extadd_pairwise_i16x8(i16x8_extmul_low_i8x16(w, v)),
+                );
+                acc = i32x4_add(
+                    acc,
+                    i32x4_extadd_pairwise_i16x8(i16x8_extmul_high_i8x16(w, v)),
+                );
+            }
+        }
+        let tail: i32 = row[n / 16 * 16..]
+            .iter()
+            .zip(&a[n / 16 * 16..])
+            .map(|(&w, &v)| i32::from(w) * i32::from(v))
+            .sum();
+        *out = i32x4_extract_lane::<0>(acc)
+            + i32x4_extract_lane::<1>(acc)
+            + i32x4_extract_lane::<2>(acc)
+            + i32x4_extract_lane::<3>(acc)
+            + tail;
     }
 }
 
@@ -222,9 +314,15 @@ pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> f32 {
     let mut m = f32x4_splat(0.0);
     for i in 0..n / 4 {
         // SAFETY: `4i + 4 <= n`.
-        m = f32x4_pmax(m, f32x4_abs(unsafe { v128_load(x.as_ptr().add(4 * i).cast()) }));
+        m = f32x4_pmax(
+            m,
+            f32x4_abs(unsafe { v128_load(x.as_ptr().add(4 * i).cast()) }),
+        );
     }
-    let amax = lanes_f32(m).iter().chain(x[n / 4 * 4..].iter()).fold(0f32, |a, v| a.max(v.abs()));
+    let amax = lanes_f32(m)
+        .iter()
+        .chain(x[n / 4 * 4..].iter())
+        .fold(0f32, |a, v| a.max(v.abs()));
     let s = act_scale(amax);
     let sv = f32x4_splat(s);
     // `trunc_sat` maps a NaN to 0 and saturates; the narrows saturate to the i8 range.
@@ -234,8 +332,14 @@ pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> f32 {
         unsafe {
             let p = x.as_ptr().add(16 * i);
             let a = i16x8_narrow_i32x4(q(v128_load(p.cast())), q(v128_load(p.add(4).cast())));
-            let b = i16x8_narrow_i32x4(q(v128_load(p.add(8).cast())), q(v128_load(p.add(12).cast())));
-            v128_store(out.as_mut_ptr().add(16 * i).cast(), i8x16_narrow_i16x8(a, b));
+            let b = i16x8_narrow_i32x4(
+                q(v128_load(p.add(8).cast())),
+                q(v128_load(p.add(12).cast())),
+            );
+            v128_store(
+                out.as_mut_ptr().add(16 * i).cast(),
+                i8x16_narrow_i16x8(a, b),
+            );
         }
     }
     for i in n / 16 * 16..n {
@@ -301,7 +405,11 @@ pub(super) unsafe fn softmax(x: &mut [f32], scale: f32) {
     for v in &mut x[n / 4 * 4..] {
         *v *= scale;
     }
-    let max = lanes_f32(m).iter().chain(x[n / 4 * 4..].iter()).copied().fold(f32::NEG_INFINITY, f32::max);
+    let max = lanes_f32(m)
+        .iter()
+        .chain(x[n / 4 * 4..].iter())
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
     let mv = f32x4_splat(max);
     let (mut a01, mut a23) = (f64x2_splat(0.0), f64x2_splat(0.0));
     for i in 0..n / 4 {
@@ -325,7 +433,10 @@ pub(super) unsafe fn softmax(x: &mut [f32], scale: f32) {
         *v = num::exp_canon(*v - max);
         acc[j] += f64::from(*v);
     }
-    #[expect(clippy::cast_possible_truncation, reason = "the oracle scales by an f32")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the oracle scales by an f32"
+    )]
     let inv = (1.0 / num::reduce4_f64(acc)) as f32;
     let iv = f32x4_splat(inv);
     for i in 0..n / 4 {
@@ -404,7 +515,10 @@ pub(super) unsafe fn finish(sum: &[i32], act: f32, w: f32, out: &mut [f32]) {
         // SAFETY: `4i + 4 <= n` for both slices.
         unsafe {
             let f = f32x4_convert_i32x4(v128_load(sum.as_ptr().add(4 * i).cast()));
-            v128_store(out.as_mut_ptr().add(4 * i).cast(), f32x4_mul(f32x4_div(f, av), wv));
+            v128_store(
+                out.as_mut_ptr().add(4 * i).cast(),
+                f32x4_mul(f32x4_div(f, av), wv),
+            );
         }
     }
     num::finish_rows(&sum[n / 4 * 4..], act, w, &mut out[n / 4 * 4..]);
@@ -420,7 +534,10 @@ pub(super) unsafe fn relu2_mul(g: &mut [f32], u: &[f32]) {
         unsafe {
             let p = g.as_mut_ptr().add(4 * i);
             let r = f32x4_pmax(f32x4_splat(0.0), v128_load(p.cast()));
-            v128_store(p.cast(), f32x4_mul(f32x4_mul(r, r), v128_load(u.as_ptr().add(4 * i).cast())));
+            v128_store(
+                p.cast(),
+                f32x4_mul(f32x4_mul(r, r), v128_load(u.as_ptr().add(4 * i).cast())),
+            );
         }
     }
     num::relu2_mul(&mut g[n / 4 * 4..], &u[n / 4 * 4..]);
@@ -435,7 +552,10 @@ pub(super) unsafe fn add_assign(x: &mut [f32], y: &[f32]) {
         // SAFETY: `4i + 4 <= n` for both slices.
         unsafe {
             let p = x.as_mut_ptr().add(4 * i);
-            v128_store(p.cast(), f32x4_add(v128_load(p.cast()), v128_load(y.as_ptr().add(4 * i).cast())));
+            v128_store(
+                p.cast(),
+                f32x4_add(v128_load(p.cast()), v128_load(y.as_ptr().add(4 * i).cast())),
+            );
         }
     }
     num::add_assign(&mut x[n / 4 * 4..], &y[n / 4 * 4..]);
@@ -452,7 +572,10 @@ pub(super) unsafe fn rope(x: &mut [f32], cos: &[f32], sin: &[f32]) {
         unsafe {
             let (pl, ph) = (lo.as_mut_ptr().add(4 * i), hi.as_mut_ptr().add(4 * i));
             let (x0, x1) = (v128_load(pl.cast()), v128_load(ph.cast()));
-            let (c, s) = (v128_load(cos.as_ptr().add(4 * i).cast()), v128_load(sin.as_ptr().add(4 * i).cast()));
+            let (c, s) = (
+                v128_load(cos.as_ptr().add(4 * i).cast()),
+                v128_load(sin.as_ptr().add(4 * i).cast()),
+            );
             v128_store(pl.cast(), f32x4_sub(f32x4_mul(x0, c), f32x4_mul(x1, s)));
             v128_store(ph.cast(), f32x4_add(f32x4_mul(x0, s), f32x4_mul(x1, c)));
         }

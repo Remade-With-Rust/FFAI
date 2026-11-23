@@ -4,14 +4,104 @@
 //! minerva roofline [--gguf PATH] [--mib N] [--reps N] [--threads 1,2,4,8]
 //! ```
 
-#![forbid(unsafe_code)]
+// Two fenced measurement items use `unsafe`: the Windows memory-counter call and the optional
+// counting allocator. Nothing else in the binary does.
+#![deny(unsafe_code)]
+
+/// Process memory counters at exit: page faults, peak working set, peak private commit.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod memstat {
+    #[repr(C)]
+    #[derive(Default)]
+    struct Counters {
+        cb: u32,
+        page_faults: u32,
+        peak_ws: usize,
+        ws: usize,
+        quota_peak_paged: usize,
+        quota_paged: usize,
+        quota_peak_nonpaged: usize,
+        quota_nonpaged: usize,
+        pagefile: usize,
+        peak_pagefile: usize,
+    }
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn K32GetProcessMemoryInfo(process: isize, counters: *mut Counters, cb: u32) -> i32;
+    }
+    /// `(page faults, peak working set, working set, peak private commit)`, bytes.
+    pub fn read() -> Option<(u32, usize, usize, usize)> {
+        let mut c = Counters {
+            cb: u32::try_from(size_of::<Counters>()).ok()?,
+            ..Counters::default()
+        };
+        // SAFETY: a pseudo-handle for this process and a counters struct of the size we pass.
+        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut c, c.cb) };
+        (ok != 0).then_some((c.page_faults, c.peak_ws, c.ws, c.peak_pagefile))
+    }
+}
+#[cfg(not(windows))]
+mod memstat {
+    pub fn read() -> Option<(u32, usize, usize, usize)> {
+        None
+    }
+}
+
+/// Allocation counts, when built with `--features census-alloc`.
+#[cfg(feature = "census-alloc")]
+#[allow(unsafe_code)]
+mod alloc_census {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    static BYTES: AtomicU64 = AtomicU64::new(0);
+    struct Counting;
+    // SAFETY: forwards every call to `System` unchanged; only counts.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            COUNT.fetch_add(1, Relaxed);
+            BYTES.fetch_add(l.size() as u64, Relaxed);
+            // SAFETY: the caller's contract, passed through.
+            unsafe { System.alloc(l) }
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            COUNT.fetch_add(1, Relaxed);
+            BYTES.fetch_add(l.size() as u64, Relaxed);
+            // SAFETY: as above.
+            unsafe { System.alloc_zeroed(l) }
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+            COUNT.fetch_add(1, Relaxed);
+            BYTES.fetch_add(n as u64, Relaxed);
+            // SAFETY: as above.
+            unsafe { System.realloc(p, l, n) }
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            // SAFETY: as above.
+            unsafe { System.dealloc(p, l) }
+        }
+    }
+    #[global_allocator]
+    static A: Counting = Counting;
+    /// `(allocations, bytes)` so far.
+    pub fn read() -> (u64, u64) {
+        (COUNT.load(Relaxed), BYTES.load(Relaxed))
+    }
+}
+#[cfg(not(feature = "census-alloc"))]
+mod alloc_census {
+    pub fn read() -> (u64, u64) {
+        (0, 0)
+    }
+}
 
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use ffai_minerva::engine::{self, Session, top_k};
+use ffai_minerva::engine::{self, HeadMode, Session, top_k};
 use ffai_minerva::model::Model;
 use ffai_minerva::roofline::{self, ByteCensus};
 use ffai_minerva::simd;
@@ -20,7 +110,10 @@ use rusty_ternary::gguf::Gguf;
 const DEFAULT_GGUF: &str = "F:/coding/bitnet-golden/ours-i2_s.gguf";
 
 fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 fn mb(b: u64) -> f64 {
@@ -29,7 +122,12 @@ fn mb(b: u64) -> f64 {
 
 fn print_census(path: &str, c: &ByteCensus) {
     println!("== bytes per token: {path}");
-    println!("  ternary  {:>9.1} MB  ({} I2_S tensors, {} layers)", mb(c.ternary), c.ternary_tensors, c.layers);
+    println!(
+        "  ternary  {:>9.1} MB  ({} I2_S tensors, {} layers)",
+        mb(c.ternary),
+        c.ternary_tensors,
+        c.layers
+    );
     println!(
         "  head     {:>9.1} MB  ({} x {}, type {}, tied={})",
         mb(c.head),
@@ -38,8 +136,16 @@ fn print_census(path: &str, c: &ByteCensus) {
         c.head_type,
         c.tied
     );
-    println!("  norms    {:>9.3} MB   embed row {} B   other {} B", mb(c.norms), c.embed_row, c.other);
-    println!("  KV (f16) {:>9.1} KB per cached position", c.kv_per_position(2) as f64 / 1e3);
+    println!(
+        "  norms    {:>9.3} MB   embed row {} B   other {} B",
+        mb(c.norms),
+        c.embed_row,
+        c.other
+    );
+    println!(
+        "  KV (f16) {:>9.1} KB per cached position",
+        c.kv_per_position(2) as f64 / 1e3
+    );
     let base = c.per_token(c.head, 0, 2);
     println!(
         "  total @pos 0: {:.1} MB   (head is {:.1}% of it)",
@@ -73,7 +179,11 @@ fn info(args: &[String]) -> Result<(), String> {
         }
     }
     println!("{} tensors", g.tensors.len());
-    for t in g.tensors.iter().filter(|t| !t.name.starts_with("blk.") || t.name.starts_with("blk.0.")) {
+    for t in g
+        .tensors
+        .iter()
+        .filter(|t| !t.name.starts_with("blk.") || t.name.starts_with("blk.0."))
+    {
         println!("  {} type {} {:?}", t.name, t.ty, t.dims);
     }
     drop(g);
@@ -85,38 +195,70 @@ fn info(args: &[String]) -> Result<(), String> {
 fn generate(args: &[String]) -> Result<(), String> {
     let path = arg(args, "--gguf").unwrap_or(DEFAULT_GGUF);
     let ids_path = arg(args, "--ids").ok_or("--ids FILE is required")?;
-    let new: usize = arg(args, "--new").ok_or("--new N is required")?.parse().map_err(|e| format!("--new: {e}"))?;
+    let new: usize = arg(args, "--new")
+        .ok_or("--new N is required")?
+        .parse()
+        .map_err(|e| format!("--new: {e}"))?;
     if let Some(t) = arg(args, "--threads") {
         let n: usize = t.parse().map_err(|e| format!("--threads: {e}"))?;
-        rayon::ThreadPoolBuilder::new().num_threads(n).build_global().map_err(|e| e.to_string())?;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global()
+            .map_err(|e| e.to_string())?;
     }
-    let prompt = parse_ids(&std::fs::read_to_string(ids_path).map_err(|e| format!("{ids_path}: {e}"))?)?;
+    let prompt =
+        parse_ids(&std::fs::read_to_string(ids_path).map_err(|e| format!("{ids_path}: {e}"))?)?;
+    let a0 = alloc_census::read();
     let t0 = Instant::now();
     let m = Model::load(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     let load = t0.elapsed();
     let mut s = Session::new(&m, prompt.len() + new);
     let mut probs = match arg(args, "--probs") {
-        Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p).map_err(|e| format!("{p}: {e}"))?)),
+        Some(p) => Some(std::io::BufWriter::new(
+            std::fs::File::create(p).map_err(|e| format!("{p}: {e}"))?,
+        )),
         None => None,
     };
     simd::census::reset();
+    let a1 = alloc_census::read();
+    let mut a2 = a1;
     let t1 = Instant::now();
     let mut first = None;
     let mut io_err = None;
     // FNV-1a over every generated step's logit bits: one number that says two runs (two tiers,
     // two devices) computed the same thing, not merely chose the same tokens.
     let mut fnv = 0xcbf2_9ce4_8422_2325_u64;
-    let out = engine::generate(&mut s, &prompt, new, |i, logits| {
+    // `--probs` needs every logit, so it runs the full head; otherwise MINERVA_HEAD (screen).
+    let mode = if probs.is_some() {
+        HeadMode::Full
+    } else {
+        HeadMode::from_env()
+    };
+    let out = engine::generate(&mut s, &prompt, new, mode, |i, logits, tok| {
         if i == 0 {
             first = Some(t1.elapsed());
+            a2 = alloc_census::read();
         }
-        for l in logits {
-            for b in l.to_bits().to_le_bytes() {
-                fnv = (fnv ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        // With logits, the hash covers every logit bit; with the screen, only the token.
+        match logits {
+            Some(ls) => {
+                for l in ls {
+                    for b in l.to_bits().to_le_bytes() {
+                        fnv = (fnv ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+                    }
+                }
+            }
+            None => {
+                for b in tok.to_le_bytes() {
+                    fnv = (fnv ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+                }
             }
         }
-        if let Some(w) = probs.as_mut() {
-            let top: Vec<String> = top_k(logits, 8).iter().map(|(t, p)| format!("[{t},{p:.6}]")).collect();
+        if let (Some(w), Some(logits)) = (probs.as_mut(), logits) {
+            let top: Vec<String> = top_k(logits, 8)
+                .iter()
+                .map(|(t, p)| format!("[{t},{p:.6}]"))
+                .collect();
             if let Err(e) = writeln!(w, "{{\"step\":{i},\"top\":[{}]}}", top.join(",")) {
                 io_err.get_or_insert(e);
             }
@@ -133,7 +275,7 @@ fn generate(args: &[String]) -> Result<(), String> {
     let first = first.unwrap_or(total);
     let decode = total - first;
     eprintln!(
-        "minerva: load {:.2}s | prefill {} tokens + first: {:.2}s | decode {} tokens: {:.2}s ({:.2} tok/s) | threads {} | isa {} | logits-fnv {fnv:016x}",
+        "minerva: load {:.2}s | prefill {} tokens + first: {:.2}s | decode {} tokens: {:.2}s ({:.2} tok/s) | threads {} | isa {} | head {:?} | logits-fnv {fnv:016x}",
         load.as_secs_f64(),
         prompt.len(),
         first.as_secs_f64(),
@@ -141,8 +283,37 @@ fn generate(args: &[String]) -> Result<(), String> {
         decode.as_secs_f64(),
         new.saturating_sub(1) as f64 / decode.as_secs_f64().max(1e-9),
         rayon::current_num_threads(),
-        s.isa().name()
+        s.isa().name(),
+        mode
     );
+    let (steps, rows, most) = s.screen_stats;
+    if steps > 0 {
+        eprintln!(
+            "screen: {steps} steps, {:.2} rows recomputed a step (most {most})",
+            rows as f64 / steps as f64
+        );
+    }
+    if cfg!(feature = "census-alloc") {
+        let a3 = alloc_census::read();
+        eprintln!(
+            "allocs: load {} ({:.1} MB) | prefill+first {} ({:.1} MB) | decode {} ({:.1} MB) = {:.2} a token",
+            a1.0 - a0.0,
+            (a1.1 - a0.1) as f64 / 1e6,
+            a2.0 - a1.0,
+            (a2.1 - a1.1) as f64 / 1e6,
+            a3.0 - a2.0,
+            (a3.1 - a2.1) as f64 / 1e6,
+            (a3.0 - a2.0) as f64 / new.saturating_sub(1).max(1) as f64
+        );
+    }
+    if let Some((pf, peak, ws, commit)) = memstat::read() {
+        eprintln!(
+            "memstat: page faults {pf} | peak working set {:.1} MB | working set {:.1} MB | peak private commit {:.1} MB",
+            peak as f64 / 1e6,
+            ws as f64 / 1e6,
+            commit as f64 / 1e6
+        );
+    }
     if args.iter().any(|a| a == "--census") {
         let snap = simd::census::snapshot();
         for k in simd::census::NAMES {
@@ -169,8 +340,14 @@ fn run() -> Result<(), String> {
         _ => return Err(USAGE.into()),
     }
     let path = arg(&args, "--gguf").unwrap_or(DEFAULT_GGUF);
-    let mib: usize = arg(&args, "--mib").unwrap_or("1024").parse().map_err(|e| format!("--mib: {e}"))?;
-    let reps: usize = arg(&args, "--reps").unwrap_or("21").parse().map_err(|e| format!("--reps: {e}"))?;
+    let mib: usize = arg(&args, "--mib")
+        .unwrap_or("1024")
+        .parse()
+        .map_err(|e| format!("--mib: {e}"))?;
+    let reps: usize = arg(&args, "--reps")
+        .unwrap_or("21")
+        .parse()
+        .map_err(|e| format!("--reps: {e}"))?;
     let threads: Vec<usize> = arg(&args, "--threads")
         .unwrap_or("1,2,4,6,8,12,16,24")
         .split(',')
@@ -203,14 +380,25 @@ fn run() -> Result<(), String> {
         );
     }
 
-    let best = rows.iter().max_by(|a, b| a.median_gbs().total_cmp(&b.median_gbs())).ok_or("no thread counts")?;
+    let best = rows
+        .iter()
+        .max_by(|a, b| a.median_gbs().total_cmp(&b.median_gbs()))
+        .ok_or("no thread counts")?;
     let bw = best.median_gbs() * 1e9;
-    println!("\n== ceiling at the best median ({:.1} GB/s, {} threads): tok/s <= bandwidth / bytes", bw / 1e9, best.threads);
+    println!(
+        "\n== ceiling at the best median ({:.1} GB/s, {} threads): tok/s <= bandwidth / bytes",
+        bw / 1e9,
+        best.threads
+    );
     println!("  head    pos    bytes/token   tok/s ceiling");
     for (label, head) in [("f16 ", census.head), ("int8", census.head_q8())] {
         for pos in [0u64, 64, 512, 1024] {
             let b = census.per_token(head, pos, 2);
-            println!("  {label}  {pos:>5}   {:>9.1} MB   {:>10.1}", mb(b), bw / b as f64);
+            println!(
+                "  {label}  {pos:>5}   {:>9.1} MB   {:>10.1}",
+                mb(b),
+                bw / b as f64
+            );
         }
     }
     Ok(())

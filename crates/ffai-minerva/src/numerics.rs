@@ -178,7 +178,11 @@ pub fn sum4_f64(x: &[f32]) -> f64 {
 /// as the reference does.
 #[must_use]
 pub fn rms_scale(sum_sq: f64, n: usize, eps: f32) -> f32 {
-    #[expect(clippy::cast_possible_truncation, clippy::cast_precision_loss, reason = "the reference's float mean")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        reason = "the reference's float mean"
+    )]
     let mean = (sum_sq / n as f64) as f32;
     1.0 / (mean + eps).sqrt()
 }
@@ -206,7 +210,14 @@ pub mod exp_consts {
     /// Low part of `ln 2`.
     pub const C2: f32 = -2.121_944_4e-4;
     /// The polynomial, highest degree first.
-    pub const P: [f32; 6] = [1.987_569_1e-4, 1.398_199_9e-3, 8.333_452e-3, 4.166_579_6e-2, 1.666_666_5e-1, 0.5];
+    pub const P: [f32; 6] = [
+        1.987_569_1e-4,
+        1.398_199_9e-3,
+        8.333_452e-3,
+        4.166_579_6e-2,
+        1.666_666_5e-1,
+        0.5,
+    ];
     // (Cephes writes the last as 5.0000001201e-1; in f32 that is exactly 0.5.)
 }
 
@@ -217,7 +228,10 @@ pub mod exp_consts {
 #[must_use]
 pub fn exp_canon(x: f32) -> f32 {
     use exp_consts::{C1, C2, HI, LO, LOG2E, P};
-    #[expect(clippy::manual_clamp, reason = "max/min map a NaN to LO, as every twin does; clamp would keep it")]
+    #[expect(
+        clippy::manual_clamp,
+        reason = "max/min map a NaN to LO, as every twin does; clamp would keep it"
+    )]
     let x = x.max(LO).min(HI);
     let n = (x * LOG2E).round_ties_even();
     let r = x - n * C1;
@@ -229,7 +243,11 @@ pub fn exp_canon(x: f32) -> f32 {
     let y = p * (r * r);
     let y = y + r;
     let y = y + 1.0;
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "n is in -126..=127 after the clamp")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "n is in -126..=127 after the clamp"
+    )]
     let scale = f32::from_bits(((n as i32 + 127) as u32) << 23);
     y * scale
 }
@@ -246,7 +264,10 @@ pub fn softmax(x: &mut [f32], scale: f32) {
         *v = exp_canon(*v - max);
     }
     let sum = sum4_f64(x);
-    #[expect(clippy::cast_possible_truncation, reason = "the reference scales by an f32")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the reference scales by an f32"
+    )]
     let inv = (1.0 / sum) as f32;
     for v in x.iter_mut() {
         *v *= inv;
@@ -329,7 +350,10 @@ mod tests {
     fn f16_table_is_exact() {
         let t = f16_table();
         for b in [0u16, 1, 0x3C00, 0x7BFF, 0x8001, 0xFC00] {
-            assert_eq!(t[usize::from(b)].to_bits(), f16::from_bits(b).to_f32().to_bits());
+            assert_eq!(
+                t[usize::from(b)].to_bits(),
+                f16::from_bits(b).to_f32().to_bits()
+            );
         }
         assert!(t[0x7E00].is_nan());
     }

@@ -54,7 +54,11 @@ impl ByteCensus {
     /// head read at `head_bytes` (pass [`Self::head`] for the plain head).
     #[must_use]
     pub const fn per_token(&self, head_bytes: u64, positions: u64, kv_elem: u64) -> u64 {
-        self.ternary + head_bytes + self.embed_row + self.norms + self.other
+        self.ternary
+            + head_bytes
+            + self.embed_row
+            + self.norms
+            + self.other
             + positions * self.kv_per_position(kv_elem)
     }
 
@@ -68,7 +72,9 @@ impl ByteCensus {
 }
 
 fn meta_u64(g: &Gguf<'_>, key: &str) -> Result<u64, String> {
-    g.get(key).and_then(rusty_ternary::gguf::Value::as_u64).ok_or_else(|| format!("missing metadata `{key}`"))
+    g.get(key)
+        .and_then(rusty_ternary::gguf::Value::as_u64)
+        .ok_or_else(|| format!("missing metadata `{key}`"))
 }
 
 /// Sort a parsed file's tensor bytes by how often a decode step reads them.
@@ -90,11 +96,18 @@ pub fn census(g: &Gguf<'_>) -> Result<ByteCensus, String> {
         return Err(format!("hidden {hidden} not divisible by heads {heads}"));
     }
 
-    let mut c = ByteCensus { layers, kv_dim: hidden / heads * kv_heads, ..ByteCensus::default() };
+    let mut c = ByteCensus {
+        layers,
+        kv_dim: hidden / heads * kv_heads,
+        ..ByteCensus::default()
+    };
     let has_output = g.tensor("output.weight").is_some();
     c.tied = !has_output;
     for t in &g.tensors {
-        let len = t.byte_len().ok_or_else(|| format!("{}: type {} has no size rule", t.name, t.ty))? as u64;
+        let len = t
+            .byte_len()
+            .ok_or_else(|| format!("{}: type {} has no size rule", t.name, t.ty))?
+            as u64;
         let is_head = t.name == "output.weight" || (!has_output && t.name == "token_embd.weight");
         if t.name == "token_embd.weight" {
             let cols = *t.dims.first().ok_or("token_embd has no dims")?;
@@ -173,7 +186,11 @@ pub struct BandwidthRow {
 fn median(v: &[f64]) -> f64 {
     let mut s = v.to_vec();
     s.sort_by(f64::total_cmp);
-    if s.is_empty() { f64::NAN } else { s[s.len() / 2] }
+    if s.is_empty() {
+        f64::NAN
+    } else {
+        s[s.len() / 2]
+    }
 }
 
 fn min(v: &[f64]) -> f64 {
@@ -207,7 +224,10 @@ impl BandwidthRow {
     pub fn quantum(&self) -> f64 {
         let mut all: Vec<f64> = self.read_s.iter().chain(&self.null_s).copied().collect();
         all.sort_by(f64::total_cmp);
-        all.windows(2).map(|w| w[1] - w[0]).filter(|&d| d > 0.0).fold(f64::INFINITY, f64::min)
+        all.windows(2)
+            .map(|w| w[1] - w[0])
+            .filter(|&d| d > 0.0)
+            .fold(f64::INFINITY, f64::min)
     }
 }
 
@@ -221,8 +241,12 @@ pub fn bandwidth(buf: &[u64], threads: &[usize], reps: usize) -> Vec<BandwidthRo
         .iter()
         .map(|&t| {
             let _ = pass(buf, t);
-            let mut row =
-                BandwidthRow { threads: t, read_s: Vec::new(), null_s: Vec::new(), bytes: (buf.len() * 8) as u64 };
+            let mut row = BandwidthRow {
+                threads: t,
+                read_s: Vec::new(),
+                null_s: Vec::new(),
+                bytes: (buf.len() * 8) as u64,
+            };
             for r in 0..reps {
                 if r % 2 == 0 {
                     row.read_s.push(pass(buf, t));
@@ -242,7 +266,9 @@ pub fn bandwidth(buf: &[u64], threads: &[usize], reps: usize) -> Vec<BandwidthRo
 #[must_use]
 pub fn stream_buffer(mib: usize) -> Vec<u64> {
     let n = mib * (1 << 20) / 8;
-    (0..n as u64).map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).collect()
+    (0..n as u64)
+        .map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .collect()
 }
 
 #[cfg(test)]

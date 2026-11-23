@@ -10,6 +10,8 @@
 //!   every kernel is judged against, computed before any kernel exists.
 //! - [`model`], [`engine`]: the scalar engine — `GGUF` load, the `BitNet` b1.58 blocks, a KV
 //!   cache, greedy decoding — gated on bitnet.cpp's tokens.
+//! - [`head`]: the greedy head's `int8` screen with a proven per-row bound: half the head's
+//!   bytes, the full head's token.
 //! - [`numerics`]: the float arithmetic in one canonical order, so a file gives the same tokens
 //!   on every device; these scalar functions are the oracles.
 //! - [`simd`]: a bit-identical SIMD twin of every scalar kernel (SSSE3, AVX2, NEON, WASM-SIMD128),
@@ -23,6 +25,7 @@
 #![deny(unsafe_code)]
 
 pub mod engine;
+pub mod head;
 pub mod kernel;
 pub mod model;
 pub mod numerics;

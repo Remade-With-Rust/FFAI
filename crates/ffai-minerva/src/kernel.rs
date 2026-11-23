@@ -18,9 +18,11 @@ const CHUNK: usize = 64;
 pub fn gemv_par(isa: Isa, codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
     let rpc = a.len() / 4;
     assert_eq!(codes.len(), y.len() * rpc);
-    y.par_chunks_mut(CHUNK).zip(codes.par_chunks(CHUNK * rpc)).for_each(|(ys, cs)| {
-        simd::ternary_gemv(isa, cs, a, a_sum, ys);
-    });
+    y.par_chunks_mut(CHUNK)
+        .zip(codes.par_chunks(CHUNK * rpc))
+        .for_each(|(ys, cs)| {
+            simd::ternary_gemv(isa, cs, a, a_sum, ys);
+        });
 }
 
 #[cfg(test)]
@@ -33,10 +35,18 @@ mod tests {
     fn the_threaded_gemv_equals_the_whole_tensor_oracle_at_every_tier() {
         let mut seed = 9u64;
         let mut next = || {
-            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             seed >> 33
         };
-        for (rows, cols) in [(1usize, 128usize), (63, 256), (65, 640), (200, 2560), (130, 6912)] {
+        for (rows, cols) in [
+            (1usize, 128usize),
+            (63, 256),
+            (65, 640),
+            (200, 2560),
+            (130, 6912),
+        ] {
             let w: Vec<i8> = (0..rows * cols).map(|_| (next() % 3) as i8 - 1).collect();
             let a: Vec<i8> = (0..cols).map(|_| (next() % 256) as i8).collect();
             let p = pack(&w, rows, cols, 0.75).unwrap();

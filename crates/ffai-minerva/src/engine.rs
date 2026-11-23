@@ -22,6 +22,7 @@
 
 use rayon::prelude::*;
 
+use crate::head;
 use crate::kernel::gemv_par;
 use crate::model::{Model, Ternary};
 use crate::numerics::rope_table;
@@ -37,6 +38,13 @@ pub enum StepError {
     ContextFull(usize),
     /// A token id outside the vocabulary.
     BadToken(u32),
+    /// `HeadMode::Verify` found the screen's token differing from the full head's (a defect).
+    ScreenMismatch {
+        /// The full head's token.
+        full: u32,
+        /// The screen's token.
+        screen: u32,
+    },
 }
 
 impl std::fmt::Display for StepError {
@@ -44,6 +52,9 @@ impl std::fmt::Display for StepError {
         match self {
             Self::ContextFull(n) => write!(f, "context of {n} tokens is full"),
             Self::BadToken(t) => write!(f, "token {t} is outside the vocabulary"),
+            Self::ScreenMismatch { full, screen } => {
+                write!(f, "head screen chose {screen}, the full head {full}")
+            }
         }
     }
 }
@@ -74,6 +85,36 @@ pub struct Session<'m> {
     cos: Vec<f32>,
     sin: Vec<f32>,
     logits: Vec<f32>,
+    screen: head::Scratch,
+    /// Screened steps, rows recomputed exactly in total, and the most in one step.
+    pub screen_stats: (u64, u64, usize),
+}
+
+/// How a decode step picks its token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadMode {
+    /// The full `f16` head: every logit (what `--probs` and the conformance harness need).
+    Full,
+    /// The `int8` screen plus the survivors' exact logits ([`crate::head`]): the same token.
+    Screen,
+    /// Both, and an error if they ever disagree.
+    Verify,
+}
+
+impl HeadMode {
+    /// `MINERVA_HEAD=full|screen|verify`, else [`HeadMode::Screen`].
+    ///
+    /// # Panics
+    /// On any other value.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("MINERVA_HEAD").as_deref() {
+            Ok("full") => Self::Full,
+            Ok("verify") => Self::Verify,
+            Ok("screen") | Err(_) => Self::Screen,
+            Ok(o) => panic!("MINERVA_HEAD={o}: want full, screen or verify"),
+        }
+    }
 }
 
 impl std::fmt::Debug for Session<'_> {
@@ -88,7 +129,15 @@ impl std::fmt::Debug for Session<'_> {
 
 /// `out = finish(W · a)` for one projection, the activation already quantised (`qa`, its scale
 /// and its sum).
-fn bitlinear(isa: Isa, m: &Model, t: &Ternary, qa: &[i8], act: (f32, i32), isum: &mut [i32], out: &mut [f32]) {
+fn bitlinear(
+    isa: Isa,
+    m: &Model,
+    t: &Ternary,
+    qa: &[i8],
+    act: (f32, i32),
+    isum: &mut [i32],
+    out: &mut [f32],
+) {
     let isum = &mut isum[..t.rows];
     gemv_par(isa, m.codes(t), &qa[..t.cols], act.1, isum);
     simd::finish_rows(isa, isum, act.0, t.scale, &mut out[..t.rows]);
@@ -137,6 +186,8 @@ impl<'m> Session<'m> {
             cos: vec![0.0; c.head_dim / 2],
             sin: vec![0.0; c.head_dim / 2],
             logits: vec![0.0; c.vocab],
+            screen: head::Scratch::new(c.vocab, c.embd),
+            screen_stats: (0, 0, 0),
         }
     }
 
@@ -152,18 +203,87 @@ impl<'m> Session<'m> {
         self.pos
     }
 
-    /// Feed one token. With `logits`, compute and return the next-token logits.
+    /// Feed one token. With `logits`, compute and return the next-token logits (the full head).
     ///
     /// # Errors
     /// When the context is full or the token is outside the vocabulary.
     pub fn step(&mut self, token: u32, logits: bool) -> Result<Option<&[f32]>, StepError> {
+        self.forward(token)?;
+        if !logits {
+            return Ok(None);
+        }
+        self.final_hidden();
+        self.head_full();
+        Ok(Some(&self.logits))
+    }
+
+    /// Feed one token and return the greedy next token through the head screen (the full head's
+    /// token, by proof: [`crate::head`]).
+    ///
+    /// # Errors
+    /// When the context is full or the token is outside the vocabulary.
+    pub fn step_argmax(&mut self, token: u32) -> Result<u32, StepError> {
+        self.forward(token)?;
+        self.final_hidden();
+        Ok(self.screen_argmax())
+    }
+
+    fn screen_argmax(&mut self) -> u32 {
+        let m = self.m;
+        let h8 = m.screen.get(m);
+        let embd = m.cfg.embd;
+        if let Some((t, n)) = head::argmax(self.isa, m, h8, &self.h[..embd], &mut self.screen) {
+            self.screen_stats.0 += 1;
+            self.screen_stats.1 += n as u64;
+            self.screen_stats.2 = self.screen_stats.2.max(n);
+            t
+        } else {
+            self.head_full();
+            argmax(&self.logits)
+        }
+    }
+
+    /// The final norm, rounded to `f16` as the reference does before the head, into `h`.
+    fn final_hidden(&mut self) {
+        let (isa, m) = (self.isa, self.m);
+        let embd = m.cfg.embd;
+        simd::rms_norm(
+            isa,
+            &self.x,
+            &m.output_norm,
+            m.cfg.rms_eps,
+            &mut self.h[..embd],
+        );
+        simd::round_f16_slice(isa, &mut self.h[..embd]);
+    }
+
+    /// Every logit from the `f16` head.
+    fn head_full(&mut self) {
+        let (isa, m) = (self.isa, self.m);
+        let embd = m.cfg.embd;
+        let h = &self.h[..embd];
+        let head = m.head_bytes();
+        let row = embd * 2;
+        self.logits
+            .par_chunks_mut(HEAD_CHUNK)
+            .zip(head.par_chunks(HEAD_CHUNK * row))
+            .for_each(|(ls, rows)| {
+                simd::f16_matvec_bytes(isa, rows, h, ls);
+            });
+    }
+
+    /// The blocks: one token into the KV cache and the residual stream `x`.
+    fn forward(&mut self, token: u32) -> Result<(), StepError> {
         let m = self.m;
         let isa = self.isa;
         let c = &m.cfg;
         if self.pos >= self.ctx {
             return Err(StepError::ContextFull(self.ctx));
         }
-        let tok = usize::try_from(token).ok().filter(|&t| t < c.vocab).ok_or(StepError::BadToken(token))?;
+        let tok = usize::try_from(token)
+            .ok()
+            .filter(|&t| t < c.vocab)
+            .ok_or(StepError::BadToken(token))?;
         let (embd, kv_dim, hd, ffn) = (c.embd, c.kv_dim(), c.head_dim, c.ffn);
         let q_dim = c.heads * hd;
         let group = c.heads / c.kv_heads;
@@ -197,17 +317,32 @@ impl<'m> Session<'m> {
             let vcache = &self.v[layer_base..layer_base + n * kv_dim];
             let q = &self.q;
             let ctx = self.ctx;
-            self.att.par_chunks_mut(hd).zip(self.scores.par_chunks_mut(ctx)).enumerate().for_each(
-                |(head, (out, sc))| {
+            self.att
+                .par_chunks_mut(hd)
+                .zip(self.scores.par_chunks_mut(ctx))
+                .enumerate()
+                .for_each(|(head, (out, sc))| {
                     let g = head / group;
                     let sc = &mut sc[..n];
-                    simd::f16_matvec_strided(isa, kcache, g * hd, kv_dim, &q[head * hd..(head + 1) * hd], sc);
+                    simd::f16_matvec_strided(
+                        isa,
+                        kcache,
+                        g * hd,
+                        kv_dim,
+                        &q[head * hd..(head + 1) * hd],
+                        sc,
+                    );
                     simd::softmax(isa, sc, kq_scale);
                     simd::round_f16_slice(isa, sc);
                     simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, out);
-                },
+                });
+            simd::rms_norm(
+                isa,
+                &self.att,
+                &l.attn_sub_norm,
+                c.rms_eps,
+                &mut self.h[..q_dim],
             );
-            simd::rms_norm(isa, &self.att, &l.attn_sub_norm, c.rms_eps, &mut self.h[..q_dim]);
             let act = quantise(isa, &self.h[..q_dim], &mut self.qa);
             bitlinear(isa, m, &l.o, &self.qa, act, &mut self.isum, &mut self.out);
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
@@ -215,27 +350,38 @@ impl<'m> Session<'m> {
             // --- feed-forward ---
             simd::rms_norm(isa, &self.x, &l.ffn_norm, c.rms_eps, &mut self.h[..embd]);
             let act = quantise(isa, &self.h[..embd], &mut self.qa);
-            bitlinear(isa, m, &l.gate, &self.qa, act, &mut self.isum, &mut self.gate);
+            bitlinear(
+                isa,
+                m,
+                &l.gate,
+                &self.qa,
+                act,
+                &mut self.isum,
+                &mut self.gate,
+            );
             bitlinear(isa, m, &l.up, &self.qa, act, &mut self.isum, &mut self.up);
             simd::relu2_mul(isa, &mut self.gate, &self.up);
-            simd::rms_norm(isa, &self.gate, &l.ffn_sub_norm, c.rms_eps, &mut self.h[..ffn]);
+            simd::rms_norm(
+                isa,
+                &self.gate,
+                &l.ffn_sub_norm,
+                c.rms_eps,
+                &mut self.h[..ffn],
+            );
             let act = quantise(isa, &self.h[..ffn], &mut self.qa);
-            bitlinear(isa, m, &l.down, &self.qa, act, &mut self.isum, &mut self.out);
+            bitlinear(
+                isa,
+                m,
+                &l.down,
+                &self.qa,
+                act,
+                &mut self.isum,
+                &mut self.out,
+            );
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
         }
         self.pos += 1;
-        if !logits {
-            return Ok(None);
-        }
-        simd::rms_norm(isa, &self.x, &m.output_norm, c.rms_eps, &mut self.h[..embd]);
-        simd::round_f16_slice(isa, &mut self.h[..embd]);
-        let h = &self.h[..embd];
-        let head = m.head_bytes();
-        let row = embd * 2;
-        self.logits.par_chunks_mut(HEAD_CHUNK).zip(head.par_chunks(HEAD_CHUNK * row)).for_each(|(ls, rows)| {
-            simd::f16_matvec_bytes(isa, rows, h, ls);
-        });
-        Ok(Some(&self.logits))
+        Ok(())
     }
 }
 
@@ -255,27 +401,39 @@ pub fn argmax(logits: &[f32]) -> u32 {
 #[must_use]
 pub fn top_k(logits: &[f32], k: usize) -> Vec<(u32, f64)> {
     let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let z: f64 = logits.iter().map(|&l| (f64::from(l) - f64::from(max)).exp()).sum();
+    let z: f64 = logits
+        .iter()
+        .map(|&l| (f64::from(l) - f64::from(max)).exp())
+        .sum();
     let mut idx: Vec<usize> = (0..logits.len()).collect();
     let k = k.min(idx.len());
-    idx.select_nth_unstable_by(k.saturating_sub(1), |&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
+    idx.select_nth_unstable_by(k.saturating_sub(1), |&a, &b| {
+        logits[b].total_cmp(&logits[a]).then(a.cmp(&b))
+    });
     idx.truncate(k);
     idx.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
     idx.into_iter()
-        .map(|i| (u32::try_from(i).unwrap_or(u32::MAX), (f64::from(logits[i]) - f64::from(max)).exp() / z))
+        .map(|i| {
+            (
+                u32::try_from(i).unwrap_or(u32::MAX),
+                (f64::from(logits[i]) - f64::from(max)).exp() / z,
+            )
+        })
         .collect()
 }
 
 /// Prefill `prompt`, then decode `new` tokens greedily. EOS is not a stop (matched token
-/// counts against the reference). `on_step` sees each generated step's logits.
+/// counts against the reference). `on_step` sees each generated step's logits (with
+/// [`HeadMode::Full`] and [`HeadMode::Verify`]; `None` with the screen) and its token.
 ///
 /// # Errors
-/// When the context overflows or a token is out of range.
+/// When the context overflows, a token is out of range, or [`HeadMode::Verify`] finds a mismatch.
 pub fn generate(
     s: &mut Session<'_>,
     prompt: &[u32],
     new: usize,
-    mut on_step: impl FnMut(usize, &[f32]),
+    mode: HeadMode,
+    mut on_step: impl FnMut(usize, Option<&[f32]>, u32),
 ) -> Result<Vec<u32>, StepError> {
     let (last, head) = prompt.split_last().ok_or(StepError::BadToken(u32::MAX))?;
     for &t in head {
@@ -284,9 +442,29 @@ pub fn generate(
     let mut out = Vec::with_capacity(new);
     let mut next = *last;
     for i in 0..new {
-        let logits = s.step(next, true)?.unwrap_or_default();
-        on_step(i, logits);
-        next = argmax(logits);
+        next = match mode {
+            HeadMode::Full => {
+                let logits = s.step(next, true)?.unwrap_or_default();
+                let t = argmax(logits);
+                on_step(i, Some(logits), t);
+                t
+            }
+            HeadMode::Screen => {
+                let t = s.step_argmax(next)?;
+                on_step(i, None, t);
+                t
+            }
+            HeadMode::Verify => {
+                let screen = s.step_argmax(next)?;
+                s.head_full();
+                let full = argmax(&s.logits);
+                if full != screen {
+                    return Err(StepError::ScreenMismatch { full, screen });
+                }
+                on_step(i, Some(&s.logits), full);
+                full
+            }
+        };
         out.push(next);
     }
     Ok(out)

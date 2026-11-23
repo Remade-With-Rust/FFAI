@@ -3,6 +3,8 @@
 //! | kernel | scalar oracle | gate |
 //! |---|---|---|
 //! | [`ternary_gemv`] | `rusty_ternary::kernel::gemv_codes` | `assert_eq!` (integers) |
+//! | [`i8f_matvec`] (head screen) | [`i8f_matvec_scalar`] | bits |
+//! | [`i8_gemv`] | [`i8_gemv_scalar`] | `assert_eq!` |
 //! | [`f16_matvec_bytes`], [`f16_matvec_strided`] | [`num::dot16_f16_bytes`], [`num::dot16_f16`] | bits |
 //! | [`weighted_sum_f16`] | [`num::weighted_sum_f16`] | bits |
 //! | [`act_quant`] | `rusty_ternary::quant::act_quant` | `assert_eq!` |
@@ -45,7 +47,13 @@ enum Tier {
     Simd128 = 4,
 }
 
-const TIERS: [Tier; 5] = [Tier::Scalar, Tier::Ssse3, Tier::Avx2, Tier::Neon, Tier::Simd128];
+const TIERS: [Tier; 5] = [
+    Tier::Scalar,
+    Tier::Ssse3,
+    Tier::Avx2,
+    Tier::Neon,
+    Tier::Simd128,
+];
 
 impl Tier {
     const fn name(self) -> &'static str {
@@ -73,7 +81,10 @@ impl Tier {
             Self::Neon => std::arch::is_aarch64_feature_detected!("neon"),
             #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
             Self::Simd128 => true,
-            #[allow(unreachable_patterns, reason = "which arms exist depends on the target")]
+            #[allow(
+                unreachable_patterns,
+                reason = "which arms exist depends on the target"
+            )]
             _ => false,
         }
     }
@@ -90,7 +101,12 @@ impl Isa {
     /// Every tier this CPU supports, scalar first, widest last.
     #[must_use]
     pub fn all() -> Vec<Self> {
-        TIERS.iter().copied().filter(|t| t.supported()).map(Self).collect()
+        TIERS
+            .iter()
+            .copied()
+            .filter(|t| t.supported())
+            .map(Self)
+            .collect()
     }
 
     /// The widest supported tier.
@@ -102,7 +118,12 @@ impl Isa {
     /// The tier called `name`, when this CPU supports it.
     #[must_use]
     pub fn named(name: &str) -> Option<Self> {
-        TIERS.iter().copied().find(|t| t.name() == name).filter(|t| t.supported()).map(Self)
+        TIERS
+            .iter()
+            .copied()
+            .find(|t| t.name() == name)
+            .filter(|t| t.supported())
+            .map(Self)
     }
 
     /// `MINERVA_ISA` when set (and supported), else [`Self::best`]; read once per process.
@@ -114,7 +135,9 @@ impl Isa {
     pub fn from_env() -> Self {
         static I: OnceLock<Isa> = OnceLock::new();
         *I.get_or_init(|| match std::env::var("MINERVA_ISA") {
-            Ok(n) => Self::named(&n).unwrap_or_else(|| panic!("MINERVA_ISA={n}: not supported here ({:?})", Self::all())),
+            Ok(n) => Self::named(&n).unwrap_or_else(|| {
+                panic!("MINERVA_ISA={n}: not supported here ({:?})", Self::all())
+            }),
             Err(_) => Self::best(),
         })
     }
@@ -153,11 +176,25 @@ pub mod census {
         F16Convert = 6,
         /// finish, relu2_mul, add_assign, rope (elements).
         Elementwise = 7,
+        /// int8 x int8 GEMV (MACs).
+        I8Gemv = 8,
+        /// int8 x f32 mat-vec, the head screen (MACs).
+        I8fMatvec = 9,
     }
 
     /// Kernel names, in [`Kernel`] order.
-    pub const NAMES: [&str; 8] =
-        ["ternary_gemv", "f16_matvec", "weighted_sum", "act_quant", "rms_norm", "softmax", "f16_convert", "elementwise"];
+    pub const NAMES: [&str; 10] = [
+        "ternary_gemv",
+        "f16_matvec",
+        "weighted_sum",
+        "act_quant",
+        "rms_norm",
+        "softmax",
+        "f16_convert",
+        "elementwise",
+        "i8_gemv",
+        "i8f_matvec",
+    ];
     const N: usize = NAMES.len() * TIERS.len();
 
     struct Slot([AtomicU64; N]);
@@ -179,11 +216,16 @@ pub mod census {
     /// Totals so far: `(kernel, tier, elements)` for every non-zero cell.
     #[must_use]
     pub fn snapshot() -> Vec<(&'static str, &'static str, u64)> {
-        let reg = REGISTRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let reg = REGISTRY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut out = Vec::new();
         for (k, name) in NAMES.iter().enumerate() {
             for (t, tier) in TIERS.iter().enumerate() {
-                let n: u64 = reg.iter().map(|s| s.0[k * TIERS.len() + t].load(Relaxed)).sum();
+                let n: u64 = reg
+                    .iter()
+                    .map(|s| s.0[k * TIERS.len() + t].load(Relaxed))
+                    .sum();
                 if n > 0 {
                     out.push((*name, tier.name(), n));
                 }
@@ -194,7 +236,11 @@ pub mod census {
 
     /// Zero every counter.
     pub fn reset() {
-        for s in REGISTRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter() {
+        for s in REGISTRY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
             for c in &s.0 {
                 c.store(0, Relaxed);
             }
@@ -236,6 +282,94 @@ pub fn ternary_gemv(isa: Isa, codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32])
     }
 }
 
+/// `y[r] = Σ_j q[r·n + j] · a[j]` (`n = a.len()`), int8 by int8, exact. Every value must lie in
+/// `-127..=127` (never -128): the x86 twins multiply `|q|` by `a·sign(q)` in `pmaddubsw`, whose
+/// pair sum `2 · 127²` then stays inside an `i16`.
+///
+/// # Panics
+/// When `q` is not `y.len()` rows of `a.len()`.
+pub fn i8_gemv(isa: Isa, q: &[i8], a: &[i8], y: &mut [i32]) {
+    let n = a.len();
+    assert_eq!(q.len(), y.len() * n);
+    debug_assert!(!a.contains(&i8::MIN) && !q.contains(&i8::MIN));
+    census::add(Kernel::I8Gemv, isa, q.len());
+    match isa.0 {
+        // SAFETY: tier detected; shapes asserted.
+        #[cfg(target_arch = "x86_64")]
+        Tier::Avx2 => unsafe { x86::i8_gemv_avx2(q, a, y) },
+        #[cfg(target_arch = "x86_64")]
+        Tier::Ssse3 => unsafe { x86::i8_gemv_ssse3(q, a, y) },
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        Tier::Neon => unsafe { neon::i8_gemv(q, a, y) },
+        // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
+        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+        Tier::Simd128 => unsafe { wasm::i8_gemv(q, a, y) },
+        _ => i8_gemv_scalar(q, a, y),
+    }
+}
+
+/// `out[r] = dot16(q row r, x)`: int8 weights times `f32`, in the canonical 16-lane order
+/// ([`num::dot16`]). With `x` holding `f16` values every product is exact (8 + 11 bits), so the
+/// twins equal the oracle bit for bit.
+///
+/// # Panics
+/// When `q` is not `out.len()` rows of `x.len()`.
+pub fn i8f_matvec(isa: Isa, q: &[i8], x: &[f32], out: &mut [f32]) {
+    assert_eq!(q.len(), out.len() * x.len());
+    census::add(Kernel::I8fMatvec, isa, q.len());
+    match isa.0 {
+        // SAFETY: tier detected; shapes asserted.
+        #[cfg(target_arch = "x86_64")]
+        Tier::Avx2 => unsafe { x86::i8f_matvec_avx2(q, x, out) },
+        #[cfg(target_arch = "x86_64")]
+        Tier::Ssse3 => unsafe { x86::i8f_matvec_ssse3(q, x, out) },
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        Tier::Neon => unsafe { neon::i8f_matvec(q, x, out) },
+        // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
+        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+        Tier::Simd128 => unsafe { wasm::i8f_matvec(q, x, out) },
+        _ => i8f_matvec_scalar(q, x, out),
+    }
+}
+
+/// The oracle of [`i8f_matvec`].
+pub fn i8f_matvec_scalar(q: &[i8], x: &[f32], out: &mut [f32]) {
+    let mut row = vec![0f32; x.len()];
+    for (o, qr) in out.iter_mut().zip(q.chunks_exact(x.len())) {
+        for (r, &v) in row.iter_mut().zip(qr) {
+            *r = f32::from(v);
+        }
+        *o = num::dot16(&row, x);
+    }
+}
+
+/// The tail of an int8 16-lane dot product: lanes stored, the rest in the oracle's order.
+#[cfg_attr(
+    not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_endian = "little"),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )),
+    expect(dead_code, reason = "only the SIMD tiers call it; this target has none")
+)]
+pub(crate) fn i8f_finish(mut acc: [f32; num::LANES], q: &[i8], x: &[f32], from: usize) -> f32 {
+    for (j, i) in (from..x.len()).enumerate() {
+        acc[j] += f32::from(q[i]) * x[i];
+    }
+    num::reduce16(acc)
+}
+
+/// The oracle of [`i8_gemv`].
+pub fn i8_gemv_scalar(q: &[i8], a: &[i8], y: &mut [i32]) {
+    for (o, row) in y.iter_mut().zip(q.chunks_exact(a.len())) {
+        *o = row
+            .iter()
+            .zip(a)
+            .map(|(&w, &v)| i32::from(w) * i32::from(v))
+            .sum();
+    }
+}
+
 /// `out[r] = dot16(f16 row r, x)` for `out.len()` contiguous rows of `x.len()` little-endian
 /// `f16` values in `mat`.
 ///
@@ -269,7 +403,14 @@ pub fn f16_matvec_bytes(isa: Isa, mat: &[u8], x: &[f32], out: &mut [f32]) {
 ///
 /// # Panics
 /// When the last row runs past `v`.
-pub fn f16_matvec_strided(isa: Isa, v: &[u16], offset: usize, stride: usize, x: &[f32], out: &mut [f32]) {
+pub fn f16_matvec_strided(
+    isa: Isa,
+    v: &[u16],
+    offset: usize,
+    stride: usize,
+    x: &[f32],
+    out: &mut [f32],
+) {
     if out.is_empty() {
         return;
     }
@@ -302,7 +443,14 @@ pub fn f16_matvec_strided(isa: Isa, v: &[u16], offset: usize, stride: usize, x: 
 ///
 /// # Panics
 /// When the last row runs past `v`.
-pub fn weighted_sum_f16(isa: Isa, p: &[f32], v: &[u16], offset: usize, stride: usize, out: &mut [f32]) {
+pub fn weighted_sum_f16(
+    isa: Isa,
+    p: &[f32],
+    v: &[u16],
+    offset: usize,
+    stride: usize,
+    out: &mut [f32],
+) {
     if p.is_empty() {
         out.fill(0.0);
         return;
@@ -358,7 +506,10 @@ pub fn act_quant(isa: Isa, x: &[f32], out: &mut [i8]) -> f32 {
         all(target_arch = "aarch64", target_endian = "little"),
         all(target_arch = "wasm32", target_feature = "simd128")
     )),
-    expect(dead_code, reason = "only the SIMD tiers call it; this target has none")
+    expect(
+        dead_code,
+        reason = "only the SIMD tiers call it; this target has none"
+    )
 )]
 #[inline]
 #[must_use]
@@ -373,12 +524,18 @@ pub(crate) fn act_scale(amax: f32) -> f32 {
         all(target_arch = "aarch64", target_endian = "little"),
         all(target_arch = "wasm32", target_feature = "simd128")
     )),
-    expect(dead_code, reason = "only the SIMD tiers call it; this target has none")
+    expect(
+        dead_code,
+        reason = "only the SIMD tiers call it; this target has none"
+    )
 )]
 #[inline]
 #[must_use]
 pub(crate) fn quant_one(v: f32, s: f32) -> i8 {
-    #[expect(clippy::cast_possible_truncation, reason = "clamped to an i8's range; a NaN casts to 0")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "clamped to an i8's range; a NaN casts to 0"
+    )]
     let q = (v * s).round_ties_even().clamp(-128.0, 127.0) as i8;
     q
 }

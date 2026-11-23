@@ -28,5 +28,13 @@ rusty_ternary = { git = "https://github.com/Remade-With-Rust/rusty_sloth", rev =
 lto = "thin"
 codegen-units = 1
 
+[features]
+# Measurement only: a counting global allocator in the `minerva` binary, so `generate` reports
+# allocations per phase (load / prefill / decode). Off in every timed build.
+census-alloc = []
+
 [lints.rust]
 unsafe_code = "warn"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+memmap2 = "0.9.12"
