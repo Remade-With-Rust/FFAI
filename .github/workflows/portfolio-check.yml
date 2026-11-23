@@ -23,4 +23,4 @@ jobs:
   check:
     uses: Remade-With-Rust/.github/.github/workflows/portfolio-test.yml@main
     with:
-      command: test
+      command: check
