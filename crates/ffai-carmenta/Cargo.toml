@@ -80,7 +80,7 @@ rayon = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 # Superseded as the default by the pure-Rust remake; see the allocator
 # doc comment in `ffai-cli/src/main.rs` for the measurement.
-rusty_alloc-api = "=2.4.0"
+rusty_alloc-api = "2.6.0"
 ffai-media = { path = "../ffai-media" }
 ffai-bench = { path = "../ffai-bench" }
 
