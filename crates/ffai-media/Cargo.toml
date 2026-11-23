@@ -31,7 +31,7 @@ hound = { workspace = true }
 # DEMUXERS and video codecs, where rff provides something nothing else does.
 # For a still-image decoder it bought an indirection and cost publication.
 rusty_png = "0.3"
-rusty_jpeg = "0.4"
+rusty_jpeg = "0.4.12"
 # VIDEO INGEST, from crates.io rather than the git workspace.
 #
 # `sample_frames` was a stub waiting on "the rff backend". The backend is
