@@ -57,7 +57,7 @@ rff-codec = "0.8.4"
 # Choosing the allocator is the deliverable's call, never a library's - the
 # house rule, and the reason `ffai-cli` owns that decision. `std` and `asm`
 # are the two default features worth keeping, so they come back by name.
-rusty_h264 = { version = "0.16", default-features = false, features = ["std", "asm"] }
+rusty_h264 = { version = "0.17.4", default-features = false, features = ["std", "asm"] }
 # PDF pages for OCR (`pdf` feature; docs/plans/commercial-gaps.md gaps 1, 2,
 # 11). Both pure Rust, MIT. lopdf's defaults (chrono, jiff, rayon, time) are
 # date handling and parallel parsing this module never uses. `fax` is the
