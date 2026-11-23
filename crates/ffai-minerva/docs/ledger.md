@@ -372,3 +372,41 @@ bitnet.cpp `765741d` (MSVC `llama-server`, `-t T -tb T`):
   the next brick.
 - Both engines are fastest at 8 threads (the P-cores; bandwidth is the limit).
 - The README row waits for a quiet-box re-run with 16 and 24 threads included.
+
+## Next brick (plan): GEMM prefill, from rusty-sloth's prefill audit of 2011d91 (2026-11-23)
+
+The audit was read-only, through the codec-vectorize-kernel and codec-memory-copies lenses.
+Ranked inputs:
+
+1. **Root cause, memory traffic:** prefill runs one GEMV per prompt token, so every token
+   streams all 521 MB of codes. p512 reads 512 x 521 MB = 267 GB, which at 31-40 GB/s (8
+   threads) is 6.7-8.6 s against the measured 8.65 s, so the arithmetic closes. It is the
+   front-drain pattern: the same bytes moved N times. bitnet.cpp reads the weights once a
+   batch and is compute-bound.
+2. **GEMM shape:**
+   - Unpack each code vector once and apply it to a tile of tokens.
+   - The token tile's activations stay L1-resident (8 tokens x 2,560 B; `down` 6,912 B).
+   - Register-tile 2-4 rows x 4 tokens of i32. Loops: rows outer, then k blocks, then tokens.
+   - Gate: one token's result must be bit-identical to `gemv_codes`, `assert_eq!` against
+     `rusty_ternary::kernel::gemm_codes` (pinned, 03ebc97).
+3. **Missing ISA rungs:**
+   - This CPU has **AVX-VNNI** (confirmed locally: `avxvnni=true`, no AVX-512).
+     `_mm256_dpbusd_avx_epi32` fuses maddubs + madd + add with no i16 step.
+   - The Pixel has `asimddp` (sdot) and `i8mm`.
+   - New tiers `Avx2Vnni` and `NeonDot`, each `assert_eq!` to the oracle. Decode is
+     memory-bound and will barely move; compute-bound prefill should.
+   - **Correction to the audit's i16 budget:** the oracle and the twins accept the invalid
+     code 3 (it contributes 2a), so a block can reach 4 x 768 = 3,072 per i16 lane. That
+     allows at most 10 blocks in i16 before widening, not 15.
+4. **Fork-join tax:**
+   - ~240 rayon regions a token (7 projections x 30 layers + attention). At 5-15 us each that
+     is 1-4 ms of a ~22 ms decode token.
+   - GEMM prefill pays it once a batch.
+   - For decode, fuse q/k/v and gate/up into one region each (they share one activation).
+     Measure it with a par-region census, before and after.
+5. **Prefill attention** is O(n²) per-position mat-vecs (p512 ~1e10 f16 MACs). A tiled causal
+   kernel (query tile x key blocks, online softmax) follows once the GEMM lands.
+
+Bounds: p512 is 1.2 T MACs, and ideal AVX-VNNI on 8 P-cores is ~2 T MAC/s, so the compute floor
+is ~0.6 s. bitnet.cpp does 3.1 s at 8 threads, so beating it on prefill is realistic. Every
+measurement runs at equal threads, on p64 and p512.
