@@ -113,7 +113,7 @@ dependencies = [
 [[package]]
 name = "rusty_ternary"
 version = "0.0.0"
-source = "git+https://github.com/Remade-With-Rust/rusty_sloth?rev=0940876dea976c3f239b4ad8f4e5d4d287f5df93#0940876dea976c3f239b4ad8f4e5d4d287f5df93"
+source = "git+https://github.com/Remade-With-Rust/rusty_sloth?rev=03ebc9766c171d520accee42cdf908673a97bf58#03ebc9766c171d520accee42cdf908673a97bf58"
 
 [[package]]
 name = "syn"

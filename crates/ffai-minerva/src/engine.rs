@@ -15,18 +15,17 @@
 //! ```
 //!
 //! then `logits = head · f16(rms_norm(x, output_norm))`. A `BitLinear` is the activation's
-//! 8-bit quantisation (`rusty_ternary::quant::act_quant`), the exact integer product, and
-//! `rusty_ternary::kernel::finish`.
+//! 8-bit quantisation, the exact integer product, and `finish`.
+//!
+//! Every kernel goes through [`crate::simd`] at the session's [`Isa`], chosen once; every tier
+//! is bit-identical to the scalar oracles, so the tier changes the speed and nothing else.
 
 use rayon::prelude::*;
-use rusty_ternary::kernel::finish;
-use rusty_ternary::quant::act_quant;
 
 use crate::kernel::gemv_par;
 use crate::model::{Model, Ternary};
-use crate::numerics::{
-    dot16_f16, dot16_f16_bytes, f16_table, rms_norm, rope_neox, rope_table, round_f16, softmax, to_f16_bits,
-};
+use crate::numerics::rope_table;
+use crate::simd::{self, Isa};
 
 /// Vocabulary rows a thread takes at a time in the head.
 const HEAD_CHUNK: usize = 256;
@@ -54,6 +53,7 @@ impl std::error::Error for StepError {}
 /// One sequence's state: the KV cache and the scratch a step needs, allocated once.
 pub struct Session<'m> {
     m: &'m Model,
+    isa: Isa,
     ctx: usize,
     pos: usize,
     /// `[layer][position][kv_dim]` as `f16` bits.
@@ -71,35 +71,53 @@ pub struct Session<'m> {
     out: Vec<f32>,
     qa: Vec<i8>,
     isum: Vec<i32>,
-    rope: Vec<(f32, f32)>,
+    cos: Vec<f32>,
+    sin: Vec<f32>,
     logits: Vec<f32>,
 }
 
 impl std::fmt::Debug for Session<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Session").field("ctx", &self.ctx).field("pos", &self.pos).finish_non_exhaustive()
+        f.debug_struct("Session")
+            .field("isa", &self.isa)
+            .field("ctx", &self.ctx)
+            .field("pos", &self.pos)
+            .finish_non_exhaustive()
     }
 }
 
-/// `out = finish(W · quant(input))` for one projection, the activation already quantised.
-fn bitlinear(m: &Model, t: &Ternary, qa: &[i8], act_scale: f32, isum: &mut [i32], out: &mut [f32]) {
+/// `out = finish(W · a)` for one projection, the activation already quantised (`qa`, its scale
+/// and its sum).
+fn bitlinear(isa: Isa, m: &Model, t: &Ternary, qa: &[i8], act: (f32, i32), isum: &mut [i32], out: &mut [f32]) {
     let isum = &mut isum[..t.rows];
-    gemv_par(m.codes(t), &qa[..t.cols], isum);
-    for (o, &s) in out[..t.rows].iter_mut().zip(isum.iter()) {
-        *o = finish(s, act_scale, t.scale);
-    }
+    gemv_par(isa, m.codes(t), &qa[..t.cols], act.1, isum);
+    simd::finish_rows(isa, isum, act.0, t.scale, &mut out[..t.rows]);
+}
+
+/// Quantise `x` into `qa`: the scale and the codes' sum.
+fn quantise(isa: Isa, x: &[f32], qa: &mut [i8]) -> (f32, i32) {
+    let qa = &mut qa[..x.len()];
+    let s = simd::act_quant(isa, x, qa);
+    (s, simd::act_sum(qa))
 }
 
 impl<'m> Session<'m> {
-    /// A session over `m` holding up to `ctx` positions.
+    /// A session over `m` holding up to `ctx` positions, at [`Isa::from_env`].
     #[must_use]
     pub fn new(m: &'m Model, ctx: usize) -> Self {
+        Self::with_isa(m, ctx, Isa::from_env())
+    }
+
+    /// A session at a chosen instruction set.
+    #[must_use]
+    pub fn with_isa(m: &'m Model, ctx: usize, isa: Isa) -> Self {
         let c = &m.cfg;
         let kv = c.layers * ctx * c.kv_dim();
         let q_dim = c.heads * c.head_dim;
         let widest = c.embd.max(q_dim).max(c.ffn);
         Self {
             m,
+            isa,
             ctx,
             pos: 0,
             k: vec![0; kv],
@@ -116,9 +134,16 @@ impl<'m> Session<'m> {
             out: vec![0.0; widest],
             qa: vec![0; widest],
             isum: vec![0; widest],
-            rope: vec![(0.0, 0.0); c.head_dim / 2],
+            cos: vec![0.0; c.head_dim / 2],
+            sin: vec![0.0; c.head_dim / 2],
             logits: vec![0.0; c.vocab],
         }
+    }
+
+    /// The instruction set this session runs.
+    #[must_use]
+    pub const fn isa(&self) -> Isa {
+        self.isa
     }
 
     /// Tokens consumed so far.
@@ -133,6 +158,7 @@ impl<'m> Session<'m> {
     /// When the context is full or the token is outside the vocabulary.
     pub fn step(&mut self, token: u32, logits: bool) -> Result<Option<&[f32]>, StepError> {
         let m = self.m;
+        let isa = self.isa;
         let c = &m.cfg;
         if self.pos >= self.ctx {
             return Err(StepError::ContextFull(self.ctx));
@@ -145,100 +171,69 @@ impl<'m> Session<'m> {
         #[expect(clippy::cast_precision_loss, reason = "head width, small")]
         let kq_scale = 1.0 / (hd as f32).sqrt();
 
-        let t16 = f16_table();
-        for (x, b) in self.x.iter_mut().zip(m.f16_row(m.embd, embd, tok).chunks_exact(2)) {
-            *x = t16[usize::from(u16::from_le_bytes([b[0], b[1]]))];
-        }
-        rope_table(pos, hd, c.rope_base, &mut self.rope);
+        simd::f16_bytes_to_f32(isa, m.f16_row(m.embd, embd, tok), &mut self.x);
+        rope_table(pos, hd, c.rope_base, &mut self.cos, &mut self.sin);
 
         for (li, l) in m.layers.iter().enumerate() {
             // --- attention ---
-            rms_norm(&self.x, &l.attn_norm, c.rms_eps, &mut self.h[..embd]);
-            let s = act_quant(&self.h[..embd], &mut self.qa[..embd]);
-            bitlinear(m, &l.q, &self.qa, s, &mut self.isum, &mut self.q);
-            bitlinear(m, &l.k, &self.qa, s, &mut self.isum, &mut self.kc);
-            bitlinear(m, &l.v, &self.qa, s, &mut self.isum, &mut self.vc);
+            simd::rms_norm(isa, &self.x, &l.attn_norm, c.rms_eps, &mut self.h[..embd]);
+            let act = quantise(isa, &self.h[..embd], &mut self.qa);
+            bitlinear(isa, m, &l.q, &self.qa, act, &mut self.isum, &mut self.q);
+            bitlinear(isa, m, &l.k, &self.qa, act, &mut self.isum, &mut self.kc);
+            bitlinear(isa, m, &l.v, &self.qa, act, &mut self.isum, &mut self.vc);
             for head in self.q.chunks_exact_mut(hd) {
-                rope_neox(head, &self.rope);
+                simd::rope_neox(isa, head, &self.cos, &self.sin);
             }
             for head in self.kc.chunks_exact_mut(hd) {
-                rope_neox(head, &self.rope);
+                simd::rope_neox(isa, head, &self.cos, &self.sin);
             }
             let layer_base = li * self.ctx * kv_dim;
             let at = layer_base + pos * kv_dim;
-            for (d, &v) in self.k[at..at + kv_dim].iter_mut().zip(&self.kc) {
-                *d = to_f16_bits(v);
-            }
-            for (d, &v) in self.v[at..at + kv_dim].iter_mut().zip(&self.vc) {
-                *d = to_f16_bits(v);
-            }
-            for v in &mut self.q {
-                *v = round_f16(*v);
-            }
+            simd::f32_to_f16(isa, &self.kc, &mut self.k[at..at + kv_dim]);
+            simd::f32_to_f16(isa, &self.vc, &mut self.v[at..at + kv_dim]);
+            simd::round_f16_slice(isa, &mut self.q);
             let n = pos + 1;
-            let (kcache, vcache) = (&self.k[layer_base..layer_base + n * kv_dim], &self.v[layer_base..at + kv_dim]);
+            let kcache = &self.k[layer_base..layer_base + n * kv_dim];
+            let vcache = &self.v[layer_base..layer_base + n * kv_dim];
             let q = &self.q;
             let ctx = self.ctx;
             self.att.par_chunks_mut(hd).zip(self.scores.par_chunks_mut(ctx)).enumerate().for_each(
                 |(head, (out, sc))| {
                     let g = head / group;
-                    let qh = &q[head * hd..(head + 1) * hd];
                     let sc = &mut sc[..n];
-                    for (t, s) in sc.iter_mut().enumerate() {
-                        let kt = &kcache[t * kv_dim + g * hd..t * kv_dim + (g + 1) * hd];
-                        *s = dot16_f16(kt, qh) * kq_scale;
-                    }
-                    softmax(sc);
-                    out.fill(0.0);
-                    for (t, &p) in sc.iter().enumerate() {
-                        let p = round_f16(p);
-                        let vt = &vcache[t * kv_dim + g * hd..t * kv_dim + (g + 1) * hd];
-                        for (o, &v) in out.iter_mut().zip(vt) {
-                            *o += p * t16[usize::from(v)];
-                        }
-                    }
+                    simd::f16_matvec_strided(isa, kcache, g * hd, kv_dim, &q[head * hd..(head + 1) * hd], sc);
+                    simd::softmax(isa, sc, kq_scale);
+                    simd::round_f16_slice(isa, sc);
+                    simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, out);
                 },
             );
-            rms_norm(&self.att, &l.attn_sub_norm, c.rms_eps, &mut self.h[..q_dim]);
-            let s = act_quant(&self.h[..q_dim], &mut self.qa[..q_dim]);
-            bitlinear(m, &l.o, &self.qa, s, &mut self.isum, &mut self.out);
-            for (x, &o) in self.x.iter_mut().zip(&self.out[..embd]) {
-                *x += o;
-            }
+            simd::rms_norm(isa, &self.att, &l.attn_sub_norm, c.rms_eps, &mut self.h[..q_dim]);
+            let act = quantise(isa, &self.h[..q_dim], &mut self.qa);
+            bitlinear(isa, m, &l.o, &self.qa, act, &mut self.isum, &mut self.out);
+            simd::add_assign(isa, &mut self.x, &self.out[..embd]);
 
             // --- feed-forward ---
-            rms_norm(&self.x, &l.ffn_norm, c.rms_eps, &mut self.h[..embd]);
-            let s = act_quant(&self.h[..embd], &mut self.qa[..embd]);
-            bitlinear(m, &l.gate, &self.qa, s, &mut self.isum, &mut self.gate);
-            bitlinear(m, &l.up, &self.qa, s, &mut self.isum, &mut self.up);
-            for (g, &u) in self.gate.iter_mut().zip(&self.up) {
-                let r = if *g > 0.0 { *g } else { 0.0 };
-                *g = r * r * u;
-            }
-            rms_norm(&self.gate, &l.ffn_sub_norm, c.rms_eps, &mut self.h[..ffn]);
-            let s = act_quant(&self.h[..ffn], &mut self.qa[..ffn]);
-            bitlinear(m, &l.down, &self.qa, s, &mut self.isum, &mut self.out);
-            for (x, &o) in self.x.iter_mut().zip(&self.out[..embd]) {
-                *x += o;
-            }
+            simd::rms_norm(isa, &self.x, &l.ffn_norm, c.rms_eps, &mut self.h[..embd]);
+            let act = quantise(isa, &self.h[..embd], &mut self.qa);
+            bitlinear(isa, m, &l.gate, &self.qa, act, &mut self.isum, &mut self.gate);
+            bitlinear(isa, m, &l.up, &self.qa, act, &mut self.isum, &mut self.up);
+            simd::relu2_mul(isa, &mut self.gate, &self.up);
+            simd::rms_norm(isa, &self.gate, &l.ffn_sub_norm, c.rms_eps, &mut self.h[..ffn]);
+            let act = quantise(isa, &self.h[..ffn], &mut self.qa);
+            bitlinear(isa, m, &l.down, &self.qa, act, &mut self.isum, &mut self.out);
+            simd::add_assign(isa, &mut self.x, &self.out[..embd]);
         }
         self.pos += 1;
         if !logits {
             return Ok(None);
         }
-        rms_norm(&self.x, &m.output_norm, c.rms_eps, &mut self.h[..embd]);
-        for v in &mut self.h[..embd] {
-            *v = round_f16(*v);
-        }
+        simd::rms_norm(isa, &self.x, &m.output_norm, c.rms_eps, &mut self.h[..embd]);
+        simd::round_f16_slice(isa, &mut self.h[..embd]);
         let h = &self.h[..embd];
         let head = m.head_bytes();
         let row = embd * 2;
-        self.logits.par_chunks_mut(HEAD_CHUNK).enumerate().for_each(|(ci, ls)| {
-            let base = ci * HEAD_CHUNK;
-            for (j, l) in ls.iter_mut().enumerate() {
-                let r = base + j;
-                *l = dot16_f16_bytes(&head[r * row..(r + 1) * row], h);
-            }
+        self.logits.par_chunks_mut(HEAD_CHUNK).zip(head.par_chunks(HEAD_CHUNK * row)).for_each(|(ls, rows)| {
+            simd::f16_matvec_bytes(isa, rows, h, ls);
         });
         Ok(Some(&self.logits))
     }

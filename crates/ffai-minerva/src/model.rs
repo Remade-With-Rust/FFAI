@@ -143,6 +143,21 @@ fn usize_of(v: u64) -> Result<usize, LoadError> {
     usize::try_from(v).map_err(|_| bad("dimension does not fit usize"))
 }
 
+/// The whole file, read 16 MB at a time: a WASI host (wasmtime) refuses one 1.2 GB `fd_read`
+/// with `ENOMEM`, where many bounded reads into one buffer work on every target.
+fn read_chunked(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    const CHUNK: usize = 16 << 20;
+    let mut f = std::fs::File::open(path)?;
+    let len = usize::try_from(f.metadata()?.len())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "file larger than the address space"))?;
+    let mut buf = vec![0u8; len];
+    for part in buf.chunks_mut(CHUNK) {
+        f.read_exact(part)?;
+    }
+    Ok(buf)
+}
+
 fn offset_in(bytes: &[u8], part: &[u8]) -> usize {
     part.as_ptr() as usize - bytes.as_ptr() as usize
 }
@@ -154,7 +169,7 @@ impl Model {
     /// When the file cannot be read, is not a `GGUF`, or is not a `BitNet` b1.58 model with the
     /// tensors, types and shapes this engine expects.
     pub fn load(path: &std::path::Path) -> Result<Self, LoadError> {
-        Self::from_bytes(std::fs::read(path).map_err(LoadError::Io)?)
+        Self::from_bytes(read_chunked(path).map_err(LoadError::Io)?)
     }
 
     /// Check a model held in memory.

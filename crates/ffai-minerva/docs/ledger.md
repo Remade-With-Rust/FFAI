@@ -134,3 +134,87 @@ work. It is not on the decode path the bench gates.
   `gemv_codes`. Swap to it when it lands.
 - Activation rounding: rusty_ternary ties to even (training's rule); bitnet.cpp rounds half
   away from zero. They can part only on exact ties, which the near-tie gate covers.
+
+## Brick c: a SIMD twin for every scalar kernel (2026-11-23)
+
+`src/simd/` (`mod.rs` holds dispatch and the reach census; `x86.rs`, `neon.rs` and `wasm.rs`
+hold the twins; `tests.rs` holds the oracle tests). Every kernel on the decode path has a
+twin at each tier, **bit-identical** to its scalar oracle:
+
+| kernel | oracle | SSSE3 | AVX2 | NEON | SIMD128 |
+|---|---|:-:|:-:|:-:|:-:|
+| I2_S GEMV | `rusty_ternary::kernel::gemv_codes` | yes | yes | yes | yes |
+| f16 mat-vec (head, attention scores) | `numerics::dot16_f16{,_bytes}` | yes | yes | yes | yes |
+| attention value sum | `numerics::weighted_sum_f16` | yes | yes | yes | yes |
+| act_quant | `rusty_ternary::quant::act_quant` | yes | yes | yes | yes |
+| rms_norm | `numerics::rms_norm` | yes | yes | yes | yes |
+| softmax (scale, max, exp, sum) | `numerics::softmax` | yes | yes | yes | yes |
+| f16 <-> f32 conversions | `half` | yes | yes (F16C) | yes | yes |
+| finish, ReLU²·up, residual add, RoPE | `numerics::*` | yes | yes | yes | yes |
+
+The only per-token code left scalar is the RoPE angle table: 64 `libm` cos/sin values a token,
+which is setup, not a kernel.
+
+**Oracle changes, made in scalar first so they could be twinned:** the f64 sums that set a
+scale (RMS norm, softmax denominator) moved from a sequential order to 4 f64 lanes (an order
+every ISA can express). `exp` moved from libm to `exp_canon`: Cephes' polynomial behind a
+ties-to-even range reduction, plain f32 multiplies and adds, within 3e-7 of exp. Softmax now
+takes the attention scale, as `soft_max_ext` does.
+
+**Dispatch:** `Isa` is opaque, built only by run-time detection or a checked `MINERVA_ISA`, so
+safe code cannot name an unsupported tier. Dispatch happens once per kernel call, with the loop
+inside the `#[target_feature]` function. `unsafe` is confined to `src/simd/`; the crate is
+`deny(unsafe_code)`.
+
+### Validation
+
+- **Oracle tests:** 22 tests, every kernel at every supported tier, `assert_eq!` on bits.
+  Inputs cover every tail length, ±128 saturation, subnormals, ±0, ±inf, and exact rounding
+  ties.
+  - x86 (scalar, ssse3, avx2) runs natively.
+  - **wasm32 (scalar, simd128) runs under wasmtime**, simd128 and scalar-only builds both.
+  - The f16->f32 sweep covers all 65,536 halves; **f32->f16 was swept over all 2^32 floats** on
+    SSSE3 and AVX2 (55 s, `--ignored`).
+- **Planted bugs, each caught:** a dropped `- Σa` in the AVX2 GEMV, a reordered SSE reduction
+  (a 1-ulp drift), and an FMA in the AVX2 mat-vec.
+- **End to end, five configurations, one hash:** a golden prompt (13 + 16) gives the same 16
+  ids and the same FNV-1a over every generated step's 128,256 logit bits (`f2f2db068ec651cb`)
+  on x86 scalar, SSSE3 and AVX2, and **in WebAssembly** (`minerva.wasm`, wasmtime) at scalar
+  and simd128.
+- **Reach census:** each tier's run shows 100.00 % of every kernel's elements at that tier,
+  with element counts equal across tiers. The GEMV counts 58,353,254,400 = 28 steps x
+  2,084,044,800 weights.
+- **Conformance gate rerun (default tier, AVX2):** 190/192, worst gap 0.0154, **PASS**
+  (`docs/conformance-c.json`). The new parting (p1024 step 21) is a coin flip on both sides
+  (bitnet.cpp 0.4802 / 0.4648, ours 0.4732 / 0.4702). The int8 activation quantiser is
+  discontinuous, so a last-bit oracle change can move a probability ~0.02 downstream; that is
+  what the near-tie rule absorbs. The golden prompts still give 48/48, and the worst probability
+  difference is unchanged at 0.0501.
+- **Clippy `-D warnings`** clean on x86_64, aarch64, wasm32+simd128 and wasm32 scalar-only.
+- **NEON is compiled and clippy-clean but NOT executed:** this host has no ARM hardware and no
+  emulator, and WSL is paused. Its tests need one run on an aarch64 machine.
+
+### Speed (`tools/tier_ab.py`): one binary, `MINERVA_ISA` per arm, 10 rotated rounds, internal clock
+
+24 threads, p64 + 64 new. Every run printed the same logits hash (work parity OK). The box
+was lightly loaded (another session's build at ~9 % CPU).
+
+| tier | decode tok/s median (min-max) | vs scalar | prefill p64 median |
+|---|---|---|---:|
+| scalar | 14.21 (13.09-14.40) | 1.000x | 3.26 s |
+| ssse3 | 29.07 (25.46-30.01) | 2.036x, 10/10, z = +3.16 | 1.14 s |
+| avx2 | 37.18 (34.87-38.62) | 2.650x, 10/10, z = +3.16 | 1.07 s |
+| null (avx2 vs avx2) | median 0.969, range 0.858-1.059 | | |
+
+AVX2 over SSSE3 is 1.18-1.40x per round (10/10), beyond the null range. In wasm, one thread:
+simd128 2.90 tok/s against scalar 1.11 (2.6x).
+
+At 37.2 tok/s x 1,179.5 MB a token, decode streams ~44 GB/s: 63 % of the contended 69.8 GB/s
+ceiling. The f16 head is still 55.7 % of those bytes, which is brick d's target.
+
+### Open
+
+- Run NEON's tests on aarch64.
+- Prefill is still one GEMV per token. `rusty_ternary::kernel::gemm_codes` (pinned) plus a
+  GEMM twin that decodes each weight row once for many tokens is the prefill lever.
+- Bandwidth rerun on a quiet box (still open from brick a).

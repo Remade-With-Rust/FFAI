@@ -11,15 +11,21 @@
 //! - [`model`], [`engine`]: the scalar engine — `GGUF` load, the `BitNet` b1.58 blocks, a KV
 //!   cache, greedy decoding — gated on bitnet.cpp's tokens.
 //! - [`numerics`]: the float arithmetic in one canonical order, so a file gives the same tokens
-//!   on every device.
+//!   on every device; these scalar functions are the oracles.
+//! - [`simd`]: a bit-identical SIMD twin of every scalar kernel (SSSE3, AVX2, NEON, WASM-SIMD128),
+//!   with a kernel-reach census.
 //!
 //! The format and the scalar integer kernels come from `rusty_ternary`; those kernels are the
 //! permanent oracle every faster one is `assert_eq!`-gated against.
 
-#![forbid(unsafe_code)]
+// `unsafe` lives in one place: the SIMD twins (`simd`), each behind run-time detection and
+// bounds its safe entry point asserts. Everything else is safe code.
+#![deny(unsafe_code)]
 
 pub mod engine;
 pub mod kernel;
 pub mod model;
 pub mod numerics;
 pub mod roofline;
+#[allow(unsafe_code)]
+pub mod simd;

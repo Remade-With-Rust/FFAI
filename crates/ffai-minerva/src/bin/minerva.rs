@@ -14,6 +14,7 @@ use std::time::Instant;
 use ffai_minerva::engine::{self, Session, top_k};
 use ffai_minerva::model::Model;
 use ffai_minerva::roofline::{self, ByteCensus};
+use ffai_minerva::simd;
 use rusty_ternary::gguf::Gguf;
 
 const DEFAULT_GGUF: &str = "F:/coding/bitnet-golden/ours-i2_s.gguf";
@@ -50,8 +51,9 @@ fn print_census(path: &str, c: &ByteCensus) {
 const USAGE: &str = "usage:
   minerva roofline [--gguf PATH] [--mib N] [--reps N] [--threads 1,2,4]
   minerva info     [--gguf PATH]
-  minerva generate --ids FILE --new N [--gguf PATH] [--threads N] [--probs OUT.jsonl]
-      prints the generated ids, comma separated, as the last line of stdout";
+  minerva generate --ids FILE --new N [--gguf PATH] [--threads N] [--probs OUT.jsonl] [--census]
+      prints the generated ids, comma separated, as the last line of stdout;
+      MINERVA_ISA=scalar|ssse3|avx2|neon|simd128 picks the instruction set (default: the widest)";
 
 fn parse_ids(text: &str) -> Result<Vec<u32>, String> {
     text.split(|c: char| c == ',' || c.is_whitespace())
@@ -97,12 +99,21 @@ fn generate(args: &[String]) -> Result<(), String> {
         Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p).map_err(|e| format!("{p}: {e}"))?)),
         None => None,
     };
+    simd::census::reset();
     let t1 = Instant::now();
     let mut first = None;
     let mut io_err = None;
+    // FNV-1a over every generated step's logit bits: one number that says two runs (two tiers,
+    // two devices) computed the same thing, not merely chose the same tokens.
+    let mut fnv = 0xcbf2_9ce4_8422_2325_u64;
     let out = engine::generate(&mut s, &prompt, new, |i, logits| {
         if i == 0 {
             first = Some(t1.elapsed());
+        }
+        for l in logits {
+            for b in l.to_bits().to_le_bytes() {
+                fnv = (fnv ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
         }
         if let Some(w) = probs.as_mut() {
             let top: Vec<String> = top_k(logits, 8).iter().map(|(t, p)| format!("[{t},{p:.6}]")).collect();
@@ -122,15 +133,28 @@ fn generate(args: &[String]) -> Result<(), String> {
     let first = first.unwrap_or(total);
     let decode = total - first;
     eprintln!(
-        "minerva: load {:.2}s | prefill {} tokens + first: {:.2}s | decode {} tokens: {:.2}s ({:.2} tok/s) | threads {}",
+        "minerva: load {:.2}s | prefill {} tokens + first: {:.2}s | decode {} tokens: {:.2}s ({:.2} tok/s) | threads {} | isa {} | logits-fnv {fnv:016x}",
         load.as_secs_f64(),
         prompt.len(),
         first.as_secs_f64(),
         new.saturating_sub(1),
         decode.as_secs_f64(),
         new.saturating_sub(1) as f64 / decode.as_secs_f64().max(1e-9),
-        rayon::current_num_threads()
+        rayon::current_num_threads(),
+        s.isa().name()
     );
+    if args.iter().any(|a| a == "--census") {
+        let snap = simd::census::snapshot();
+        for k in simd::census::NAMES {
+            let cells: Vec<_> = snap.iter().filter(|c| c.0 == k).collect();
+            let total: u64 = cells.iter().map(|c| c.2).sum();
+            let split: Vec<String> = cells
+                .iter()
+                .map(|c| format!("{} {:.2}%", c.1, 100.0 * c.2 as f64 / total.max(1) as f64))
+                .collect();
+            eprintln!("census: {k:<13} {total:>15}  {}", split.join(", "));
+        }
+    }
     let line: Vec<String> = out.iter().map(u32::to_string).collect();
     println!("{}", line.join(","));
     Ok(())
