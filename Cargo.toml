@@ -60,7 +60,7 @@ png = "0.17"
 # NOTE: nothing consumes these through `workspace = true` today — `ffai-media`
 # declares its own. They are kept in step with what the tree actually resolves
 # so that wiring them up later cannot silently pull an older decoder.
-rusty_png = "0.3"
+rusty_png = "0.3.2"
 rusty_jpeg = "0.4.12"
 
 # ---- remade_ffmpeg_rs: the rest of our ffmpeg (Principle 7) ----
