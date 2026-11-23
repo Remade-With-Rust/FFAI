@@ -341,3 +341,34 @@ testable.
 - A sidecar int8 head file would skip the build and never touch the f16 head at all. That is
   an export-format question (keyed to the model's hash).
 - Prefill is still one GEMV a token (GEMM via `gemm_codes` is next).
+
+## Brick g, first matched-thread race vs bitnet.cpp (2026-11-23, run by rusty-sloth)
+
+Minerva FFai `57d74f4` (brick d: head screen on, avx2), built from a `git archive`, against
+bitnet.cpp `765741d` (MSVC `llama-server`, `-t T -tb T`):
+
+- Both engines run `ours-i2_s.gguf` with exact prompt ids, greedy, `ignore_eos`; token counts
+  are asserted.
+- ABBA rounds; each engine is timed on its own clock.
+- A background process from another session held ~14 % of the CPU throughout.
+- Harness: `F:\coding\bitnet-bench\harness\cpu_race.py`. Logs: `results\cpu_race*.log`. JSON:
+  `results\cpu_race_8_24.json`, `results\cpu_race_12_16.json`.
+
+**Equal threads on every row** (the standing rule above):
+
+| threads | prompt -> new | decode Minerva | decode bitnet.cpp | ratio | prefill Minerva | prefill bitnet.cpp |
+|---|---|---:|---:|---|---:|---:|
+| 8 vs 8 | 64 -> 128 | 45.15 tok/s | 40.46 tok/s | **1.118x, 8/8** | 1,270 ms | 368 ms |
+| 8 vs 8 | 512 -> 64 | 43.41 | 38.49 | **1.130x, 8/8** | 8,650 ms | 3,145 ms |
+| 12 vs 12 | 64 -> 128 | 41.51 | 35.53 | 1.168x, 5/6 | 1,465 ms | 318 ms |
+| 12 vs 12 | 512 -> 64 | 40.75 | 34.22 | 1.186x, 5/6 | 9,480 ms | 2,829 ms |
+
+- **Not admissible; re-run on a quiet box.** 24 vs 24: bitnet.cpp collapsed to 2.15 / 4.07
+  tok/s (its spin barrier fails at threads = logical cores under background load); Minerva
+  read 52.3 / 49.0. 16 vs 16: Minerva itself swung 20.6 vs 46.0 between rows, so the box was
+  noisy.
+- **Decode leads by 12-19 % at matched 8 and 12 threads**, most of it the int8 head screen.
+- **Prefill trails 3-4x**, as expected: Minerva still runs one GEMV a token. GEMM prefill is
+  the next brick.
+- Both engines are fastest at 8 threads (the P-cores; bandwidth is the limit).
+- The README row waits for a quiet-box re-run with 16 and 24 threads included.
