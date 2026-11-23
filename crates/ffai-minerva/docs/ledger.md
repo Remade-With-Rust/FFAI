@@ -63,5 +63,74 @@ At 8 threads (43.5 GB/s) the f16 ceiling is 36.9 tok/s at position 0.
   in 5 bits (1.67 bits a weight), so it would cut the 521 MB ternary stream by about 87 MB
   per token: -7.4 % of a token with the f16 head, -10.2 % with the int8 screen. Brick e
   prices TL2 on that, plus an Ir count. It cannot be refuted on bytes alone.
+- **Brick d requirement (rusty-sloth-05, 2026-11-23):** with the screen, the f16 head is read
+  only for its 1-12 survivor rows a token (5 KB each) plus the input embedding row. So keep it
+  **memory-mapped from the GGUF, not loaded**: resident becomes ~520 MB of codes + 328 MB of
+  int8 head + KV, not +657 MB more, and that matters for a phone's budget. Measure resident set and
+  page faults in both arms. Two caveats: mapping is `unsafe` (a fenced seam under
+  `unsafe.md`, outside the `forbid` library core), and wasm32 has no mmap, so the browser
+  build keeps the f16 head out of memory some other way (fetch survivor rows on demand, or
+  ship the int8 screen plus an f16 side file).
+- **The ceiling does not go in the README** until the bandwidth is rerun on a quiet box.
 - **Open:** a clean rerun (faucet stopped, free RAM restored), then a P-core-only
   affinity sweep to see what the E-cores add.
+
+## Brick b: the scalar engine, end to end (2026-11-23)
+
+`src/model.rs` (GGUF load and checks), `src/engine.rs` (the `build_bitnet_158` graph, f16 KV
+cache, greedy), `src/kernel.rs` (the I2_S GEMV, rows split across rayon), `src/numerics.rs`
+(the float arithmetic). Run with `minerva generate --ids F --new N`.
+
+### Gate: bitnet.cpp's tokens, teacher-forced, under the near-tie rule — PASS
+
+`tools/conformance.py` (rusty_sloth's `step` / `teacher_forced` / `vocabulary`, imported):
+our greedy ids for each bench prompt, then bitnet.cpp's `llama-server` (765741d, Windows MSVC,
+CPU, n_probs 256) asked for its distribution at every step of them. The result is in
+`docs/conformance-b.json`.
+
+| prompt | in / out | agree | worst gap |
+|---|---|---:|---:|
+| p64 | 64 / 48 | 48/48 | 0 |
+| p256 | 256 / 48 | 48/48 | 0 |
+| p512 | 512 / 48 | 47/48 | 0.0012 |
+| p1024 | 1024 / 48 | 48/48 | 0 |
+
+The one parting (p512 step 38) is a near-tie on both sides: bitnet.cpp has 0.4538 against
+our token's 0.4526, and we have 0.467 against 0.430. **191/192 steps, gate < 0.1.**
+
+- **The gate can fail:** `--poison` (our ids rotated by one) reads 43/48 with a worst gap of
+  0.998, exit 1.
+- **The quick gate against bitnet.cpp's own greedy output** (`bitnet-golden/cpp-ours.json`,
+  3 prompts x 16): 48/48. After renormalising ours over its top-4 (that server softmaxes
+  among the top n_probs only), the largest probability difference is 0.050.
+
+### Arithmetic rules adopted here (`numerics.rs`), for "same file, same tokens on every device"
+
+- The integer paths are exact: the I2_S product and `act_quant`.
+- Every transcendental (`expf`, `cosf`, `sinf`, `powf`) comes from the pure-Rust `libm` crate,
+  never the platform libm (MSVC CRT, glibc and wasm differ in the last bit).
+- Float dot products use one canonical order: 16 lanes, multiply then add, no FMA, a fixed
+  pairwise reduction. The SIMD twins (brick c) must reproduce it bit for bit.
+- Scale-setting sums (RMS norm, softmax denominator) run in f64, sequentially, as `ggml_float`.
+- f16 rounding happens where the reference rounds: K and V cached as f16, the query and the
+  attention weights rounded to f16 before their products, and the hidden state rounded to f16
+  before the head.
+- RoPE is NEOX (pairs half a head apart), with the angle advanced by repeated f32
+  multiplication, as `ggml_rope`.
+- The loader refuses RoPE scaling, `rope_freqs`, partial RoPE, and any tensor of the wrong
+  type or shape.
+
+### Speed, for orientation only (contended box, not a measurement)
+
+24 threads, the scalar row product, no SIMD: decode 9.7-12.4 tok/s, which is already 16-21 %
+of the contended 59 tok/s ceiling. Prefill runs the GEMV once per token (p1024: 69.6 s,
+68 ms a token), so a GEMM prefill that decodes each weight row once for many tokens is open
+work. It is not on the decode path the bench gates.
+
+### Open
+
+- `src/kernel.rs` holds a copy of rusty_ternary's private row product, gated `assert_eq!` to
+  `kernel::gemv` on whole tensors. Requested from rusty-sloth-05: a public row-range
+  `gemv_codes`. Swap to it when it lands.
+- Activation rounding: rusty_ternary ties to even (training's rule); bitnet.cpp rounds half
+  away from zero. They can part only on exact ties, which the near-tie gate covers.

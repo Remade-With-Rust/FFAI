@@ -8,10 +8,18 @@
 //!
 //! - [`roofline`]: bytes a token streams against this machine's read bandwidth — the ceiling
 //!   every kernel is judged against, computed before any kernel exists.
+//! - [`model`], [`engine`]: the scalar engine — `GGUF` load, the `BitNet` b1.58 blocks, a KV
+//!   cache, greedy decoding — gated on bitnet.cpp's tokens.
+//! - [`numerics`]: the float arithmetic in one canonical order, so a file gives the same tokens
+//!   on every device.
 //!
 //! The format and the scalar integer kernels come from `rusty_ternary`; those kernels are the
 //! permanent oracle every faster one is `assert_eq!`-gated against.
 
 #![forbid(unsafe_code)]
 
+pub mod engine;
+pub mod kernel;
+pub mod model;
+pub mod numerics;
 pub mod roofline;
