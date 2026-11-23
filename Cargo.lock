@@ -3738,36 +3738,36 @@ dependencies = [
 
 [[package]]
 name = "rff-codec"
-version = "0.2.0"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61677fc31588351aedd8f8c931aceb3df9c407fbf0f0b655d434bd65a5b84e09"
+checksum = "3490c4262a20a38821239a1bf80a08d801542a489b13b4772982464a125ac156"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-core"
-version = "0.2.1"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14f1d6f3bcfc56f5220ed6ccf30e10fdd2de16cd2d1c2ec111d6bed6439b2120"
+checksum = "cfa0a3a9a0ffe5b8d1f64765f869ee017a865e4872dd04f7884fc8f678cd3eeb"
 dependencies = [
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "rff-format"
-version = "0.2.1"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ede37b5f32c0d20416ca1ee8214483469388f3e76dbca38b76126d96851a4bd"
+checksum = "c05d88201285ef06cc9093fc7bd67bf3bc49b6ce4f2215506d7faaec0958f781"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-format-avi"
-version = "0.2.0"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95e9a5dfd75e53aca4ab0171714ed9807706b3e584b3d5269666038fd4f31f7b"
+checksum = "ca4f27718e92518b44287b1c28a4188ee66239bb214b0151cca8c2ea111f37b4"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3775,10 +3775,11 @@ dependencies = [
 
 [[package]]
 name = "rff-format-mkv"
-version = "0.2.1"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9a1356e1385b32df3abb8741c9f86f94edce07f09c1c3f6fd43992b990a1ded"
+checksum = "b3f324e4f17992ea8b783d97bb0a66cd579d27c5b0c812c6508fcdcce1548a4a"
 dependencies = [
+ "miniz_oxide",
  "rff-core",
  "rff-format",
  "rff-subtitle",
@@ -3786,9 +3787,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-mp4"
-version = "0.2.1"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd50c0332f1e700a19a244b76be86c3081e1f36f8b7b2ce19cf5f63fef430006"
+checksum = "970bf49cd8c2b986606928d138ab195e840e586f16e020cd09b5bd63e850f6e7"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3796,9 +3797,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-ts"
-version = "0.2.1"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64991d97bb9e24008d5b906725030acb2f98abd11326c360687d20797f17c26b"
+checksum = "835c4e1b560a3ed8460e280fab6600fe6dcd3a128fce4c7c48734151c9bb0db9"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3806,9 +3807,9 @@ dependencies = [
 
 [[package]]
 name = "rff-subtitle"
-version = "0.2.0"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9735c92fade5b42e986d6d88562c5c0093c11ad7d6a8b36014f6d73ae2fb7759"
+checksum = "ceea36ac9d50f443992678e65235312dc590aa08cfa7dd0a0b67a8ecf58155f0"
 
 [[package]]
 name = "ring"
@@ -3963,9 +3964,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc"
-version = "2.4.0"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af775820e14adea82b15c22e9d2815cb85976c12285c30caa327f4d441038969"
+checksum = "fbc3c5d570c6a698fe1329b5abfbadeb3993723dc06af6c0dad541b2a34e1ff9"
 dependencies = [
  "libc",
  "portable-atomic",
@@ -3974,9 +3975,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_alloc-api"
-version = "2.4.0"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a5b07b04e499fe5ff94c9866fd3b39e148b02f978b42ee6f572f92d7e32b9f"
+checksum = "99a38e4517642f7c2123e8a27200b15f06d763b59ab7a33d57a2f82dd958e66d"
 dependencies = [
  "rusty_alloc",
 ]
@@ -3989,9 +3990,9 @@ checksum = "11138f233c555e7e28b812e9fe834feb2e579f3508f57c87620a4ae1dc824f46"
 
 [[package]]
 name = "rusty_h264"
-version = "0.16.0"
+version = "0.17.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acc4385b919216f3148223bf790f47611676d3a4084083c0535eaa2d29478da8"
+checksum = "ff02d92f6ec1c8ac81a08f8104e85b68c6a82e054e147f2839f43acd09c7f817"
 dependencies = [
  "rusty_h264-common",
  "rusty_h264-decoder",
@@ -4000,15 +4001,15 @@ dependencies = [
 
 [[package]]
 name = "rusty_h264-accel"
-version = "0.16.0"
+version = "0.17.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18110c8f692668ccf004393bee04e369d4f0f173dd0ea4b515080258e6f9c599"
+checksum = "eb1078d19652da485f4e2491e02ed9559e44f7427cb1f62cd82d63a66b1c740e"
 
 [[package]]
 name = "rusty_h264-common"
-version = "0.16.0"
+version = "0.17.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf982ae23ecf8f13015ec1c5576fe2935f4e4296b097ebc4233b5872623af2a"
+checksum = "cdde0fe62dd8d912ae1cb4a507df37d487c7d3f09c00225688516f2d577e2af1"
 dependencies = [
  "bytemuck",
  "once_cell",
@@ -4019,18 +4020,18 @@ dependencies = [
 
 [[package]]
 name = "rusty_h264-decoder"
-version = "0.16.0"
+version = "0.17.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0f4deb1a3a5e928cbaa1dff7db6bc46262c850aedeb75cb5aeab890494c18a5"
+checksum = "91d8f5c7d6bcc0fe2d91252d7c88059540e772abc8041717c9342ebf7c69c312"
 dependencies = [
  "rusty_h264-common",
 ]
 
 [[package]]
 name = "rusty_h264-encoder"
-version = "0.16.0"
+version = "0.17.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e037f6341a02f54021f7077735bd12e2fd61a749e1ee7248eee00466ef5fa4ba"
+checksum = "1ecf0018e5589cd8ddae29193166022970766c1382377eb2cbbc069b0c0335ca"
 dependencies = [
  "rusty_h264-accel",
  "rusty_h264-common",
@@ -4038,9 +4039,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_jpeg"
-version = "0.4.1"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04b834f51d522e52dc7ad26fd6e157865f565eaf7f224a7a1a6d75ca617dd793"
+checksum = "c2bef7c9990a884b694dfe2d7b6dba4b1c502862879783a2223d4437368e56ae"
 
 [[package]]
 name = "rusty_json_turbo"
