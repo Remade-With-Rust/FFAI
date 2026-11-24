@@ -29,6 +29,7 @@ pub mod head;
 pub mod kernel;
 pub mod model;
 pub mod numerics;
+pub mod prof;
 pub mod roofline;
 #[allow(unsafe_code)]
 pub mod simd;

@@ -526,3 +526,31 @@ census call counts as work-parity anchors. Intel SDE gives dynamic counts if nee
 
 Each gets an `assert_eq!` twin gate plus an unchanged logits hash, or a recorded refutation.
 Order: e2's NeonDot run, V1, V3, V2, V4, then bricks 3-4.
+
+## Brick e1b: prefill's transpose + finish, parallel and fused (2026-11-23)
+
+**Instrument first:** `src/prof.rs` adds coarse prefill stage timers (`MINERVA_PROF=1`; a few
+scopes a layer phase, one relaxed load when off). At `c7ae4c1`, p512 prefill split as:
+
+| threads | total | GEMM | transpose + finish | attention | other |
+|---|---:|---:|---:|---:|---:|
+| 8 | 3.97 s | 58.6 % | **25.8 %** | 6.5 % | 9.2 % |
+| 12 | 3.11 s | 55.7 % | **28.5 %** | 5.7 % | 10.1 % |
+
+A quarter of prefill was the serial gather of each token's column out of the GEMM's
+`[rows, tokens]` sums (512-byte strides), plus a separate `finish` pass. It is now parallel over
+blocks of 16 tokens (each 64-byte line of the sums read once), with the scalar `finish` (the
+oracle, which the twins equal bit for bit) fused into the same pass. The logits hashes are
+unchanged (p64 `1c2856725481ae14`, p512 `b94e537d411a31eb`). The stage went 1.03 s -> 0.16 s at
+8 threads.
+
+**Paired A/B, old binary (`c7ae4c1`) vs new** (`tier_ab.py --var EXE`, 6 rotated rounds, two
+new arms, `--new 8`), prefill speedups:
+
+| threads | p512 | p64 |
+|---|---|---|
+| 8 | **1.329x / 1.204x, 6/6 + 6/6** | 1.019x / 1.034x |
+| 12 | **1.218x / 1.239x, 6/6 + 6/6** | 1.043x / 1.033x |
+
+After: p512 at 8 threads is about 2.3 s (GEMM 71 %, finish 7 %, attention 8 %, other 14 %).
+The serial per-token loops in "other" are next.

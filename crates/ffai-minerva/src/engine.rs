@@ -28,6 +28,9 @@ use crate::model::{Model, Ternary};
 use crate::numerics::rope_table;
 use crate::simd::{self, Isa};
 
+/// Tokens a thread finishes at a time after a prefill GEMM (16 i32 = one cache line of a row).
+const FINISH_BLOCK: usize = 16;
+
 /// Prompt tokens a prefill batch holds: the weights stream once a batch, not once a token.
 const PREFILL_BATCH: usize = 128;
 
@@ -159,27 +162,34 @@ fn bitlinear_batch(
     qa: &[i8],
     acts: &[(f32, i32)],
     ysum: &mut [i32],
-    one: &mut [i32],
     out: &mut [f32],
     stride: usize,
 ) {
     let bm = acts.len();
     let sums: Vec<i32> = acts.iter().map(|a| a.1).collect();
     let ysum = &mut ysum[..t.rows * bm];
+    let g = crate::prof::scope(crate::prof::Stage::Gemm);
     gemm_par(isa, m.codes(t), t.cols, bm, &qa[..bm * t.cols], &sums, ysum);
-    let one = &mut one[..t.rows];
-    for (k, act) in acts.iter().enumerate() {
-        for (r, o) in one.iter_mut().enumerate() {
-            *o = ysum[r * bm + k];
-        }
-        simd::finish_rows(
-            isa,
-            one,
-            act.0,
-            t.scale,
-            &mut out[k * stride..k * stride + t.rows],
-        );
-    }
+    drop(g);
+    let _f = crate::prof::scope(crate::prof::Stage::Finish);
+    // The `[rows, tokens]` sums to each token's floats: in parallel over blocks of 16 tokens, so
+    // a 64-byte line of `ysum` (one row's 16 tokens) is read once, with `finish` fused in (the
+    // scalar oracle, which the `finish_rows` twins equal bit for bit).
+    let (rows, scale) = (t.rows, t.scale);
+    let ysum = &*ysum;
+    out[..bm * stride]
+        .par_chunks_mut(FINISH_BLOCK * stride)
+        .zip(acts.par_chunks(FINISH_BLOCK))
+        .enumerate()
+        .for_each(|(blk, (o, acts))| {
+            let k0 = blk * FINISH_BLOCK;
+            for r in 0..rows {
+                let line = &ysum[r * bm + k0..r * bm + k0 + acts.len()];
+                for (j, (&s, act)) in line.iter().zip(acts).enumerate() {
+                    o[j * stride + r] = rusty_ternary::kernel::finish(s, act.0, scale);
+                }
+            }
+        });
 }
 
 /// Quantise `x` into `qa`: the scale and the codes' sum.
@@ -336,6 +346,7 @@ impl<'m> Session<'m> {
         reason = "the block, as `forward`, over a batch"
     )]
     fn prefill_batch(&mut self, tokens: &[u32]) -> Result<(), StepError> {
+        let _total = crate::prof::scope(crate::prof::Stage::Total);
         let m = self.m;
         let isa = self.isa;
         let c = &m.cfg;
@@ -375,7 +386,6 @@ impl<'m> Session<'m> {
         let mut qa = vec![0i8; bm * widest];
         let mut acts = vec![(0f32, 0i32); bm];
         let mut ysum = vec![0i32; rows_max.max(widest) * bm];
-        let mut one = vec![0i32; rows_max.max(widest)];
         let mut scores = vec![0f32; bm * c.heads * ctx];
         let (mut cos, mut sin) = (vec![0f32; bm * hd / 2], vec![0f32; bm * hd / 2]);
 
@@ -411,13 +421,9 @@ impl<'m> Session<'m> {
                     &mut qa[k * embd..(k + 1) * embd],
                 );
             }
-            bitlinear_batch(isa, m, &l.q, &qa, &acts, &mut ysum, &mut one, &mut q, q_dim);
-            bitlinear_batch(
-                isa, m, &l.k, &qa, &acts, &mut ysum, &mut one, &mut kc, kv_dim,
-            );
-            bitlinear_batch(
-                isa, m, &l.v, &qa, &acts, &mut ysum, &mut one, &mut vc, kv_dim,
-            );
+            bitlinear_batch(isa, m, &l.q, &qa, &acts, &mut ysum, &mut q, q_dim);
+            bitlinear_batch(isa, m, &l.k, &qa, &acts, &mut ysum, &mut kc, kv_dim);
+            bitlinear_batch(isa, m, &l.v, &qa, &acts, &mut ysum, &mut vc, kv_dim);
             let half = hd / 2;
             let layer_base = li * ctx * kv_dim;
             for k in 0..bm {
@@ -447,6 +453,7 @@ impl<'m> Session<'m> {
             let kcache = &self.k[layer_base..layer_base + (pos0 + bm) * kv_dim];
             let vcache = &self.v[layer_base..layer_base + (pos0 + bm) * kv_dim];
             let qr = &q;
+            let att_scope = crate::prof::scope(crate::prof::Stage::Attention);
             att.par_chunks_mut(hd)
                 .zip(scores.par_chunks_mut(ctx))
                 .enumerate()
@@ -461,6 +468,7 @@ impl<'m> Session<'m> {
                     simd::round_f16_slice(isa, sc);
                     simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, o);
                 });
+            drop(att_scope);
             for k in 0..bm {
                 simd::rms_norm(
                     isa,
@@ -475,9 +483,7 @@ impl<'m> Session<'m> {
                     &mut qa[k * q_dim..(k + 1) * q_dim],
                 );
             }
-            bitlinear_batch(
-                isa, m, &l.o, &qa, &acts, &mut ysum, &mut one, &mut out, embd,
-            );
+            bitlinear_batch(isa, m, &l.o, &qa, &acts, &mut ysum, &mut out, embd);
             for k in 0..bm {
                 simd::add_assign(
                     isa,
@@ -501,10 +507,8 @@ impl<'m> Session<'m> {
                     &mut qa[k * embd..(k + 1) * embd],
                 );
             }
-            bitlinear_batch(
-                isa, m, &l.gate, &qa, &acts, &mut ysum, &mut one, &mut gate, ffn,
-            );
-            bitlinear_batch(isa, m, &l.up, &qa, &acts, &mut ysum, &mut one, &mut up, ffn);
+            bitlinear_batch(isa, m, &l.gate, &qa, &acts, &mut ysum, &mut gate, ffn);
+            bitlinear_batch(isa, m, &l.up, &qa, &acts, &mut ysum, &mut up, ffn);
             for k in 0..bm {
                 simd::relu2_mul(
                     isa,
@@ -524,9 +528,7 @@ impl<'m> Session<'m> {
                     &mut qa[k * ffn..(k + 1) * ffn],
                 );
             }
-            bitlinear_batch(
-                isa, m, &l.down, &qa, &acts, &mut ysum, &mut one, &mut out, embd,
-            );
+            bitlinear_batch(isa, m, &l.down, &qa, &acts, &mut ysum, &mut out, embd);
             for k in 0..bm {
                 simd::add_assign(
                     isa,

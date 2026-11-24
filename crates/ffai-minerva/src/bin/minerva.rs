@@ -314,6 +314,20 @@ fn generate(args: &[String]) -> Result<(), String> {
             commit as f64 / 1e6
         );
     }
+    if let Some(stages) = ffai_minerva::prof::report() {
+        let total = stages[0].1;
+        let named: f64 = stages[1..].iter().map(|s| s.1).sum();
+        let parts: Vec<String> = stages[1..]
+            .iter()
+            .map(|(n, t)| format!("{n} {t:.3}s ({:.1}%)", 100.0 * t / total.max(1e-12)))
+            .collect();
+        eprintln!(
+            "prof: prefill {total:.3}s = {} + other {:.3}s ({:.1}%)",
+            parts.join(" + "),
+            total - named,
+            100.0 * (total - named) / total.max(1e-12)
+        );
+    }
     if args.iter().any(|a| a == "--census") {
         let snap = simd::census::snapshot();
         for k in simd::census::NAMES {

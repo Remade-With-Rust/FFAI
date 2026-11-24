@@ -2,6 +2,7 @@
 
     python tools/tier_ab.py [--rounds 10] [--ids F] [--new 64] [--arms scalar,ssse3,avx2,avx2]
     python tools/tier_ab.py --var MINERVA_HEAD --arms full,screen,screen
+    python tools/tier_ab.py --var EXE --arms old.exe,new.exe,new.exe        (two binaries)
 
 Method (codec-measurement):
 - ONE binary; the arm is an env var (`--var`, default `MINERVA_ISA`), read once per process. A
@@ -22,13 +23,18 @@ LINE = re.compile(r'prefill (\d+) tokens \+ first: ([\d.]+)s \| decode (\d+) tok
 
 
 def run(exe, ids, new, var, value, threads):
-    env = dict(os.environ, **{var: value})
+    if var == 'EXE':
+        exe, env = value, dict(os.environ)
+    else:
+        env = dict(os.environ, **{var: value})
     cmd = [exe, 'generate', '--ids', ids, '--new', str(new)] + (['--threads', str(threads)] if threads else [])
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise SystemExit(f'{value}: exit {r.returncode}\n{r.stderr[-1500:]}')
     m = LINE.search(r.stderr)
     ran = {'MINERVA_ISA': m.group(7), 'MINERVA_HEAD': m.group(8).lower()}.get(var, value) if m else None
+    if var == 'EXE' and m:
+        ran = value
     if ran != value:
         raise SystemExit(f'{value}: no timing line, or another arm ran ({ran}):\n{r.stderr[-800:]}')
     return {'prefill_s': float(m.group(2)), 'decode_tps': float(m.group(5)), 'fnv': m.group(9),
