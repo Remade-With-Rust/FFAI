@@ -425,6 +425,10 @@ impl Model {
             if !scale.is_finite() {
                 return Err(bad(format!("`{name}`: scale {scale}")));
             }
+            // Code 3 is not a weight (no writer emits it). Refused here, once, so every kernel
+            // may take `code <= 2` as given, and a corrupt file fails instead of reading 2a.
+            i2s::check_codes(&b[..rows * cols / 4])
+                .map_err(|_| bad(format!("`{name}`: holds code 3, which is not an I2_S weight")))?;
             Ok(Ternary {
                 codes: offset_in(bytes, b),
                 rows,
@@ -502,5 +506,30 @@ impl Model {
     #[must_use]
     pub fn head_bytes(&self) -> &[u8] {
         &self.store.as_slice()[self.head..self.head + self.cfg.vocab * self.cfg.embd * 2]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OURS: &str = "F:/coding/bitnet-golden/ours-i2_s.gguf";
+
+    /// A real model with one byte of `blk.0.attn_q`'s codes set to `0xff` (four code-3 weights)
+    /// must be refused at load, naming the tensor; the untouched file must load.
+    #[test]
+    #[ignore = "needs F:/coding/bitnet-golden/ours-i2_s.gguf"]
+    fn a_tensor_holding_code_3_is_refused() {
+        let bytes = std::fs::read(OURS).expect("model file");
+        let at = {
+            let g = Gguf::parse(&bytes).expect("parse");
+            let t = g.tensor("blk.0.attn_q.weight").expect("tensor");
+            offset_in(&bytes, g.bytes_of(t).expect("bytes")) + 1000
+        };
+        let mut bad = bytes.clone();
+        bad[at] = 0xff;
+        let err = Model::from_bytes(bad).expect_err("code 3 must be refused");
+        assert!(err.to_string().contains("blk.0.attn_q.weight"), "{err}");
+        Model::from_bytes(bytes).expect("the real file loads");
     }
 }

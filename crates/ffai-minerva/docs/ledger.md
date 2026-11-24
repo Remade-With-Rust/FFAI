@@ -410,3 +410,18 @@ Ranked inputs:
 Bounds: p512 is 1.2 T MACs, and ideal AVX-VNNI on 8 P-cores is ~2 T MAC/s, so the compute floor
 is ~0.6 s. bitnet.cpp does 3.1 s at 8 threads, so beating it on prefill is realistic. Every
 measurement runs at equal threads, on p64 and p512.
+
+## Brick e0: code 3 refused at load (2026-11-23)
+
+`rusty_ternary::i2s::check_codes` (pin e68e203) runs once per projection in `Model::load`. A
+tensor holding code 3 (not an I2_S weight; no writer emits it) is a load error naming the
+tensor, so every kernel may take `code <= 2` as given: the i16 budget is 15 blocks, and the
+VNNI / sdot range proofs are tighter.
+
+- Both GGUFs load: ours, and **Microsoft's `ggml-model-i2_s.gguf` (their converter's output)
+  holds no code 3**.
+- `model::tests::a_tensor_holding_code_3_is_refused` plants `0xff` in `blk.0.attn_q` and
+  expects the error.
+- **Cost:** warm load 0.04 -> 0.27 s, but load + first token is unchanged (1.61-1.72 s, against
+  1.62 s): the scan pages the codes in at load instead of at the first token. Cold
+  (`cold_ab.py`, 3 rounds) load + first token is 28.75 s, against 28.7 s.
