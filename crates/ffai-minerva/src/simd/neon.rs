@@ -511,11 +511,11 @@ pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> (f32, i32) {
     let q = |v: float32x4_t| {
         let v = vmulq_f32(v, sv);
         let v = vbslq_f32(vceqq_f32(v, v), v, vdupq_n_f32(0.0));
-        let v = vminq_f32(
-            vmaxq_f32(vrndnq_f32(v), vdupq_n_f32(-128.0)),
-            vdupq_n_f32(127.0),
-        );
-        vcvtq_s32_f32(v)
+        // No clamp: |x·s| <= 127·(1 + 2u) because s = 127 / max|x| (or |x| < 1e-5 under the
+        // floor), so the round-to-nearest-even conversion lands in -127..=127 and the clamp the
+        // oracle applies never acts. A NaN is zeroed first (the oracle maps it to 0).
+        // `vcvtnq` converts rounding to nearest even.
+        vcvtnq_s32_f32(v)
     };
     // The codes' sum rides along on the i32 lanes (already in -128..=127).
     let mut acc = vdupq_n_s32(0);

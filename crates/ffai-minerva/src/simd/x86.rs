@@ -952,13 +952,13 @@ pub(super) unsafe fn act_quant_ssse3(x: &[f32], out: &mut [i8]) -> (f32, i32) {
         .fold(0f32, |a, v| a.max(v.abs()));
     let s = act_scale(amax);
     let sv = _mm_set1_ps(s);
-    let (lo, hi) = (_mm_set1_ps(-128.0), _mm_set1_ps(127.0));
     let q = |v: __m128| {
         let v = _mm_mul_ps(v, sv);
         let v = _mm_and_ps(v, _mm_cmpord_ps(v, v));
-        // Clamping before the (round-to-nearest-even) conversion equals clamping after it: the
-        // bounds are integers.
-        _mm_cvtps_epi32(_mm_min_ps(_mm_max_ps(v, lo), hi))
+        // No clamp: |x·s| <= 127·(1 + 2u) because s = 127 / max|x| (or |x| < 1e-5 under the
+        // floor), so the round-to-nearest-even conversion lands in -127..=127 and the clamp the
+        // oracle applies never acts. A NaN is zeroed first (the oracle maps it to 0).
+        _mm_cvtps_epi32(v)
     };
     // The codes' sum rides along: the i32 lanes are already in -128..=127, so the saturating
     // packs store exactly them.
@@ -1009,12 +1009,14 @@ pub(super) unsafe fn act_quant_avx2(x: &[f32], out: &mut [i8]) -> (f32, i32) {
         .fold(0f32, |a, v| a.max(v.abs()));
     let s = act_scale(amax);
     let sv = _mm256_set1_ps(s);
-    let (lo, hi) = (_mm256_set1_ps(-128.0), _mm256_set1_ps(127.0));
     let q = |v: __m256| {
         let v = _mm256_mul_ps(v, sv);
         let v = _mm256_and_ps(v, _mm256_cmp_ps::<_CMP_ORD_Q>(v, v));
-        let v = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(v);
-        _mm256_cvtps_epi32(_mm256_min_ps(_mm256_max_ps(v, lo), hi))
+        // No clamp: |x·s| <= 127·(1 + 2u) because s = 127 / max|x| (or |x| < 1e-5 under the
+        // floor), so the round-to-nearest-even conversion lands in -127..=127 and the clamp the
+        // oracle applies never acts. A NaN is zeroed first (the oracle maps it to 0).
+        // `cvtps2dq` rounds to nearest even itself (MXCSR default), so no separate round.
+        _mm256_cvtps_epi32(v)
     };
     let order = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
     // The codes' sum rides along: the i32 lanes are already in -128..=127, so the saturating
