@@ -195,8 +195,7 @@ fn bitlinear_batch(
 /// Quantise `x` into `qa`: the scale and the codes' sum.
 fn quantise(isa: Isa, x: &[f32], qa: &mut [i8]) -> (f32, i32) {
     let qa = &mut qa[..x.len()];
-    let s = simd::act_quant(isa, x, qa);
-    (s, simd::act_sum(qa))
+    simd::act_quant_sum(isa, x, qa)
 }
 
 impl<'m> Session<'m> {

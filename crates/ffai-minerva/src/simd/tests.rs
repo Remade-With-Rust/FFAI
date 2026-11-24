@@ -324,7 +324,13 @@ fn act_quant_matches_the_oracle() {
             let ws = rusty_ternary::quant::act_quant(&x, &mut want);
             for isa in simd_tiers() {
                 let mut got = vec![0i8; n];
-                let gs = act_quant(isa, &x, &mut got);
+                let (gs, gsum) = act_quant_sum(isa, &x, &mut got);
+                assert_eq!(
+                    gsum,
+                    act_sum(&want),
+                    "{} n {n} scale {scale}: the fused sum",
+                    isa.name()
+                );
                 assert_eq!(
                     gs.to_bits(),
                     ws.to_bits(),

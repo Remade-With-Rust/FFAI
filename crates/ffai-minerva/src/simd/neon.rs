@@ -490,7 +490,7 @@ pub(super) unsafe fn weighted_sum(p: &[f32], base: *const u16, stride: usize, ou
 /// # Safety
 /// NEON; equal lengths.
 #[target_feature(enable = "neon")]
-pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> f32 {
+pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> (f32, i32) {
     let n = x.len();
     let mut m = vdupq_n_f32(0.0);
     for i in 0..n / 4 {
@@ -517,28 +517,29 @@ pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> f32 {
         );
         vcvtq_s32_f32(v)
     };
+    // The codes' sum rides along on the i32 lanes (already in -128..=127).
+    let mut acc = vdupq_n_s32(0);
     for i in 0..n / 16 {
         // SAFETY: `16i + 16 <= n` for both slices.
         unsafe {
             let p = x.as_ptr().add(16 * i);
-            let a = vcombine_s16(
-                vqmovn_s32(q(vld1q_f32(p))),
-                vqmovn_s32(q(vld1q_f32(p.add(4)))),
-            );
-            let b = vcombine_s16(
-                vqmovn_s32(q(vld1q_f32(p.add(8)))),
-                vqmovn_s32(q(vld1q_f32(p.add(12)))),
-            );
+            let (q0, q1) = (q(vld1q_f32(p)), q(vld1q_f32(p.add(4))));
+            let (q2, q3) = (q(vld1q_f32(p.add(8))), q(vld1q_f32(p.add(12))));
+            acc = vaddq_s32(acc, vaddq_s32(vaddq_s32(q0, q1), vaddq_s32(q2, q3)));
+            let a = vcombine_s16(vqmovn_s32(q0), vqmovn_s32(q1));
+            let b = vcombine_s16(vqmovn_s32(q2), vqmovn_s32(q3));
             vst1q_s8(
                 out.as_mut_ptr().add(16 * i),
                 vcombine_s8(vqmovn_s16(a), vqmovn_s16(b)),
             );
         }
     }
+    let mut sum = vaddvq_s32(acc);
     for i in n / 16 * 16..n {
         out[i] = quant_one(x[i], s);
+        sum += i32::from(out[i]);
     }
-    s
+    (s, sum)
 }
 
 /// # Safety

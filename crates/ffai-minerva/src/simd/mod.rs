@@ -565,6 +565,15 @@ pub fn weighted_sum_f16(
 /// # Panics
 /// When the lengths differ.
 pub fn act_quant(isa: Isa, x: &[f32], out: &mut [i8]) -> f32 {
+    act_quant_sum(isa, x, out).0
+}
+
+/// [`act_quant`] and [`act_sum`] of its codes, in one pass (the twins add the code lanes they
+/// already hold; the scalar arm is the two oracles in turn).
+///
+/// # Panics
+/// When the lengths differ.
+pub fn act_quant_sum(isa: Isa, x: &[f32], out: &mut [i8]) -> (f32, i32) {
     assert_eq!(x.len(), out.len());
     census::add(Kernel::ActQuant, isa, x.len());
     match isa.0 {
@@ -578,7 +587,10 @@ pub fn act_quant(isa: Isa, x: &[f32], out: &mut [i8]) -> f32 {
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::act_quant(x, out) },
-        _ => rusty_ternary::quant::act_quant(x, out),
+        _ => {
+            let s = rusty_ternary::quant::act_quant(x, out);
+            (s, act_sum(out))
+        }
     }
 }
 

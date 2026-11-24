@@ -932,7 +932,7 @@ pub(super) unsafe fn weighted_sum_avx2(
 /// # Safety
 /// SSSE3; equal lengths.
 #[target_feature(enable = "ssse3")]
-pub(super) unsafe fn act_quant_ssse3(x: &[f32], out: &mut [i8]) -> f32 {
+pub(super) unsafe fn act_quant_ssse3(x: &[f32], out: &mut [i8]) -> (f32, i32) {
     let n = x.len();
     let abs = _mm_castsi128_ps(_mm_set1_epi32(0x7fff_ffff));
     let mut m = _mm_setzero_ps();
@@ -960,25 +960,36 @@ pub(super) unsafe fn act_quant_ssse3(x: &[f32], out: &mut [i8]) -> f32 {
         // bounds are integers.
         _mm_cvtps_epi32(_mm_min_ps(_mm_max_ps(v, lo), hi))
     };
+    // The codes' sum rides along: the i32 lanes are already in -128..=127, so the saturating
+    // packs store exactly them.
+    let mut acc = _mm_setzero_si128();
     for i in 0..n / 16 {
         // SAFETY: `16i + 16 <= n` for both slices.
         unsafe {
             let p = x.as_ptr().add(16 * i);
-            let a = _mm_packs_epi32(q(_mm_loadu_ps(p)), q(_mm_loadu_ps(p.add(4))));
-            let b = _mm_packs_epi32(q(_mm_loadu_ps(p.add(8))), q(_mm_loadu_ps(p.add(12))));
+            let (q0, q1) = (q(_mm_loadu_ps(p)), q(_mm_loadu_ps(p.add(4))));
+            let (q2, q3) = (q(_mm_loadu_ps(p.add(8))), q(_mm_loadu_ps(p.add(12))));
+            acc = _mm_add_epi32(
+                acc,
+                _mm_add_epi32(_mm_add_epi32(q0, q1), _mm_add_epi32(q2, q3)),
+            );
+            let a = _mm_packs_epi32(q0, q1);
+            let b = _mm_packs_epi32(q2, q3);
             _mm_storeu_si128(out.as_mut_ptr().add(16 * i).cast(), _mm_packs_epi16(a, b));
         }
     }
+    let mut sum = hsum_epi32(acc);
     for i in n / 16 * 16..n {
         out[i] = quant_one(x[i], s);
+        sum += i32::from(out[i]);
     }
-    s
+    (s, sum)
 }
 
 /// # Safety
 /// AVX2; equal lengths.
 #[target_feature(enable = "avx2")]
-pub(super) unsafe fn act_quant_avx2(x: &[f32], out: &mut [i8]) -> f32 {
+pub(super) unsafe fn act_quant_avx2(x: &[f32], out: &mut [i8]) -> (f32, i32) {
     let n = x.len();
     let abs = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fff_ffff));
     let mut m = _mm256_setzero_ps();
@@ -1006,22 +1017,35 @@ pub(super) unsafe fn act_quant_avx2(x: &[f32], out: &mut [i8]) -> f32 {
         _mm256_cvtps_epi32(_mm256_min_ps(_mm256_max_ps(v, lo), hi))
     };
     let order = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+    // The codes' sum rides along: the i32 lanes are already in -128..=127, so the saturating
+    // packs store exactly them.
+    let mut acc = _mm256_setzero_si256();
     for i in 0..n / 32 {
         // SAFETY: `32i + 32 <= n` for both slices.
         unsafe {
             let p = x.as_ptr().add(32 * i);
-            let a = _mm256_packs_epi32(q(_mm256_loadu_ps(p)), q(_mm256_loadu_ps(p.add(8))));
-            let b =
-                _mm256_packs_epi32(q(_mm256_loadu_ps(p.add(16))), q(_mm256_loadu_ps(p.add(24))));
+            let (q0, q1) = (q(_mm256_loadu_ps(p)), q(_mm256_loadu_ps(p.add(8))));
+            let (q2, q3) = (q(_mm256_loadu_ps(p.add(16))), q(_mm256_loadu_ps(p.add(24))));
+            acc = _mm256_add_epi32(
+                acc,
+                _mm256_add_epi32(_mm256_add_epi32(q0, q1), _mm256_add_epi32(q2, q3)),
+            );
+            let a = _mm256_packs_epi32(q0, q1);
+            let b = _mm256_packs_epi32(q2, q3);
             // The packs work within 128-bit lanes; this puts the 4-byte groups back in order.
             let v = _mm256_permutevar8x32_epi32(_mm256_packs_epi16(a, b), order);
             _mm256_storeu_si256(out.as_mut_ptr().add(32 * i).cast(), v);
         }
     }
+    let mut sum = hsum_epi32(_mm_add_epi32(
+        _mm256_castsi256_si128(acc),
+        _mm256_extracti128_si256::<1>(acc),
+    ));
     for i in n / 32 * 32..n {
         out[i] = quant_one(x[i], s);
+        sum += i32::from(out[i]);
     }
-    s
+    (s, sum)
 }
 
 // ---------------------------------------------------------------------------------------------

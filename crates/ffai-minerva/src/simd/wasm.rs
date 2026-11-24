@@ -384,7 +384,7 @@ pub(super) unsafe fn weighted_sum(p: &[f32], base: *const u16, stride: usize, ou
 /// # Safety
 /// Equal lengths.
 #[target_feature(enable = "simd128")]
-pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> f32 {
+pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> (f32, i32) {
     let n = x.len();
     let mut m = f32x4_splat(0.0);
     for i in 0..n / 4 {
@@ -402,25 +402,35 @@ pub(super) unsafe fn act_quant(x: &[f32], out: &mut [i8]) -> f32 {
     let sv = f32x4_splat(s);
     // `trunc_sat` maps a NaN to 0 and saturates; the narrows saturate to the i8 range.
     let q = |v: v128| i32x4_trunc_sat_f32x4(f32x4_nearest(f32x4_mul(v, sv)));
+    // The codes' sum rides along on the i32 lanes (already in -128..=127).
+    let mut acc = i32x4_splat(0);
     for i in 0..n / 16 {
         // SAFETY: `16i + 16 <= n` for both slices.
         unsafe {
             let p = x.as_ptr().add(16 * i);
-            let a = i16x8_narrow_i32x4(q(v128_load(p.cast())), q(v128_load(p.add(4).cast())));
-            let b = i16x8_narrow_i32x4(
+            let (q0, q1) = (q(v128_load(p.cast())), q(v128_load(p.add(4).cast())));
+            let (q2, q3) = (
                 q(v128_load(p.add(8).cast())),
                 q(v128_load(p.add(12).cast())),
             );
+            acc = i32x4_add(acc, i32x4_add(i32x4_add(q0, q1), i32x4_add(q2, q3)));
+            let a = i16x8_narrow_i32x4(q0, q1);
+            let b = i16x8_narrow_i32x4(q2, q3);
             v128_store(
                 out.as_mut_ptr().add(16 * i).cast(),
                 i8x16_narrow_i16x8(a, b),
             );
         }
     }
+    let mut sum = i32x4_extract_lane::<0>(acc)
+        + i32x4_extract_lane::<1>(acc)
+        + i32x4_extract_lane::<2>(acc)
+        + i32x4_extract_lane::<3>(acc);
     for i in n / 16 * 16..n {
         out[i] = quant_one(x[i], s);
+        sum += i32::from(out[i]);
     }
-    s
+    (s, sum)
 }
 
 /// # Safety
