@@ -594,3 +594,44 @@ stores are at most 16 elements).
   estimated 1-2 %. It also cost +27 MB of peak working set (916 -> 943 MB), which counts
   against the phone budget. Reverted because it is not measurably faster, not because it is
   measurably worse.
+
+## Norm / quantise chain: deterministic instruction wins W1-W3 (2026-11-23)
+
+Instrument: `F:\coding\bitnet-bench\harness\asm_count.py` (rusty-sloth's), static instructions
+per innermost loop trip from the LINKED binary's asm (AVX2), divided by the elements a trip
+retires. The chain runs 4 times a layer per token (2,560 + 2,560 + 2,560 + 6,912 = 14,592
+elements).
+
+| step | baseline | after | commit |
+|---|---:|---:|---|
+| `act_sum` pass (inlined, SSE2 baseline) | 13 per 8 = 1.625/elem | removed (fused into the quantiser: 4 `vpaddd` per 32) | W1 `42d4dba` |
+| quantise loop | 36 per 32 = 1.125 | 40 (W1) -> **28 per 32 = 0.875** | W2 `829f76a` |
+| rms_norm sum of squares | 16 per 16 = 1.00 | **12 per 16 = 0.75** | W3 `bbff372` |
+| rms_norm apply | 15 per 32 = 0.47 | unchanged | |
+| max \|x\| | 12 per 32 = 0.375 | unchanged | |
+| **chain total** | **4.60/elem** | **2.47/elem (-46 %)** | |
+
+- **W1:** the quantiser holds each code as an i32 lane in -128..=127 (so the saturating pack
+  stores exactly it) and adds the lanes as it goes. `act_quant_sum` returns (scale, sum).
+  `Session::forward`'s static size went 1,138 -> 970.
+- **W2:** `|x·s| <= 127·(1+2u)` because `s = 127/max|x|` (or `|x| < 1e-5` under the floor), so
+  the oracle's clamp never acts. `cvtps2dq` / `vcvtnq` round ties-to-even, so the separate round
+  goes too. The NaN mask stays.
+- **W3:** an f32 squared is exact in f64 (48 of 53 bits), so `fma(v, v, acc)` == `acc + v·v` bit
+  for bit (`vfmadd231pd`, NEON `vfmaq_f64`). The avx2 tier now requires `fma`.
+- **Trap seen on the way:** a 188-insn "loop" in `act_quant_avx2` is the scalar tail
+  (`quant_one`), auto-vectorised 32 wide by LLVM with a scalarised conversion. It never runs
+  (the tail is < 32 elements); it is static size only. Read the op mix before trusting a loop's
+  identity.
+- **Gates for each:** `assert_eq!` vs the oracles at every tier (x86 native, wasm simd128
+  under wasmtime), the fused sum against `act_sum`; logits hashes unchanged (p64
+  `1c2856725481ae14`, p512 `b94e537d411a31eb`); clippy `-D warnings` on 4 builds.
+- **Clock:** pre-W1 `1325dac` vs W1-W3, 6 rounds, two arms. Prefill p512: 8T 1.04x / 1.03x (9/12),
+  12T 0.99x / 1.01x. Decode p64 + 64: 8T 0.99x / 0.95x, 12T 1.01x / 0.98x. All within the null
+  arms. That matches the counter: ~0.9 M insns a token, ~0.25 % of decode, ~2-4 % of the
+  serial share of prefill. The verdict is the counter (codec-measurement §15: sub-1 % bricks);
+  the clock shows no regression. **Below clock resolution, not "no effect".**
+- **Not built (arithmetic):** W4, fusing max|x| into the norm's apply pass. It saves 0.125/elem
+  (~55k insns a token) for two new fused kernels across four tiers.
+- The time lever left in this chain is not instructions but its serial execution in prefill
+  (it runs token by token on one thread, the "other" ~14 %). Parallelise it across tokens.
