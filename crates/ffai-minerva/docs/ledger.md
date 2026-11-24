@@ -663,3 +663,23 @@ rotated rounds, two new arms, null arm beside each.
 
 Counted toward Tim's 10: W1, W2, W3, V1, V3, V4, V2 (7). Time wins beside them: the rayon
 pool fix, e1b, the parallel per-token chain.
+
+## The last three (2026-11-23)
+
+| commit | change | count | clock |
+|---|---|---|---|
+| `45cc198` | decode GEMV (VNNI) in row pairs, two accumulators a row (4 independent `vpdpbusd` chains, not one 4-deep chain a block) | 11 -> 11.5 insns a row-block (latency, not instructions) | **decode 8T 1.052/1.040x (16/16)**, 12T 1.013/1.016x |
+| `ce0a766` | V5: head screen loads each 8-byte half straight into `vpmovsxbd` (LLVM had rebuilt the high half via `vpbroadcastq`); softmax exp drops the never-acting upper clamp and fuses the exact `n·C1` step | `i8f_matvec` 22 -> 20 per trip (-9 %); softmax 41 -> 38 per 8 elements (-7 %) | 0.99-1.01x, within null (below resolution) |
+| latest | decode runs q\|k\|v and gate\|up under one `rayon::join` each | sync points 7 -> 4 a layer (210 -> 120 a token) | **decode 8T 1.045/1.051x, 12T 1.034/1.046x (15/16 each)** |
+
+**Refuted / not built:**
+
+- Softmax constants as 8-lane statics: LLVM re-derived the broadcasts (41 -> 41). They are pure
+  load uops in an ALU-bound loop.
+- **Brick 4, tiled prefill attention, as planned.** An online-softmax tile reorders the
+  softmax sums, so it cannot be bit-identical to the canonical oracle. The bit-identical
+  variant, tiling query tokens over each widened K row, only re-saves the widening, which V3
+  already cut to ~12 % of the score kernel: under 1 % of prefill. Not built.
+
+**Counted toward Tim's 10:** W1, W2, W3, V1, V3, V4, V2, the paired GEMV, V5, and the q|k|v +
+gate|up join. Every one is bit-identical, gated by `assert_eq!` and the logits hashes.
