@@ -227,9 +227,26 @@ pub mod census {
         };
     }
 
-    /// Count `n` elements of `k` run at `isa`.
+    /// Whether counting is on: off by default, so a dispatch pays one relaxed load and a
+    /// predictable branch instead of a thread-local lookup and an atomic add.
+    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Turn counting on or off (`minerva generate --census`, the census tests).
+    pub fn enable(on: bool) {
+        ON.store(on, Relaxed);
+    }
+
+    /// Count `n` elements of `k` run at `isa` (when counting is on).
     #[inline]
     pub fn add(k: Kernel, isa: Isa, n: usize) {
+        if ON.load(Relaxed) {
+            add_slow(k, isa, n);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn add_slow(k: Kernel, isa: Isa, n: usize) {
         MINE.with(|s| s.0[k as usize * TIERS.len() + isa.0 as usize].fetch_add(n as u64, Relaxed));
     }
 

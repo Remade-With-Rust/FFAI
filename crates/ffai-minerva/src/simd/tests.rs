@@ -604,6 +604,7 @@ fn elementwise_twins_match_the_oracles() {
 
 #[test]
 fn the_census_counts_the_tier_that_ran() {
+    census::enable(true);
     census::reset();
     let isa = Isa::best();
     let mut y = [0f32; 4];

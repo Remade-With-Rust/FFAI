@@ -254,6 +254,7 @@ fn generate(args: &[String]) -> Result<(), String> {
         )),
         None => None,
     };
+    simd::census::enable(args.iter().any(|a| a == "--census"));
     simd::census::reset();
     let a1 = alloc_census::read();
     let mut a2 = a1;
