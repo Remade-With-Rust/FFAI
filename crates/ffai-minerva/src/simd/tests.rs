@@ -132,6 +132,8 @@ fn ternary_gemm_matches_the_oracle() {
         (4, 2560, 9),
         (3, 6912, 17),
         (2, 2560, 64),
+        (7, 256, 13),
+        (6, 640, 4),
     ] {
         let trits: Vec<i8> = (0..rows * cols)
             .map(|_| (rng.next() % 3) as i8 - 1)

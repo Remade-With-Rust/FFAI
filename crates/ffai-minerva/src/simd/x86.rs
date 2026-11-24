@@ -419,6 +419,60 @@ unsafe fn gemm_tile_vnni<const T: usize>(
     }
 }
 
+/// Two rows by `T` tokens: each activation load feeds two `vpdpbusd` (one a row) and each
+/// unpacked code vector `T`, against one a load in the 1-row tile (V1: the 1-row tile is
+/// load-bound). 2 x 4 holds 8 accumulators, 2 code and 2 unpacked vectors, one activation and
+/// the mask in 16 `ymm`.
+///
+/// # Safety
+/// AVX2 + AVX-VNNI; `r0`, `r1` readable for `cols / 4` bytes, `a` for `T` tokens of `cols`.
+#[target_feature(enable = "avx2,avxvnni")]
+#[inline]
+unsafe fn gemm_tile_vnni_2r<const T: usize>(
+    r0: *const u8,
+    r1: *const u8,
+    a: *const i8,
+    cols: usize,
+    o0: &mut [i32],
+    o1: &mut [i32],
+) {
+    let mask = _mm256_set1_epi8(3);
+    let mut acc0 = [_mm256_setzero_si256(); T];
+    let mut acc1 = [_mm256_setzero_si256(); T];
+    for b in 0..cols / 128 {
+        // SAFETY: block `b` is inside both rows and inside every token's activations.
+        unsafe {
+            let c0 = _mm256_loadu_si256(r0.add(b * 32).cast());
+            let c1 = _mm256_loadu_si256(r1.add(b * 32).cast());
+            macro_rules! group {
+                ($sh:literal, $g:literal) => {
+                    let q0 = _mm256_and_si256(_mm256_srli_epi16::<$sh>(c0), mask);
+                    let q1 = _mm256_and_si256(_mm256_srli_epi16::<$sh>(c1), mask);
+                    for t in 0..T {
+                        let v = _mm256_loadu_si256(a.add(t * cols + b * 128 + $g * 32).cast());
+                        acc0[t] = _mm256_dpbusd_avx_epi32(acc0[t], q0, v);
+                        acc1[t] = _mm256_dpbusd_avx_epi32(acc1[t], q1, v);
+                    }
+                };
+            }
+            group!(6, 0);
+            group!(4, 1);
+            group!(2, 2);
+            group!(0, 3);
+        }
+    }
+    let h = |v: __m256i| {
+        hsum_epi32(_mm_add_epi32(
+            _mm256_castsi256_si128(v),
+            _mm256_extracti128_si256::<1>(v),
+        ))
+    };
+    for t in 0..T {
+        o0[t] = h(acc0[t]);
+        o1[t] = h(acc1[t]);
+    }
+}
+
 /// # Safety
 /// AVX2 + AVX-VNNI; shapes as [`gemm_avx2`].
 #[target_feature(enable = "avx2,avxvnni")]
@@ -431,8 +485,52 @@ pub(super) unsafe fn gemm_vnni(
     y: &mut [i32],
 ) {
     let rpc = cols / 4;
-    for (r, yr) in y.chunks_exact_mut(m).enumerate() {
-        // SAFETY: as `gemm_avx2`.
+    let rows = y.len() / m;
+    let mut r = 0;
+    while r + 2 <= rows {
+        let (y0, y1) = y[r * m..(r + 2) * m].split_at_mut(m);
+        // SAFETY: rows `r`, `r + 1` and every tile's tokens are inside the slices.
+        unsafe {
+            let (p0, p1) = (
+                codes.as_ptr().add(r * rpc),
+                codes.as_ptr().add((r + 1) * rpc),
+            );
+            let mut t = 0;
+            while t + 4 <= m {
+                gemm_tile_vnni_2r::<4>(
+                    p0,
+                    p1,
+                    a.as_ptr().add(t * cols),
+                    cols,
+                    &mut y0[t..t + 4],
+                    &mut y1[t..t + 4],
+                );
+                t += 4;
+            }
+            while t < m {
+                gemm_tile_vnni_2r::<1>(
+                    p0,
+                    p1,
+                    a.as_ptr().add(t * cols),
+                    cols,
+                    &mut y0[t..=t],
+                    &mut y1[t..=t],
+                );
+                t += 1;
+            }
+        }
+        for (o, &s) in y0
+            .iter_mut()
+            .chain(y1.iter_mut())
+            .zip(a_sums.iter().chain(a_sums))
+        {
+            *o -= s;
+        }
+        r += 2;
+    }
+    if r < rows {
+        let yr = &mut y[r * m..(r + 1) * m];
+        // SAFETY: the last row and every tile's tokens are inside the slices.
         unsafe {
             let row = codes.as_ptr().add(r * rpc);
             let mut t = 0;
