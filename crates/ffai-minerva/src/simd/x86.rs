@@ -344,11 +344,63 @@ pub(super) unsafe fn gemv_vnni(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]
     let cols = a.len();
     let rpc = cols / 4;
     let mask = _mm256_set1_epi8(3);
-    for (r, out) in y.iter_mut().enumerate() {
-        // SAFETY: as `gemv_avx2`: every read is inside row `r` and the activations.
+    let h = |v: __m256i| {
+        hsum_epi32(_mm_add_epi32(
+            _mm256_castsi256_si128(v),
+            _mm256_extracti128_si256::<1>(v),
+        ))
+    };
+    // Rows in pairs: the four activation vectors of a block are loaded once for both rows,
+    // and each row keeps two accumulators (groups 0-1 and 2-3), so four independent vpdpbusd
+    // chains run instead of one 4-deep chain a block. Exact integers: any grouping is equal.
+    let mut r = 0;
+    while r + 2 <= y.len() {
+        // SAFETY: rows `r` and `r + 1` span `rpc` bytes inside `codes`; block `b` reads their
+        // bytes `32b..32b+32` and activations `128b..128b+128`.
+        unsafe {
+            let (r0, r1) = (
+                codes.as_ptr().add(r * rpc),
+                codes.as_ptr().add((r + 1) * rpc),
+            );
+            let (mut a0, mut b0, mut a1, mut b1) = (
+                _mm256_setzero_si256(),
+                _mm256_setzero_si256(),
+                _mm256_setzero_si256(),
+                _mm256_setzero_si256(),
+            );
+            for b in 0..cols / 128 {
+                let c0 = _mm256_loadu_si256(r0.add(b * 32).cast());
+                let c1 = _mm256_loadu_si256(r1.add(b * 32).cast());
+                let ab = a.as_ptr().add(b * 128);
+                let v0 = _mm256_loadu_si256(ab.cast());
+                let v1 = _mm256_loadu_si256(ab.add(32).cast());
+                let v2 = _mm256_loadu_si256(ab.add(64).cast());
+                let v3 = _mm256_loadu_si256(ab.add(96).cast());
+                let q = |c: __m256i, sh: i32| match sh {
+                    6 => _mm256_and_si256(_mm256_srli_epi16::<6>(c), mask),
+                    4 => _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask),
+                    2 => _mm256_and_si256(_mm256_srli_epi16::<2>(c), mask),
+                    _ => _mm256_and_si256(c, mask),
+                };
+                a0 = _mm256_dpbusd_avx_epi32(a0, q(c0, 6), v0);
+                a1 = _mm256_dpbusd_avx_epi32(a1, q(c1, 6), v0);
+                b0 = _mm256_dpbusd_avx_epi32(b0, q(c0, 2), v2);
+                b1 = _mm256_dpbusd_avx_epi32(b1, q(c1, 2), v2);
+                a0 = _mm256_dpbusd_avx_epi32(a0, q(c0, 4), v1);
+                a1 = _mm256_dpbusd_avx_epi32(a1, q(c1, 4), v1);
+                b0 = _mm256_dpbusd_avx_epi32(b0, q(c0, 0), v3);
+                b1 = _mm256_dpbusd_avx_epi32(b1, q(c1, 0), v3);
+            }
+            y[r] = h(_mm256_add_epi32(a0, b0)) - a_sum;
+            y[r + 1] = h(_mm256_add_epi32(a1, b1)) - a_sum;
+        }
+        r += 2;
+    }
+    if r < y.len() {
+        // SAFETY: as above, for the last row.
         unsafe {
             let row = codes.as_ptr().add(r * rpc);
-            let mut acc = _mm256_setzero_si256();
+            let (mut acc, mut acc2) = (_mm256_setzero_si256(), _mm256_setzero_si256());
             for b in 0..cols / 128 {
                 let c = _mm256_loadu_si256(row.add(b * 32).cast());
                 let ab = a.as_ptr().add(b * 128);
@@ -357,27 +409,23 @@ pub(super) unsafe fn gemv_vnni(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]
                     _mm256_and_si256(_mm256_srli_epi16::<6>(c), mask),
                     _mm256_loadu_si256(ab.cast()),
                 );
-                acc = _mm256_dpbusd_avx_epi32(
-                    acc,
-                    _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask),
-                    _mm256_loadu_si256(ab.add(32).cast()),
-                );
-                acc = _mm256_dpbusd_avx_epi32(
-                    acc,
+                acc2 = _mm256_dpbusd_avx_epi32(
+                    acc2,
                     _mm256_and_si256(_mm256_srli_epi16::<2>(c), mask),
                     _mm256_loadu_si256(ab.add(64).cast()),
                 );
                 acc = _mm256_dpbusd_avx_epi32(
                     acc,
+                    _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask),
+                    _mm256_loadu_si256(ab.add(32).cast()),
+                );
+                acc2 = _mm256_dpbusd_avx_epi32(
+                    acc2,
                     _mm256_and_si256(c, mask),
                     _mm256_loadu_si256(ab.add(96).cast()),
                 );
             }
-            let h = _mm_add_epi32(
-                _mm256_castsi256_si128(acc),
-                _mm256_extracti128_si256::<1>(acc),
-            );
-            *out = hsum_epi32(h) - a_sum;
+            y[r] = h(_mm256_add_epi32(acc, acc2)) - a_sum;
         }
     }
 }
