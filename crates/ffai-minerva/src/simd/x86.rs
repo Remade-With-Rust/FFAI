@@ -554,6 +554,10 @@ pub(super) unsafe fn gemm_vnni(
     }
 }
 
+/// Blocks an AVX2 / SSSE3 product sums in i16 before widening: with codes <= 2 a block adds at
+/// most 4 x 512 = 2,048 to a lane, and 15 x 2,048 = 30,720 < 32,767.
+const I16_BLOCKS: usize = 15;
+
 /// Tokens a GEMM tile holds.
 const GEMM_TILE: usize = 8;
 
@@ -569,33 +573,46 @@ unsafe fn gemm_tile_avx2<const T: usize>(
 ) {
     let mask = _mm256_set1_epi8(3);
     let ones = _mm256_set1_epi16(1);
+    let blocks = cols / 128;
     let mut acc = [_mm256_setzero_si256(); T];
-    for b in 0..cols / 128 {
-        // SAFETY: block `b` is inside the row and inside every token's activations.
-        unsafe {
-            let c = _mm256_loadu_si256(row.add(b * 32).cast());
-            let q0 = _mm256_and_si256(_mm256_srli_epi16::<6>(c), mask);
-            let q1 = _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask);
-            let q2 = _mm256_and_si256(_mm256_srli_epi16::<2>(c), mask);
-            let q3 = _mm256_and_si256(c, mask);
-            for (t, acc) in acc.iter_mut().enumerate() {
-                let ab = a.add(t * cols + b * 128);
-                let mut s = _mm256_maddubs_epi16(q0, _mm256_loadu_si256(ab.cast()));
-                s = _mm256_add_epi16(
-                    s,
-                    _mm256_maddubs_epi16(q1, _mm256_loadu_si256(ab.add(32).cast())),
-                );
-                s = _mm256_add_epi16(
-                    s,
-                    _mm256_maddubs_epi16(q2, _mm256_loadu_si256(ab.add(64).cast())),
-                );
-                s = _mm256_add_epi16(
-                    s,
-                    _mm256_maddubs_epi16(q3, _mm256_loadu_si256(ab.add(96).cast())),
-                );
-                *acc = _mm256_add_epi32(*acc, _mm256_madd_epi16(s, ones));
+    let mut b0 = 0;
+    while b0 < blocks {
+        // As `gemv_avx2`: up to I16_BLOCKS blocks summed in i16 before one widen.
+        let b1 = (b0 + I16_BLOCKS).min(blocks);
+        let mut s = [_mm256_setzero_si256(); T];
+        for b in b0..b1 {
+            // SAFETY: block `b` is inside the row and inside every token's activations.
+            unsafe {
+                let c = _mm256_loadu_si256(row.add(b * 32).cast());
+                let q0 = _mm256_and_si256(_mm256_srli_epi16::<6>(c), mask);
+                let q1 = _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask);
+                let q2 = _mm256_and_si256(_mm256_srli_epi16::<2>(c), mask);
+                let q3 = _mm256_and_si256(c, mask);
+                for (t, s) in s.iter_mut().enumerate() {
+                    let ab = a.add(t * cols + b * 128);
+                    *s = _mm256_add_epi16(
+                        *s,
+                        _mm256_maddubs_epi16(q0, _mm256_loadu_si256(ab.cast())),
+                    );
+                    *s = _mm256_add_epi16(
+                        *s,
+                        _mm256_maddubs_epi16(q1, _mm256_loadu_si256(ab.add(32).cast())),
+                    );
+                    *s = _mm256_add_epi16(
+                        *s,
+                        _mm256_maddubs_epi16(q2, _mm256_loadu_si256(ab.add(64).cast())),
+                    );
+                    *s = _mm256_add_epi16(
+                        *s,
+                        _mm256_maddubs_epi16(q3, _mm256_loadu_si256(ab.add(96).cast())),
+                    );
+                }
             }
         }
+        for (acc, s) in acc.iter_mut().zip(s) {
+            *acc = _mm256_add_epi32(*acc, _mm256_madd_epi16(s, ones));
+        }
+        b0 = b1;
     }
     for (o, v) in out.iter_mut().zip(acc) {
         *o = hsum_epi32(_mm_add_epi32(
