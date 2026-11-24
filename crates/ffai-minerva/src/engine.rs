@@ -88,6 +88,8 @@ pub struct Session<'m> {
     out: Vec<f32>,
     qa: Vec<i8>,
     isum: Vec<i32>,
+    isum2: Vec<i32>,
+    isum3: Vec<i32>,
     cos: Vec<f32>,
     sin: Vec<f32>,
     logits: Vec<f32>,
@@ -286,6 +288,8 @@ impl<'m> Session<'m> {
             out: vec![0.0; widest],
             qa: vec![0; widest],
             isum: vec![0; widest],
+            isum2: vec![0; widest],
+            isum3: vec![0; widest],
             cos: vec![0.0; c.head_dim / 2],
             sin: vec![0.0; c.head_dim / 2],
             logits: vec![0.0; c.vocab],
@@ -599,9 +603,22 @@ impl<'m> Session<'m> {
             // --- attention ---
             simd::rms_norm(isa, &self.x, &l.attn_norm, c.rms_eps, &mut self.h[..embd]);
             let act = quantise(isa, &self.h[..embd], &mut self.qa);
-            bitlinear(isa, m, &l.q, &self.qa, act, &mut self.isum, &mut self.q);
-            bitlinear(isa, m, &l.k, &self.qa, act, &mut self.isum, &mut self.kc);
-            bitlinear(isa, m, &l.v, &self.qa, act, &mut self.isum, &mut self.vc);
+            // q, k and v share one activation: one join tree, one sync point, and the small k / v
+            // fill the threads q leaves idle (each has its own sum scratch).
+            {
+                let (qa, isum, isum2, isum3) =
+                    (&self.qa, &mut self.isum, &mut self.isum2, &mut self.isum3);
+                let (qo, ko, vo) = (&mut self.q, &mut self.kc, &mut self.vc);
+                rayon::join(
+                    || bitlinear(isa, m, &l.q, qa, act, isum, qo),
+                    || {
+                        rayon::join(
+                            || bitlinear(isa, m, &l.k, qa, act, isum2, ko),
+                            || bitlinear(isa, m, &l.v, qa, act, isum3, vo),
+                        )
+                    },
+                );
+            }
             for head in self.q.chunks_exact_mut(hd) {
                 simd::rope_neox(isa, head, &self.cos, &self.sin);
             }
@@ -647,16 +664,15 @@ impl<'m> Session<'m> {
             // --- feed-forward ---
             simd::rms_norm(isa, &self.x, &l.ffn_norm, c.rms_eps, &mut self.h[..embd]);
             let act = quantise(isa, &self.h[..embd], &mut self.qa);
-            bitlinear(
-                isa,
-                m,
-                &l.gate,
-                &self.qa,
-                act,
-                &mut self.isum,
-                &mut self.gate,
-            );
-            bitlinear(isa, m, &l.up, &self.qa, act, &mut self.isum, &mut self.up);
+            // gate and up share one activation: one join, one sync point.
+            {
+                let (qa, isum, isum2) = (&self.qa, &mut self.isum, &mut self.isum2);
+                let (go, uo) = (&mut self.gate, &mut self.up);
+                rayon::join(
+                    || bitlinear(isa, m, &l.gate, qa, act, isum, go),
+                    || bitlinear(isa, m, &l.up, qa, act, isum2, uo),
+                );
+            }
             simd::relu2_mul(isa, &mut self.gate, &self.up);
             simd::rms_norm(
                 isa,
