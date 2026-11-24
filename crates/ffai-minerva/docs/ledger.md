@@ -581,3 +581,16 @@ stores are at most 16 elements).
   refuses one 1.2 GB read, which the chunks work around.
 - The "3.87 a token" reported in brick d was this injector, not the engine's own buffers;
   the engine allocates nothing a decode step.
+- **Refuted (reverted): reusing the prefill batch buffers across batches.** Moving the 14
+  buffers into the session (grown, never re-zeroed; every cell written before it is read) is
+  bit-identical, including p1024's shorter final batch (logits hash `566af54a37be0f53` both
+  ways), and deterministically cuts page faults by **53,963 at p1024 and 19,245 at p512**.
+  The clock did not move: old (`c2dd617`) vs new, 6 rounds, two arms:
+  - 8T p512: 0.958x / 0.954x (4/12)
+  - 12T p512: 1.020x / 1.083x (7/12)
+  - 8T p1024: 1.029x / 1.035x (9/12)
+
+  That is within the null arms (0.69-1.42, 0.88-1.11, 0.82-1.08), consistent with the
+  estimated 1-2 %. It also cost +27 MB of peak working set (916 -> 943 MB), which counts
+  against the phone budget. Reverted because it is not measurably faster, not because it is
+  measurably worse.
