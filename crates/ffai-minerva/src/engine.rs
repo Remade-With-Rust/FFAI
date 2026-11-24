@@ -703,6 +703,24 @@ pub fn generate(
     prompt: &[u32],
     new: usize,
     mode: HeadMode,
+    on_step: impl FnMut(usize, Option<&[f32]>, u32) + Send,
+) -> Result<Vec<u32>, StepError> {
+    // Run on a pool worker: every parallel region below then forks through that worker's own
+    // deque instead of the pool's global injector (from a non-pool thread each of the ~240
+    // regions a token was injected, and the injector allocated a block every 63 jobs).
+    if rayon::current_thread_index().is_none()
+        && std::env::var("MINERVA_POOL").as_deref() != Ok("outside")
+    {
+        return rayon::scope(|_| generate_in(s, prompt, new, mode, on_step));
+    }
+    generate_in(s, prompt, new, mode, on_step)
+}
+
+fn generate_in(
+    s: &mut Session<'_>,
+    prompt: &[u32],
+    new: usize,
+    mode: HeadMode,
     mut on_step: impl FnMut(usize, Option<&[f32]>, u32),
 ) -> Result<Vec<u32>, StepError> {
     let (last, head) = prompt.split_last().ok_or(StepError::BadToken(u32::MAX))?;

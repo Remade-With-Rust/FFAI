@@ -56,22 +56,56 @@ mod alloc_census {
     use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
     static COUNT: AtomicU64 = AtomicU64::new(0);
     static BYTES: AtomicU64 = AtomicU64::new(0);
+    /// `MINERVA_ALLOC_TRACE`: print the call site of every allocation while armed.
+    static TRACE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    thread_local! { static IN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+    fn trace(size: usize) {
+        if TRACE.load(Relaxed) && !IN.with(std::cell::Cell::get) {
+            IN.with(|c| c.set(true));
+            let bt = std::backtrace::Backtrace::force_capture().to_string();
+            let frames: Vec<&str> = bt
+                .lines()
+                .filter(|l| {
+                    !l.contains("alloc_census")
+                        && !l.contains("backtrace")
+                        && !l.contains("alloc::")
+                        && l.trim_start()
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_digit())
+                })
+                .take(5)
+                .map(str::trim)
+                .collect();
+            eprintln!("alloc {size} B: {}", frames.join(" <- "));
+            IN.with(|c| c.set(false));
+        }
+    }
+    /// Arm or disarm the trace (only if `MINERVA_ALLOC_TRACE` is set).
+    pub fn arm(on: bool) {
+        if std::env::var_os("MINERVA_ALLOC_TRACE").is_some() {
+            TRACE.store(on, Relaxed);
+        }
+    }
     struct Counting;
     // SAFETY: forwards every call to `System` unchanged; only counts.
     unsafe impl GlobalAlloc for Counting {
         unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            trace(l.size());
             COUNT.fetch_add(1, Relaxed);
             BYTES.fetch_add(l.size() as u64, Relaxed);
             // SAFETY: the caller's contract, passed through.
             unsafe { System.alloc(l) }
         }
         unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            trace(l.size());
             COUNT.fetch_add(1, Relaxed);
             BYTES.fetch_add(l.size() as u64, Relaxed);
             // SAFETY: as above.
             unsafe { System.alloc_zeroed(l) }
         }
         unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+            trace(n);
             COUNT.fetch_add(1, Relaxed);
             BYTES.fetch_add(n as u64, Relaxed);
             // SAFETY: as above.
@@ -94,6 +128,7 @@ mod alloc_census {
     pub fn read() -> (u64, u64) {
         (0, 0)
     }
+    pub fn arm(_: bool) {}
 }
 
 use std::io::Write;
@@ -238,6 +273,7 @@ fn generate(args: &[String]) -> Result<(), String> {
         if i == 0 {
             first = Some(t1.elapsed());
             a2 = alloc_census::read();
+            alloc_census::arm(true);
         }
         // With logits, the hash covers every logit bit; with the screen, only the token.
         match logits {

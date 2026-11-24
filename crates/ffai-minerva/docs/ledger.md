@@ -554,3 +554,30 @@ new arms, `--new 8`), prefill speedups:
 
 After: p512 at 8 threads is about 2.3 s (GEMM 71 %, finish 7 %, attention 8 %, other 14 %).
 The serial per-token loops in "other" are next.
+
+## Copies audit of the kernels and glue (codec-memory-copies, 2026-11-23)
+
+A grep of every allocation / collect / fill / copy in `engine`, `head`, `kernel`, `numerics`,
+`model` and `simd/*`, each classified by how often it fires. **No front-drain and no
+runtime-length memcpy on a hot path; no copy inside any kernel** (kernel tails and lane
+stores are at most 16 elements).
+
+- **Decode, 3.87 allocations a token: rayon's injector, now fixed.** Traced with the census
+  allocator's new backtrace mode (`MINERVA_ALLOC_TRACE`; it now also hooks `alloc_zeroed`):
+  `crossbeam_deque::Injector::push` from `kernel::gemv_par` and `Session::forward`, a 1,520 B
+  block every 63 jobs. Every one of the ~240 parallel regions a token was injected from the
+  main thread, a non-pool thread. `generate` now runs on a pool worker (`rayon::scope`), so
+  nested regions fork through the worker's own deque. `MINERVA_POOL=outside` keeps the old arm.
+  - Counter: **3.93 -> 0.07 allocations a decode token**. Logits hash unchanged.
+  - Clock (`tier_ab.py --var MINERVA_POOL`, 6 rounds, two inside arms), decode p64 + 64:
+    **8T 1.224x / 1.187x (12/12)**, **12T 1.291x / 1.251x (12/12)**; null arms 0.97 / 0.98.
+    p512 prefill: inside the noisy null arm (0.76-1.71), no claim.
+- Prefill batch buffers: 14 fresh zeroed vectors a 128-token batch (~31 MB), +25,808 page
+  faults at p512 (415,385 against the step path's 389,577). Measured next.
+- `sums` collect in `bitlinear_batch` (210 a batch, ~0.5 KB each) and the session buffers
+  (once): negligible.
+- `i8f_matvec_scalar` builds a temp row per call: scalar tier only.
+- `read_chunked` zero-fill then read: wasm / `MINERVA_LOAD=read` only. It stays: wasmtime
+  refuses one 1.2 GB read, which the chunks work around.
+- The "3.87 a token" reported in brick d was this injector, not the engine's own buffers;
+  the engine allocates nothing a decode step.
