@@ -635,3 +635,31 @@ elements).
   (~55k insns a token) for two new fused kernels across four tiers.
 - The time lever left in this chain is not instructions but its serial execution in prefill
   (it runs token by token on one thread, the "other" ~14 %). Parallelise it across tokens.
+
+## Hammer round 2 (2026-11-23): the per-token chain across tokens, V1, V3, V4, V2
+
+Every row is bit-identical (logits hashes unchanged on p64 / p512 / p1024) and gated by
+`assert_eq!` vs the oracles at every tier; clippy clean. Counts are from
+`asm_count.py` (linked asm); clocks from `tier_ab.py --var EXE`, old binary vs new, 6-10
+rotated rounds, two new arms, null arm beside each.
+
+| commit | change | count | clock |
+|---|---|---|---|
+| `6a85b07` | prefill's per-token loops (norm + quant x3, residual adds, relu²+subnorm+quant, RoPE+KV+round) run in parallel across tokens | (time win) "other" 0.32 -> 0.08 s at p512 8T | p512 1.09/1.18x (8T), 1.07/1.04x (12T); p64 1.01-1.04x |
+| `e017486` | V1: 2-row x 4-token VNNI GEMM tile | 53 -> 67 insns, **33 -> 18 loads** per 1,024 MACs (the 1x8 tile folds its activation loads into `vpdpbusd`) | **p512 1.13/1.14x (8T), 1.20/1.21x (12T), 24/24**; GEMM 1.76 -> 1.21 s |
+| `1d6776c` | V3: grouped-query attention kernels (each f16 K / V element widened once per 4-head group), prefill only | scores 68 -> 24 per 16 K elements for 4 heads (-65 %), values 68 -> 52 (-24 %) | prefill p512 1.01-1.04x, p1024 1.05-1.10x |
+| `4f942f5` | V4: census off unless `--census` (relaxed flag, outlined cold counter) | dispatchers -5..-10 insns each (e.g. `ternary_gemm` 224 -> 215) | (per-dispatch tax, below resolution) |
+| `c2b6bc7` | V2: i16 sums across 15 blocks in the AVX2 GEMM tile (non-VNNI CPUs) | 91 -> 76 insns per 1,024 MACs (-16 %) | at `MINERVA_ISA=avx2`: 1.00-1.06x, within null |
+
+**Refuted and recorded:**
+
+- **Grouped decode attention:** 5 tasks (one a KV head) against 20 measured 0.95-0.99x at
+  64-1,088 positions; the lost parallelism outweighs the 4x widen saving. Decode stays one
+  task a query head.
+- **V2 in the GEMV:** 20 -> 20 insns a block, so `gemv_avx2` is unchanged.
+- **Lesson (V1):** for a load-bound kernel, the static instruction count points the wrong way
+  when the baseline folds its loads into memory operands. Quote loads per trip beside insns;
+  `asm_count.py` now counts folded loads (rusty-sloth).
+
+Counted toward Tim's 10: W1, W2, W3, V1, V3, V4, V2 (7). Time wins beside them: the rayon
+pool fix, e1b, the parallel per-token chain.
