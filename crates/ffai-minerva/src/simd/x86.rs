@@ -142,18 +142,19 @@ fn exp4(v: __m128) -> __m128 {
     _mm_mul_ps(y, _mm_castsi128_ps(scale))
 }
 
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "avx2,fma")]
 #[inline]
 fn exp8(v: __m256) -> __m256 {
-    let x = _mm256_min_ps(
-        _mm256_max_ps(v, _mm256_set1_ps(E::LO)),
-        _mm256_set1_ps(E::HI),
-    );
+    // Softmax is the only caller and feeds `x - max <= 0`, so the upper clamp (88) never acts:
+    // dropped. `max(v, LO)` still maps a NaN to LO, as the oracle's `x.max(LO).min(HI)` does.
+    let x = _mm256_max_ps(v, _mm256_set1_ps(E::LO));
     let n = _mm256_round_ps::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(_mm256_mul_ps(
         x,
         _mm256_set1_ps(E::LOG2E),
     ));
-    let r = _mm256_sub_ps(x, _mm256_mul_ps(n, _mm256_set1_ps(E::C1)));
+    // `n * C1` is exact (C1 has 9 significant bits, |n| <= 127), so the fused form rounds once,
+    // exactly as `x - n * C1` does. (Not so for C2: that step stays a multiply then a subtract.)
+    let r = _mm256_fnmadd_ps(n, _mm256_set1_ps(E::C1), x);
     let r = _mm256_sub_ps(r, _mm256_mul_ps(n, _mm256_set1_ps(E::C2)));
     let mut p = _mm256_set1_ps(E::P[0]);
     for &c in &E::P[1..] {
@@ -865,9 +866,11 @@ pub(super) unsafe fn i8f_matvec_avx2(q: &[i8], x: &[f32], out: &mut [f32]) {
         unsafe {
             let (mut lo, mut hi) = (_mm256_setzero_ps(), _mm256_setzero_ps());
             for i in 0..n16 {
-                let v = _mm_loadu_si128(row.as_ptr().add(16 * i).cast());
-                let w0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(v));
-                let w1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128::<8>(v)));
+                // Two 8-byte loads, each sign-extended straight from memory (a 16-byte load
+                // then a byte shift made LLVM rebuild the high half with an extra broadcast).
+                let p = row.as_ptr().add(16 * i);
+                let w0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64(p.cast())));
+                let w1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64(p.add(8).cast())));
                 let xp = x.as_ptr().add(16 * i);
                 lo = _mm256_add_ps(lo, _mm256_mul_ps(w0, _mm256_loadu_ps(xp)));
                 hi = _mm256_add_ps(hi, _mm256_mul_ps(w1, _mm256_loadu_ps(xp.add(8))));
@@ -1447,8 +1450,8 @@ pub(super) unsafe fn softmax_ssse3(x: &mut [f32], scale: f32) {
 }
 
 /// # Safety
-/// AVX2.
-#[target_feature(enable = "avx2")]
+/// AVX2 + FMA.
+#[target_feature(enable = "avx2,fma")]
 pub(super) unsafe fn softmax_avx2(x: &mut [f32], scale: f32) {
     let n = x.len();
     let sc = _mm256_set1_ps(scale);
