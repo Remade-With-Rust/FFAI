@@ -1093,15 +1093,17 @@ pub(super) unsafe fn rms_norm_ssse3(x: &[f32], w: &[f32], eps: f32, out: &mut [f
 }
 
 /// # Safety
-/// AVX2; equal lengths.
-#[target_feature(enable = "avx2")]
+/// AVX2 + FMA; equal lengths.
+#[target_feature(enable = "avx2,fma")]
 pub(super) unsafe fn rms_norm_avx2(x: &[f32], w: &[f32], eps: f32, out: &mut [f32]) {
     let n = x.len();
     let mut a = _mm256_setzero_pd();
     for i in 0..n / 4 {
         // SAFETY: `4i + 4 <= n`.
         let v = _mm256_cvtps_pd(unsafe { _mm_loadu_ps(x.as_ptr().add(4 * i)) });
-        a = _mm256_add_pd(a, _mm256_mul_pd(v, v));
+        // f32 squared is exact in f64 (48 of 53 bits), so the fused multiply-add rounds exactly as
+        // `acc + v * v` (the oracle's order and bits).
+        a = _mm256_fmadd_pd(v, v, a);
     }
     let mut acc = [0f64; 4];
     // SAFETY: four doubles into a four-double array.

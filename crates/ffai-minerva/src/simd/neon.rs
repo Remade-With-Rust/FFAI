@@ -552,8 +552,10 @@ pub(super) unsafe fn rms_norm(x: &[f32], w: &[f32], eps: f32, out: &mut [f32]) {
         // SAFETY: `4i + 4 <= n`.
         let v = unsafe { vld1q_f32(x.as_ptr().add(4 * i)) };
         let (lo, hi) = (vcvt_f64_f32(vget_low_f32(v)), vcvt_high_f64_f32(v));
-        a01 = vaddq_f64(a01, vmulq_f64(lo, lo));
-        a23 = vaddq_f64(a23, vmulq_f64(hi, hi));
+        // f32 squared is exact in f64 (48 of 53 bits), so the fused multiply-add rounds exactly as
+        // `acc + v * v` (the oracle's order and bits).
+        a01 = vfmaq_f64(a01, lo, lo);
+        a23 = vfmaq_f64(a23, hi, hi);
     }
     let mut acc = [
         vgetq_lane_f64::<0>(a01),

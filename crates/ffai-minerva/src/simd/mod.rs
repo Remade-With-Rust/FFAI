@@ -86,6 +86,7 @@ impl Tier {
                 std::is_x86_feature_detected!("ssse3")
                     && std::is_x86_feature_detected!("avx2")
                     && std::is_x86_feature_detected!("f16c")
+                    && std::is_x86_feature_detected!("fma")
             }
             #[cfg(target_arch = "x86_64")]
             Self::Avx2Vnni => Self::Avx2.supported() && std::is_x86_feature_detected!("avxvnni"),
