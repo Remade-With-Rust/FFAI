@@ -683,3 +683,47 @@ pool fix, e1b, the parallel per-token chain.
 
 **Counted toward Tim's 10:** W1, W2, W3, V1, V3, V4, V2, the paired GEMV, V5, and the q|k|v +
 gate|up join. Every one is bit-identical, gated by `assert_eq!` and the logits hashes.
+
+## NeonDot executed on the Pixel (closes brick e2's open item, 2026-11-23)
+
+Pixel 9 Pro XL, Android 17, aarch64, wireless adb; test binary built with the NDK r27c
+linker: tiers `["scalar", "neon", "neondot"]`. **All 26 oracle tests pass at every tier**,
+including the `sdot` (inline `asm!`) GEMV and GEMM against `gemv_codes` / `gemm_codes`, and
+the exhaustive f32 -> f16 sweep passes (93.8 s). The binary was deleted from the phone
+afterwards (`ls` confirms).
+
+## Final matched race vs bitnet.cpp (rusty-sloth, 2026-11-23)
+
+Minerva `d2ac1ca` (avx2vnni, head screen) against bitnet.cpp `765741d` (MSVC `llama-server`,
+`-t T -tb T`):
+
+- Both engines run `ours-i2_s.gguf` with exact prompt ids, greedy, `ignore_eos`; token counts
+  are asserted.
+- 8 ABBA rounds a pair; each engine timed on its own clock.
+- Quiet box: nothing above 1.4 % CPU at the start.
+- Logs: `F:\coding\bitnet-bench\results\cpu_race_final.log` / `.json`.
+
+**Equal threads on every row:**
+
+| threads | prompt -> new | decode Minerva | decode bitnet.cpp | ratio | wins | prefill Minerva | prefill bitnet.cpp | prefill ratio |
+|---|---|---:|---:|---:|---|---:|---:|---:|
+| 8 vs 8 | 64 -> 128 | 63.37 tok/s | 32.08 tok/s | **1.915x** | 8/8 | 375 ms | 442 ms | 1.18x |
+| 8 vs 8 | 512 -> 64 | 57.18 | 31.60 | **1.822x** | 8/8 | 1,565 ms | 3,913 ms | **2.48x** |
+| 12 vs 12 | 64 -> 128 | 61.80 | 33.76 | **1.837x** | 8/8 | 355 ms | 347 ms | 0.98x |
+| 12 vs 12 | 512 -> 64 | 54.53 | 31.96 | **1.713x** | 8/8 | 1,600 ms | 3,214 ms | **2.02x** |
+| 16 vs 16 | 64 -> 128 | 61.50 | 31.98 | **1.939x** | 8/8 | 330 ms | 301 ms | 0.91x |
+| 16 vs 16 | 512 -> 64 | 61.23 | 32.90 | **1.858x** | 8/8 | 1,445 ms | 2,722 ms | **1.90x** |
+
+- **Decode: 1.71-1.94x ahead at every admissible thread count, 48/48 rounds.**
+- **Long prompts (p512): prefill 1.90-2.48x ahead.** Short prompts (p64) are level (0.91-1.18x).
+- **Not admissible:** 24 vs 24. bitnet.cpp collapsed even on a quiet box (1.45 and 0.54
+  tok/s): its spin barrier at threads = logical cores on this 8P+8E hybrid. That is a
+  configuration pathology of the opponent, not a Minerva win. Minerva held 61.8 and 48.8.
+- **Caveat:** bitnet.cpp's own decode read 31-34 tok/s here against 38-41 in the afternoon's
+  race (same build and file; box state differs, thermal or power). The ratios are paired
+  within each round and stand; do not compare absolute numbers across the two races.
+
+Against this afternoon's race (`57d74f4`, the same caveat on absolutes):
+
+- decode ratio at 8 threads went 1.12-1.13x -> 1.82-1.92x
+- p512 prefill went 0.36x (8,650 vs 3,145 ms) -> 2.48x
