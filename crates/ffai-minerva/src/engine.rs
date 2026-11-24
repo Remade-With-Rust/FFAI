@@ -192,6 +192,37 @@ fn bitlinear_batch(
         });
 }
 
+/// One KV head's attention for its group of query heads (`q` the group's heads, `hd` each):
+/// scores over positions `0..n` into `sc` (one row of `ctx` a head), softmax and `f16` rounding
+/// per head, then the value sums into `out` (`hd` a head). Each head's arithmetic is the
+/// per-head kernels' exactly; the grouped kernels widen each `f16` K / V element once.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the attention's buffers, passed explicitly"
+)]
+fn attend_group(
+    isa: Isa,
+    kcache: &[u16],
+    vcache: &[u16],
+    offset: usize,
+    kv_dim: usize,
+    hd: usize,
+    q: &[f32],
+    n: usize,
+    sc: &mut [f32],
+    ctx: usize,
+    kq_scale: f32,
+    out: &mut [f32],
+) {
+    simd::f16_matvec_strided_group(isa, kcache, offset, kv_dim, hd, q, n, sc, ctx);
+    for row in sc.chunks_exact_mut(ctx) {
+        let row = &mut row[..n];
+        simd::softmax(isa, row, kq_scale);
+        simd::round_f16_slice(isa, row);
+    }
+    simd::weighted_sum_f16_group(isa, sc, ctx, n, vcache, offset, kv_dim, out, hd);
+}
+
 /// Prefill's per-token RMS norm then quantisation, in parallel across the batch's tokens:
 /// token `k` reads `src[k·dim ..][..dim]` and writes its own slices of `h` and `qa` and
 /// `acts[k]`, exactly as the per-token step does.
@@ -468,19 +499,29 @@ impl<'m> Session<'m> {
             let vcache = &self.v[layer_base..layer_base + (pos0 + bm) * kv_dim];
             let qr = &q;
             let att_scope = crate::prof::scope(crate::prof::Stage::Attention);
-            att.par_chunks_mut(hd)
-                .zip(scores.par_chunks_mut(ctx))
+            // One task a (token, KV head): the group's `group` query heads share each widened
+            // K and V element (bit-identical to the per-head kernels).
+            att.par_chunks_mut(group * hd)
+                .zip(scores.par_chunks_mut(group * ctx))
                 .enumerate()
                 .for_each(|(i, (o, sc))| {
-                    let (k, head) = (i / c.heads, i % c.heads);
+                    let (k, g) = (i / c.kv_heads, i % c.kv_heads);
                     let n = pos0 + k + 1;
-                    let g = head / group;
-                    let sc = &mut sc[..n];
-                    let qh = &qr[k * q_dim + head * hd..k * q_dim + (head + 1) * hd];
-                    simd::f16_matvec_strided(isa, kcache, g * hd, kv_dim, qh, sc);
-                    simd::softmax(isa, sc, kq_scale);
-                    simd::round_f16_slice(isa, sc);
-                    simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, o);
+                    let qg = &qr[k * q_dim + g * group * hd..k * q_dim + (g + 1) * group * hd];
+                    attend_group(
+                        isa,
+                        kcache,
+                        vcache,
+                        g * hd,
+                        kv_dim,
+                        hd,
+                        qg,
+                        n,
+                        sc,
+                        ctx,
+                        kq_scale,
+                        o,
+                    );
                 });
             drop(att_scope);
             norm_quant_tokens(
@@ -577,6 +618,8 @@ impl<'m> Session<'m> {
             let vcache = &self.v[layer_base..layer_base + n * kv_dim];
             let q = &self.q;
             let ctx = self.ctx;
+            // One task a query head: decode has only 5 KV-head tasks, which idles threads (measured:
+            // the grouped path lost at 64-1,088 positions); prefill uses the grouped kernels.
             self.att
                 .par_chunks_mut(hd)
                 .zip(self.scores.par_chunks_mut(ctx))
@@ -584,14 +627,8 @@ impl<'m> Session<'m> {
                 .for_each(|(head, (out, sc))| {
                     let g = head / group;
                     let sc = &mut sc[..n];
-                    simd::f16_matvec_strided(
-                        isa,
-                        kcache,
-                        g * hd,
-                        kv_dim,
-                        &q[head * hd..(head + 1) * hd],
-                        sc,
-                    );
+                    let qh = &q[head * hd..(head + 1) * hd];
+                    simd::f16_matvec_strided(isa, kcache, g * hd, kv_dim, qh, sc);
                     simd::softmax(isa, sc, kq_scale);
                     simd::round_f16_slice(isa, sc);
                     simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, out);

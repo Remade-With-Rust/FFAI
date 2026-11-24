@@ -919,6 +919,90 @@ pub(super) unsafe fn f16_matvec_avx2(
     }
 }
 
+/// Four heads' scores against one KV head: each K row's 16-element chunk is widened once and
+/// multiplied into all four heads' own accumulators (each head's lanes in the canonical order),
+/// then each head reduced canonically.
+///
+/// # Safety
+/// AVX2 + F16C; `len % 16 == 0`; rows `t < n` at `base + t·stride` readable for `len` values;
+/// `x` four heads of `len`; `out[j·out_stride + t]` in bounds for `j < 4`, `t < n`.
+#[target_feature(enable = "avx2,f16c")]
+pub(super) unsafe fn f16_matvec_group4_avx2(
+    base: *const u16,
+    stride: usize,
+    len: usize,
+    x: &[f32],
+    n: usize,
+    out: &mut [f32],
+    out_stride: usize,
+) {
+    for t in 0..n {
+        // SAFETY: chunk `i < len/16` of row `t` and of each head's query are in bounds.
+        unsafe {
+            let row = base.add(t * stride).cast::<u8>();
+            let mut lo = [_mm256_setzero_ps(); 4];
+            let mut hi = [_mm256_setzero_ps(); 4];
+            for i in 0..len / LANES {
+                let h = _mm256_loadu_si256(row.add(32 * i).cast());
+                let k0 = _mm256_cvtph_ps(_mm256_castsi256_si128(h));
+                let k1 = _mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h));
+                for j in 0..4 {
+                    let xp = x.as_ptr().add(j * len + 16 * i);
+                    lo[j] = _mm256_add_ps(lo[j], _mm256_mul_ps(k0, _mm256_loadu_ps(xp)));
+                    hi[j] = _mm256_add_ps(hi[j], _mm256_mul_ps(k1, _mm256_loadu_ps(xp.add(8))));
+                }
+            }
+            for j in 0..4 {
+                let v = _mm256_add_ps(lo[j], hi[j]);
+                out[j * out_stride + t] = reduce4_canon(_mm_add_ps(
+                    _mm256_castps256_ps128(v),
+                    _mm256_extractf128_ps::<1>(v),
+                ));
+            }
+        }
+    }
+}
+
+/// Four heads' value sums over one KV head: each V row's 16-element slice is widened once and
+/// accumulated into all four heads (each element's sum in `t` order, as the per-head kernel).
+///
+/// # Safety
+/// AVX2 + F16C; `len % 16 == 0`; rows `t < n` at `base + t·stride` readable for `len` values;
+/// `p[j·p_stride + t]` in bounds; `out` four heads of `len`.
+#[target_feature(enable = "avx2,f16c")]
+pub(super) unsafe fn weighted_sum_group4_avx2(
+    p: &[f32],
+    p_stride: usize,
+    n: usize,
+    base: *const u16,
+    stride: usize,
+    out: &mut [f32],
+    len: usize,
+) {
+    for blk in 0..len / 16 {
+        // SAFETY: values `16·blk..16·blk+16` of each row and of each head's output are in bounds.
+        unsafe {
+            let mut lo = [_mm256_setzero_ps(); 4];
+            let mut hi = [_mm256_setzero_ps(); 4];
+            for t in 0..n {
+                let h = _mm256_loadu_si256(base.add(t * stride + 16 * blk).cast());
+                let v0 = _mm256_cvtph_ps(_mm256_castsi256_si128(h));
+                let v1 = _mm256_cvtph_ps(_mm256_extracti128_si256::<1>(h));
+                for j in 0..4 {
+                    let pv = _mm256_set1_ps(*p.get_unchecked(j * p_stride + t));
+                    lo[j] = _mm256_add_ps(lo[j], _mm256_mul_ps(pv, v0));
+                    hi[j] = _mm256_add_ps(hi[j], _mm256_mul_ps(pv, v1));
+                }
+            }
+            for j in 0..4 {
+                let o = out.as_mut_ptr().add(j * len + 16 * blk);
+                _mm256_storeu_ps(o, lo[j]);
+                _mm256_storeu_ps(o.add(8), hi[j]);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Attention values: out[d] = Σ_t p[t]·v_t[d], lanes across d, t sequential per lane.
 

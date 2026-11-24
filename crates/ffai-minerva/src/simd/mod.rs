@@ -522,6 +522,117 @@ pub fn f16_matvec_strided(
     }
 }
 
+/// Grouped-query attention scores: for each of the `x.len() / len` query heads `j` sharing one
+/// KV head, `out[j·out_stride + t] = dot16(v[offset + t·stride ..][..len], x[j·len ..][..len])`
+/// for `t < n`. Bit-identical to [`f16_matvec_strided`] per head (each head keeps its own lanes
+/// in their order); the grouped twins widen each `f16` element once for the whole group.
+///
+/// # Panics
+/// When a row or an output runs past its slice.
+#[expect(clippy::too_many_arguments, reason = "a strided group of heads")]
+pub fn f16_matvec_strided_group(
+    isa: Isa,
+    v: &[u16],
+    offset: usize,
+    stride: usize,
+    len: usize,
+    x: &[f32],
+    n: usize,
+    out: &mut [f32],
+    out_stride: usize,
+) {
+    let g = x.len() / len;
+    if n == 0 || g == 0 {
+        return;
+    }
+    assert!(x.len() == g * len && offset + (n - 1) * stride + len <= v.len());
+    assert!((g - 1) * out_stride + n <= out.len());
+    match isa.0 {
+        // SAFETY: tier detected; rows and outputs asserted in bounds; `len % 16 == 0`, `g == 4`.
+        #[cfg(target_arch = "x86_64")]
+        Tier::Avx2 | Tier::Avx2Vnni if g == 4 && len.is_multiple_of(16) => {
+            census::add(Kernel::F16Matvec, isa, g * n * len);
+            unsafe {
+                x86::f16_matvec_group4_avx2(
+                    v[offset..].as_ptr(),
+                    stride,
+                    len,
+                    x,
+                    n,
+                    out,
+                    out_stride,
+                )
+            }
+        }
+        _ => {
+            for j in 0..g {
+                let o = &mut out[j * out_stride..j * out_stride + n];
+                f16_matvec_strided(isa, v, offset, stride, &x[j * len..(j + 1) * len], o);
+            }
+        }
+    }
+}
+
+/// Grouped-query attention values: for each head `j` of the group,
+/// `out[j·len + d] = Σ_t p[j·p_stride + t] · v[offset + t·stride + d]` for `t < n`.
+/// Bit-identical to [`weighted_sum_f16`] per head; the grouped twins widen each `f16` once.
+///
+/// # Panics
+/// When a row or an input runs past its slice.
+#[expect(clippy::too_many_arguments, reason = "a strided group of heads")]
+pub fn weighted_sum_f16_group(
+    isa: Isa,
+    p: &[f32],
+    p_stride: usize,
+    n: usize,
+    v: &[u16],
+    offset: usize,
+    stride: usize,
+    out: &mut [f32],
+    len: usize,
+) {
+    let g = out.len() / len;
+    if g == 0 {
+        return;
+    }
+    assert!(out.len() == g * len && (g - 1) * p_stride + n <= p.len());
+    if n == 0 {
+        out.fill(0.0);
+        return;
+    }
+    assert!(offset + (n - 1) * stride + len <= v.len());
+    match isa.0 {
+        // SAFETY: tier detected; rows and inputs asserted in bounds; `len % 16 == 0`, `g == 4`.
+        #[cfg(target_arch = "x86_64")]
+        Tier::Avx2 | Tier::Avx2Vnni if g == 4 && len.is_multiple_of(16) => {
+            census::add(Kernel::WeightedSum, isa, g * n * len);
+            unsafe {
+                x86::weighted_sum_group4_avx2(
+                    p,
+                    p_stride,
+                    n,
+                    v[offset..].as_ptr(),
+                    stride,
+                    out,
+                    len,
+                )
+            }
+        }
+        _ => {
+            for j in 0..g {
+                weighted_sum_f16(
+                    isa,
+                    &p[j * p_stride..j * p_stride + n],
+                    v,
+                    offset,
+                    stride,
+                    &mut out[j * len..(j + 1) * len],
+                );
+            }
+        }
+    }
+}
+
 /// `out[d] = Σ_t p[t] · v[offset + t·stride + d]` (`v` as `f16` bits), each element summed in
 /// `t` order from zero.
 ///

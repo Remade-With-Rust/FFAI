@@ -283,6 +283,67 @@ fn f16_matvec_matches_the_oracle() {
 }
 
 #[test]
+fn grouped_attention_matches_the_per_head_oracles() {
+    let mut rng = Rng(14);
+    for (n, len, g) in [
+        (1usize, 128usize, 4usize),
+        (7, 128, 4),
+        (33, 128, 4),
+        (5, 16, 4),
+        (9, 48, 4),
+        (6, 128, 2),
+        (4, 17, 4),
+    ] {
+        let (offset, stride, ctx) = (5usize, 640usize, n + 3);
+        let v = rng.halves(offset + n * stride + len);
+        let x = rng.floats(g * len, 2.0);
+        let mut want = vec![0f32; g * ctx];
+        for j in 0..g {
+            for t in 0..n {
+                want[j * ctx + t] = num::dot16_f16(
+                    &v[offset + t * stride..offset + t * stride + len],
+                    &x[j * len..(j + 1) * len],
+                );
+            }
+        }
+        let p: Vec<f32> = rng
+            .floats(g * ctx, 1.0)
+            .iter()
+            .map(|x| num::round_f16(x.abs()))
+            .collect();
+        let mut want_o = vec![0f32; g * len];
+        for j in 0..g {
+            num::weighted_sum_f16(
+                &p[j * ctx..j * ctx + n],
+                &v[offset..],
+                stride,
+                &mut want_o[j * len..(j + 1) * len],
+            );
+        }
+        for isa in simd_tiers() {
+            let mut got = vec![0f32; g * ctx];
+            f16_matvec_strided_group(isa, &v, offset, stride, len, &x, n, &mut got, ctx);
+            for j in 0..g {
+                assert_eq!(
+                    bits(&got[j * ctx..j * ctx + n]),
+                    bits(&want[j * ctx..j * ctx + n]),
+                    "{} scores n {n} len {len} g {g}",
+                    isa.name()
+                );
+            }
+            let mut got_o = vec![7f32; g * len];
+            weighted_sum_f16_group(isa, &p, ctx, n, &v, offset, stride, &mut got_o, len);
+            assert_eq!(
+                bits(&got_o),
+                bits(&want_o),
+                "{} values n {n} len {len} g {g}",
+                isa.name()
+            );
+        }
+    }
+}
+
+#[test]
 fn weighted_sum_matches_the_oracle() {
     let mut rng = Rng(3);
     for (n, len) in [
