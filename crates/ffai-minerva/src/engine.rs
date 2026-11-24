@@ -192,6 +192,30 @@ fn bitlinear_batch(
         });
 }
 
+/// Prefill's per-token RMS norm then quantisation, in parallel across the batch's tokens:
+/// token `k` reads `src[k·dim ..][..dim]` and writes its own slices of `h` and `qa` and
+/// `acts[k]`, exactly as the per-token step does.
+fn norm_quant_tokens(
+    isa: Isa,
+    src: &[f32],
+    w: &[f32],
+    eps: f32,
+    h: &mut [f32],
+    qa: &mut [i8],
+    acts: &mut [(f32, i32)],
+) {
+    let dim = w.len();
+    let n = acts.len() * dim;
+    src.par_chunks(dim)
+        .zip(h[..n].par_chunks_mut(dim))
+        .zip(qa[..n].par_chunks_mut(dim))
+        .zip(acts.par_iter_mut())
+        .for_each(|(((x, h), qa), act)| {
+            simd::rms_norm(isa, x, w, eps, h);
+            *act = quantise(isa, h, qa);
+        });
+}
+
 /// Quantise `x` into `qa`: the scale and the codes' sum.
 fn quantise(isa: Isa, x: &[f32], qa: &mut [i8]) -> (f32, i32) {
     let qa = &mut qa[..x.len()];
@@ -406,49 +430,40 @@ impl<'m> Session<'m> {
 
         for (li, l) in m.layers.iter().enumerate() {
             // --- attention ---
-            for k in 0..bm {
-                simd::rms_norm(
-                    isa,
-                    &x[k * embd..(k + 1) * embd],
-                    &l.attn_norm,
-                    c.rms_eps,
-                    &mut h[k * embd..(k + 1) * embd],
-                );
-                acts[k] = quantise(
-                    isa,
-                    &h[k * embd..(k + 1) * embd],
-                    &mut qa[k * embd..(k + 1) * embd],
-                );
-            }
+            norm_quant_tokens(
+                isa,
+                &x[..bm * embd],
+                &l.attn_norm,
+                c.rms_eps,
+                &mut h,
+                &mut qa,
+                &mut acts[..bm],
+            );
             bitlinear_batch(isa, m, &l.q, &qa, &acts, &mut ysum, &mut q, q_dim);
             bitlinear_batch(isa, m, &l.k, &qa, &acts, &mut ysum, &mut kc, kv_dim);
             bitlinear_batch(isa, m, &l.v, &qa, &acts, &mut ysum, &mut vc, kv_dim);
             let half = hd / 2;
             let layer_base = li * ctx * kv_dim;
-            for k in 0..bm {
-                let (cs, sn) = (
-                    &cos[k * half..(k + 1) * half],
-                    &sin[k * half..(k + 1) * half],
-                );
-                for head in q[k * q_dim..(k + 1) * q_dim].chunks_exact_mut(hd) {
-                    simd::rope_neox(isa, head, cs, sn);
-                }
-                for head in kc[k * kv_dim..(k + 1) * kv_dim].chunks_exact_mut(hd) {
-                    simd::rope_neox(isa, head, cs, sn);
-                }
-                let at = layer_base + (pos0 + k) * kv_dim;
-                simd::f32_to_f16(
-                    isa,
-                    &kc[k * kv_dim..(k + 1) * kv_dim],
-                    &mut self.k[at..at + kv_dim],
-                );
-                simd::f32_to_f16(
-                    isa,
-                    &vc[k * kv_dim..(k + 1) * kv_dim],
-                    &mut self.v[at..at + kv_dim],
-                );
-                simd::round_f16_slice(isa, &mut q[k * q_dim..(k + 1) * q_dim]);
-            }
+            let at = layer_base + pos0 * kv_dim;
+            q[..bm * q_dim]
+                .par_chunks_mut(q_dim)
+                .zip(kc[..bm * kv_dim].par_chunks_mut(kv_dim))
+                .zip(vc[..bm * kv_dim].par_chunks(kv_dim))
+                .zip(self.k[at..at + bm * kv_dim].par_chunks_mut(kv_dim))
+                .zip(self.v[at..at + bm * kv_dim].par_chunks_mut(kv_dim))
+                .zip(cos[..bm * half].par_chunks(half))
+                .zip(sin[..bm * half].par_chunks(half))
+                .for_each(|((((((q, kc), vc), kd), vd), cs), sn)| {
+                    for head in q.chunks_exact_mut(hd) {
+                        simd::rope_neox(isa, head, cs, sn);
+                    }
+                    for head in kc.chunks_exact_mut(hd) {
+                        simd::rope_neox(isa, head, cs, sn);
+                    }
+                    simd::f32_to_f16(isa, kc, kd);
+                    simd::f32_to_f16(isa, vc, vd);
+                    simd::round_f16_slice(isa, q);
+                });
             let kcache = &self.k[layer_base..layer_base + (pos0 + bm) * kv_dim];
             let vcache = &self.v[layer_base..layer_base + (pos0 + bm) * kv_dim];
             let qr = &q;
@@ -468,73 +483,49 @@ impl<'m> Session<'m> {
                     simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, o);
                 });
             drop(att_scope);
-            for k in 0..bm {
-                simd::rms_norm(
-                    isa,
-                    &att[k * q_dim..(k + 1) * q_dim],
-                    &l.attn_sub_norm,
-                    c.rms_eps,
-                    &mut h[k * q_dim..(k + 1) * q_dim],
-                );
-                acts[k] = quantise(
-                    isa,
-                    &h[k * q_dim..(k + 1) * q_dim],
-                    &mut qa[k * q_dim..(k + 1) * q_dim],
-                );
-            }
+            norm_quant_tokens(
+                isa,
+                &att[..bm * q_dim],
+                &l.attn_sub_norm,
+                c.rms_eps,
+                &mut h,
+                &mut qa,
+                &mut acts[..bm],
+            );
             bitlinear_batch(isa, m, &l.o, &qa, &acts, &mut ysum, &mut out, embd);
-            for k in 0..bm {
-                simd::add_assign(
-                    isa,
-                    &mut x[k * embd..(k + 1) * embd],
-                    &out[k * embd..(k + 1) * embd],
-                );
-            }
+            x[..bm * embd]
+                .par_chunks_mut(embd)
+                .zip(out[..bm * embd].par_chunks(embd))
+                .for_each(|(x, o)| simd::add_assign(isa, x, o));
 
             // --- feed-forward ---
-            for k in 0..bm {
-                simd::rms_norm(
-                    isa,
-                    &x[k * embd..(k + 1) * embd],
-                    &l.ffn_norm,
-                    c.rms_eps,
-                    &mut h[k * embd..(k + 1) * embd],
-                );
-                acts[k] = quantise(
-                    isa,
-                    &h[k * embd..(k + 1) * embd],
-                    &mut qa[k * embd..(k + 1) * embd],
-                );
-            }
+            norm_quant_tokens(
+                isa,
+                &x[..bm * embd],
+                &l.ffn_norm,
+                c.rms_eps,
+                &mut h,
+                &mut qa,
+                &mut acts[..bm],
+            );
             bitlinear_batch(isa, m, &l.gate, &qa, &acts, &mut ysum, &mut gate, ffn);
             bitlinear_batch(isa, m, &l.up, &qa, &acts, &mut ysum, &mut up, ffn);
-            for k in 0..bm {
-                simd::relu2_mul(
-                    isa,
-                    &mut gate[k * ffn..(k + 1) * ffn],
-                    &up[k * ffn..(k + 1) * ffn],
-                );
-                simd::rms_norm(
-                    isa,
-                    &gate[k * ffn..(k + 1) * ffn],
-                    &l.ffn_sub_norm,
-                    c.rms_eps,
-                    &mut h[k * ffn..(k + 1) * ffn],
-                );
-                acts[k] = quantise(
-                    isa,
-                    &h[k * ffn..(k + 1) * ffn],
-                    &mut qa[k * ffn..(k + 1) * ffn],
-                );
-            }
+            gate[..bm * ffn]
+                .par_chunks_mut(ffn)
+                .zip(up[..bm * ffn].par_chunks(ffn))
+                .zip(h[..bm * ffn].par_chunks_mut(ffn))
+                .zip(qa[..bm * ffn].par_chunks_mut(ffn))
+                .zip(acts[..bm].par_iter_mut())
+                .for_each(|((((g, u), h), qa), act)| {
+                    simd::relu2_mul(isa, g, u);
+                    simd::rms_norm(isa, g, &l.ffn_sub_norm, c.rms_eps, h);
+                    *act = quantise(isa, h, qa);
+                });
             bitlinear_batch(isa, m, &l.down, &qa, &acts, &mut ysum, &mut out, embd);
-            for k in 0..bm {
-                simd::add_assign(
-                    isa,
-                    &mut x[k * embd..(k + 1) * embd],
-                    &out[k * embd..(k + 1) * embd],
-                );
-            }
+            x[..bm * embd]
+                .par_chunks_mut(embd)
+                .zip(out[..bm * embd].par_chunks(embd))
+                .for_each(|(x, o)| simd::add_assign(isa, x, o));
         }
         self.x.copy_from_slice(&x[(bm - 1) * embd..bm * embd]);
         self.pos += bm;
