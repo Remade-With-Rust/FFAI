@@ -123,6 +123,44 @@ fn ternary_gemv_matches_the_oracle() {
 }
 
 #[test]
+fn ternary_gemm_matches_the_oracle() {
+    let mut rng = Rng(13);
+    for (rows, cols, m) in [
+        (1usize, 128usize, 1usize),
+        (3, 256, 7),
+        (5, 640, 8),
+        (4, 2560, 9),
+        (3, 6912, 17),
+        (2, 2560, 64),
+    ] {
+        let trits: Vec<i8> = (0..rows * cols)
+            .map(|_| (rng.next() % 3) as i8 - 1)
+            .collect();
+        let packed = pack(&trits, rows, cols, 1.0).unwrap();
+        let codes = &packed[..rows * cols / 4];
+        for case in 0..3 {
+            let a: Vec<i8> = match case {
+                0 => (0..m * cols).map(|_| (rng.next() % 256) as i8).collect(),
+                1 => vec![-128; m * cols],
+                _ => vec![127; m * cols],
+            };
+            let sums: Vec<i32> = a.chunks_exact(cols).map(act_sum).collect();
+            let mut by_token = vec![0i32; m * rows];
+            rusty_ternary::kernel::gemm_codes(codes, rows, cols, m, &a, &mut by_token).unwrap();
+            // The oracle is `[m, rows]`; the kernel's output is `[rows, m]`.
+            let want: Vec<i32> = (0..rows * m)
+                .map(|i| by_token[(i % m) * rows + i / m])
+                .collect();
+            for isa in simd_tiers() {
+                let mut got = vec![0i32; rows * m];
+                ternary_gemm(isa, codes, cols, m, &a, &sums, &mut got);
+                assert_eq!(got, want, "{} {rows}x{cols} m {m} case {case}", isa.name());
+            }
+        }
+    }
+}
+
+#[test]
 fn i8f_matvec_matches_the_oracle() {
     let mut rng = Rng(12);
     for (rows, n) in [

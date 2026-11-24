@@ -25,6 +25,28 @@ pub fn gemv_par(isa: Isa, codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
         });
 }
 
+/// Prefill's product over `m` tokens: `y[r·m + t] = Σ_j W[r, j] · a[t·cols + j]` (`[rows, m]`),
+/// rows split across the pool, each chunk through [`simd::ternary_gemm`]: the weights are read
+/// once for all `m` tokens.
+///
+/// # Panics
+/// When the shapes disagree.
+pub fn gemm_par(
+    isa: Isa,
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    let rpc = cols / 4;
+    assert_eq!(y.len() * rpc, codes.len() * m);
+    y.par_chunks_mut(CHUNK * m)
+        .zip(codes.par_chunks(CHUNK * rpc))
+        .for_each(|(ys, cs)| simd::ternary_gemm(isa, cs, cols, m, a, a_sums, ys));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

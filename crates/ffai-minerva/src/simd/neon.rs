@@ -136,6 +136,77 @@ pub(super) unsafe fn gemv(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
     }
 }
 
+/// # Safety
+/// NEON; `row` readable for `cols / 4` bytes, `a` for `T` tokens of `cols`.
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn gemm_tile<const T: usize>(row: *const u8, a: *const i8, cols: usize, out: &mut [i32]) {
+    let mask = vdupq_n_u8(3);
+    let mut acc = [vdupq_n_s32(0); T];
+    for b in 0..cols / 128 {
+        // SAFETY: block `b` is inside the row and inside every token's activations.
+        unsafe {
+            let c0 = vld1q_u8(row.add(b * 32));
+            let c1 = vld1q_u8(row.add(b * 32 + 16));
+            let q = [
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<6>(c0), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<6>(c1), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<4>(c0), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<4>(c1), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<2>(c0), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<2>(c1), mask)),
+                vreinterpretq_s8_u8(vandq_u8(c0, mask)),
+                vreinterpretq_s8_u8(vandq_u8(c1, mask)),
+            ];
+            for (t, acc) in acc.iter_mut().enumerate() {
+                let ab = a.add(t * cols + b * 128);
+                let (mut lo, mut hi) = (vdupq_n_s16(0), vdupq_n_s16(0));
+                for (k, &qk) in q.iter().enumerate() {
+                    let v = vld1q_s8(ab.add(16 * k));
+                    lo = vmlal_s8(lo, vget_low_s8(qk), vget_low_s8(v));
+                    hi = vmlal_high_s8(hi, qk, v);
+                }
+                *acc = vpadalq_s16(vpadalq_s16(*acc, lo), hi);
+            }
+        }
+    }
+    for (o, v) in out.iter_mut().zip(acc) {
+        *o = vaddvq_s32(v);
+    }
+}
+
+/// # Safety
+/// NEON; `codes` whole rows of `cols / 4` bytes, `a` `m · cols`, `a_sums` `m`, `y` `rows · m`.
+#[target_feature(enable = "neon")]
+pub(super) unsafe fn gemm(
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    let rpc = cols / 4;
+    for (r, yr) in y.chunks_exact_mut(m).enumerate() {
+        // SAFETY: row `r` and every tile's tokens are inside the slices.
+        unsafe {
+            let row = codes.as_ptr().add(r * rpc);
+            let mut t = 0;
+            while t + 8 <= m {
+                gemm_tile::<8>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..t + 8]);
+                t += 8;
+            }
+            while t < m {
+                gemm_tile::<1>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..=t]);
+                t += 1;
+            }
+        }
+        for (o, &s) in yr.iter_mut().zip(a_sums) {
+            *o -= s;
+        }
+    }
+}
+
 /// int8 x f32 mat-vec in the canonical 16-lane order.
 ///
 /// # Safety

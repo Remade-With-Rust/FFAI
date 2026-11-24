@@ -3,6 +3,7 @@
 //! | kernel | scalar oracle | gate |
 //! |---|---|---|
 //! | [`ternary_gemv`] | `rusty_ternary::kernel::gemv_codes` | `assert_eq!` (integers) |
+//! | [`ternary_gemm`] (prefill) | `rusty_ternary::kernel::gemm_codes` | `assert_eq!` |
 //! | [`i8f_matvec`] (head screen) | [`i8f_matvec_scalar`] | bits |
 //! | [`i8_gemv`] | [`i8_gemv_scalar`] | `assert_eq!` |
 //! | [`f16_matvec_bytes`], [`f16_matvec_strided`] | [`num::dot16_f16_bytes`], [`num::dot16_f16`] | bits |
@@ -180,10 +181,12 @@ pub mod census {
         I8Gemv = 8,
         /// int8 x f32 mat-vec, the head screen (MACs).
         I8fMatvec = 9,
+        /// I2_S GEMM, prefill (weights x tokens).
+        TernaryGemm = 10,
     }
 
     /// Kernel names, in [`Kernel`] order.
-    pub const NAMES: [&str; 10] = [
+    pub const NAMES: [&str; 11] = [
         "ternary_gemv",
         "f16_matvec",
         "weighted_sum",
@@ -194,6 +197,7 @@ pub mod census {
         "elementwise",
         "i8_gemv",
         "i8f_matvec",
+        "ternary_gemm",
     ];
     const N: usize = NAMES.len() * TIERS.len();
 
@@ -350,7 +354,10 @@ pub fn i8f_matvec_scalar(q: &[i8], x: &[f32], out: &mut [f32]) {
         all(target_arch = "aarch64", target_endian = "little"),
         all(target_arch = "wasm32", target_feature = "simd128")
     )),
-    expect(dead_code, reason = "only the SIMD tiers call it; this target has none")
+    expect(
+        dead_code,
+        reason = "only the SIMD tiers call it; this target has none"
+    )
 )]
 pub(crate) fn i8f_finish(mut acc: [f32; num::LANES], q: &[i8], x: &[f32], from: usize) -> f32 {
     for (j, i) in (from..x.len()).enumerate() {
@@ -367,6 +374,56 @@ pub fn i8_gemv_scalar(q: &[i8], a: &[i8], y: &mut [i32]) {
             .zip(a)
             .map(|(&w, &v)| i32::from(w) * i32::from(v))
             .sum();
+    }
+}
+
+/// Prefill's product: `y[r·m + t] = Σ_j W[r, j] · a[t·cols + j]` for the `codes.len() / (cols/4)`
+/// whole rows of I2_S codes and `m` tokens of activations; `a_sums[t]` is [`act_sum`] of token
+/// `t`. The output is row-major by ROW (`[rows, m]`), so threads split the rows and each writes
+/// one contiguous block. Every code block is unpacked once and applied to a tile of tokens.
+///
+/// # Panics
+/// When the shapes disagree or `cols` is not a whole number of 128-weight blocks.
+pub fn ternary_gemm(
+    isa: Isa,
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    assert!(cols.is_multiple_of(rusty_ternary::i2s::BLOCK) && codes.len().is_multiple_of(cols / 4));
+    let rows = codes.len() / (cols / 4);
+    assert!(a.len() == m * cols && a_sums.len() == m && y.len() == rows * m);
+    census::add(Kernel::TernaryGemm, isa, rows * cols * m);
+    match isa.0 {
+        // SAFETY: tier detected; shapes asserted.
+        #[cfg(target_arch = "x86_64")]
+        Tier::Avx2 => unsafe { x86::gemm_avx2(codes, cols, m, a, a_sums, y) },
+        #[cfg(target_arch = "x86_64")]
+        Tier::Ssse3 => unsafe { x86::gemm_ssse3(codes, cols, m, a, a_sums, y) },
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        Tier::Neon => unsafe { neon::gemm(codes, cols, m, a, a_sums, y) },
+        // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
+        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+        Tier::Simd128 => unsafe { wasm::gemm(codes, cols, m, a, a_sums, y) },
+        _ => {
+            let rpc = cols / 4;
+            for (r, yr) in y.chunks_exact_mut(m).enumerate() {
+                for (t, o) in yr.iter_mut().enumerate() {
+                    let mut one = [0i32];
+                    rusty_ternary::kernel::gemv_codes(
+                        &codes[r * rpc..(r + 1) * rpc],
+                        cols,
+                        &a[t * cols..(t + 1) * cols],
+                        &mut one,
+                    )
+                    .expect("shapes asserted");
+                    *o = one[0];
+                }
+            }
+        }
     }
 }
 

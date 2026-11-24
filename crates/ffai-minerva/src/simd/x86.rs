@@ -329,6 +329,182 @@ pub(super) unsafe fn i8_gemv_avx2(q: &[i8], a: &[i8], y: &mut [i32]) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// I2_S GEMM (prefill): each 32-byte code block unpacked once, applied to a tile of `T` tokens
+// held in `T` i32 accumulators. Codes are <= 2 (refused at load otherwise), so a block's four
+// `pmaddubsw` sums stay under 4·512 = 2,048 per i16 lane before the `pmaddwd` widen.
+
+/// Tokens a GEMM tile holds.
+const GEMM_TILE: usize = 8;
+
+/// # Safety
+/// AVX2; `row` readable for `cols / 4` bytes, `a` for `T` tokens of `cols`.
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn gemm_tile_avx2<const T: usize>(
+    row: *const u8,
+    a: *const i8,
+    cols: usize,
+    out: &mut [i32],
+) {
+    let mask = _mm256_set1_epi8(3);
+    let ones = _mm256_set1_epi16(1);
+    let mut acc = [_mm256_setzero_si256(); T];
+    for b in 0..cols / 128 {
+        // SAFETY: block `b` is inside the row and inside every token's activations.
+        unsafe {
+            let c = _mm256_loadu_si256(row.add(b * 32).cast());
+            let q0 = _mm256_and_si256(_mm256_srli_epi16::<6>(c), mask);
+            let q1 = _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask);
+            let q2 = _mm256_and_si256(_mm256_srli_epi16::<2>(c), mask);
+            let q3 = _mm256_and_si256(c, mask);
+            for (t, acc) in acc.iter_mut().enumerate() {
+                let ab = a.add(t * cols + b * 128);
+                let mut s = _mm256_maddubs_epi16(q0, _mm256_loadu_si256(ab.cast()));
+                s = _mm256_add_epi16(
+                    s,
+                    _mm256_maddubs_epi16(q1, _mm256_loadu_si256(ab.add(32).cast())),
+                );
+                s = _mm256_add_epi16(
+                    s,
+                    _mm256_maddubs_epi16(q2, _mm256_loadu_si256(ab.add(64).cast())),
+                );
+                s = _mm256_add_epi16(
+                    s,
+                    _mm256_maddubs_epi16(q3, _mm256_loadu_si256(ab.add(96).cast())),
+                );
+                *acc = _mm256_add_epi32(*acc, _mm256_madd_epi16(s, ones));
+            }
+        }
+    }
+    for (o, v) in out.iter_mut().zip(acc) {
+        *o = hsum_epi32(_mm_add_epi32(
+            _mm256_castsi256_si128(v),
+            _mm256_extracti128_si256::<1>(v),
+        ));
+    }
+}
+
+/// # Safety
+/// AVX2; `codes` whole rows of `cols / 4` bytes, `a` `m · cols`, `a_sums` `m`, `y` `rows · m`.
+#[target_feature(enable = "avx2")]
+pub(super) unsafe fn gemm_avx2(
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    let rpc = cols / 4;
+    for (r, yr) in y.chunks_exact_mut(m).enumerate() {
+        // SAFETY: row `r` and every tile's tokens are inside the slices (asserted by the caller).
+        unsafe {
+            let row = codes.as_ptr().add(r * rpc);
+            let mut t = 0;
+            while t + GEMM_TILE <= m {
+                gemm_tile_avx2::<GEMM_TILE>(
+                    row,
+                    a.as_ptr().add(t * cols),
+                    cols,
+                    &mut yr[t..t + GEMM_TILE],
+                );
+                t += GEMM_TILE;
+            }
+            while t < m {
+                gemm_tile_avx2::<1>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..=t]);
+                t += 1;
+            }
+        }
+        for (o, &s) in yr.iter_mut().zip(a_sums) {
+            *o -= s;
+        }
+    }
+}
+
+/// # Safety
+/// SSSE3; as [`gemm_tile_avx2`].
+#[target_feature(enable = "ssse3")]
+#[inline]
+unsafe fn gemm_tile_ssse3<const T: usize>(
+    row: *const u8,
+    a: *const i8,
+    cols: usize,
+    out: &mut [i32],
+) {
+    let mask = _mm_set1_epi8(3);
+    let ones = _mm_set1_epi16(1);
+    let mut acc = [_mm_setzero_si128(); T];
+    for b in 0..cols / 128 {
+        // SAFETY: block `b` is inside the row and inside every token's activations.
+        unsafe {
+            let c0 = _mm_loadu_si128(row.add(b * 32).cast());
+            let c1 = _mm_loadu_si128(row.add(b * 32 + 16).cast());
+            let q = [
+                _mm_and_si128(_mm_srli_epi16::<6>(c0), mask),
+                _mm_and_si128(_mm_srli_epi16::<6>(c1), mask),
+                _mm_and_si128(_mm_srli_epi16::<4>(c0), mask),
+                _mm_and_si128(_mm_srli_epi16::<4>(c1), mask),
+                _mm_and_si128(_mm_srli_epi16::<2>(c0), mask),
+                _mm_and_si128(_mm_srli_epi16::<2>(c1), mask),
+                _mm_and_si128(c0, mask),
+                _mm_and_si128(c1, mask),
+            ];
+            for (t, acc) in acc.iter_mut().enumerate() {
+                let ab = a.add(t * cols + b * 128);
+                let mut s = _mm_setzero_si128();
+                for (k, &qk) in q.iter().enumerate() {
+                    s = _mm_add_epi16(
+                        s,
+                        _mm_maddubs_epi16(qk, _mm_loadu_si128(ab.add(16 * k).cast())),
+                    );
+                }
+                *acc = _mm_add_epi32(*acc, _mm_madd_epi16(s, ones));
+            }
+        }
+    }
+    for (o, v) in out.iter_mut().zip(acc) {
+        *o = hsum_epi32(v);
+    }
+}
+
+/// # Safety
+/// SSSE3; shapes as [`gemm_avx2`].
+#[target_feature(enable = "ssse3")]
+pub(super) unsafe fn gemm_ssse3(
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    let rpc = cols / 4;
+    for (r, yr) in y.chunks_exact_mut(m).enumerate() {
+        // SAFETY: as `gemm_avx2`.
+        unsafe {
+            let row = codes.as_ptr().add(r * rpc);
+            let mut t = 0;
+            while t + GEMM_TILE <= m {
+                gemm_tile_ssse3::<GEMM_TILE>(
+                    row,
+                    a.as_ptr().add(t * cols),
+                    cols,
+                    &mut yr[t..t + GEMM_TILE],
+                );
+                t += GEMM_TILE;
+            }
+            while t < m {
+                gemm_tile_ssse3::<1>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..=t]);
+                t += 1;
+            }
+        }
+        for (o, &s) in yr.iter_mut().zip(a_sums) {
+            *o -= s;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // int8 x f32 mat-vec (the head screen) in the canonical 16-lane order.
 
 /// Sixteen int8 at `p` sign-extended to four `f32x4` (SSE2: unpack with itself, shift down).

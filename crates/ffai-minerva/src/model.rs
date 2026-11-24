@@ -156,9 +156,17 @@ impl Store {
             }
             unsafe extern "system" {
                 fn GetCurrentProcess() -> isize;
-                fn PrefetchVirtualMemory(process: isize, n: usize, ranges: *const Range, flags: u32) -> i32;
+                fn PrefetchVirtualMemory(
+                    process: isize,
+                    n: usize,
+                    ranges: *const Range,
+                    flags: u32,
+                ) -> i32;
             }
-            let r = Range { address: m.as_ptr(), size: m.len() };
+            let r = Range {
+                address: m.as_ptr(),
+                size: m.len(),
+            };
             // SAFETY: one range covering exactly the live mapping; the call only schedules reads.
             let _ = unsafe { PrefetchVirtualMemory(GetCurrentProcess(), 1, &raw const r, 0) };
         }
@@ -427,8 +435,11 @@ impl Model {
             }
             // Code 3 is not a weight (no writer emits it). Refused here, once, so every kernel
             // may take `code <= 2` as given, and a corrupt file fails instead of reading 2a.
-            i2s::check_codes(&b[..rows * cols / 4])
-                .map_err(|_| bad(format!("`{name}`: holds code 3, which is not an I2_S weight")))?;
+            i2s::check_codes(&b[..rows * cols / 4]).map_err(|_| {
+                bad(format!(
+                    "`{name}`: holds code 3, which is not an I2_S weight"
+                ))
+            })?;
             Ok(Ternary {
                 codes: offset_in(bytes, b),
                 rows,

@@ -21,9 +21,10 @@ LINE = re.compile(r'prefill (\d+) tokens \+ first: ([\d.]+)s \| decode (\d+) tok
                   r'\| threads (\d+) \| isa (\w+) \| head (\w+) \| logits-fnv ([0-9a-f]+)')
 
 
-def run(exe, ids, new, var, value):
+def run(exe, ids, new, var, value, threads):
     env = dict(os.environ, **{var: value})
-    r = subprocess.run([exe, 'generate', '--ids', ids, '--new', str(new)], capture_output=True, text=True, env=env)
+    cmd = [exe, 'generate', '--ids', ids, '--new', str(new)] + (['--threads', str(threads)] if threads else [])
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise SystemExit(f'{value}: exit {r.returncode}\n{r.stderr[-1500:]}')
     m = LINE.search(r.stderr)
@@ -41,6 +42,7 @@ def main():
     ap.add_argument('--new', type=int, default=64)
     ap.add_argument('--rounds', type=int, default=10)
     ap.add_argument('--var', default='MINERVA_ISA')
+    ap.add_argument('--threads', type=int, default=0, help='Minerva --threads (0: the pool default)')
     ap.add_argument('--arms', default='scalar,ssse3,avx2,avx2')
     a = ap.parse_args()
     names = a.arms.split(',')
@@ -52,7 +54,7 @@ def main():
         if r % 2:
             order.reverse()
         for i in order:
-            res[labels[i]].append(run(a.exe, a.ids, a.new, a.var, names[i]))
+            res[labels[i]].append(run(a.exe, a.ids, a.new, a.var, names[i], a.threads))
         print(f'round {r + 1}/{a.rounds}: ' + '  '.join(f'{labels[i]} {res[labels[i]][-1]["decode_tps"]:.2f}' for i in order),
               flush=True)
 

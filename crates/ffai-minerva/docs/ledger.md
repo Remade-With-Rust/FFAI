@@ -425,3 +425,46 @@ VNNI / sdot range proofs are tighter.
 - **Cost:** warm load 0.04 -> 0.27 s, but load + first token is unchanged (1.61-1.72 s, against
   1.62 s): the scan pages the codes in at load instead of at the first token. Cold
   (`cold_ab.py`, 3 rounds) load + first token is 28.75 s, against 28.7 s.
+
+## Brick e1: GEMM prefill (2026-11-23)
+
+`Session::prefill` runs a prompt in batches of up to 128 tokens.
+
+- Every per-token operation (norms, quantisation, RoPE, KV store, attention, residual) is the
+  same as in `step`.
+- The seven projections per layer are batched through `simd::ternary_gemm` / `kernel::gemm_par`.
+  The output is `[rows, tokens]`; threads split the rows; each code block is unpacked once and
+  applied to a tile of 8 tokens held in 8 i32 accumulators (single-token tail tiles).
+- So the weights stream once per batch, not once a token. The audit's root cause: p512 used to
+  read 267 GB.
+- `MINERVA_PREFILL=step` keeps the per-token path as the A/B arm and the oracle.
+
+**Gates:**
+
+- `ternary_gemm` is `assert_eq!` to `rusty_ternary::kernel::gemm_codes` at every tier, x86
+  native and wasm simd128 under wasmtime; the cases include ±128/127 saturation and token
+  counts with tails.
+- End to end, full head, `MINERVA_PREFILL=step` vs the GEMM: the logits hashes are identical on
+  p64 (`1c2856725481ae14`) and p512 (`b94e537d411a31eb`).
+- Conformance gate PASS, 190/192, worst gap 0.0154 (`docs/conformance-e1.json`). Every bench
+  prompt's logits hash is identical to bricks c and d.
+- Clippy `-D warnings` on x86_64, aarch64, wasm32 ± simd128.
+
+**Speed** (`tier_ab.py --var MINERVA_PREFILL --arms step,gemm,gemm --threads T --new 8`, 6
+rotated rounds; "prefill" is the `prefill + first` median, so it includes the first decoded
+token and the one-time ~0.2 s screen build):
+
+| threads | prompt | step | GEMM | speedup | null arm (gemm#2 / gemm), on decode |
+|---|---|---:|---:|---:|---|
+| 8 | p64 | 1.40 s | 0.56 s | **2.5x** | 0.958 (0.84-1.06) |
+| 8 | p512 | 11.18 s | 3.37 s | **3.3x** | 0.992 (0.62-1.04) |
+| 12 | p64 | 1.47 s | 0.55 s | **2.7x** | 1.006 (0.93-1.14) |
+| 12 | p512 | 10.74 s | 3.27 s | **3.3x** | 0.995 (0.91-1.11) |
+
+Decode is unchanged (within the null arm), as it must be. At 24 threads (gate run), p1024
+prefill went from 22.2 s to 6.2 s. For orientation only (not a matched race):
+bitnet.cpp's p512 was 3.15 s at 8 threads in rusty-sloth's run, so Minerva is now near parity
+before the VNNI tier.
+
+Next: brick e2, the `Avx2Vnni` and `NeonDot` GEMM tiers. Prefill is now compute-bound, so a
+fused `vpdpbusd` / `sdot` should show.
