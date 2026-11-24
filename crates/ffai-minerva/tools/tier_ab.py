@@ -77,6 +77,12 @@ def main():
         z = (wins - len(ratios) / 2) / (0.5 * math.sqrt(len(ratios)))
         print(f'{l:<10} {statistics.median(d):>20.2f} {min(d):>7.2f} {max(d):>7.2f} {statistics.median(p):>14.2f}  '
               f'{statistics.median(ratios):>12.3f}x {wins:>3}/{len(ratios)} {z:+.2f}')
+    print(f'\nprefill+first, paired: speedup = {base} seconds / arm seconds (> 1: the arm is faster)')
+    for l in labels:
+        sp = [y['prefill_s'] / x['prefill_s'] for x, y in zip(res[l], res[base])]
+        wins = sum(q > 1 for q in sp)
+        z = (wins - len(sp) / 2) / (0.5 * math.sqrt(len(sp)))
+        print(f'{l:<10} speedup median {statistics.median(sp):.3f}x  range {min(sp):.3f}-{max(sp):.3f}  wins {wins}/{len(sp)}  z {z:+.2f}')
     for n in [l for l in labels if '#' in l]:
         first = n.split('#')[0]
         q = [x['decode_tps'] / y['decode_tps'] for x, y in zip(res[n], res[first])]

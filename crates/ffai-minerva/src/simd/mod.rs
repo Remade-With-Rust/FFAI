@@ -14,7 +14,9 @@
 //! | [`f16_bytes_to_f32`], [`f32_to_f16`], [`round_f16_slice`] | `half` | bits (exhaustive) |
 //! | [`finish_rows`], [`relu2_mul`], [`add_assign`], [`rope_neox`] | [`num`]'s elementwise fns | bits |
 //!
-//! Tiers: `ssse3` and `avx2` (+`f16c`) on x86-64, chosen at run time; `neon` on aarch64 (baseline);
+//! Tiers: `ssse3`, `avx2` (+`f16c`) and `avx2vnni` on x86-64, chosen at run time; `neon` and
+//! `neondot` on aarch64 (the `vnni` / `dot` tiers change only the ternary GEMV and GEMM, every
+//! other kernel runs its `avx2` / `neon` twin);
 //! `simd128` on wasm32 when the module is built with it (wasm has no run-time detection). The
 //! scalar oracle is always available and is what any other target runs.
 //!
@@ -46,13 +48,18 @@ enum Tier {
     Avx2 = 2,
     Neon = 3,
     Simd128 = 4,
+    Avx2Vnni = 5,
+    NeonDot = 6,
 }
 
-const TIERS: [Tier; 5] = [
+/// Every tier, narrowest first within an architecture (`Isa::best` takes the last supported).
+const TIERS: [Tier; 7] = [
     Tier::Scalar,
     Tier::Ssse3,
     Tier::Avx2,
+    Tier::Avx2Vnni,
     Tier::Neon,
+    Tier::NeonDot,
     Tier::Simd128,
 ];
 
@@ -64,6 +71,8 @@ impl Tier {
             Self::Avx2 => "avx2",
             Self::Neon => "neon",
             Self::Simd128 => "simd128",
+            Self::Avx2Vnni => "avx2vnni",
+            Self::NeonDot => "neondot",
         }
     }
 
@@ -78,8 +87,14 @@ impl Tier {
                     && std::is_x86_feature_detected!("avx2")
                     && std::is_x86_feature_detected!("f16c")
             }
+            #[cfg(target_arch = "x86_64")]
+            Self::Avx2Vnni => Self::Avx2.supported() && std::is_x86_feature_detected!("avxvnni"),
             #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
             Self::Neon => std::arch::is_aarch64_feature_detected!("neon"),
+            #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+            Self::NeonDot => {
+                Self::Neon.supported() && std::arch::is_aarch64_feature_detected!("dotprod")
+            }
             #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
             Self::Simd128 => true,
             #[allow(
@@ -225,7 +240,10 @@ pub mod census {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut out = Vec::new();
         for (k, name) in NAMES.iter().enumerate() {
-            for (t, tier) in TIERS.iter().enumerate() {
+            // Cells are indexed by the tier's discriminant (as `add` writes them), not by its
+            // position in `TIERS`.
+            for tier in &TIERS {
+                let t = *tier as usize;
                 let n: u64 = reg
                     .iter()
                     .map(|s| s.0[k * TIERS.len() + t].load(Relaxed))
@@ -273,10 +291,14 @@ pub fn ternary_gemv(isa: Isa, codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32])
     match isa.0 {
         // SAFETY: `Isa` holds `Avx2` / `Ssse3` only when detected; the shapes are asserted above.
         #[cfg(target_arch = "x86_64")]
+        Tier::Avx2Vnni => unsafe { x86::gemv_vnni(codes, a, a_sum, y) },
+        #[cfg(target_arch = "x86_64")]
         Tier::Avx2 => unsafe { x86::gemv_avx2(codes, a, a_sum, y) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::gemv_ssse3(codes, a, a_sum, y) },
         // SAFETY: NEON detected; shapes asserted.
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        Tier::NeonDot => unsafe { neon::gemv_dot(codes, a, a_sum, y) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
         Tier::Neon => unsafe { neon::gemv(codes, a, a_sum, y) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
@@ -300,11 +322,11 @@ pub fn i8_gemv(isa: Isa, q: &[i8], a: &[i8], y: &mut [i32]) {
     match isa.0 {
         // SAFETY: tier detected; shapes asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::i8_gemv_avx2(q, a, y) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::i8_gemv_avx2(q, a, y) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::i8_gemv_ssse3(q, a, y) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::i8_gemv(q, a, y) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::i8_gemv(q, a, y) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::i8_gemv(q, a, y) },
@@ -324,11 +346,11 @@ pub fn i8f_matvec(isa: Isa, q: &[i8], x: &[f32], out: &mut [f32]) {
     match isa.0 {
         // SAFETY: tier detected; shapes asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::i8f_matvec_avx2(q, x, out) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::i8f_matvec_avx2(q, x, out) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::i8f_matvec_ssse3(q, x, out) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::i8f_matvec(q, x, out) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::i8f_matvec(q, x, out) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::i8f_matvec(q, x, out) },
@@ -400,9 +422,13 @@ pub fn ternary_gemm(
     match isa.0 {
         // SAFETY: tier detected; shapes asserted.
         #[cfg(target_arch = "x86_64")]
+        Tier::Avx2Vnni => unsafe { x86::gemm_vnni(codes, cols, m, a, a_sums, y) },
+        #[cfg(target_arch = "x86_64")]
         Tier::Avx2 => unsafe { x86::gemm_avx2(codes, cols, m, a, a_sums, y) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::gemm_ssse3(codes, cols, m, a, a_sums, y) },
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        Tier::NeonDot => unsafe { neon::gemm_dot(codes, cols, m, a, a_sums, y) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
         Tier::Neon => unsafe { neon::gemm(codes, cols, m, a, a_sums, y) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
@@ -439,11 +465,11 @@ pub fn f16_matvec_bytes(isa: Isa, mat: &[u8], x: &[f32], out: &mut [f32]) {
     match isa.0 {
         // SAFETY: tier detected; `out.len()` rows of `row` bytes lie inside `mat` (asserted).
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::f16_matvec_avx2(mat.as_ptr(), row, x, out) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::f16_matvec_avx2(mat.as_ptr(), row, x, out) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::f16_matvec_ssse3(mat.as_ptr(), row, x, out) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::f16_matvec(mat.as_ptr(), row, x, out) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::f16_matvec(mat.as_ptr(), row, x, out) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::f16_matvec(mat.as_ptr(), row, x, out) },
@@ -477,11 +503,11 @@ pub fn f16_matvec_strided(
     match isa.0 {
         // SAFETY: tier detected; every row `[offset + r·stride, + x.len())` is inside `v`.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::f16_matvec_avx2(base, 2 * stride, x, out) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::f16_matvec_avx2(base, 2 * stride, x, out) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::f16_matvec_ssse3(base, 2 * stride, x, out) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::f16_matvec(base, 2 * stride, x, out) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::f16_matvec(base, 2 * stride, x, out) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::f16_matvec(base, 2 * stride, x, out) },
@@ -518,11 +544,11 @@ pub fn weighted_sum_f16(
     match isa.0 {
         // SAFETY: tier detected; every row is inside `v` (asserted).
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::weighted_sum_avx2(p, base, stride, out) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::weighted_sum_avx2(p, base, stride, out) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::weighted_sum_ssse3(p, base, stride, out) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::weighted_sum(p, base, stride, out) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::weighted_sum(p, base, stride, out) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::weighted_sum(p, base, stride, out) },
@@ -544,11 +570,11 @@ pub fn act_quant(isa: Isa, x: &[f32], out: &mut [i8]) -> f32 {
     match isa.0 {
         // SAFETY: tier detected; equal lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::act_quant_avx2(x, out) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::act_quant_avx2(x, out) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::act_quant_ssse3(x, out) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::act_quant(x, out) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::act_quant(x, out) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::act_quant(x, out) },
@@ -607,11 +633,11 @@ pub fn rms_norm(isa: Isa, x: &[f32], w: &[f32], eps: f32, out: &mut [f32]) {
     match isa.0 {
         // SAFETY: tier detected; equal lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::rms_norm_avx2(x, w, eps, out) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::rms_norm_avx2(x, w, eps, out) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::rms_norm_ssse3(x, w, eps, out) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::rms_norm(x, w, eps, out) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::rms_norm(x, w, eps, out) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::rms_norm(x, w, eps, out) },
@@ -625,11 +651,11 @@ pub fn softmax(isa: Isa, x: &mut [f32], scale: f32) {
     match isa.0 {
         // SAFETY: tier detected.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::softmax_avx2(x, scale) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::softmax_avx2(x, scale) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::softmax_ssse3(x, scale) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::softmax(x, scale) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::softmax(x, scale) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::softmax(x, scale) },
@@ -647,11 +673,11 @@ pub fn f16_bytes_to_f32(isa: Isa, src: &[u8], dst: &mut [f32]) {
     match isa.0 {
         // SAFETY: tier detected; lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::h2f_avx2(src, dst) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::h2f_avx2(src, dst) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::h2f_ssse3(src, dst) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::h2f(src, dst) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::h2f(src, dst) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::h2f(src, dst) },
@@ -674,11 +700,11 @@ pub fn f32_to_f16(isa: Isa, src: &[f32], dst: &mut [u16]) {
     match isa.0 {
         // SAFETY: tier detected; lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::f2h_avx2(src, dst) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::f2h_avx2(src, dst) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::f2h_ssse3(src, dst) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::f2h(src, dst) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::f2h(src, dst) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::f2h(src, dst) },
@@ -696,11 +722,11 @@ pub fn round_f16_slice(isa: Isa, x: &mut [f32]) {
     match isa.0 {
         // SAFETY: tier detected.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::round_f16_avx2(x) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::round_f16_avx2(x) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::round_f16_ssse3(x) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::round_f16(x) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::round_f16(x) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::round_f16(x) },
@@ -722,11 +748,13 @@ pub fn finish_rows(isa: Isa, sum: &[i32], act_scale: f32, weight_scale: f32, out
     match isa.0 {
         // SAFETY: tier detected; lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::finish_avx2(sum, act_scale, weight_scale, out) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe {
+            x86::finish_avx2(sum, act_scale, weight_scale, out)
+        },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::finish_ssse3(sum, act_scale, weight_scale, out) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::finish(sum, act_scale, weight_scale, out) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::finish(sum, act_scale, weight_scale, out) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::finish(sum, act_scale, weight_scale, out) },
@@ -744,11 +772,11 @@ pub fn relu2_mul(isa: Isa, g: &mut [f32], u: &[f32]) {
     match isa.0 {
         // SAFETY: tier detected; lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::relu2_mul_avx2(g, u) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::relu2_mul_avx2(g, u) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::relu2_mul_ssse3(g, u) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::relu2_mul(g, u) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::relu2_mul(g, u) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::relu2_mul(g, u) },
@@ -766,11 +794,11 @@ pub fn add_assign(isa: Isa, x: &mut [f32], y: &[f32]) {
     match isa.0 {
         // SAFETY: tier detected; lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::add_assign_avx2(x, y) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::add_assign_avx2(x, y) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::add_assign_ssse3(x, y) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::add_assign(x, y) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::add_assign(x, y) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::add_assign(x, y) },
@@ -788,11 +816,11 @@ pub fn rope_neox(isa: Isa, x: &mut [f32], cos: &[f32], sin: &[f32]) {
     match isa.0 {
         // SAFETY: tier detected; lengths asserted.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 => unsafe { x86::rope_avx2(x, cos, sin) },
+        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::rope_avx2(x, cos, sin) },
         #[cfg(target_arch = "x86_64")]
         Tier::Ssse3 => unsafe { x86::rope_ssse3(x, cos, sin) },
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon => unsafe { neon::rope(x, cos, sin) },
+        Tier::Neon | Tier::NeonDot => unsafe { neon::rope(x, cos, sin) },
         // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
         Tier::Simd128 => unsafe { wasm::rope(x, cos, sin) },

@@ -333,6 +333,129 @@ pub(super) unsafe fn i8_gemv_avx2(q: &[i8], a: &[i8], y: &mut [i32]) {
 // held in `T` i32 accumulators. Codes are <= 2 (refused at load otherwise), so a block's four
 // `pmaddubsw` sums stay under 4·512 = 2,048 per i16 lane before the `pmaddwd` widen.
 
+/// AVX-VNNI GEMV: `vpdpbusd` (unsigned codes <= 2 times signed activations, four products summed
+/// straight into each i32 lane, no saturating step) replaces `pmaddubsw` + `paddw` + `pmaddwd` +
+/// `paddd`.
+///
+/// # Safety
+/// AVX2 + AVX-VNNI; shapes as [`gemv_avx2`].
+#[target_feature(enable = "avx2,avxvnni")]
+pub(super) unsafe fn gemv_vnni(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
+    let cols = a.len();
+    let rpc = cols / 4;
+    let mask = _mm256_set1_epi8(3);
+    for (r, out) in y.iter_mut().enumerate() {
+        // SAFETY: as `gemv_avx2`: every read is inside row `r` and the activations.
+        unsafe {
+            let row = codes.as_ptr().add(r * rpc);
+            let mut acc = _mm256_setzero_si256();
+            for b in 0..cols / 128 {
+                let c = _mm256_loadu_si256(row.add(b * 32).cast());
+                let ab = a.as_ptr().add(b * 128);
+                acc = _mm256_dpbusd_avx_epi32(
+                    acc,
+                    _mm256_and_si256(_mm256_srli_epi16::<6>(c), mask),
+                    _mm256_loadu_si256(ab.cast()),
+                );
+                acc = _mm256_dpbusd_avx_epi32(
+                    acc,
+                    _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask),
+                    _mm256_loadu_si256(ab.add(32).cast()),
+                );
+                acc = _mm256_dpbusd_avx_epi32(
+                    acc,
+                    _mm256_and_si256(_mm256_srli_epi16::<2>(c), mask),
+                    _mm256_loadu_si256(ab.add(64).cast()),
+                );
+                acc = _mm256_dpbusd_avx_epi32(
+                    acc,
+                    _mm256_and_si256(c, mask),
+                    _mm256_loadu_si256(ab.add(96).cast()),
+                );
+            }
+            let h = _mm_add_epi32(
+                _mm256_castsi256_si128(acc),
+                _mm256_extracti128_si256::<1>(acc),
+            );
+            *out = hsum_epi32(h) - a_sum;
+        }
+    }
+}
+
+/// # Safety
+/// AVX2 + AVX-VNNI; as [`gemm_tile_avx2`].
+#[target_feature(enable = "avx2,avxvnni")]
+#[inline]
+unsafe fn gemm_tile_vnni<const T: usize>(
+    row: *const u8,
+    a: *const i8,
+    cols: usize,
+    out: &mut [i32],
+) {
+    let mask = _mm256_set1_epi8(3);
+    let mut acc = [_mm256_setzero_si256(); T];
+    for b in 0..cols / 128 {
+        // SAFETY: block `b` is inside the row and inside every token's activations.
+        unsafe {
+            let c = _mm256_loadu_si256(row.add(b * 32).cast());
+            let q0 = _mm256_and_si256(_mm256_srli_epi16::<6>(c), mask);
+            let q1 = _mm256_and_si256(_mm256_srli_epi16::<4>(c), mask);
+            let q2 = _mm256_and_si256(_mm256_srli_epi16::<2>(c), mask);
+            let q3 = _mm256_and_si256(c, mask);
+            for (t, acc) in acc.iter_mut().enumerate() {
+                let ab = a.add(t * cols + b * 128);
+                let mut v = _mm256_dpbusd_avx_epi32(*acc, q0, _mm256_loadu_si256(ab.cast()));
+                v = _mm256_dpbusd_avx_epi32(v, q1, _mm256_loadu_si256(ab.add(32).cast()));
+                v = _mm256_dpbusd_avx_epi32(v, q2, _mm256_loadu_si256(ab.add(64).cast()));
+                *acc = _mm256_dpbusd_avx_epi32(v, q3, _mm256_loadu_si256(ab.add(96).cast()));
+            }
+        }
+    }
+    for (o, v) in out.iter_mut().zip(acc) {
+        *o = hsum_epi32(_mm_add_epi32(
+            _mm256_castsi256_si128(v),
+            _mm256_extracti128_si256::<1>(v),
+        ));
+    }
+}
+
+/// # Safety
+/// AVX2 + AVX-VNNI; shapes as [`gemm_avx2`].
+#[target_feature(enable = "avx2,avxvnni")]
+pub(super) unsafe fn gemm_vnni(
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    let rpc = cols / 4;
+    for (r, yr) in y.chunks_exact_mut(m).enumerate() {
+        // SAFETY: as `gemm_avx2`.
+        unsafe {
+            let row = codes.as_ptr().add(r * rpc);
+            let mut t = 0;
+            while t + GEMM_TILE <= m {
+                gemm_tile_vnni::<GEMM_TILE>(
+                    row,
+                    a.as_ptr().add(t * cols),
+                    cols,
+                    &mut yr[t..t + GEMM_TILE],
+                );
+                t += GEMM_TILE;
+            }
+            while t < m {
+                gemm_tile_vnni::<1>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..=t]);
+                t += 1;
+            }
+        }
+        for (o, &s) in yr.iter_mut().zip(a_sums) {
+            *o -= s;
+        }
+    }
+}
+
 /// Tokens a GEMM tile holds.
 const GEMM_TILE: usize = 8;
 

@@ -468,3 +468,61 @@ before the VNNI tier.
 
 Next: brick e2, the `Avx2Vnni` and `NeonDot` GEMM tiers. Prefill is now compute-bound, so a
 fused `vpdpbusd` / `sdot` should show.
+
+## Brick e2: AVX-VNNI and NEON-dot tiers (2026-11-23)
+
+New tiers `avx2vnni` (AVX2 + F16C + AVX-VNNI; `Isa::best` on this CPU) and `neondot` (NEON +
+dotprod).
+
+- They change only the ternary GEMV and GEMM. `vpdpbusd` / `sdot` take codes <= 2 times the
+  activations straight into i32, in place of `pmaddubsw` + `paddw` + `pmaddwd` + `paddd`.
+- Every other kernel at these tiers runs its `avx2` / `neon` twin.
+- `sdot` is a one-instruction inline `asm!` helper, because `vdotq_s32` is unstable
+  (`stdarch_neon_dotprod`) on the pinned 1.95 toolchain. It is register-only:
+  `pure, nomem, nostack`.
+- **Census bug caught by its own test:** cells are written by the tier's discriminant but were
+  read by its position in `TIERS`, which now differ. `snapshot` now indexes by discriminant.
+
+**Gates:**
+
+- `avx2vnni` passes every oracle test (`assert_eq!` on the GEMV and GEMM).
+- Conformance PASS 190/192 at `avx2vnni` (`docs/conformance-e2.json`), screen ids == full ids.
+- Clippy `-D warnings` on x86_64, aarch64, wasm32 ± simd128.
+- **NEON-dot: compiled for aarch64; its oracle run on the Pixel is pending** (wireless adb
+  re-pair).
+
+**Speed:** `tier_ab.py --var MINERVA_ISA --arms avx2,avx2vnni,avx2vnni --threads T --new 32`, 6
+rotated rounds, paired prefill speedups. Work parity OK.
+
+| threads | prompt | prefill+first speedup, each vnni arm (median) | wins | decode |
+|---|---|---|---|---|
+| 8 | p64 | 1.055x / 1.046x | 4/6, 4/6 | 0.95-0.98x (within null 0.88-1.05) |
+| 8 | p512 | 1.097x / 1.200x | 6/6, 4/6 | 1.09x |
+| 12 | p64 | 1.081x / 1.066x | 4/6, 5/6 | 1.04-1.05x |
+| 12 | p512 | 1.204x / 1.087x | 4/6, 6/6 | 1.03-1.05x |
+
+At p512 the gain is real: pooled, 10/12 at both thread counts (z ≈ +2.3). Kept. It is far
+short of ~2x. rusty-sloth's reading (V1 below): the GEMM tile is 1 row x 8 tokens, so every
+activation load feeds one dot instruction and the loop is load-bound. Attention and the
+per-token glue now also share p512's cost.
+
+## Instruction-reduction veins (rusty-sloth's read of d25f871, 2026-11-23): the work queue after e2
+
+Instrument: static instructions per innermost loop / MACs retired, from the LINKED binary's
+asm (`cargo rustc --release --bin minerva -- --emit asm`; ThinLTO makes library asm lie), with
+census call counts as work-parity anchors. Intel SDE gives dynamic counts if needed.
+
+- **V1:** tile R rows x T tokens in the GEMM (each activation load feeds R dots, each
+  unpacked code T); sweep R x T within 16 ymm.
+- **V2:** with codes <= 2, keep AVX2 / SSSE3 per-block sums in i16 for up to 15 blocks, then
+  widen once. Applies to the decode GEMV too.
+- **V3:** grouped-query attention widens each f16 K and V element once per query head (4 per
+  KV head). Process a group's 4 heads per KV row: one widen, 4 chains, each in its current
+  order, so bit-identical.
+- **V4:** `census::add` runs on every dispatcher call. Gate it on a relaxed `AtomicBool` set
+  by `--census`.
+- **V5:** loop-invariant broadcasts and recomputed constants in the per-token glue (the asm
+  INVARIANT / HALF-STORE greps).
+
+Each gets an `assert_eq!` twin gate plus an unchanged logits hash, or a recorded refutation.
+Order: e2's NeonDot run, V1, V3, V2, V4, then bricks 3-4.

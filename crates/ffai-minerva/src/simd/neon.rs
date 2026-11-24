@@ -207,6 +207,138 @@ pub(super) unsafe fn gemm(
     }
 }
 
+/// `acc + sdot(a, b)`: four signed products summed into each i32 lane.
+///
+/// Inline assembly, not the intrinsic: `vdotq_s32` is unstable (`stdarch_neon_dotprod`) on the
+/// pinned 1.95 toolchain. One register-only instruction under `dotprod`.
+#[target_feature(enable = "neon,dotprod")]
+#[inline]
+fn sdot(mut acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
+    // SAFETY: `sdot` reads and writes only the three vector registers named; the function's
+    // `dotprod` feature (detected by `super::Isa`) makes it valid to execute.
+    unsafe {
+        std::arch::asm!(
+            "sdot {acc:v}.4s, {a:v}.16b, {b:v}.16b",
+            acc = inout(vreg) acc,
+            a = in(vreg) a,
+            b = in(vreg) b,
+            options(pure, nomem, nostack),
+        );
+    }
+    acc
+}
+
+/// NEON dot-product GEMV: `sdot` of codes (0..=2, as signed bytes) against activations, straight
+/// into i32.
+///
+/// # Safety
+/// NEON + dotprod; shapes as [`gemv`].
+#[target_feature(enable = "neon,dotprod")]
+pub(super) unsafe fn gemv_dot(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
+    let cols = a.len();
+    let rpc = cols / 4;
+    let mask = vdupq_n_u8(3);
+    for (r, out) in y.iter_mut().enumerate() {
+        // SAFETY: block `b` of row `r` reads codes `32b..32b+32` and activations
+        // `128b..128b+128`, inside the slices.
+        unsafe {
+            let row = codes.as_ptr().add(r * rpc);
+            let mut acc = vdupq_n_s32(0);
+            for b in 0..cols / 128 {
+                let c0 = vld1q_u8(row.add(b * 32));
+                let c1 = vld1q_u8(row.add(b * 32 + 16));
+                let ab = a.as_ptr().add(b * 128);
+                let q = [
+                    vandq_u8(vshrq_n_u8::<6>(c0), mask),
+                    vandq_u8(vshrq_n_u8::<6>(c1), mask),
+                    vandq_u8(vshrq_n_u8::<4>(c0), mask),
+                    vandq_u8(vshrq_n_u8::<4>(c1), mask),
+                    vandq_u8(vshrq_n_u8::<2>(c0), mask),
+                    vandq_u8(vshrq_n_u8::<2>(c1), mask),
+                    vandq_u8(c0, mask),
+                    vandq_u8(c1, mask),
+                ];
+                for (k, &qk) in q.iter().enumerate() {
+                    acc = sdot(acc, vreinterpretq_s8_u8(qk), vld1q_s8(ab.add(16 * k)));
+                }
+            }
+            *out = vaddvq_s32(acc) - a_sum;
+        }
+    }
+}
+
+/// # Safety
+/// NEON + dotprod; as [`gemm_tile`].
+#[target_feature(enable = "neon,dotprod")]
+#[inline]
+unsafe fn gemm_tile_dot<const T: usize>(
+    row: *const u8,
+    a: *const i8,
+    cols: usize,
+    out: &mut [i32],
+) {
+    let mask = vdupq_n_u8(3);
+    let mut acc = [vdupq_n_s32(0); T];
+    for b in 0..cols / 128 {
+        // SAFETY: block `b` is inside the row and inside every token's activations.
+        unsafe {
+            let c0 = vld1q_u8(row.add(b * 32));
+            let c1 = vld1q_u8(row.add(b * 32 + 16));
+            let q = [
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<6>(c0), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<6>(c1), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<4>(c0), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<4>(c1), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<2>(c0), mask)),
+                vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8::<2>(c1), mask)),
+                vreinterpretq_s8_u8(vandq_u8(c0, mask)),
+                vreinterpretq_s8_u8(vandq_u8(c1, mask)),
+            ];
+            for (t, acc) in acc.iter_mut().enumerate() {
+                let ab = a.add(t * cols + b * 128);
+                for (k, &qk) in q.iter().enumerate() {
+                    *acc = sdot(*acc, qk, vld1q_s8(ab.add(16 * k)));
+                }
+            }
+        }
+    }
+    for (o, v) in out.iter_mut().zip(acc) {
+        *o = vaddvq_s32(v);
+    }
+}
+
+/// # Safety
+/// NEON + dotprod; shapes as [`gemm`].
+#[target_feature(enable = "neon,dotprod")]
+pub(super) unsafe fn gemm_dot(
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    let rpc = cols / 4;
+    for (r, yr) in y.chunks_exact_mut(m).enumerate() {
+        // SAFETY: row `r` and every tile's tokens are inside the slices.
+        unsafe {
+            let row = codes.as_ptr().add(r * rpc);
+            let mut t = 0;
+            while t + 8 <= m {
+                gemm_tile_dot::<8>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..t + 8]);
+                t += 8;
+            }
+            while t < m {
+                gemm_tile_dot::<1>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..=t]);
+                t += 1;
+            }
+        }
+        for (o, &s) in yr.iter_mut().zip(a_sums) {
+            *o -= s;
+        }
+    }
+}
+
 /// int8 x f32 mat-vec in the canonical 16-lane order.
 ///
 /// # Safety
