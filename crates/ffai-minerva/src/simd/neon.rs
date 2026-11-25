@@ -1,7 +1,7 @@
 //! aarch64 NEON twins. NEON is baseline on aarch64; `super::Isa` still checks it at run time.
 //!
-//! The `f16` conversions are integer bit manipulation (stable Rust has no `float16x4_t`): exact,
-//! and the same algorithm as the SSSE3 and WASM tiers. Maxima use `maxnm` (a NaN loses, as
+//! The `f16` conversions are `fcvtl` / `fcvtn` by inline assembly (stable Rust has no
+//! `float16x4_t`): exact and ties to even, as the oracles. Maxima use `maxnm` (a NaN loses, as
 //! `f32::max`); the ReLU uses compare-and-select (as the oracle's `g > 0 ? g : 0`). No fused
 //! multiply-add anywhere: `vmulq` then `vaddq`.
 
@@ -10,24 +10,43 @@ use std::arch::aarch64::*;
 use super::{act_scale, quant_one};
 use crate::numerics::{self as num, LANES, exp_consts as E};
 
+/// Eight halves to two `f32x4`, by `fcvtl` (baseline aarch64, exact, subnormals included; a NaN
+/// comes out quiet). Inline assembly: the `float16x4_t` intrinsics are unstable on 1.95.
 #[target_feature(enable = "neon")]
 #[inline]
-fn h2f4(h: uint32x4_t) -> float32x4_t {
-    let me = vshlq_n_u32::<13>(vandq_u32(h, vdupq_n_u32(0x7fff)));
-    let e = vandq_u32(me, vdupq_n_u32(0x0f80_0000));
-    let mut o = vaddq_u32(me, vdupq_n_u32(0x3800_0000));
-    let infnan = vceqq_u32(e, vdupq_n_u32(0x0f80_0000));
-    o = vaddq_u32(o, vandq_u32(infnan, vdupq_n_u32(0x3800_0000)));
-    let denorm = vceqq_u32(e, vdupq_n_u32(0));
-    let od = vreinterpretq_u32_f32(vsubq_f32(
-        vreinterpretq_f32_u32(vaddq_u32(o, vdupq_n_u32(0x0080_0000))),
-        vdupq_n_f32(f32::from_bits(0x3880_0000)),
-    ));
-    o = vbslq_u32(denorm, od, o);
-    vreinterpretq_f32_u32(vorrq_u32(
-        o,
-        vshlq_n_u32::<16>(vandq_u32(h, vdupq_n_u32(0x8000))),
-    ))
+fn h2f8(h: uint16x8_t) -> (float32x4_t, float32x4_t) {
+    let (lo, hi): (float32x4_t, float32x4_t);
+    // SAFETY: both read `h` and write one vector register each; baseline on aarch64.
+    unsafe {
+        std::arch::asm!(
+            "fcvtl {lo:v}.4s, {h:v}.4h",
+            "fcvtl2 {hi:v}.4s, {h:v}.8h",
+            h = in(vreg) h,
+            lo = out(vreg) lo,
+            hi = lateout(vreg) hi,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    (lo, hi)
+}
+
+/// Two `f32x4` to eight halves, by `fcvtn` (ties to even, overflow to infinity).
+#[target_feature(enable = "neon")]
+#[inline]
+fn f2h8(a: float32x4_t, b: float32x4_t) -> uint16x8_t {
+    let h: uint16x8_t;
+    // SAFETY: reads `a` and `b`, writes one vector register; baseline on aarch64.
+    unsafe {
+        std::arch::asm!(
+            "fcvtn {h:v}.4h, {a:v}.4s",
+            "fcvtn2 {h:v}.8h, {b:v}.4s",
+            h = out(vreg) h,
+            a = in(vreg) a,
+            b = in(vreg) b,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    h
 }
 
 /// Eight halves at `p` (any alignment) to two `f32x4`.
@@ -38,32 +57,7 @@ fn h2f4(h: uint32x4_t) -> float32x4_t {
 #[inline]
 unsafe fn load8h(p: *const u8) -> (float32x4_t, float32x4_t) {
     // SAFETY: the caller guarantees 16 readable bytes; a byte load has no alignment demand.
-    let h = vreinterpretq_u16_u8(unsafe { vld1q_u8(p) });
-    (h2f4(vmovl_u16(vget_low_u16(h))), h2f4(vmovl_high_u16(h)))
-}
-
-#[target_feature(enable = "neon")]
-#[inline]
-fn f2h4(v: float32x4_t) -> uint32x4_t {
-    let x0 = vreinterpretq_u32_f32(v);
-    let sign = vandq_u32(x0, vdupq_n_u32(0x8000_0000));
-    let x = veorq_u32(x0, sign);
-    let big = vcgtq_u32(x, vdupq_n_u32(0x477f_ffff));
-    let nan = vcgtq_u32(x, vdupq_n_u32(0x7f80_0000));
-    let o_big = vbslq_u32(nan, vdupq_n_u32(0x7e00), vdupq_n_u32(0x7c00));
-    let small = vcltq_u32(x, vdupq_n_u32(0x3880_0000));
-    let magic = vdupq_n_u32(0x3f00_0000);
-    let o_small = vsubq_u32(
-        vreinterpretq_u32_f32(vaddq_f32(
-            vreinterpretq_f32_u32(x),
-            vreinterpretq_f32_u32(magic),
-        )),
-        magic,
-    );
-    let odd = vandq_u32(vshrq_n_u32::<13>(x), vdupq_n_u32(1));
-    let o_norm = vshrq_n_u32::<13>(vaddq_u32(vaddq_u32(x, vdupq_n_u32(0xc800_0fff)), odd));
-    let o = vbslq_u32(small, o_small, vbslq_u32(big, o_big, o_norm));
-    vorrq_u32(o, vshrq_n_u32::<16>(sign))
+    h2f8(vreinterpretq_u16_u8(unsafe { vld1q_u8(p) }))
 }
 
 #[target_feature(enable = "neon")]
@@ -373,6 +367,154 @@ pub(super) unsafe fn gemm_dot(
     }
 }
 
+/// `acc + smmla(q, a)`: `q` two rows' 8 bytes, `a` two tokens' 8 bytes; lanes
+/// `[r0·t0, r0·t1, r1·t0, r1·t1]`.
+///
+/// Inline assembly, not the intrinsic: `vmmlaq_s32` is unstable on the pinned 1.95 toolchain.
+#[target_feature(enable = "neon,i8mm")]
+#[inline]
+fn smmla(mut acc: int32x4_t, q: int8x16_t, a: int8x16_t) -> int32x4_t {
+    // SAFETY: `smmla` reads and writes only the three vector registers named; the function's
+    // `i8mm` feature (detected by `super::Isa`) makes it valid to execute.
+    unsafe {
+        std::arch::asm!(
+            "smmla {acc:v}.4s, {q:v}.16b, {a:v}.16b",
+            acc = inout(vreg) acc,
+            q = in(vreg) q,
+            a = in(vreg) a,
+            options(pure, nomem, nostack),
+        );
+    }
+    acc
+}
+
+/// Two rows times `P` token pairs (`packed`: `P` pairs of `2 · cols`, see [`gemm_i8mm`]), the
+/// sums into `acc`.
+///
+/// # Safety
+/// NEON + i8mm; `row0` and `row1` readable for `cols / 4` bytes, `packed` for `P · 2 · cols`.
+#[target_feature(enable = "neon,i8mm")]
+#[inline]
+unsafe fn gemm_tile_i8mm<const P: usize>(
+    row0: *const u8,
+    row1: *const u8,
+    packed: *const i8,
+    cols: usize,
+) -> [int32x4_t; P] {
+    let mask = vdupq_n_u8(3);
+    let mut acc = [vdupq_n_s32(0); P];
+    for b in 0..cols / 128 {
+        // SAFETY: block `b` is inside both rows and inside every pair's packed activations.
+        unsafe {
+            let unpack = |row: *const u8| {
+                let (c0, c1) = (vld1q_u8(row.add(b * 32)), vld1q_u8(row.add(b * 32 + 16)));
+                [
+                    vshrq_n_u8::<6>(c0),
+                    vshrq_n_u8::<6>(c1),
+                    vandq_u8(vshrq_n_u8::<4>(c0), mask),
+                    vandq_u8(vshrq_n_u8::<4>(c1), mask),
+                    vandq_u8(vshrq_n_u8::<2>(c0), mask),
+                    vandq_u8(vshrq_n_u8::<2>(c1), mask),
+                    vandq_u8(c0, mask),
+                    vandq_u8(c1, mask),
+                ]
+            };
+            let (u, v) = (unpack(row0), unpack(row1));
+            for (k, (&u, &v)) in u.iter().zip(&v).enumerate() {
+                let (u, v) = (vreinterpretq_s64_u8(u), vreinterpretq_s64_u8(v));
+                let lo = vreinterpretq_s8_s64(vzip1q_s64(u, v));
+                let hi = vreinterpretq_s8_s64(vzip2q_s64(u, v));
+                for (p, acc) in acc.iter_mut().enumerate() {
+                    let ab = packed.add(p * 2 * cols + b * 256 + k * 32);
+                    *acc = smmla(*acc, lo, vld1q_s8(ab));
+                    *acc = smmla(*acc, hi, vld1q_s8(ab.add(16)));
+                }
+            }
+        }
+    }
+    acc
+}
+
+/// NEON i8mm GEMM: rows and tokens in pairs through `smmla` (32 products an instruction to
+/// `sdot`'s 16). A pair of tokens is first packed as alternating 8-byte runs; an odd last row or
+/// token takes the `sdot` tile.
+///
+/// # Safety
+/// NEON + dotprod + i8mm; shapes as [`gemm`].
+#[target_feature(enable = "neon,dotprod,i8mm")]
+pub(super) unsafe fn gemm_i8mm(
+    codes: &[u8],
+    cols: usize,
+    m: usize,
+    a: &[i8],
+    a_sums: &[i32],
+    y: &mut [i32],
+) {
+    const PAIRS: usize = 4;
+    let rpc = cols / 4;
+    let rows = y.len() / m;
+    let pairs = m / 2;
+    let mut packed = vec![0i8; pairs * 2 * cols];
+    for (dst, src) in packed
+        .chunks_exact_mut(2 * cols)
+        .zip(a.chunks_exact(2 * cols))
+    {
+        let (t0, t1) = src.split_at(cols);
+        for ((d, a0), a1) in dst
+            .chunks_exact_mut(16)
+            .zip(t0.chunks_exact(8))
+            .zip(t1.chunks_exact(8))
+        {
+            d[..8].copy_from_slice(a0);
+            d[8..].copy_from_slice(a1);
+        }
+    }
+    let row_pairs = rows / 2;
+    let (y2, y1) = y.split_at_mut(row_pairs * 2 * m);
+    for (i, yy) in y2.chunks_exact_mut(2 * m).enumerate() {
+        let (yr0, yr1) = yy.split_at_mut(m);
+        // SAFETY: rows `2i` and `2i + 1`, every packed pair and the odd token are in bounds.
+        unsafe {
+            let row0 = codes.as_ptr().add(2 * i * rpc);
+            let row1 = row0.add(rpc);
+            let mut put = |p: usize, v: int32x4_t| {
+                yr0[2 * p] = vgetq_lane_s32::<0>(v);
+                yr0[2 * p + 1] = vgetq_lane_s32::<1>(v);
+                yr1[2 * p] = vgetq_lane_s32::<2>(v);
+                yr1[2 * p + 1] = vgetq_lane_s32::<3>(v);
+            };
+            let mut p = 0;
+            while p + PAIRS <= pairs {
+                let acc =
+                    gemm_tile_i8mm::<PAIRS>(row0, row1, packed.as_ptr().add(p * 2 * cols), cols);
+                for (j, v) in acc.into_iter().enumerate() {
+                    put(p + j, v);
+                }
+                p += PAIRS;
+            }
+            while p < pairs {
+                let acc = gemm_tile_i8mm::<1>(row0, row1, packed.as_ptr().add(p * 2 * cols), cols);
+                put(p, acc[0]);
+                p += 1;
+            }
+            if m % 2 == 1 {
+                let last = a.as_ptr().add((m - 1) * cols);
+                gemm_tile_dot::<1>(row0, last, cols, &mut yr0[m - 1..]);
+                gemm_tile_dot::<1>(row1, last, cols, &mut yr1[m - 1..]);
+            }
+        }
+        for yr in [yr0, yr1] {
+            for (o, &s) in yr.iter_mut().zip(a_sums) {
+                *o -= s;
+            }
+        }
+    }
+    if !y1.is_empty() {
+        // SAFETY: the odd last row, with the same shapes.
+        unsafe { gemm_dot(&codes[row_pairs * 2 * rpc..], cols, m, a, a_sums, y1) };
+    }
+}
+
 /// int8 x f32 mat-vec in the canonical 16-lane order.
 ///
 /// # Safety
@@ -538,8 +680,30 @@ pub(super) unsafe fn f16_matvec(base: *const u8, row_bytes: usize, x: &[f32], ou
 /// NEON; rows `t < p.len()` at `base + t·stride` readable for `out.len()` values.
 #[target_feature(enable = "neon")]
 pub(super) unsafe fn weighted_sum(p: &[f32], base: *const u16, stride: usize, out: &mut [f32]) {
+    // 64 outputs a pass: each pass walks every row, so a narrow pass walks the cache `stride`
+    // apart once per 16 outputs. Per output the additions run in the same order.
+    let n64 = out.len() / 64;
+    for blk in 0..n64 {
+        // SAFETY: values `64·blk..64·blk+64` of each row and of `out` are in bounds.
+        unsafe {
+            let mut acc = [vdupq_n_f32(0.0); 16];
+            for (t, &pt) in p.iter().enumerate() {
+                let q = base.add(t * stride + 64 * blk).cast::<u8>();
+                let pv = vdupq_n_f32(pt);
+                for (k, pair) in acc.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                    let (h0, h1) = load8h(q.add(16 * k));
+                    pair[0] = vaddq_f32(pair[0], vmulq_f32(pv, h0));
+                    pair[1] = vaddq_f32(pair[1], vmulq_f32(pv, h1));
+                }
+            }
+            let o = out.as_mut_ptr().add(64 * blk);
+            for (k, v) in acc.into_iter().enumerate() {
+                vst1q_f32(o.add(4 * k), v);
+            }
+        }
+    }
     let n16 = out.len() / 16;
-    for blk in 0..n16 {
+    for blk in 4 * n64..n16 {
         // SAFETY: values `16·blk..16·blk+16` of each row and of `out` are in bounds.
         unsafe {
             let z = vdupq_n_f32(0.0);
@@ -765,10 +929,7 @@ pub(super) unsafe fn f2h(src: &[f32], dst: &mut [u16]) {
         // SAFETY: floats `8i..8i+8`, halves `8i..8i+8`.
         unsafe {
             let p = src.as_ptr().add(8 * i);
-            let h = vcombine_u16(
-                vmovn_u32(f2h4(vld1q_f32(p))),
-                vmovn_u32(f2h4(vld1q_f32(p.add(4)))),
-            );
+            let h = f2h8(vld1q_f32(p), vld1q_f32(p.add(4)));
             vst1q_u8(
                 dst.as_mut_ptr().add(8 * i).cast::<u8>(),
                 vreinterpretq_u8_u16(h),
@@ -785,14 +946,16 @@ pub(super) unsafe fn f2h(src: &[f32], dst: &mut [u16]) {
 #[target_feature(enable = "neon")]
 pub(super) unsafe fn round_f16(x: &mut [f32]) {
     let n = x.len();
-    for i in 0..n / 4 {
-        // SAFETY: `4i + 4 <= n`.
+    for i in 0..n / 8 {
+        // SAFETY: `8i + 8 <= n`.
         unsafe {
-            let p = x.as_mut_ptr().add(4 * i);
-            vst1q_f32(p, h2f4(f2h4(vld1q_f32(p))));
+            let p = x.as_mut_ptr().add(8 * i);
+            let (a, b) = h2f8(f2h8(vld1q_f32(p), vld1q_f32(p.add(4))));
+            vst1q_f32(p, a);
+            vst1q_f32(p.add(4), b);
         }
     }
-    for v in &mut x[n / 4 * 4..] {
+    for v in &mut x[n / 8 * 8..] {
         *v = num::round_f16(*v);
     }
 }

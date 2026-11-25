@@ -828,3 +828,27 @@ Correctness: kernel oracle tests (27 on the laptop and on the phone); x86 full-h
 phone `verify` on g0, p64, p512 with the x86 hashes; x86 ssse3, avx2, avx2vnni `verify` on p64;
 wasm simd128 (p64, p512, +4, screened) gives the phone's ids. The screen's 16-bit activation
 rechecks 15.94 rows a step against 14.73 (p1024).
+
+## Phone, continued: fcvtl, i8mm, and where a long answer's time goes (2026-11-25)
+
+Sustained decode, Pixel, p64 + 2,000 tokens, per-token times (`--latency`, new), clocks and
+temperature sampled every 5 s: the 200-token median rose 51 -> 127 ms at 4 threads and 49 -> 139 ms
+at 3, in step with position. CPU frequency caps stayed at the hardware maximum in the 4-thread run
+and dropped only at the end of the 3-thread one (34-36 C). That growth is mostly attention, not the throttling
+suggested earlier. Spikes over 1.8x the local median: 4 of 1,999 tokens (max 249 ms); none at 3
+threads.
+
+| change (p512, 6 paired rounds, phone screen on) | first token | decode |
+|---|---|---|
+| `neoni8mm` tier: GEMM by `smmla`, against NeonDot | 1.15x, 6/6 | not expected to change (1.06x, 4/6) |
+| f16 conversions by `fcvtl` / `fcvtn` in place of integer sequences, and the value sum 64 wide, against i8mm | **1.44x, 6/6** | 1.22x, 5/6 |
+| both, against NeonDot | **1.65x, 6/6** | 1.44x, 5/6 |
+| null arm (i8mm twice) | 0.97x, 3/6 | 0.99x, 3/6 |
+
+Profiled p512 attention 6.03 -> 1.79 s (one run each). The phone reached 36 C: ratios only.
+Phone gates: the unit tests pass (28; the only failures were two ignored tests that open a Windows
+model path); full-head hash of p64 equals x86 at neoni8mm, neondot and neon; `verify` on g0 and
+p512 gives the x86 hashes. The two NEON changes were not separated from one another.
+
+Not landed: GEMM tokens-outside loop order (activations in L1). One round only on the phone, 1.35x
+first token, before the phone left the network; needs its A/B.

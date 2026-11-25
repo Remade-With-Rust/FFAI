@@ -265,6 +265,11 @@ fn generate(args: &[String]) -> Result<(), String> {
     let mut a2 = a1;
     let t1 = Instant::now();
     let mut first = None;
+    // `--latency`: each step's end, for the per-token spread (a whole-run rate hides a stutter).
+    let mut ends: Option<Vec<std::time::Duration>> = args
+        .iter()
+        .any(|a| a == "--latency")
+        .then(|| Vec::with_capacity(new));
     let mut io_err = None;
     // FNV-1a over every generated step's logit bits: one number that says two runs (two tiers,
     // two devices) computed the same thing, not merely chose the same tokens.
@@ -276,6 +281,9 @@ fn generate(args: &[String]) -> Result<(), String> {
         HeadMode::from_env()
     };
     let out = engine::generate(&mut s, &prompt, new, mode, |i, logits, tok| {
+        if let Some(e) = ends.as_mut() {
+            e.push(t1.elapsed());
+        }
         if i == 0 {
             first = Some(t1.elapsed());
             a2 = alloc_census::read();
@@ -328,6 +336,25 @@ fn generate(args: &[String]) -> Result<(), String> {
         s.isa().name(),
         mode
     );
+    if let Some(e) = ends.filter(|e| e.len() > 1) {
+        let ms: Vec<f64> = e
+            .windows(2)
+            .map(|w| (w[1] - w[0]).as_secs_f64() * 1e3)
+            .collect();
+        let mut sorted = ms.clone();
+        sorted.sort_by(f64::total_cmp);
+        let q = |p: usize| sorted[(sorted.len() - 1) * p / 100];
+        eprintln!(
+            "latency ms: p50 {:.1} p90 {:.1} p99 {:.1} max {:.1} (of {})",
+            q(50),
+            q(90),
+            q(99),
+            q(100),
+            ms.len()
+        );
+        let every: Vec<String> = ms.iter().map(|v| format!("{v:.1}")).collect();
+        eprintln!("latency series: {}", every.join(","));
+    }
     let (steps, rows, most) = s.screen_stats;
     if steps > 0 {
         eprintln!(
