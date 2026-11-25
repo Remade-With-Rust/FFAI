@@ -347,20 +347,25 @@ pub(super) unsafe fn gemm_dot(
     y: &mut [i32],
 ) {
     let rpc = cols / 4;
-    for (r, yr) in y.chunks_exact_mut(m).enumerate() {
-        // SAFETY: row `r` and every tile's tokens are inside the slices.
-        unsafe {
-            let row = codes.as_ptr().add(r * rpc);
-            let mut t = 0;
-            while t + 8 <= m {
-                gemm_tile_dot::<8>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..t + 8]);
-                t += 8;
-            }
-            while t < m {
-                gemm_tile_dot::<1>(row, a.as_ptr().add(t * cols), cols, &mut yr[t..=t]);
-                t += 1;
+    // Tokens outside, rows inside, as `gemm_i8mm`.
+    let mut t = 0;
+    while t < m {
+        let n = if m - t >= 8 { 8 } else { 1 };
+        for (r, yr) in y.chunks_exact_mut(m).enumerate() {
+            // SAFETY: row `r` and tokens `t..t + n` are inside the slices.
+            unsafe {
+                let row = codes.as_ptr().add(r * rpc);
+                let at = a.as_ptr().add(t * cols);
+                if n == 8 {
+                    gemm_tile_dot::<8>(row, at, cols, &mut yr[t..t + 8]);
+                } else {
+                    gemm_tile_dot::<1>(row, at, cols, &mut yr[t..=t]);
+                }
             }
         }
+        t += n;
+    }
+    for yr in y.chunks_exact_mut(m) {
         for (o, &s) in yr.iter_mut().zip(a_sums) {
             *o -= s;
         }
@@ -454,59 +459,67 @@ pub(super) unsafe fn gemm_i8mm(
     let rpc = cols / 4;
     let rows = y.len() / m;
     let pairs = m / 2;
-    let mut packed = vec![0i8; pairs * 2 * cols];
-    for (dst, src) in packed
-        .chunks_exact_mut(2 * cols)
-        .zip(a.chunks_exact(2 * cols))
-    {
-        let (t0, t1) = src.split_at(cols);
-        for ((d, a0), a1) in dst
-            .chunks_exact_mut(16)
-            .zip(t0.chunks_exact(8))
-            .zip(t1.chunks_exact(8))
-        {
-            d[..8].copy_from_slice(a0);
-            d[8..].copy_from_slice(a1);
-        }
-    }
     let row_pairs = rows / 2;
     let (y2, y1) = y.split_at_mut(row_pairs * 2 * m);
-    for (i, yy) in y2.chunks_exact_mut(2 * m).enumerate() {
-        let (yr0, yr1) = yy.split_at_mut(m);
-        // SAFETY: rows `2i` and `2i + 1`, every packed pair and the odd token are in bounds.
-        unsafe {
-            let row0 = codes.as_ptr().add(2 * i * rpc);
-            let row1 = row0.add(rpc);
+    // Tokens outside, rows inside: a tile of 8 tokens' activations (20 to 55 KB) stays in L1 for
+    // every row of the chunk. The other order walks the whole batch's activations (328 KB and
+    // up) once a row pair.
+    let mut packed = vec![0i8; PAIRS * 2 * cols];
+    let mut p0 = 0;
+    while p0 < pairs {
+        let np = if pairs - p0 >= PAIRS { PAIRS } else { 1 };
+        for (dst, src) in packed
+            .chunks_exact_mut(2 * cols)
+            .zip(a[p0 * 2 * cols..].chunks_exact(2 * cols))
+            .take(np)
+        {
+            let (t0, t1) = src.split_at(cols);
+            for ((d, a0), a1) in dst
+                .chunks_exact_mut(16)
+                .zip(t0.chunks_exact(8))
+                .zip(t1.chunks_exact(8))
+            {
+                d[..8].copy_from_slice(a0);
+                d[8..].copy_from_slice(a1);
+            }
+        }
+        for (i, yy) in y2.chunks_exact_mut(2 * m).enumerate() {
+            let (yr0, yr1) = yy.split_at_mut(m);
             let mut put = |p: usize, v: int32x4_t| {
                 yr0[2 * p] = vgetq_lane_s32::<0>(v);
                 yr0[2 * p + 1] = vgetq_lane_s32::<1>(v);
                 yr1[2 * p] = vgetq_lane_s32::<2>(v);
                 yr1[2 * p + 1] = vgetq_lane_s32::<3>(v);
             };
-            let mut p = 0;
-            while p + PAIRS <= pairs {
-                let acc =
-                    gemm_tile_i8mm::<PAIRS>(row0, row1, packed.as_ptr().add(p * 2 * cols), cols);
-                for (j, v) in acc.into_iter().enumerate() {
-                    put(p + j, v);
+            // SAFETY: rows `2i` and `2i + 1` and the `np` packed pairs are in bounds.
+            unsafe {
+                let row0 = codes.as_ptr().add(2 * i * rpc);
+                let row1 = row0.add(rpc);
+                if np == PAIRS {
+                    let acc = gemm_tile_i8mm::<PAIRS>(row0, row1, packed.as_ptr(), cols);
+                    for (j, v) in acc.into_iter().enumerate() {
+                        put(p0 + j, v);
+                    }
+                } else {
+                    put(
+                        p0,
+                        gemm_tile_i8mm::<1>(row0, row1, packed.as_ptr(), cols)[0],
+                    );
                 }
-                p += PAIRS;
-            }
-            while p < pairs {
-                let acc = gemm_tile_i8mm::<1>(row0, row1, packed.as_ptr().add(p * 2 * cols), cols);
-                put(p, acc[0]);
-                p += 1;
-            }
-            if m % 2 == 1 {
-                let last = a.as_ptr().add((m - 1) * cols);
-                gemm_tile_dot::<1>(row0, last, cols, &mut yr0[m - 1..]);
-                gemm_tile_dot::<1>(row1, last, cols, &mut yr1[m - 1..]);
             }
         }
-        for yr in [yr0, yr1] {
-            for (o, &s) in yr.iter_mut().zip(a_sums) {
-                *o -= s;
+        p0 += np;
+    }
+    for (i, yr) in y2.chunks_exact_mut(m).enumerate() {
+        if m % 2 == 1 {
+            // SAFETY: row `i` and the last token are in bounds.
+            unsafe {
+                let last = a.as_ptr().add((m - 1) * cols);
+                gemm_tile_dot::<1>(codes.as_ptr().add(i * rpc), last, cols, &mut yr[m - 1..]);
             }
+        }
+        for (o, &s) in yr.iter_mut().zip(a_sums) {
+            *o -= s;
         }
     }
     if !y1.is_empty() {

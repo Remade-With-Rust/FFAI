@@ -852,3 +852,30 @@ p512 gives the x86 hashes. The two NEON changes were not separated from one anot
 
 Not landed: GEMM tokens-outside loop order (activations in L1). One round only on the phone, 1.35x
 first token, before the phone left the network; needs its A/B.
+
+## Phone: GEMM tokens outside, rows inside; long-answer before and after (2026-11-25)
+
+Both aarch64 GEMMs (`sdot`, `smmla`) now run a tile of 8 tokens over every row of a 64-row chunk
+before the next tile, so the activations (20-55 KB) stay in L1. Pixel p512, 6 paired rounds,
+screen awake, unplugged, hot (36-37 C by the end):
+
+| | first token |
+|---|---|
+| new order vs old, i8mm | **1.48x, 6/6** |
+| new order vs old, NeonDot | **1.44x, 6/6** |
+| null arm (old i8mm twice) | 1.05x, 4/6 (range 0.97-1.91, noisy) |
+
+Kernel tests (27, plus the ignored exhaustive one) pass on the phone, full-head p64 hash equals x86
+at neoni8mm, neondot and neon; `verify` g0 and p512 as x86. Decode is not timed here (4 tokens).
+With the new order, i8mm against NeonDot is not established either way: the tiled NeonDot was not worse.
+
+2,000-token answer, p64, 4 threads, per-token 200-token medians (ms), one run each, fcvtl build run
+first (27 -> 37 C across the session; caps fell to 1.4-1.8 GHz late in both):
+fcvtl `51.6 55.9 53.0 71.8 83.8 80.8 85.2 87.4 90.4 92.8` (12.4 tok/s, max 162 ms); before
+`58.6 67.6 78.2 94.7 101.8 121 134 143 153 162` (8.5 tok/s). The growth is smaller but the phone
+was throttling in both and the order was not swapped: not a clean ratio.
+
+Correction: the previous section says the growth was not throttling. Here the frequency caps did
+fall (cpu7 3.1 to 1.4 GHz), so a long run has both causes; the first, cooler 4-thread run had no cap
+change while its medians still rose 51 -> 127, so attention's growth is real, but the size of each
+part is not separated.
