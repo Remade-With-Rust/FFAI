@@ -767,3 +767,38 @@ Against this afternoon's race (`57d74f4`, the same caveat on absolutes):
   rusty_ternary`, run on 2026-11-23 while the crate was still a workspace member, garbage-collects
   unused `[workspace.dependencies]`: it deleted `rusty_png` / `rusty_jpeg` and their comment
   (reproduced in a throwaway workspace). It was never committed.
+
+## Full model across devices, and the clang gate (2026-11-25, code `d2ac1ca`)
+
+**Gate rerun against clang bitnet.cpp** (`build-clang-noomp`, clang 18.1.8, `-O3 -march=native`, no
+OpenMP): **PASS, 189/192, worst gap 0.0108**, three partings, all near-ties
+(`docs/conformance-clang.json`). It supersedes the MSVC 190/192 as the reference for the gate.
+
+**Full-logit hash (`MINERVA_HEAD=full`), same file** (sha256 `adead0a1...`, checked on the phone):
+
+| run | g0 +16 | p64 +8 | p512 +8 |
+|---|---|---|---|
+| x86 (earlier recorded values) | f2f2db068ec651cb | 1c2856725481ae14 | b94e537d411a31eb |
+| Pixel 9 Pro XL, neondot | same | same | same |
+| Pixel, neon | - | same | - |
+| Pixel, scalar | same | - | - |
+| wasm32 wasmtime, simd128 | same | same | same |
+| wasm32 wasmtime, scalar | same | - | - |
+
+Pixel `MINERVA_HEAD=screen` gave the full head's ids on p64, and `verify` passed. The x86 gate run
+at 24 threads reproduced all four --new 48 hashes. Not covered: a browser, iOS, other phones,
+32-bit devices other than wasm32. This replaces the "Scope" bullet in Corrections above, which
+was true when written. wasm runs are single-threaded (simd128: 1.98-2.73 tok/s decode, p512
+prefill 106 s; one run each, machine not quiet).
+
+**Pixel speed and memory**: neondot, screen, p64 +32, 4 runs a setting in alternating order,
+plugged in, phone warming from 27.3 to 30.9 C, background apps open (1.9-2.4 GB available, swap
+nearly full). Thermal and clock state not controlled; provisional, no reference engine.
+
+| threads | 1 | 2 | 4 | 5 | 6 | 8 (default) |
+|---|---|---|---|---|---|---|
+| decode tok/s, median | 9.23 | 10.86 | 16.54 | 15.77 | 17.56 | 14.62 |
+
+6 beat the 8-thread default in 4/4 rounds (a fixed default of 8 is not the best here; 4 is close to
+6). Prefill p64 2.3-3.9 s. Peak RSS (includes mapped pages): 0.86 GB screen, 1.16-1.20 GB full.
+neon and neondot were one run each for speed: no verdict.
