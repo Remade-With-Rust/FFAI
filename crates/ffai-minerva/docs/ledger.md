@@ -879,3 +879,31 @@ Correction: the previous section says the growth was not throttling. Here the fr
 fall (cpu7 3.1 to 1.4 GHz), so a long run has both causes; the first, cooler 4-thread run had no cap
 change while its medians still rose 51 -> 127, so attention's growth is real, but the size of each
 part is not separated.
+
+## Phone race against bitnet.cpp, 4 vs 4 threads (2026-11-25, PROVISIONAL)
+
+Pixel 9 Pro XL, unpinned, fresh process a run, 6 rounds, order rotated and reversed; a run starts
+only with the screen awake, cpu4 and cpu7 caps at hardware maximum and battery <= 33.0 C (a run
+ending with the screen off is redone: 1). Partly unplugged. Minerva at 3a723d1 (neoni8mm, screen
+head). bitnet.cpp 765741d, NDK r27c clang -O3 dotprod+i8mm+fp16, `-noomp` and `-omp`, TL1 OFF (no
+TL1 file priced). Token check first: both builds agree with Minerva at 47/48 teacher-forced steps
+(p64, p256), worst gap 0.0163. The server's rate is (M-1)/predicted_ms; it warms up at load, and
+Minerva's first token includes its one-time int8 head build (~0.5 s).
+
+| cell | | Minerva | bitnet.cpp -omp | Minerva / -omp, per round | median, wins | null arm (Minerva / Minerva), per round |
+|---|---|---|---|---|---|---|
+| 64 -> 128 | decode tok/s | 21.4 | 19.4 | 1.25 1.12 1.09 1.25 1.04 1.04 | 1.10, 6/6 | 1.08 0.95 0.90 1.07 1.16 0.87 |
+| 64 -> 128 | first token s | 1.94 | 1.31 | 0.85 0.46 0.64 0.63 0.72 0.72 | 0.68, 0/6 | 0.93 0.70 0.99 0.95 1.04 0.93 |
+| 512 -> 32 | decode tok/s | 20.9 | 18.7 | 1.14 1.16 0.89 1.10 1.13 1.13 | 1.13, 5/6 | 1.04 1.03 0.72 1.03 1.00 1.18 |
+| 512 -> 32 | first token s | 7.16 | 10.35 | 1.48 1.60 1.55 1.34 1.41 1.50 | **1.49, 6/6** | 1.08 1.20 1.11 1.02 0.98 0.92 |
+
+Ratios are Minerva faster above 1. Against `-noomp` decode is 2.20x and 2.05x and first token 0.72x
+and 1.45x: the better arm is `-omp`, and that is what Minerva is quoted against.
+
+What this supports: at 4 threads on this phone Minerva's first token is faster on the 512-token
+prompt (1.49x, 6/6, against a null of 0.92-1.20) and **slower on the 64-token one** (0.68x, 0/6).
+Decode is 1.10x and 1.13x, but the null arm alone ran 0.72-1.18, so that lead is **not established**.
+Only 4 threads, one phone, two cells, both prompts greedy.
+
+Also: `zero` attention weights after f16 rounding are 1-5% of weights at 512-2,000 positions (two
+prompts, x86), so skipping them is not worth code.
