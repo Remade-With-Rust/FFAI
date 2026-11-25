@@ -198,7 +198,7 @@ fn i8f_matvec_matches_the_oracle() {
 }
 
 #[test]
-fn i8_gemv_matches_the_oracle() {
+fn i8i16_matvec_matches_the_oracle() {
     let mut rng = Rng(11);
     for (rows, n) in [
         (1usize, 1usize),
@@ -207,32 +207,37 @@ fn i8_gemv_matches_the_oracle() {
         (5, 31),
         (7, 32),
         (9, 33),
+        (10, 80),
         (17, 2560),
         (3, 2575),
+        (5, I16_MAX_COLS),
     ] {
-        for case in 0..3 {
-            let pick = |rng: &mut Rng| -> i8 {
-                match case {
+        for case in 0..4 {
+            let q: Vec<i8> = (0..rows * n)
+                .map(|_| match case {
                     0 => i8::try_from(rng.next() % 255)
                         .unwrap_or(0)
                         .wrapping_sub(127),
-                    1 => {
-                        if rng.next().is_multiple_of(2) {
-                            127
-                        } else {
-                            -127
-                        }
-                    }
+                    1 if rng.next().is_multiple_of(2) => -127,
+                    3 => -127,
                     _ => 127,
-                }
+                })
+                .collect();
+            // Cases 2 and 3: the largest magnitude of either sign, in every lane.
+            let x: Vec<f32> = match case {
+                0 | 1 => rng.floats(n, 30.0),
+                _ => vec![5.0; n],
             };
-            let q: Vec<i8> = (0..rows * n).map(|_| pick(&mut rng)).collect();
-            let a: Vec<i8> = (0..n).map(|_| pick(&mut rng)).collect();
-            let mut want = vec![0i32; rows];
-            i8_gemv_scalar(&q, &a, &mut want);
+            let mut act = ActI16::default();
+            assert!(act.set(&x).is_some());
+            for ((&a, &hi), &lo) in act.a.iter().zip(&act.hi).zip(&act.lo) {
+                assert_eq!(i32::from(a), 128 * i32::from(hi) + i32::from(lo));
+            }
+            let mut want = vec![0i64; rows];
+            i8i16_matvec_scalar(&q, &act, &mut want);
             for isa in simd_tiers() {
-                let mut got = vec![0i32; rows];
-                i8_gemv(isa, &q, &a, &mut got);
+                let mut got = vec![0i64; rows];
+                i8i16_matvec(isa, &q, &act, &mut got);
                 assert_eq!(got, want, "{} {rows}x{n} case {case}", isa.name());
             }
         }

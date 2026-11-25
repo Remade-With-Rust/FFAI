@@ -269,63 +269,87 @@ pub(super) unsafe fn gemv_avx2(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// int8 x int8 GEMV (the head screen): `pmaddubsw(|q|, a·sign(q))`, both in -127..=127, so a
-// pair is at most 2·127² = 32,258 (no saturation); `pmaddwd` widens every block.
-
-fn i8_tail(q: &[i8], a: &[i8], from: usize) -> i32 {
-    q[from..]
-        .iter()
-        .zip(&a[from..])
-        .map(|(&w, &v)| i32::from(w) * i32::from(v))
-        .sum()
+/// The i32 lanes' exact sum.
+#[target_feature(enable = "sse2")]
+fn lanes_i64(v: __m128i) -> i64 {
+    let mut l = [0i32; 4];
+    // SAFETY: `l` is 16 writable bytes.
+    unsafe { _mm_storeu_si128(l.as_mut_ptr().cast(), v) };
+    l.into_iter().map(i64::from).sum()
 }
 
+/// int8 x int16 mat-vec: the weights sign-extended to `i16`, `pmaddwd` (pairs into i32).
+///
 /// # Safety
-/// SSSE3; `q.len() == y.len() * a.len()`.
+/// SSSE3; `q.len() == y.len() * a.len()`, `a.len() <= I16_MAX_COLS`, `|a| <= I16_ACT_MAX`.
 #[target_feature(enable = "ssse3")]
-pub(super) unsafe fn i8_gemv_ssse3(q: &[i8], a: &[i8], y: &mut [i32]) {
+pub(super) unsafe fn i8i16_matvec_ssse3(q: &[i8], a: &[i16], y: &mut [i64]) {
     let n = a.len();
-    let ones = _mm_set1_epi16(1);
     for (r, out) in y.iter_mut().enumerate() {
         let row = &q[r * n..(r + 1) * n];
         let mut acc = _mm_setzero_si128();
         for i in 0..n / 16 {
-            // SAFETY: bytes `16i..16i+16` of the row and of `a`.
+            // SAFETY: elements `16i..16i+16` of the row and of `a`.
             unsafe {
                 let w = _mm_loadu_si128(row.as_ptr().add(16 * i).cast());
-                let v = _mm_loadu_si128(a.as_ptr().add(16 * i).cast());
-                let p = _mm_maddubs_epi16(_mm_abs_epi8(w), _mm_sign_epi8(v, w));
-                acc = _mm_add_epi32(acc, _mm_madd_epi16(p, ones));
+                let wl = _mm_srai_epi16::<8>(_mm_unpacklo_epi8(w, w));
+                let wh = _mm_srai_epi16::<8>(_mm_unpackhi_epi8(w, w));
+                let p = a.as_ptr().add(16 * i);
+                let d0 = _mm_madd_epi16(wl, _mm_loadu_si128(p.cast()));
+                let d1 = _mm_madd_epi16(wh, _mm_loadu_si128(p.add(8).cast()));
+                acc = _mm_add_epi32(acc, _mm_add_epi32(d0, d1));
             }
         }
-        *out = hsum_epi32(acc) + i8_tail(row, a, n / 16 * 16);
+        *out = lanes_i64(acc) + super::i8i16_tail(row, a, n / 16 * 16);
     }
 }
 
 /// # Safety
-/// AVX2; `q.len() == y.len() * a.len()`.
+/// AVX2; as [`i8i16_matvec_ssse3`].
 #[target_feature(enable = "avx2")]
-pub(super) unsafe fn i8_gemv_avx2(q: &[i8], a: &[i8], y: &mut [i32]) {
+pub(super) unsafe fn i8i16_matvec_avx2(q: &[i8], a: &[i16], y: &mut [i64]) {
     let n = a.len();
-    let ones = _mm256_set1_epi16(1);
     for (r, out) in y.iter_mut().enumerate() {
         let row = &q[r * n..(r + 1) * n];
         let mut acc = _mm256_setzero_si256();
-        for i in 0..n / 32 {
-            // SAFETY: bytes `32i..32i+32` of the row and of `a`.
+        for i in 0..n / 16 {
+            // SAFETY: elements `16i..16i+16` of the row and of `a`.
             unsafe {
-                let w = _mm256_loadu_si256(row.as_ptr().add(32 * i).cast());
-                let v = _mm256_loadu_si256(a.as_ptr().add(32 * i).cast());
-                let p = _mm256_maddubs_epi16(_mm256_abs_epi8(w), _mm256_sign_epi8(v, w));
-                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(p, ones));
+                let w = _mm256_cvtepi8_epi16(_mm_loadu_si128(row.as_ptr().add(16 * i).cast()));
+                let v = _mm256_loadu_si256(a.as_ptr().add(16 * i).cast());
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(w, v));
             }
         }
-        let h = _mm_add_epi32(
-            _mm256_castsi256_si128(acc),
-            _mm256_extracti128_si256::<1>(acc),
-        );
-        *out = hsum_epi32(h) + i8_tail(row, a, n / 32 * 32);
+        *out = lanes_i64(_mm256_castsi256_si128(acc))
+            + lanes_i64(_mm256_extracti128_si256::<1>(acc))
+            + super::i8i16_tail(row, a, n / 16 * 16);
+    }
+}
+
+/// `vpdpwssd` does the multiply, the pair sum and the accumulate; four chains.
+///
+/// # Safety
+/// AVX2 + AVX-VNNI; as [`i8i16_matvec_ssse3`].
+#[target_feature(enable = "avx2,avxvnni")]
+pub(super) unsafe fn i8i16_matvec_vnni(q: &[i8], a: &[i16], y: &mut [i64]) {
+    let n = a.len();
+    for (r, out) in y.iter_mut().enumerate() {
+        let row = &q[r * n..(r + 1) * n];
+        let mut acc = [_mm256_setzero_si256(); 4];
+        for i in 0..n / 16 {
+            // SAFETY: elements `16i..16i+16` of the row and of `a`.
+            unsafe {
+                let w = _mm256_cvtepi8_epi16(_mm_loadu_si128(row.as_ptr().add(16 * i).cast()));
+                let v = _mm256_loadu_si256(a.as_ptr().add(16 * i).cast());
+                acc[i % 4] = _mm256_dpwssd_avx_epi32(acc[i % 4], w, v);
+            }
+        }
+        let mut sum = super::i8i16_tail(row, a, n / 16 * 16);
+        for v in acc {
+            sum += lanes_i64(_mm256_castsi256_si128(v));
+            sum += lanes_i64(_mm256_extracti128_si256::<1>(v));
+        }
+        *out = sum;
     }
 }
 

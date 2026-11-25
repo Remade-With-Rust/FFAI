@@ -24,7 +24,12 @@
 //! covers every term and the roundings of `B` and `a_r ± B` themselves, so
 //! **`f ∈ [lo, hi] = [a_r - B, a_r + B]`**.
 //!
-//! The activation stays `f32`. An `int8` activation (an integer screen) was tried first and
+//! The default screen's activation is 16 bits: `a = round(x / t)`, `x = t·a + e`. Its integer dot
+//! `D = q·a` is exact, `a_r = s·t·D` (computed in `f64`, then one rounding to `f32`), so
+//! `|s·(q·x) - a_r| <= s ‖q‖₂ ‖e‖₂ + 2u|a_r|`, and the same `B` plus `s ‖q‖₂ ‖e‖₂` covers it. `‖e‖`
+//! is measured, not estimated, each token. `MINERVA_SCREEN=f32` keeps the float dot above.
+//!
+//! An `int8` activation (an integer screen) was tried first and
 //! refuted: its term `s ‖q‖₂ ‖x - t·a‖₂` ran 1.1-4.7x the weight term, because this model's hidden
 //! state has outlier channels (`max|x| / rms` 5-22), leaving 99 and 38,751 survivors a step on two
 //! golden prompts.
@@ -47,6 +52,12 @@ use crate::simd::{self, Isa};
 /// Vocabulary rows a thread screens at a time.
 const CHUNK: usize = 256;
 
+/// Lanes of the quantiser's folds.
+const W: usize = 8;
+
+/// `1.5 * 2^23`: adding then subtracting it rounds an `f32` below `2^22` to an integer, ties even.
+const MAGIC: f32 = 12_582_912.0;
+
 /// `x` (non-negative) as the smallest `f32` not below it.
 fn round_up(x: f64) -> f32 {
     #[expect(
@@ -67,6 +78,8 @@ pub struct HeadQ8 {
     q: Vec<i8>,
     scale: Vec<f32>,
     c: Vec<f32>,
+    /// `s ‖q‖₂`, rounded up: what a row multiplies the activation's error by.
+    sq: Vec<f32>,
 }
 
 impl std::fmt::Debug for HeadQ8 {
@@ -87,71 +100,125 @@ impl HeadQ8 {
         let mut q = vec![0i8; rows * cols];
         let mut scale = vec![0f32; rows];
         let mut c = vec![0f32; rows];
+        let mut sq = vec![0f32; rows];
         let t16 = f16_table();
         q.par_chunks_mut(CHUNK * cols)
             .zip(scale.par_chunks_mut(CHUNK))
             .zip(c.par_chunks_mut(CHUNK))
+            .zip(sq.par_chunks_mut(CHUNK))
             .enumerate()
             .for_each_init(
                 || vec![0f32; cols],
-                |w, (ci, ((qc, sc), bc))| {
+                |w, (ci, (((qc, sc), bc), nc))| {
                     let r0 = ci * CHUNK;
-                    for (j, ((qr, s), b)) in qc
+                    for (j, (((qr, s), b), n)) in qc
                         .chunks_exact_mut(cols)
                         .zip(sc.iter_mut())
                         .zip(bc.iter_mut())
+                        .zip(nc.iter_mut())
                         .enumerate()
                     {
-                        quantise_row(m.f16_row(m.head, cols, r0 + j), t16, w, qr, s, b);
+                        (*s, *b, *n) = quantise_row(m.f16_row(m.head, cols, r0 + j), t16, w, qr);
                     }
                     m.release_head_rows(r0..r0 + sc.len());
                 },
             );
-        Self { cols, q, scale, c }
+        Self {
+            cols,
+            q,
+            scale,
+            c,
+            sq,
+        }
     }
 
     /// The bytes the screen reads a token.
     #[must_use]
     pub fn bytes(&self) -> usize {
-        self.q.len() + 8 * self.scale.len()
+        self.q.len() + 12 * self.scale.len()
     }
 }
 
-/// One row: `w` (scratch) its `f32` values, `qr` its codes, `s` its scale, `b` its bound
-/// coefficient.
-fn quantise_row(bytes: &[u8], t16: &[f32], w: &mut [f32], qr: &mut [i8], s: &mut f32, b: &mut f32) {
+/// One row: `w` (scratch) its `f32` values, `qr` its codes. Returns its scale, its bound
+/// coefficient and `s ‖q‖₂`.
+fn quantise_row(bytes: &[u8], t16: &[f32], w: &mut [f32], qr: &mut [i8]) -> (f32, f32, f32) {
     for (v, x) in w.iter_mut().zip(bytes.chunks_exact(2)) {
         *v = t16[usize::from(u16::from_le_bytes([x[0], x[1]]))];
     }
-    let amax = w.iter().fold(0f32, |a, v| a.max(v.abs()));
-    if !amax.is_finite() {
+    // Fixed-width lanes, so the folds vectorise on every target (a strict-order fold cannot). The
+    // norms' summation order is not part of the bound: its 1e-4 slack covers any.
+    let mut m8 = [0f32; W];
+    let mut bad = [0u32; W];
+    let (wc, wt) = w.as_chunks::<W>();
+    for c in wc {
+        for ((m, b), v) in m8.iter_mut().zip(&mut bad).zip(c) {
+            let a = v.abs();
+            *m = if a > *m { a } else { *m };
+            *b |= u32::from(!a.is_finite());
+        }
+    }
+    let mut amax = m8.iter().fold(0f32, |a, &v| a.max(v));
+    let mut finite = bad.iter().all(|&b| b == 0);
+    for v in wt {
+        amax = amax.max(v.abs());
+        finite &= v.is_finite();
+    }
+    if !finite {
         // A non-finite weight: the row can never be ruled out.
-        (*s, *b) = (0.0, f32::INFINITY);
-        return;
+        return (0.0, f32::INFINITY, f32::INFINITY);
     }
     let sc = amax / 127.0;
-    let (mut e2, mut w2, mut q2) = (0f64, 0f64, 0f64);
-    for (qv, &wv) in qr.iter_mut().zip(w.iter()) {
-        #[expect(clippy::cast_possible_truncation, reason = "clamped to ±127")]
-        let k = if sc > 0.0 {
-            (wv / sc).round_ties_even().clamp(-127.0, 127.0) as i8
-        } else {
-            0
-        };
-        *qv = k;
-        let e = f64::from(wv) - f64::from(sc) * f64::from(k);
-        e2 += e * e;
-        w2 += f64::from(wv) * f64::from(wv);
-        q2 += f64::from(k) * f64::from(k);
+    if sc <= 0.0 {
+        qr.fill(0);
+        return (0.0, 0.0, 0.0);
     }
-    *s = sc;
-    *b = round_up((e2.sqrt() + 1e-5 * w2.sqrt() + 1e-5 * f64::from(sc) * q2.sqrt()) * (1.0 + 1e-4));
+    let (mut e8, mut w8, mut q8) = ([0f64; W], [0f64; W], [0f64; W]);
+    let mut lane = |q: &mut i8, v: f32, l: usize| {
+        // Round to nearest, ties to even, by the magic number (`round_ties_even` is a libm call
+        // on a target without SSE4.1); `|v / sc| <= 127.00001`.
+        // Its low mantissa byte is the code.
+        let m = v / sc + MAGIC;
+        *q = m.to_bits().to_le_bytes()[0].cast_signed();
+        let k = f64::from(m - MAGIC);
+        let v = f64::from(v);
+        let e = v - f64::from(sc) * k;
+        e8[l] += e * e;
+        w8[l] += v * v;
+        q8[l] += k * k;
+    };
+    let (qc, qt) = qr.as_chunks_mut::<W>();
+    for (q, c) in qc.iter_mut().zip(wc) {
+        for (l, (q, &v)) in q.iter_mut().zip(c).enumerate() {
+            lane(q, v, l);
+        }
+    }
+    for (l, (q, &v)) in qt.iter_mut().zip(wt).enumerate() {
+        lane(q, v, l);
+    }
+    let (e2, w2, q2) = (
+        e8.iter().sum::<f64>(),
+        w8.iter().sum::<f64>(),
+        q8.iter().sum::<f64>(),
+    );
+    let sq = f64::from(sc) * q2.sqrt();
+    (
+        sc,
+        round_up((e2.sqrt() + 1e-5 * w2.sqrt() + 1e-5 * sq) * (1.0 + 1e-4)),
+        round_up(sq * (1.0 + 1e-4)),
+    )
+}
+
+/// Whether the 16-bit screen runs: unless `MINERVA_SCREEN=f32` (the float screen, for the A/B).
+fn float_screen_off() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("MINERVA_SCREEN").as_deref() != Ok("f32"))
 }
 
 /// A screen's per-session scratch, allocated once.
 #[derive(Debug, Default)]
 pub struct Scratch {
     dots: Vec<f32>,
+    act: simd::ActI16,
     hi: Vec<f32>,
     survivors: Vec<u32>,
     one: [f32; 1],
@@ -164,6 +231,7 @@ impl Scratch {
         let _ = cols;
         Self {
             dots: vec![0.0; rows],
+            act: simd::ActI16::default(),
             hi: vec![0.0; rows],
             survivors: Vec::with_capacity(64),
             one: [0.0],
@@ -188,6 +256,10 @@ pub fn argmax(
         return None;
     }
     let xn = round_up(x2.sqrt() * (1.0 + 1e-4));
+    let int = float_screen_off().then(|| sc.act.set(x)).flatten();
+    // `‖e‖₂`, with room for the `f64` roundings in it and in `t·a`.
+    let en = int.map_or(0.0, |(_, e)| round_up(e * (1.0 + 1e-4) + 1e-12 * x2.sqrt()));
+    let act = &sc.act;
 
     let lo_max = sc
         .dots
@@ -196,13 +268,30 @@ pub fn argmax(
         .zip(h8.q.par_chunks(CHUNK * cols))
         .enumerate()
         .map(|(ci, ((dots, hi), q))| {
-            simd::i8f_matvec(isa, q, x, dots);
+            if let Some((t, _)) = int {
+                let mut d = [0i64; CHUNK];
+                let d = &mut d[..dots.len()];
+                simd::i8i16_matvec(isa, q, act, d);
+                for (o, &d) in dots.iter_mut().zip(d.iter()) {
+                    // `|D| < 2^53`: the conversion is exact.
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        clippy::cast_possible_truncation,
+                        reason = "exact below 2^53; one rounding to f32, in the bound"
+                    )]
+                    {
+                        *o = (d as f64 * t) as f32;
+                    }
+                }
+            } else {
+                simd::i8f_matvec(isa, q, x, dots);
+            }
             let base = ci * CHUNK;
             let mut lo_max = f32::NEG_INFINITY;
             for (j, (&d, h)) in dots.iter().zip(hi.iter_mut()).enumerate() {
                 let r = base + j;
                 let av = d * h8.scale[r];
-                let b = h8.c[r] * xn * 1.0001 + 1e-6 * av.abs();
+                let b = (h8.c[r] * xn + h8.sq[r] * en) * 1.0001 + 1e-6 * av.abs();
                 *h = av + b;
                 lo_max = lo_max.max(av - b);
             }
@@ -235,6 +324,17 @@ pub struct Lazy(OnceLock<HeadQ8>);
 impl Lazy {
     /// The screen of `m`, building it the first time.
     pub fn get(&self, m: &Model) -> &HeadQ8 {
-        self.0.get_or_init(|| HeadQ8::build(m))
+        self.0.get_or_init(|| {
+            let t = std::time::Instant::now();
+            let h = HeadQ8::build(m);
+            let t = t.elapsed();
+            if std::env::var_os("MINERVA_PROF").is_some() {
+                let f = h.q.iter().fold(0xcbf2_9ce4_8422_2325_u64, |f, &q| {
+                    (f ^ u64::from(q.cast_unsigned())).wrapping_mul(0x0100_0000_01b3)
+                });
+                eprintln!("head build: {:.3}s codes-fnv {f:016x}", t.as_secs_f64());
+            }
+            h
+        })
     }
 }

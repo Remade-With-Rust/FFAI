@@ -802,3 +802,29 @@ nearly full). Thermal and clock state not controlled; provisional, no reference 
 6 beat the 8-thread default in 4/4 rounds (a fixed default of 8 is not the best here; 4 is close to
 6). Prefill p64 2.3-3.9 s. Peak RSS (includes mapped pages): 0.86 GB screen, 1.16-1.20 GB full.
 neon and neondot were one run each for speed: no verdict.
+
+## Phone-driven wins: integer head screen, sdot rows in fours, head build, thread default (2026-11-25)
+
+Pixel 9 Pro XL, p64 +32, paired rounds in alternating order, runs kept only if the screen was on
+before and after (dozing slows decode 5-10x; earlier rounds in which it dozed were discarded).
+Unplugged for these rounds (93-98%), 30-36 C, not thermally controlled: ratios only. All arms gave
+the same ids.
+
+| change | result | verdict |
+|---|---|---|
+| head screen with a 16-bit activation and an exact integer dot (`i8i16_matvec`; `sdot` x2 on NeonDot), versus the f32 screen | 4 threads 1.35x, 6/6; with the next row, 1 thread 1.69x, 6/6. Laptop: 1 thread 1.09x 10/10 (null 1.00); 4 and 8 threads not distinguishable (1.05x 6/10, 0.97x 3/10) | kept |
+| `gemv_dot` rows in fours, independent chains | 1 thread **1.255x, 8/8** (null 0.98, 3/8); 4 threads 1.03x 6/8 and, in an earlier 6-round set, 0.98x 3/6 (null 1.00): neutral | kept |
+| default threads = cores with at least half the fastest core's capacity (4 here) | vs 8: 1.34x, 6/6 | kept |
+| all three, default settings, old -> new | 1.42x (6/6), 1.63x (8/8, without the fours) | |
+| head build vectorised (lanes; magic-number rounding) | 0.27 -> 0.157 s, 6/6, identical codes hash; laptop p64 first token 1.185x, 10/10 (null 0.96) at 8 threads | kept |
+| NeonDot vs NEON (same build, default threads) | decode 1.25x, first 1.48x, 8/8 each | the earlier one-run "about equal" was noise |
+
+Refuted or corrected on the way: pinning to the fast cores adds little over an unpinned 4 threads
+(1.05x, 4/6; not implemented); WASM prefill was guessed to be attention-bound at 512 tokens and is
+not: GEMM is 89-97% of prefill, attention 10% at 512 (one run each, single thread, laptop). On the
+phone, GEMM is 65% of p512 prefill and attention 30%: the next lead is a wider GEMM (`i8mm`).
+
+Correctness: kernel oracle tests (27 on the laptop and on the phone); x86 full-head hashes unchanged (p512, p1024 +48);
+phone `verify` on g0, p64, p512 with the x86 hashes; x86 ssse3, avx2, avx2vnni `verify` on p64;
+wasm simd128 (p64, p512, +4, screened) gives the phone's ids. The screen's 16-bit activation
+rechecks 15.94 rows a step against 14.73 (p1024).

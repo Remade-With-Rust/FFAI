@@ -4,8 +4,8 @@
 //! |---|---|---|
 //! | [`ternary_gemv`] | `rusty_ternary::kernel::gemv_codes` | `assert_eq!` (integers) |
 //! | [`ternary_gemm`] (prefill) | `rusty_ternary::kernel::gemm_codes` | `assert_eq!` |
-//! | [`i8f_matvec`] (head screen) | [`i8f_matvec_scalar`] | bits |
-//! | [`i8_gemv`] | [`i8_gemv_scalar`] | `assert_eq!` |
+//! | [`i8f_matvec`] (the float head screen) | [`i8f_matvec_scalar`] | bits |
+//! | [`i8i16_matvec`] (head screen) | [`i8i16_matvec_scalar`] | `assert_eq!` |
 //! | [`f16_matvec_bytes`], [`f16_matvec_strided`] | [`num::dot16_f16_bytes`], [`num::dot16_f16`] | bits |
 //! | [`weighted_sum_f16`] | [`num::weighted_sum_f16`] | bits |
 //! | [`act_quant`] | `rusty_ternary::quant::act_quant` | `assert_eq!` |
@@ -193,9 +193,9 @@ pub mod census {
         F16Convert = 6,
         /// finish, relu2_mul, add_assign, rope (elements).
         Elementwise = 7,
-        /// int8 x int8 GEMV (MACs).
-        I8Gemv = 8,
-        /// int8 x f32 mat-vec, the head screen (MACs).
+        /// int8 x int16 mat-vec, the head screen (MACs).
+        I8I16 = 8,
+        /// int8 x f32 mat-vec, the float head screen (MACs).
         I8fMatvec = 9,
         /// I2_S GEMM, prefill (weights x tokens).
         TernaryGemm = 10,
@@ -211,7 +211,7 @@ pub mod census {
         "softmax",
         "f16_convert",
         "elementwise",
-        "i8_gemv",
+        "i8i16_matvec",
         "i8f_matvec",
         "ternary_gemm",
     ];
@@ -326,29 +326,82 @@ pub fn ternary_gemv(isa: Isa, codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32])
     }
 }
 
-/// `y[r] = Σ_j q[r·n + j] · a[j]` (`n = a.len()`), int8 by int8, exact. Every value must lie in
-/// `-127..=127` (never -128): the x86 twins multiply `|q|` by `a·sign(q)` in `pmaddubsw`, whose
-/// pair sum `2 · 127²` then stays inside an `i16`.
+/// The largest magnitude of a 16-bit screen activation: `128·127 + 63`, so it splits into
+/// `128·hi + lo` with both halves `i8`.
+pub const I16_ACT_MAX: i16 = 16_319;
+
+/// The most columns [`i8i16_matvec`] takes: four i32 lanes of `n / 4` products of at most
+/// `127 · 16,319` each stay under `2^31`.
+pub const I16_MAX_COLS: usize = 4_096;
+
+/// A 16-bit activation and its `128·hi + lo` split (the `sdot` tier's operands).
+#[derive(Debug, Default)]
+pub struct ActI16 {
+    a: Vec<i16>,
+    hi: Vec<i8>,
+    lo: Vec<i8>,
+}
+
+impl ActI16 {
+    /// Quantise `x` to `a = round(x / t)`, `|a| <= I16_ACT_MAX`; returns `t` and `‖x - t·a‖₂`
+    /// in `f64`. Scalar: a few thousand elements a token. `None` when `x` is all zero, not
+    /// finite or wider than [`I16_MAX_COLS`].
+    pub fn set(&mut self, x: &[f32]) -> Option<(f64, f64)> {
+        let m = x.iter().fold(0f32, |m, v| m.max(v.abs()));
+        if x.len() > I16_MAX_COLS || m <= 0.0 || !x.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let max = f64::from(I16_ACT_MAX);
+        let t = f64::from(m) / max;
+        let mut e2 = 0f64;
+        self.a.clear();
+        self.hi.clear();
+        self.lo.clear();
+        for &v in x {
+            #[expect(clippy::cast_possible_truncation, reason = "clamped to ±16,319")]
+            let a = (f64::from(v) / t).round_ties_even().clamp(-max, max) as i16;
+            let e = f64::from(v) - t * f64::from(a);
+            e2 += e * e;
+            let h = (a + 64) >> 7;
+            #[expect(clippy::cast_possible_truncation, reason = "±127 and -64..=63")]
+            let (hi, lo) = (h as i8, (a - 128 * h) as i8);
+            self.a.push(a);
+            self.hi.push(hi);
+            self.lo.push(lo);
+        }
+        Some((t, e2.sqrt()))
+    }
+}
+
+/// `y[r] = Σ_j q[r, j] · a[j]`, exact: the head screen's product.
 ///
 /// # Panics
-/// When `q` is not `y.len()` rows of `a.len()`.
-pub fn i8_gemv(isa: Isa, q: &[i8], a: &[i8], y: &mut [i32]) {
-    let n = a.len();
-    assert_eq!(q.len(), y.len() * n);
-    debug_assert!(!a.contains(&i8::MIN) && !q.contains(&i8::MIN));
-    census::add(Kernel::I8Gemv, isa, q.len());
+/// When the shapes disagree.
+pub fn i8i16_matvec(isa: Isa, q: &[i8], act: &ActI16, y: &mut [i64]) {
+    let a = act.a.as_slice();
+    assert!(a.len() <= I16_MAX_COLS);
+    assert_eq!(q.len(), y.len() * a.len());
+    census::add(Kernel::I8I16, isa, q.len());
     match isa.0 {
-        // SAFETY: tier detected; shapes asserted.
+        // SAFETY (every arm): tier detected; shapes asserted; `ActI16::set` bounds `a`.
         #[cfg(target_arch = "x86_64")]
-        Tier::Avx2 | Tier::Avx2Vnni => unsafe { x86::i8_gemv_avx2(q, a, y) },
+        Tier::Avx2Vnni => unsafe { x86::i8i16_matvec_vnni(q, a, y) },
+        // SAFETY: as above.
         #[cfg(target_arch = "x86_64")]
-        Tier::Ssse3 => unsafe { x86::i8_gemv_ssse3(q, a, y) },
+        Tier::Avx2 => unsafe { x86::i8i16_matvec_avx2(q, a, y) },
+        // SAFETY: as above.
+        #[cfg(target_arch = "x86_64")]
+        Tier::Ssse3 => unsafe { x86::i8i16_matvec_ssse3(q, a, y) },
+        // SAFETY: as above.
         #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-        Tier::Neon | Tier::NeonDot => unsafe { neon::i8_gemv(q, a, y) },
-        // SAFETY: the module was built with simd128 (else this arm does not exist); bounds as above.
+        Tier::NeonDot => unsafe { neon::i8i16_matvec_dot(q, a, &act.hi, &act.lo, y) },
+        // SAFETY: as above.
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        Tier::Neon => unsafe { neon::i8i16_matvec(q, a, y) },
+        // SAFETY: as above, and the module was built with simd128 (else this arm does not exist).
         #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-        Tier::Simd128 => unsafe { wasm::i8_gemv(q, a, y) },
-        _ => i8_gemv_scalar(q, a, y),
+        Tier::Simd128 => unsafe { wasm::i8i16_matvec(q, a, y) },
+        _ => i8i16_matvec_scalar(q, act, y),
     }
 }
 
@@ -406,15 +459,20 @@ pub(crate) fn i8f_finish(mut acc: [f32; num::LANES], q: &[i8], x: &[f32], from: 
     num::reduce16(acc)
 }
 
-/// The oracle of [`i8_gemv`].
-pub fn i8_gemv_scalar(q: &[i8], a: &[i8], y: &mut [i32]) {
-    for (o, row) in y.iter_mut().zip(q.chunks_exact(a.len())) {
-        *o = row
-            .iter()
-            .zip(a)
-            .map(|(&w, &v)| i32::from(w) * i32::from(v))
-            .sum();
+/// The oracle of [`i8i16_matvec`].
+pub fn i8i16_matvec_scalar(q: &[i8], act: &ActI16, y: &mut [i64]) {
+    for (o, row) in y.iter_mut().zip(q.chunks_exact(act.a.len())) {
+        *o = i8i16_tail(row, &act.a, 0);
     }
+}
+
+/// One row's product over the elements from `from` on.
+pub(crate) fn i8i16_tail(q: &[i8], a: &[i16], from: usize) -> i64 {
+    q[from..]
+        .iter()
+        .zip(&a[from..])
+        .map(|(&w, &v)| i64::from(i32::from(w) * i32::from(v)))
+        .sum()
 }
 
 /// Prefill's product: `y[r·m + t] = Σ_j W[r, j] · a[t·cols + j]` for the `codes.len() / (cols/4)`

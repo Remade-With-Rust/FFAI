@@ -229,28 +229,60 @@ fn sdot(mut acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
 }
 
 /// NEON dot-product GEMV: `sdot` of codes (0..=2, as signed bytes) against activations, straight
-/// into i32.
+/// into i32. Rows four at a time: an activation vector is loaded once for the four, and the four
+/// accumulators are independent chains (one chain held the core to one `sdot` a cycle).
 ///
 /// # Safety
 /// NEON + dotprod; shapes as [`gemv`].
 #[target_feature(enable = "neon,dotprod")]
 pub(super) unsafe fn gemv_dot(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32]) {
-    let cols = a.len();
-    let rpc = cols / 4;
+    let rpc = a.len() / 4;
+    let quads = y.len() / 4 * 4;
+    let (y4, y1) = y.split_at_mut(quads);
+    for (i, o) in y4.chunks_exact_mut(4).enumerate() {
+        // SAFETY: rows `4i..4i+4` are inside `codes`.
+        unsafe { gemv_rows_dot::<4>(codes.as_ptr().add(4 * i * rpc), rpc, a, a_sum, o) };
+    }
+    for (i, o) in y1.chunks_exact_mut(1).enumerate() {
+        // SAFETY: row `quads + i` is inside `codes`.
+        unsafe { gemv_rows_dot::<1>(codes.as_ptr().add((quads + i) * rpc), rpc, a, a_sum, o) };
+    }
+}
+
+/// # Safety
+/// NEON + dotprod; `R` rows of `rpc = a.len() / 4` bytes readable at `base`.
+#[target_feature(enable = "neon,dotprod")]
+#[inline]
+unsafe fn gemv_rows_dot<const R: usize>(
+    base: *const u8,
+    rpc: usize,
+    a: &[i8],
+    a_sum: i32,
+    out: &mut [i32],
+) {
     let mask = vdupq_n_u8(3);
-    for (r, out) in y.iter_mut().enumerate() {
-        // SAFETY: block `b` of row `r` reads codes `32b..32b+32` and activations
-        // `128b..128b+128`, inside the slices.
+    let mut acc = [vdupq_n_s32(0); R];
+    for b in 0..a.len() / 128 {
+        // SAFETY: block `b` reads codes `32b..32b+32` of each row and activations
+        // `128b..128b+128`.
         unsafe {
-            let row = codes.as_ptr().add(r * rpc);
-            let mut acc = vdupq_n_s32(0);
-            for b in 0..cols / 128 {
-                let c0 = vld1q_u8(row.add(b * 32));
-                let c1 = vld1q_u8(row.add(b * 32 + 16));
-                let ab = a.as_ptr().add(b * 128);
+            let ab = a.as_ptr().add(b * 128);
+            let v = [
+                vld1q_s8(ab),
+                vld1q_s8(ab.add(16)),
+                vld1q_s8(ab.add(32)),
+                vld1q_s8(ab.add(48)),
+                vld1q_s8(ab.add(64)),
+                vld1q_s8(ab.add(80)),
+                vld1q_s8(ab.add(96)),
+                vld1q_s8(ab.add(112)),
+            ];
+            for (r, acc) in acc.iter_mut().enumerate() {
+                let row = base.add(r * rpc + b * 32);
+                let (c0, c1) = (vld1q_u8(row), vld1q_u8(row.add(16)));
                 let q = [
-                    vandq_u8(vshrq_n_u8::<6>(c0), mask),
-                    vandq_u8(vshrq_n_u8::<6>(c1), mask),
+                    vshrq_n_u8::<6>(c0),
+                    vshrq_n_u8::<6>(c1),
                     vandq_u8(vshrq_n_u8::<4>(c0), mask),
                     vandq_u8(vshrq_n_u8::<4>(c1), mask),
                     vandq_u8(vshrq_n_u8::<2>(c0), mask),
@@ -258,12 +290,14 @@ pub(super) unsafe fn gemv_dot(codes: &[u8], a: &[i8], a_sum: i32, y: &mut [i32])
                     vandq_u8(c0, mask),
                     vandq_u8(c1, mask),
                 ];
-                for (k, &qk) in q.iter().enumerate() {
-                    acc = sdot(acc, vreinterpretq_s8_u8(qk), vld1q_s8(ab.add(16 * k)));
+                for (qk, vk) in q.into_iter().zip(v) {
+                    *acc = sdot(*acc, vreinterpretq_s8_u8(qk), vk);
                 }
             }
-            *out = vaddvq_s32(acc) - a_sum;
         }
+    }
+    for (o, v) in out.iter_mut().zip(acc) {
+        *o = vaddvq_s32(v) - a_sum;
     }
 }
 
@@ -380,31 +414,82 @@ pub(super) unsafe fn i8f_matvec(q: &[i8], x: &[f32], out: &mut [f32]) {
     }
 }
 
-/// int8 x int8 GEMV: every product widened to `i16` (`vmull`), every pair to `i32` (`vpadal`).
+/// int8 x int16 mat-vec: the weights widened to `i16`, `smlal` into i32.
 ///
 /// # Safety
-/// NEON; `q.len() == y.len() * a.len()`.
+/// NEON; `q.len() == y.len() * a.len()`, `a.len() <= I16_MAX_COLS`, `|a| <= I16_ACT_MAX`.
 #[target_feature(enable = "neon")]
-pub(super) unsafe fn i8_gemv(q: &[i8], a: &[i8], y: &mut [i32]) {
+pub(super) unsafe fn i8i16_matvec(q: &[i8], a: &[i16], y: &mut [i64]) {
     let n = a.len();
     for (r, out) in y.iter_mut().enumerate() {
         let row = &q[r * n..(r + 1) * n];
-        let mut acc = vdupq_n_s32(0);
+        let mut acc = [vdupq_n_s32(0); 4];
         for i in 0..n / 16 {
-            // SAFETY: bytes `16i..16i+16` of the row and of `a`.
+            // SAFETY: elements `16i..16i+16` of the row and of `a`.
             unsafe {
                 let w = vld1q_s8(row.as_ptr().add(16 * i));
-                let v = vld1q_s8(a.as_ptr().add(16 * i));
-                acc = vpadalq_s16(acc, vmull_s8(vget_low_s8(w), vget_low_s8(v)));
-                acc = vpadalq_s16(acc, vmull_high_s8(w, v));
+                let (wl, wh) = (vmovl_s8(vget_low_s8(w)), vmovl_high_s8(w));
+                let p = a.as_ptr().add(16 * i);
+                let (vl, vh) = (vld1q_s16(p), vld1q_s16(p.add(8)));
+                acc[0] = vmlal_s16(acc[0], vget_low_s16(wl), vget_low_s16(vl));
+                acc[1] = vmlal_high_s16(acc[1], wl, vl);
+                acc[2] = vmlal_s16(acc[2], vget_low_s16(wh), vget_low_s16(vh));
+                acc[3] = vmlal_high_s16(acc[3], wh, vh);
             }
         }
-        let tail: i32 = row[n / 16 * 16..]
-            .iter()
-            .zip(&a[n / 16 * 16..])
-            .map(|(&w, &v)| i32::from(w) * i32::from(v))
-            .sum();
-        *out = vaddvq_s32(acc) + tail;
+        let mut sum = super::i8i16_tail(row, a, n / 16 * 16);
+        for v in acc {
+            sum += vaddlvq_s32(v);
+        }
+        *out = sum;
+    }
+}
+
+/// int8 x int16 mat-vec by `sdot`: `a = 128·hi + lo`, two `sdot`s per 16 weights, four rows at a
+/// time (the activation loads shared, eight independent chains).
+///
+/// # Safety
+/// NEON + dotprod; as [`i8i16_matvec`], and `hi`, `lo` are `a`'s split.
+#[target_feature(enable = "neon,dotprod")]
+pub(super) unsafe fn i8i16_matvec_dot(q: &[i8], a: &[i16], hi: &[i8], lo: &[i8], y: &mut [i64]) {
+    let n = a.len();
+    assert!(hi.len() == n && lo.len() == n && q.len() == y.len() * n);
+    let quads = y.len() / 4 * 4;
+    let (y4, y1) = y.split_at_mut(quads);
+    for (i, o) in y4.chunks_exact_mut(4).enumerate() {
+        let q = &q[4 * i * n..4 * (i + 1) * n];
+        // SAFETY: four rows of `n`.
+        unsafe { i8i16_rows_dot::<4>(q, a, hi, lo, o) };
+    }
+    for (i, o) in y1.chunks_exact_mut(1).enumerate() {
+        let q = &q[(quads + i) * n..(quads + i + 1) * n];
+        // SAFETY: one row of `n`.
+        unsafe { i8i16_rows_dot::<1>(q, a, hi, lo, o) };
+    }
+}
+
+/// # Safety
+/// NEON + dotprod; `q` is `R` rows of `a.len()`; `hi` and `lo` as long as `a`.
+#[target_feature(enable = "neon,dotprod")]
+#[inline]
+unsafe fn i8i16_rows_dot<const R: usize>(q: &[i8], a: &[i16], hi: &[i8], lo: &[i8], y: &mut [i64]) {
+    let n = a.len();
+    let z = vdupq_n_s32(0);
+    let mut acc = [(z, z); R];
+    for i in 0..n / 16 {
+        // SAFETY: elements `16i..16i+16` of `hi`, `lo` and each row.
+        unsafe {
+            let vh = vld1q_s8(hi.as_ptr().add(16 * i));
+            let vl = vld1q_s8(lo.as_ptr().add(16 * i));
+            for (r, (h, l)) in acc.iter_mut().enumerate() {
+                let w = vld1q_s8(q.as_ptr().add(r * n + 16 * i));
+                *h = sdot(*h, w, vh);
+                *l = sdot(*l, w, vl);
+            }
+        }
+    }
+    for ((o, (h, l)), row) in y.iter_mut().zip(acc).zip(q.chunks_exact(n)) {
+        *o = 128 * vaddlvq_s32(h) + vaddlvq_s32(l) + super::i8i16_tail(row, a, n / 16 * 16);
     }
 }
 

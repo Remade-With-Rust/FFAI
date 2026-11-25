@@ -33,3 +33,4 @@ pub mod prof;
 pub mod roofline;
 #[allow(unsafe_code)]
 pub mod simd;
+pub mod threads;

@@ -265,41 +265,31 @@ pub(super) unsafe fn i8f_matvec(q: &[i8], x: &[f32], out: &mut [f32]) {
     }
 }
 
-/// int8 x int8 GEMV: products widened (`extmul`), pairs widened (`extadd_pairwise`).
+/// int8 x int16 mat-vec: the weights widened to `i16`, `dot` (pairs into i32).
 ///
 /// # Safety
-/// `q.len() == y.len() * a.len()`.
+/// `q.len() == y.len() * a.len()`, `a.len() <= I16_MAX_COLS`, `|a| <= I16_ACT_MAX`.
 #[target_feature(enable = "simd128")]
-pub(super) unsafe fn i8_gemv(q: &[i8], a: &[i8], y: &mut [i32]) {
+pub(super) unsafe fn i8i16_matvec(q: &[i8], a: &[i16], y: &mut [i64]) {
     let n = a.len();
     for (r, out) in y.iter_mut().enumerate() {
         let row = &q[r * n..(r + 1) * n];
         let mut acc = i32x4_splat(0);
         for i in 0..n / 16 {
-            // SAFETY: bytes `16i..16i+16` of the row and of `a`.
+            // SAFETY: elements `16i..16i+16` of the row and of `a`.
             unsafe {
                 let w = v128_load(row.as_ptr().add(16 * i).cast());
-                let v = v128_load(a.as_ptr().add(16 * i).cast());
-                acc = i32x4_add(
-                    acc,
-                    i32x4_extadd_pairwise_i16x8(i16x8_extmul_low_i8x16(w, v)),
-                );
-                acc = i32x4_add(
-                    acc,
-                    i32x4_extadd_pairwise_i16x8(i16x8_extmul_high_i8x16(w, v)),
-                );
+                let p = a.as_ptr().add(16 * i);
+                let d0 = i32x4_dot_i16x8(i16x8_extend_low_i8x16(w), v128_load(p.cast()));
+                let d1 = i32x4_dot_i16x8(i16x8_extend_high_i8x16(w), v128_load(p.add(8).cast()));
+                acc = i32x4_add(acc, i32x4_add(d0, d1));
             }
         }
-        let tail: i32 = row[n / 16 * 16..]
-            .iter()
-            .zip(&a[n / 16 * 16..])
-            .map(|(&w, &v)| i32::from(w) * i32::from(v))
-            .sum();
-        *out = i32x4_extract_lane::<0>(acc)
-            + i32x4_extract_lane::<1>(acc)
-            + i32x4_extract_lane::<2>(acc)
-            + i32x4_extract_lane::<3>(acc)
-            + tail;
+        *out = i64::from(i32x4_extract_lane::<0>(acc))
+            + i64::from(i32x4_extract_lane::<1>(acc))
+            + i64::from(i32x4_extract_lane::<2>(acc))
+            + i64::from(i32x4_extract_lane::<3>(acc))
+            + super::i8i16_tail(row, a, n / 16 * 16);
     }
 }
 

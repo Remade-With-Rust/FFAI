@@ -234,8 +234,13 @@ fn generate(args: &[String]) -> Result<(), String> {
         .ok_or("--new N is required")?
         .parse()
         .map_err(|e| format!("--new: {e}"))?;
-    if let Some(t) = arg(args, "--threads") {
-        let n: usize = t.parse().map_err(|e| format!("--threads: {e}"))?;
+    // `--threads`, else `RAYON_NUM_THREADS` (the pool reads it), else the fast cores.
+    let threads = match arg(args, "--threads") {
+        Some(t) => Some(t.parse().map_err(|e| format!("--threads: {e}"))?),
+        None if std::env::var_os("RAYON_NUM_THREADS").is_some() => None,
+        None => ffai_minerva::threads::recommended(),
+    };
+    if let Some(n) = threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build_global()
