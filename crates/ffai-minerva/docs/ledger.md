@@ -344,6 +344,17 @@ testable.
 
 ## Brick g, first matched-thread race vs bitnet.cpp (2026-11-23, run by rusty-sloth)
 
+> **PROVISIONAL (marked 2026-11-25; rusty-sloth withdrew the figure).** Do not quote it or put it
+> in the README; it awaits a rerun against a clang build.
+> - The opponent was a locally patched MSVC build (`GGML_OPENMP=OFF`, `GGML_NATIVE=OFF`, `/O2`).
+>   BitNet's CMake rejects MSVC; clang is its supported compiler.
+> - The harness never compared output ids, only counts.
+> - The 24-thread "spin barrier" cause is an untested guess.
+> - bitnet.cpp's decode read ~20 % lower at night than in the afternoon, unexplained, so "the
+>   ratios are paired, so they stand" is unproven.
+> - Minerva's prefill figure is `prefill + first token` and includes the one-time screen build;
+>   whether the two engines' prefill clocks cover the same work was not checked.
+
 Minerva FFai `57d74f4` (brick d: head screen on, avx2), built from a `git archive`, against
 bitnet.cpp `765741d` (MSVC `llama-server`, `-t T -tb T`):
 
@@ -694,6 +705,17 @@ afterwards (`ls` confirms).
 
 ## Final matched race vs bitnet.cpp (rusty-sloth, 2026-11-23)
 
+> **PROVISIONAL (marked 2026-11-25; rusty-sloth withdrew the figure).** Do not quote it or put it
+> in the README; it awaits a rerun against a clang build.
+> - The opponent was a locally patched MSVC build (`GGML_OPENMP=OFF`, `GGML_NATIVE=OFF`, `/O2`).
+>   BitNet's CMake rejects MSVC; clang is its supported compiler.
+> - The harness never compared output ids, only counts.
+> - The 24-thread "spin barrier" cause is an untested guess.
+> - bitnet.cpp's decode read ~20 % lower at night than in the afternoon, unexplained, so "the
+>   ratios are paired, so they stand" is unproven.
+> - Minerva's prefill figure is `prefill + first token` and includes the one-time screen build;
+>   whether the two engines' prefill clocks cover the same work was not checked.
+
 Minerva `d2ac1ca` (avx2vnni, head screen) against bitnet.cpp `765741d` (MSVC `llama-server`,
 `-t T -tb T`):
 
@@ -727,3 +749,21 @@ Against this afternoon's race (`57d74f4`, the same caveat on absolutes):
 
 - decode ratio at 8 threads went 1.12-1.13x -> 1.82-1.92x
 - p512 prefill went 0.36x (8,650 vs 3,145 ms) -> 2.48x
+
+## Corrections (2026-11-25)
+
+- **Both race sections above are provisional**; see the note at the head of each.
+- **The conformance gate's reference is the Windows MSVC `bitnet-win` build too** (its default
+  `--server`), so every 190/192 above is agreement with that build. Rerun the gate against the
+  clang build when it exists.
+- **Scope of "same file, same tokens":** full-model logit-bit equality is shown for x86 tiers and
+  for wasm32 under wasmtime, the latter on brick c only (16 tokens, before the screen, GEMM
+  prefill and grouped attention). The Pixel ran kernel tests only. No full model has run on a
+  phone or in a browser.
+- **Counted wins: 7, not 10.** W1, W2, W3, V2, V3, V4 and V5 lower an instruction count. V1
+  (53 -> 67), the paired GEMV (11 -> 11.5) and the q|k|v + gate|up join do not; they are time
+  wins.
+- **The root `Cargo.toml` edit was this session's, not another session's.** `cargo remove
+  rusty_ternary`, run on 2026-11-23 while the crate was still a workspace member, garbage-collects
+  unused `[workspace.dependencies]`: it deleted `rusty_png` / `rusty_jpeg` and their comment
+  (reproduced in a throwaway workspace). It was never committed.
