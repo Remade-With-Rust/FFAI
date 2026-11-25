@@ -867,10 +867,10 @@ screen awake, unplugged, hot (36-37 C by the end):
 
 Kernel tests (27, plus the ignored exhaustive one) pass on the phone, full-head p64 hash equals x86
 at neoni8mm, neondot and neon; `verify` g0 and p512 as x86. Decode is not timed here (4 tokens).
-With the new order, i8mm against NeonDot is not established either way: the tiled NeonDot was not worse.
+With the new order, i8mm against NeonDot: 1.22x, 4/6, two rounds far the other way; not established.
 
 2,000-token answer, p64, 4 threads, per-token 200-token medians (ms), one run each, fcvtl build run
-first (27 -> 37 C across the session; caps fell to 1.4-1.8 GHz late in both):
+first (36 -> 37 C while these ran; caps fell to 1.4-1.8 GHz late in both):
 fcvtl `51.6 55.9 53.0 71.8 83.8 80.8 85.2 87.4 90.4 92.8` (12.4 tok/s, max 162 ms); before
 `58.6 67.6 78.2 94.7 101.8 121 134 143 153 162` (8.5 tok/s). The growth is smaller but the phone
 was throttling in both and the order was not swapped: not a clean ratio.
