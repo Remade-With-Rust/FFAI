@@ -280,11 +280,15 @@ fn generate(args: &[String]) -> Result<(), String> {
     } else {
         HeadMode::from_env()
     };
+    // The profile at the first token: decode stages are reported from the second step on (the
+    // first carries the head's one-time build).
+    let mut prof0 = None;
     let out = engine::generate(&mut s, &prompt, new, mode, |i, logits, tok| {
         if let Some(e) = ends.as_mut() {
             e.push(t1.elapsed());
         }
         if i == 0 {
+            prof0 = ffai_minerva::prof::report();
             first = Some(t1.elapsed());
             a2 = alloc_census::read();
             alloc_census::arm(true);
@@ -385,8 +389,8 @@ fn generate(args: &[String]) -> Result<(), String> {
     }
     if let Some(stages) = ffai_minerva::prof::report() {
         let total = stages[0].1;
-        let named: f64 = stages[1..].iter().map(|s| s.1).sum();
-        let parts: Vec<String> = stages[1..]
+        let named: f64 = stages[1..4].iter().map(|s| s.1).sum();
+        let parts: Vec<String> = stages[1..4]
             .iter()
             .map(|(n, t)| format!("{n} {t:.3}s ({:.1}%)", 100.0 * t / total.max(1e-12)))
             .collect();
@@ -394,6 +398,36 @@ fn generate(args: &[String]) -> Result<(), String> {
             "prof: prefill {total:.3}s = {} + other {:.3}s ({:.1}%)",
             parts.join(" + "),
             total - named,
+            100.0 * (total - named) / total.max(1e-12)
+        );
+    }
+    if let Some(stages) = ffai_minerva::prof::report() {
+        // Decode: per step, over the steps after the first token (the first carries the head's
+        // one-time build).
+        let base = prof0.unwrap_or_else(|| stages.iter().map(|s| (s.0, 0.0)).collect());
+        let stages: Vec<(&str, f64)> = stages
+            .iter()
+            .zip(&base)
+            .map(|(s, b)| (s.0, s.1 - b.1))
+            .collect();
+        let steps = new.saturating_sub(1).max(1) as f64;
+        let total = stages[4].1;
+        let named: f64 = stages[5..8].iter().map(|s| s.1).sum();
+        let parts: Vec<String> = stages[5..8]
+            .iter()
+            .map(|(n, t)| {
+                format!(
+                    "{n} {:.2}ms ({:.1}%)",
+                    1e3 * t / steps,
+                    100.0 * t / total.max(1e-12)
+                )
+            })
+            .collect();
+        eprintln!(
+            "prof: decode {:.2}ms/step over {steps} steps = {} + other {:.2}ms ({:.1}%)",
+            1e3 * total / steps,
+            parts.join(" + "),
+            1e3 * (total - named) / steps,
             100.0 * (total - named) / total.max(1e-12)
         );
     }

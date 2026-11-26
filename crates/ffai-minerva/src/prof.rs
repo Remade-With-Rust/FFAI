@@ -1,4 +1,4 @@
-//! A coarse stage profiler for prefill: atomic nanosecond buckets, on only with
+//! A coarse stage profiler for prefill and decode: atomic nanosecond buckets, on only with
 //! `MINERVA_PROF=1` (read once). Scopes are per projection and per layer phase (tens per layer a
 //! batch, never per element), so the timer's own cost is negligible; when off, a scope is one
 //! relaxed load.
@@ -18,11 +18,28 @@ pub enum Stage {
     Finish = 2,
     /// The attention region (scores, softmax, value sums).
     Attention = 3,
+    /// Decode: every step that ends in a next token (forward pass, final norm and head).
+    DecTotal = 4,
+    /// Decode: the ternary mat-vecs (each join of projections timed as one).
+    DecTernary = 5,
+    /// Decode: the attention region.
+    DecAttention = 6,
+    /// Decode: the final norm and the head (screen, or the full head).
+    DecHead = 7,
 }
 
 /// Stage names, in [`Stage`] order.
-pub const NAMES: [&str; 4] = ["total", "gemm", "finish", "attention"];
-static NS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+pub const NAMES: [&str; 8] = [
+    "total",
+    "gemm",
+    "finish",
+    "attention",
+    "decode",
+    "ternary",
+    "attention",
+    "head",
+];
+static NS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
 fn on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

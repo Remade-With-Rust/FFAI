@@ -315,10 +315,12 @@ impl<'m> Session<'m> {
     /// # Errors
     /// When the context is full or the token is outside the vocabulary.
     pub fn step(&mut self, token: u32, logits: bool) -> Result<Option<&[f32]>, StepError> {
+        let _total = logits.then(|| crate::prof::scope(crate::prof::Stage::DecTotal));
         self.forward(token)?;
         if !logits {
             return Ok(None);
         }
+        let _head = crate::prof::scope(crate::prof::Stage::DecHead);
         self.final_hidden();
         self.head_full();
         Ok(Some(&self.logits))
@@ -330,7 +332,9 @@ impl<'m> Session<'m> {
     /// # Errors
     /// When the context is full or the token is outside the vocabulary.
     pub fn step_argmax(&mut self, token: u32) -> Result<u32, StepError> {
+        let _total = crate::prof::scope(crate::prof::Stage::DecTotal);
         self.forward(token)?;
+        let _head = crate::prof::scope(crate::prof::Stage::DecHead);
         self.final_hidden();
         Ok(self.screen_argmax())
     }
@@ -606,6 +610,7 @@ impl<'m> Session<'m> {
             // q, k and v share one activation: one join tree, one sync point, and the small k / v
             // fill the threads q leaves idle (each has its own sum scratch).
             {
+                let _t = crate::prof::scope(crate::prof::Stage::DecTernary);
                 let (qa, isum, isum2, isum3) =
                     (&self.qa, &mut self.isum, &mut self.isum2, &mut self.isum3);
                 let (qo, ko, vo) = (&mut self.q, &mut self.kc, &mut self.vc);
@@ -637,6 +642,7 @@ impl<'m> Session<'m> {
             let ctx = self.ctx;
             // One task a query head: decode has only 5 KV-head tasks, which idles threads (measured:
             // the grouped path lost at 64-1,088 positions); prefill uses the grouped kernels.
+            let att_scope = crate::prof::scope(crate::prof::Stage::DecAttention);
             self.att
                 .par_chunks_mut(hd)
                 .zip(self.scores.par_chunks_mut(ctx))
@@ -650,6 +656,7 @@ impl<'m> Session<'m> {
                     simd::round_f16_slice(isa, sc);
                     simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, out);
                 });
+            drop(att_scope);
             simd::rms_norm(
                 isa,
                 &self.att,
@@ -658,7 +665,10 @@ impl<'m> Session<'m> {
                 &mut self.h[..q_dim],
             );
             let act = quantise(isa, &self.h[..q_dim], &mut self.qa);
-            bitlinear(isa, m, &l.o, &self.qa, act, &mut self.isum, &mut self.out);
+            {
+                let _t = crate::prof::scope(crate::prof::Stage::DecTernary);
+                bitlinear(isa, m, &l.o, &self.qa, act, &mut self.isum, &mut self.out);
+            }
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
 
             // --- feed-forward ---
@@ -666,6 +676,7 @@ impl<'m> Session<'m> {
             let act = quantise(isa, &self.h[..embd], &mut self.qa);
             // gate and up share one activation: one join, one sync point.
             {
+                let _t = crate::prof::scope(crate::prof::Stage::DecTernary);
                 let (qa, isum, isum2) = (&self.qa, &mut self.isum, &mut self.isum2);
                 let (go, uo) = (&mut self.gate, &mut self.up);
                 rayon::join(
@@ -682,6 +693,7 @@ impl<'m> Session<'m> {
                 &mut self.h[..ffn],
             );
             let act = quantise(isa, &self.h[..ffn], &mut self.qa);
+            let _t = crate::prof::scope(crate::prof::Stage::DecTernary);
             bitlinear(
                 isa,
                 m,

@@ -968,3 +968,37 @@ The first-token gap went from 0.68x (1.94 s against 1.31 s) to 0.92x, and 0.92 i
 head build (about 0.5 s), which the server does at load; a prepared head would remove it. Decode
 leads in all 6 rounds (1.22x), but the null alone spans 0.95-1.37, so the lead is still **not
 established**.
+
+## Phone: contiguous KV layout, and stage times by position (2026-11-26)
+
+**Contiguous KV (`[layer][kv_head][position][head_dim]`) on top of fmlal: refuted, reverted.** One
+binary, `MINERVA_KV=contig` against the strided layout, tokens identical; Pixel 9 Pro XL, 4
+threads, gated as before, plugged in, battery 26 -> 35.6 C.
+
+| cell, rounds | contig decode, per round | median | null, per round | median |
+|---|---|---|---|---|
+| 256 -> 64, 6 | 0.98 0.97 1.08 1.05 0.98 0.97 | 0.980 | 0.95 0.95 1.01 0.98 1.01 1.02 | 0.995 |
+| 1024 -> 64, 6 | 1.01 1.04 0.94 1.02 0.98 1.01 | 1.012 | 1.01 0.94 0.92 0.77 0.96 1.08 | 0.951 |
+| 1856 -> 64, 5 | 0.97 1.06 1.06 1.13 1.03 | 1.057 | 1.06 1.06 1.05 1.03 0.99 | 1.054 |
+
+First token 0.981 / 0.995 / 0.988 against nulls 1.057 / 0.990 / 1.001. The kernel probe's 1.3x at
+2,000 positions does not reach the engine once fmlal has halved the KV reads.
+
+**Stage times** (`MINERVA_PROF=1`; decode per step over steps 2-33, the first carries the head
+build; ternary joins timed as one). 3 repeats a cell, order alternated, battery 34.5-35.5 C with
+caps at maximum, yet ternary time moved up to 1.9x between repeats at the same position (heat:
+the caps show the limit, not the clock). Best repeat / median, ms a step:
+
+| position | ternary | attention | head | other | total |
+|---|---|---|---|---|---|
+| 64 | 26.9 / 36.0 | 0.8 / 1.6 | 12.0 / 13.1 | 0.6 / 1.0 | 40.4 / 51.6 |
+| 1,024 | 36.5 / 45.7 | 10.1 / 12.9 | 13.1 / 17.0 | 0.7 / 1.3 | 60.5 / 77.3 |
+| 1,856 | 31.0 / 37.9 | 15.9 / 18.8 | 13.1 / 13.2 | 0.8 / 0.8 | 60.9 / 70.6 |
+
+1,856-token prefill, 3 repeats: 24.0-26.3 s = GEMM 63-64%, attention 27%, finish 5%, other 4-5%.
+
+Read: attention grows with position (0.8 -> 16 ms, best repeats) and is a quarter of a step at
+1,856; the head is flat at about 13 ms, about 30% of a short-context step: the int8 screen reads
+128,256 x 2,560 bytes (328 MB) a token, 11.8 ms at the probed 27.8 GB/s, so it sits at the
+bandwidth floor and only fewer bytes would move it. Laptop, 8 threads, for comparison: p64 18.6 ms
+= ternary 11.3 + head 6.3 + attention 0.5; p512 19.8 = 10.9 + 5.7 + 2.7.
