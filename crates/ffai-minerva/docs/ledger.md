@@ -934,3 +934,20 @@ second copy of `base`, so it shows the noise.
   token gains 1.42x: spinning workers cost the decode step more than parking saves.
 - **Building the int8 head in the background: refuted.** First token 1.135 sits inside the null's
   1.151; decode 0.954. Reverted.
+
+### Keep-awake through the prompt only (`MINERVA_SPIN`)
+
+Workers kept awake until the first token, then parked for the answer. Same harness; `null` is a
+second copy of the no-spin arm.
+
+| prompt -> answer, rounds | first token, keep-awake / null | decode, keep-awake per round | decode median (null) |
+|---|---|---|---|
+| 64 -> 64, 8 | **1.313, 7/8** / 1.042 | 0.84 1.11 1.05 1.15 1.04 1.07 0.89 0.95 | 1.045 (1.017) |
+| 256 -> 32, 6 | 1.084, 5/6 / 0.969 | 1.04 0.97 0.96 1.09 1.00 1.01 | 1.003 (0.970) |
+| 512 -> 32, 6 | 1.088, 6/6 / 1.046 | 0.87 0.84 0.95 1.03 1.03 0.91 | **0.932** (1.020) |
+
+**Kept for short prompts only:** on by default on aarch64 for prompts up to 64 tokens (the
+measured win), off above (`MINERVA_SPIN=0` off, `prompt` at any length). At 256 the gain is about
+0.2 s; at 512 decode lost 7%, likely the three spinning cores warming the phone (lowest cap 2.97
+against 3.1 GHz). Spot check with the default: 64-token first token 1.28 s against 1.92 s with
+`MINERVA_SPIN=0`, tokens identical. Not measured on x86 or WASM, so not on there.

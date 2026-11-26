@@ -751,21 +751,73 @@ pub fn generate(
     // Run on a pool worker: every parallel region below then forks through that worker's own
     // deque instead of the pool's global injector (from a non-pool thread each of the ~240
     // regions a token was injected, and the injector allocated a block every 63 jobs).
-    if rayon::current_thread_index().is_none()
-        && std::env::var("MINERVA_POOL").as_deref() != Ok("outside")
+    // (A scope also on a worker already: keep-awake jobs need one.)
+    if rayon::current_thread_index().is_some()
+        || std::env::var("MINERVA_POOL").as_deref() != Ok("outside")
     {
-        return rayon::scope(|_| generate_in(s, prompt, new, mode, on_step));
+        return rayon::scope(|sc| generate_in(s, prompt, new, mode, on_step, Some(sc)));
     }
-    generate_in(s, prompt, new, mode, on_step)
+    generate_in(s, prompt, new, mode, on_step, None)
 }
 
-fn generate_in(
-    s: &mut Session<'_>,
+/// Lets the kept-awake workers go when dropped (also on an error or a panic).
+struct Awake(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for Awake {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Prompts up to this many tokens keep the workers awake by default (on aarch64).
+const SPIN_MAX_PROMPT: usize = 64;
+
+/// Whether to keep the pool's other workers awake through the prompt and its first token:
+/// `MINERVA_SPIN=0` never, `prompt` always, unset for prompts up to [`SPIN_MAX_PROMPT`] tokens on
+/// aarch64. Pixel 9 Pro XL, 4 threads: first token 1.31x at 64 tokens with decode unchanged, about
+/// 1.1x at 256 and 512, and decode after a 512-token prompt 0.93x (the spinning cores warm the
+/// phone); spinning through the whole answer cost decode 0.87x. Not measured elsewhere.
+fn spin_prompt(prompt_len: usize) -> bool {
+    match std::env::var("MINERVA_SPIN").as_deref() {
+        Ok("0") => false,
+        Ok("prompt") => true,
+        _ => cfg!(target_arch = "aarch64") && prompt_len <= SPIN_MAX_PROMPT,
+    }
+}
+
+/// Keeps the pool's other workers looking for work until the returned guard drops, instead of
+/// parking between a token's many short regions (a parked worker wakes slowly, and on a phone its
+/// core clocks down). A broadcast job cannot be stolen, so a worker waiting in a join never picks
+/// up another's; the caller's own copy returns at once.
+fn keep_awake(sc: &rayon::Scope<'_>) -> Option<Awake> {
+    let me = rayon::current_thread_index()?;
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&stop);
+    sc.spawn_broadcast(move |_, ctx| {
+        if ctx.index() == me {
+            return;
+        }
+        while !flag.load(std::sync::atomic::Ordering::Acquire) {
+            if rayon::yield_now() != Some(rayon::Yield::Executed) {
+                std::hint::spin_loop();
+            }
+        }
+    });
+    Some(Awake(stop))
+}
+
+/// [`generate`] on a pool worker; `pool` is the scope keep-awake workers run in.
+fn generate_in<'s, 'm: 's>(
+    s: &mut Session<'m>,
     prompt: &[u32],
     new: usize,
     mode: HeadMode,
     mut on_step: impl FnMut(usize, Option<&[f32]>, u32),
+    pool: Option<&rayon::Scope<'s>>,
 ) -> Result<Vec<u32>, StepError> {
+    let mut awake = pool
+        .filter(|_| spin_prompt(prompt.len()))
+        .and_then(keep_awake);
     let (last, head) = prompt.split_last().ok_or(StepError::BadToken(u32::MAX))?;
     s.prefill(head)?;
     let mut out = Vec::with_capacity(new);
@@ -795,6 +847,8 @@ fn generate_in(
             }
         };
         out.push(next);
+        // The prompt and its first token are done: let the workers park for the answer.
+        drop(awake.take());
     }
     Ok(out)
 }
