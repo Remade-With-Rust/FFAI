@@ -1072,3 +1072,32 @@ an unchecked row opens (by design: the flag asserts the file is the one written 
 Laptop, p64, 8 threads, 2 runs each: first token 0.92 / 1.04 s building the screen, 0.66 / 0.77 s
 with the head file; load 0.52-0.57 -> 0.60-0.62 s (the check, 0.05 s). About 0.2 s saved; tokens
 identical. Phone and the race arm pending (rusty-sloth wires it into export and the race).
+
+## Phone: NEON grouped attention, the head file, uneven core split (2026-11-26)
+
+Pixel 9 Pro XL, gated as before (awake, caps at maximum), plugged in; one binary per test, arms
+by environment or flag, tokens identical in every arm.
+
+**NEON fhm group-of-4 attention kernels: refuted, not committed.** Kernel test on the phone 27/27
+(grouped kernels on exact-f16 queries included). 4 threads, battery 27 -> 36 C; `g4pre` = the
+kernels in prefill only, `g4dec` = also grouped decode attention:
+
+| cell | decode null / g4pre / g4dec | first token null / g4pre / g4dec |
+|---|---|---|
+| 1024 -> 64, 6 rounds | 1.024 / 1.003 / 1.028 | 0.975 / 0.976 / 0.979 |
+| 1856 -> 64, 5 rounds | 1.004 / 0.983 / 1.012 | 1.009 / 0.984 / 0.965 |
+
+Unlike the laptop, the per-head path does not pay for the 4x K/V re-read here (the group's four
+query heads run together and the reads appear to come from cache). Grouped decode stays x86-only.
+
+**Head file: kept** (b07aa41). Made on the phone in 0.42 s into its own folder. 64 -> 32, 8 rounds,
+battery 31-33 C: first token 1.51 -> **1.13 s, 1.348x, 8/8** (null 1.007); decode 0.968 (null
+0.981), neutral. (Last night's re-race had bitnet.cpp -omp at 1.35 s on this cell; not a race
+until re-raced with a head arm.)
+
+**Uneven work across core classes: refuted at 64 positions.** Threads x rows a task (decode
+`par_chunks`; tasks are stolen, so the split is already uneven), every run starting at <= 31.0 C,
+6 rounds, 64 -> 64. Decode against 4 threads x 64 rows (null 0.990): 4 x 16 rows 1.013, 5 x 16
+0.819, 6 x 16 0.875, 8 x 16 0.630, 8 x 64 0.693; first token 0.555-0.756 for 5-8 threads. Smaller
+tasks do not let the A520s help: the 4-thread default stands. The 1,856-position cell did not run
+(adb dropped).
