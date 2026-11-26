@@ -951,3 +951,20 @@ measured win), off above (`MINERVA_SPIN=0` off, `prompt` at any length). At 256 
 0.2 s; at 512 decode lost 7%, likely the three spinning cores warming the phone (lowest cap 2.97
 against 3.1 GHz). Spot check with the default: 64-token first token 1.28 s against 1.92 s with
 `MINERVA_SPIN=0`, tokens identical. Not measured on x86 or WASM, so not on there.
+
+### Re-race at 64 tokens after fmlal and short-prompt keep-awake (2026-11-25, PROVISIONAL)
+
+Same phone, harness and gates as the race above; Minerva at e0df6a7 (neonfhm, keep-awake on for
+this 64-token prompt), 6 rounds, three arms (`-noomp` dropped: the phone is Tim's main phone, and
+only `-omp` is quoted). Battery 24.5 -> 31.8 C; no cap fell; no run redone.
+
+| 64 -> 128 | Minerva | bitnet.cpp -omp | Minerva / -omp, per round | median, wins | null arm, per round |
+|---|---|---|---|---|---|
+| decode tok/s | 23.9 | 19.4 | 1.18 1.21 1.23 1.11 1.46 1.28 | 1.22, 6/6 | 0.95 0.96 1.15 1.02 1.23 1.37 |
+| first token s | 1.47 | 1.35 | 0.82 0.94 0.95 1.11 0.88 0.90 | 0.92, 1/6 | 0.80 1.01 1.10 1.02 0.87 1.07 |
+
+The first-token gap went from 0.68x (1.94 s against 1.31 s) to 0.92x, and 0.92 is inside the null's
+0.80-1.10: **level within the noise, not a win**. Minerva's 1.47 s still includes its one-time int8
+head build (about 0.5 s), which the server does at load; a prepared head would remove it. Decode
+leads in all 6 rounds (1.22x), but the null alone spans 0.95-1.37, so the lead is still **not
+established**.
