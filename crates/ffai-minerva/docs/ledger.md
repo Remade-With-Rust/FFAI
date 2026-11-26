@@ -1026,3 +1026,31 @@ state's outlier channels). **4-bit is refuted** (most of the vocabulary survives
 that keeps survivors small saves about a quarter of the head's bytes: ~13 -> ~10 ms a step on the
 phone, 6.3 -> ~4.7 ms on the laptop, 5-8% of a step, for a packed 6-bit kernel on every tier.
 Parked behind decode attention.
+
+## Decode attention: split, and grouped by KV head (2026-11-26, laptop, PROVISIONAL)
+
+Split of decode attention (CPU time summed over threads, 8 threads, golden model): at 1,856
+positions scores 47 ms and values 40 ms a step against softmax 1.9 and `f16` rounding 0.2; at
+1,024, 24 / 21 / 1.1 / 0.2. Reading K and V is the attention. Decode ran one task per query head,
+so each KV head's K and V were read once per query head in its group (4x): about 570 MB a step at
+1,856 positions, near the laptop's memory bandwidth for the ~12 ms measured.
+
+**Grouped decode attention** (`MINERVA_DECATT=group|head`): three phases, each with enough tasks:
+scores by (KV head, 128 positions) through the grouped kernel (each score is independent),
+softmax and rounding by query head, values by (KV head, 32 outputs) through the grouped kernel
+(each output still sums positions in order from zero). Tokens identical at p64, p1024 and p1856.
+Laptop, 8 threads, 8 rounds, **no load gate** (another session was compiling: load median 67%,
+11-100%), so the null arms are wide; attention stage time, then decode:
+
+| positions | attention speed, grouped (null) | per round, grouped | decode, grouped (null) |
+|---|---|---|---|
+| 1,856 | **1.283** (0.978) | 1.36 1.69 1.04 1.41 1.03 1.27 0.69 1.30 | 1.076 (0.981) |
+| 1,024 | 1.266 (1.099) | 1.65 1.16 1.22 2.23 4.86 1.31 1.01 1.20 | 1.074 (1.126) |
+| 256 | 0.700 (1.052) | 0.89 0.64 0.75 0.68 0.72 0.65 0.64 0.93 | 0.846 (1.014) |
+| 64 | 0.673 (0.935) | 0.80 1.08 0.50 0.41 0.69 0.65 0.69 0.51 | 0.967 (0.948) |
+
+Default on x86 from 1,024 positions only; the decode gain is **not established** under this load
+(attention is about a third of a step at 1,856, so ~1.28x on it is ~8% of the step). Below 1,024
+the three phases cost more than the reads they save. On aarch64 the grouped kernels are AVX2-only
+(NEON loops per head), so the phone keeps the per-head path; NEON fhm grouped kernels are written
+but unrun on a phone, held back for the next phone session (they would also change prefill).

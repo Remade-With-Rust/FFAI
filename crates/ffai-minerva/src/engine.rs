@@ -83,6 +83,10 @@ pub struct Session<'m> {
     vc: Vec<f32>,
     att: Vec<f32>,
     scores: Vec<f32>,
+    /// Grouped decode attention's staging: scores by (KV head, position chunk), values by
+    /// (KV head, output slice).
+    att_tmp: Vec<f32>,
+    att_otmp: Vec<f32>,
     gate: Vec<f32>,
     up: Vec<f32>,
     out: Vec<f32>,
@@ -194,6 +198,128 @@ fn bitlinear_batch(
         });
 }
 
+/// Positions a grouped decode scores task covers.
+const DEC_CHUNK: usize = 128;
+
+/// Output values a grouped decode values task covers (64 bytes of `f16` a row).
+const DEC_SLICE: usize = 32;
+
+/// Positions from which decode takes the grouped attention by default (x86 only).
+const DEC_GROUP_MIN: usize = 1024;
+
+/// Whether decode takes the grouped attention (it needs groups of 4 and head widths of a
+/// multiple of [`DEC_SLICE`]): `MINERVA_DECATT=group` always, `head` never, unset on x86 from
+/// [`DEC_GROUP_MIN`] positions. Laptop, 8 threads, under load (median 67%): attention 1.28x at
+/// 1,856 positions (7/8 rounds, null 0.98) and 1.27x at 1,024 (null 1.10), but 0.70x at 256 and
+/// 0.67x at 64, where three phases cost more than the reads they save. aarch64 waits for its
+/// grouped kernels (today it would loop per head).
+fn dec_grouped(n: usize, group: usize, hd: usize) -> bool {
+    static MODE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    let mode = *MODE.get_or_init(|| match std::env::var("MINERVA_DECATT").as_deref() {
+        Ok("group") => Some(true),
+        Ok("head") => Some(false),
+        _ => None,
+    });
+    let on = mode.unwrap_or(cfg!(target_arch = "x86_64") && n >= DEC_GROUP_MIN);
+    on && n > 0 && group == 4 && hd.is_multiple_of(DEC_SLICE)
+}
+
+/// One decode step's attention, each KV head's `K` and `V` read once for its whole group (the
+/// per-head path reads them once a query head). Three phases, each with enough tasks to fill
+/// the threads: scores by (KV head, chunk of positions) (each score is independent of the
+/// others), softmax and `f16` rounding by query head, values by (KV head, slice of outputs)
+/// (each output still sums over positions in order from zero). The same bits as the per-head
+/// path: the grouped kernels equal the per-head ones.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the attention's buffers, passed explicitly"
+)]
+fn attend_decode_grouped(
+    isa: Isa,
+    kcache: &[u16],
+    vcache: &[u16],
+    q: &[f32],
+    n: usize,
+    (kv_heads, group, hd, kv_dim, ctx): (usize, usize, usize, usize, usize),
+    kq_scale: f32,
+    (scores, tmp, otmp): (&mut [f32], &mut [f32], &mut [f32]),
+    att: &mut [f32],
+) {
+    // Scores: KV head `g`'s region of `tmp` holds its chunks back to back, chunk `c` as `group`
+    // runs of its length.
+    tmp[..kv_heads * group * ctx]
+        .par_chunks_mut(group * ctx)
+        .enumerate()
+        .for_each(|(g, reg)| {
+            let qg = &q[g * group * hd..(g + 1) * group * hd];
+            reg[..group * n]
+                .par_chunks_mut(group * DEC_CHUNK)
+                .enumerate()
+                .for_each(|(c, o)| {
+                    let len = o.len() / group;
+                    let t0 = c * DEC_CHUNK;
+                    simd::f16_matvec_strided_group(
+                        isa,
+                        kcache,
+                        g * hd + t0 * kv_dim,
+                        kv_dim,
+                        hd,
+                        qg,
+                        len,
+                        o,
+                        len,
+                    );
+                });
+        });
+    // Softmax and rounding, a query head a task, after gathering its row.
+    let tmp = &*tmp;
+    scores[..kv_heads * group * ctx]
+        .par_chunks_mut(ctx)
+        .enumerate()
+        .for_each(|(h, row)| {
+            let (g, j) = (h / group, h % group);
+            let reg = &tmp[g * group * ctx..];
+            for t0 in (0..n).step_by(DEC_CHUNK) {
+                let len = DEC_CHUNK.min(n - t0);
+                let src = &reg[t0 * group + j * len..t0 * group + (j + 1) * len];
+                row[t0..t0 + len].copy_from_slice(src);
+            }
+            let row = &mut row[..n];
+            simd::softmax(isa, row, kq_scale);
+            simd::round_f16_slice(isa, row);
+        });
+    // Values: (KV head, slice of `DEC_SLICE` outputs) a task, staged then placed.
+    let scores = &*scores;
+    let slices = hd / DEC_SLICE;
+    otmp[..kv_heads * group * hd]
+        .par_chunks_mut(group * DEC_SLICE)
+        .enumerate()
+        .for_each(|(i, o)| {
+            let (g, b) = (i / slices, i % slices);
+            simd::weighted_sum_f16_group(
+                isa,
+                &scores[g * group * ctx..(g + 1) * group * ctx],
+                ctx,
+                n,
+                vcache,
+                g * hd + b * DEC_SLICE,
+                kv_dim,
+                o,
+                DEC_SLICE,
+            );
+        });
+    for (i, o) in otmp[..kv_heads * group * hd]
+        .chunks_exact(group * DEC_SLICE)
+        .enumerate()
+    {
+        let (g, b) = (i / slices, i % slices);
+        for (j, src) in o.chunks_exact(DEC_SLICE).enumerate() {
+            let at = (g * group + j) * hd + b * DEC_SLICE;
+            att[at..at + DEC_SLICE].copy_from_slice(src);
+        }
+    }
+}
+
 /// One KV head's attention for its group of query heads (`q` the group's heads, `hd` each):
 /// scores over positions `0..n` into `sc` (one row of `ctx` a head), softmax and `f16` rounding
 /// per head, then the value sums into `out` (`hd` a head). Each head's arithmetic is the
@@ -283,6 +409,8 @@ impl<'m> Session<'m> {
             vc: vec![0.0; c.kv_dim()],
             att: vec![0.0; q_dim],
             scores: vec![0.0; c.heads * ctx],
+            att_tmp: vec![0.0; c.heads * ctx],
+            att_otmp: vec![0.0; q_dim],
             gate: vec![0.0; c.ffn],
             up: vec![0.0; c.ffn],
             out: vec![0.0; widest],
@@ -640,22 +768,36 @@ impl<'m> Session<'m> {
             let vcache = &self.v[layer_base..layer_base + n * kv_dim];
             let q = &self.q;
             let ctx = self.ctx;
-            // One task a query head: decode has only 5 KV-head tasks, which idles threads (measured:
-            // the grouped path lost at 64-1,088 positions); prefill uses the grouped kernels.
             let att_scope = crate::prof::scope(crate::prof::Stage::DecAttention);
-            self.att
-                .par_chunks_mut(hd)
-                .zip(self.scores.par_chunks_mut(ctx))
-                .enumerate()
-                .for_each(|(head, (out, sc))| {
-                    let g = head / group;
-                    let sc = &mut sc[..n];
-                    let qh = &q[head * hd..(head + 1) * hd];
-                    simd::f16_matvec_strided(isa, kcache, g * hd, kv_dim, qh, sc);
-                    simd::softmax(isa, sc, kq_scale);
-                    simd::round_f16_slice(isa, sc);
-                    simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, out);
-                });
+            if dec_grouped(n, group, hd) {
+                attend_decode_grouped(
+                    isa,
+                    kcache,
+                    vcache,
+                    q,
+                    n,
+                    (c.kv_heads, group, hd, kv_dim, ctx),
+                    kq_scale,
+                    (&mut self.scores, &mut self.att_tmp, &mut self.att_otmp),
+                    &mut self.att,
+                );
+            } else {
+                // One task a query head: decode has only 5 KV-head tasks, which idles threads (measured:
+                // the grouped path lost at 64-1,088 positions); prefill uses the grouped kernels.
+                self.att
+                    .par_chunks_mut(hd)
+                    .zip(self.scores.par_chunks_mut(ctx))
+                    .enumerate()
+                    .for_each(|(head, (out, sc))| {
+                        let g = head / group;
+                        let sc = &mut sc[..n];
+                        let qh = &q[head * hd..(head + 1) * hd];
+                        simd::f16_matvec_strided(isa, kcache, g * hd, kv_dim, qh, sc);
+                        simd::softmax(isa, sc, kq_scale);
+                        simd::round_f16_slice(isa, sc);
+                        simd::weighted_sum_f16(isa, sc, vcache, g * hd, kv_dim, out);
+                    });
+            }
             drop(att_scope);
             simd::rms_norm(
                 isa,
