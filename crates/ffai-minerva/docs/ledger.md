@@ -1002,3 +1002,27 @@ Read: attention grows with position (0.8 -> 16 ms, best repeats) and is a quarte
 128,256 x 2,560 bytes (328 MB) a token, 11.8 ms at the probed 27.8 GB/s, so it sits at the
 bandwidth floor and only fewer bytes would move it. Laptop, 8 threads, for comparison: p64 18.6 ms
 = ternary 11.3 + head 6.3 + attention 0.5; p512 19.8 = 10.9 + 5.7 + 2.7.
+
+### A narrower head screen: survivor census (2026-11-26, laptop)
+
+The screen's bound is exact at any code width (it uses each row's measured quantisation error), so
+narrower codes keep the tokens and only change how many rows are rescored exactly. Census over 32
+decode steps on the golden model, p64 and p512, steps after the first; codes held as `i8`, so only
+the bound changed (no speed measured). Rows rescored a step, mean / most:
+
+| screen | bytes a row (now 2,572) | p64 | p512 |
+|---|---|---|---|
+| 8-bit, a scale a row (now) | 2,572 | 2.2 / 11 | 2.5 / 6 |
+| 7-bit, a scale a row | ~2,250 | 6.4 / 25 | 7.8 / 24 |
+| 6-bit, a scale a row | ~1,930 | 85 / 595 | 121 / 774 |
+| 6-bit, blocks of 128 (scale + error norm a block) | ~2,000 | 15 / 72 | 21 / 97 |
+| 5-bit, blocks of 32 | ~1,920 | 105 / 686 | 173 / 882 |
+| 5-bit, a scale a row | ~1,610 | 20,486 / 104,659 | 14,896 / 127,713 |
+| 4-bit, blocks of 16 / 32 / 64 | 1,300-1,600 | 7,123-61,644 / up to all | 10,718-68,632 / all |
+| 4-bit, a scale a row | ~1,290 | all | all |
+
+Block bounds sum `‖e_b‖ ‖x_b‖` over blocks (tighter than one Cauchy-Schwarz term, given the hidden
+state's outlier channels). **4-bit is refuted** (most of the vocabulary survives). The best width
+that keeps survivors small saves about a quarter of the head's bytes: ~13 -> ~10 ms a step on the
+phone, 6.3 -> ~4.7 ms on the laptop, 5-8% of a step, for a packed 6-bit kernel on every tier.
+Parked behind decode attention.
