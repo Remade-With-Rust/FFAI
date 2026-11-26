@@ -689,6 +689,164 @@ pub(super) unsafe fn f16_matvec(base: *const u8, row_bytes: usize, x: &[f32], ou
     }
 }
 
+/// `x` as halves, when every value is exactly an `f16` (so a widening multiply-add of it by `f16`
+/// weights has an exact product, and fusing changes no bit: 11 + 11 bits fit an `f32`, and the
+/// smallest product, 2^-48, is a normal `f32`). `None` otherwise.
+fn exact_halves(x: &[f32]) -> Option<Vec<u16>> {
+    let mut h = vec![0u16; x.len()];
+    let n = x.len() / 8 * 8;
+    // SAFETY: NEON is baseline on aarch64; groups of 8 are inside both slices.
+    unsafe {
+        let mut diff = vdupq_n_u32(0);
+        for i in (0..n).step_by(8) {
+            let (a, b) = (
+                vld1q_f32(x.as_ptr().add(i)),
+                vld1q_f32(x.as_ptr().add(i + 4)),
+            );
+            let q = f2h8(a, b);
+            let (c, d) = h2f8(q);
+            let e = |p: float32x4_t, q: float32x4_t| {
+                veorq_u32(vreinterpretq_u32_f32(p), vreinterpretq_u32_f32(q))
+            };
+            diff = vorrq_u32(diff, vorrq_u32(e(a, c), e(b, d)));
+            vst1q_u16(h.as_mut_ptr().add(i), q);
+        }
+        if vmaxvq_u32(diff) != 0 {
+            return None;
+        }
+    }
+    for i in n..x.len() {
+        h[i] = num::to_f16_bits(x[i]);
+        if num::round_f16(x[i]).to_bits() != x[i].to_bits() {
+            return None;
+        }
+    }
+    Some(h)
+}
+
+/// `(lo + a.low * b.low, hi + a.high * b.high)`, widened `f16 -> f32`, fused: `fmlal`, `fmlal2`.
+///
+/// Inline assembly: the intrinsics are unstable on 1.95.
+#[target_feature(enable = "neon,fp16,fhm")]
+#[inline]
+fn fmlal(
+    mut lo: float32x4_t,
+    mut hi: float32x4_t,
+    a: uint16x8_t,
+    b: uint16x8_t,
+) -> (float32x4_t, float32x4_t) {
+    // SAFETY: reads and writes only the named vector registers; valid under `fhm`, which the
+    // tier detected.
+    unsafe {
+        std::arch::asm!(
+            "fmlal {lo:v}.4s, {a:v}.4h, {b:v}.4h",
+            "fmlal2 {hi:v}.4s, {a:v}.4h, {b:v}.4h",
+            lo = inout(vreg) lo,
+            hi = inout(vreg) hi,
+            a = in(vreg) a,
+            b = in(vreg) b,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    (lo, hi)
+}
+
+/// [`f16_matvec`] by `fmlal`: the same bits when `x` is all `f16` values, else [`f16_matvec`].
+///
+/// # Safety
+/// NEON + fp16 + fhm; as [`f16_matvec`].
+#[target_feature(enable = "neon,fp16,fhm")]
+pub(super) unsafe fn f16_matvec_fhm(base: *const u8, row_bytes: usize, x: &[f32], out: &mut [f32]) {
+    let exact = x
+        .len()
+        .is_multiple_of(LANES)
+        .then(|| exact_halves(x))
+        .flatten();
+    let Some(xh) = exact else {
+        // SAFETY: the same contract.
+        return unsafe { f16_matvec(base, row_bytes, x, out) };
+    };
+    let quads = out.len() / 4 * 4;
+    let (o4, o1) = out.split_at_mut(quads);
+    for (i, o) in o4.chunks_exact_mut(4).enumerate() {
+        // SAFETY: rows `4i..4i + 4`.
+        unsafe { f16_rows_fhm::<4>(base.add(4 * i * row_bytes), row_bytes, &xh, o) };
+    }
+    for (i, o) in o1.chunks_exact_mut(1).enumerate() {
+        // SAFETY: row `quads + i`.
+        unsafe { f16_rows_fhm::<1>(base.add((quads + i) * row_bytes), row_bytes, &xh, o) };
+    }
+}
+
+/// # Safety
+/// NEON + fp16 + fhm; `R` rows of `x.len()` halves readable, `row_bytes` apart; `x.len() % 16 == 0`.
+#[target_feature(enable = "neon,fp16,fhm")]
+#[inline]
+unsafe fn f16_rows_fhm<const R: usize>(
+    base: *const u8,
+    row_bytes: usize,
+    x: &[u16],
+    out: &mut [f32],
+) {
+    let z = vdupq_n_f32(0.0);
+    let mut acc = [[z; 4]; R];
+    for i in 0..x.len() / 16 {
+        // SAFETY: halves `16i..16i + 16` of `x` and of each row (unaligned byte loads).
+        unsafe {
+            let (x0, x1) = (
+                vld1q_u16(x.as_ptr().add(16 * i)),
+                vld1q_u16(x.as_ptr().add(16 * i + 8)),
+            );
+            for (r, a) in acc.iter_mut().enumerate() {
+                let p = base.add(r * row_bytes + 32 * i);
+                let h0 = vreinterpretq_u16_u8(vld1q_u8(p));
+                let h1 = vreinterpretq_u16_u8(vld1q_u8(p.add(16)));
+                (a[0], a[1]) = fmlal(a[0], a[1], h0, x0);
+                (a[2], a[3]) = fmlal(a[2], a[3], h1, x1);
+            }
+        }
+    }
+    for (o, a) in out.iter_mut().zip(acc) {
+        *o = reduce16(a[0], a[1], a[2], a[3]);
+    }
+}
+
+/// [`weighted_sum`] by `fmlal`: the same bits when every weight is an `f16` value, else
+/// [`weighted_sum`].
+///
+/// # Safety
+/// NEON + fp16 + fhm; as [`weighted_sum`].
+#[target_feature(enable = "neon,fp16,fhm")]
+pub(super) unsafe fn weighted_sum_fhm(p: &[f32], base: *const u16, stride: usize, out: &mut [f32]) {
+    let exact = out
+        .len()
+        .is_multiple_of(64)
+        .then(|| exact_halves(p))
+        .flatten();
+    let Some(ph) = exact else {
+        // SAFETY: the same contract.
+        return unsafe { weighted_sum(p, base, stride, out) };
+    };
+    for (blk, o) in out.chunks_exact_mut(64).enumerate() {
+        let mut acc = [vdupq_n_f32(0.0); 16];
+        for (t, &pt) in ph.iter().enumerate() {
+            let pv = vdupq_n_u16(pt);
+            // SAFETY: values `64·blk..64·blk + 64` of row `t`.
+            unsafe {
+                let q = base.add(t * stride + 64 * blk);
+                for (k, pair) in acc.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                    let h = vreinterpretq_u16_u8(vld1q_u8(q.add(8 * k).cast()));
+                    (pair[0], pair[1]) = fmlal(pair[0], pair[1], h, pv);
+                }
+            }
+        }
+        for (d, v) in o.chunks_exact_mut(4).zip(acc) {
+            // SAFETY: four floats.
+            unsafe { vst1q_f32(d.as_mut_ptr(), v) };
+        }
+    }
+}
+
 /// # Safety
 /// NEON; rows `t < p.len()` at `base + t·stride` readable for `out.len()` values.
 #[target_feature(enable = "neon")]

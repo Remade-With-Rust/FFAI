@@ -247,42 +247,48 @@ fn i8i16_matvec_matches_the_oracle() {
 #[test]
 fn f16_matvec_matches_the_oracle() {
     let mut rng = Rng(2);
-    for (rows, len) in [
-        (1usize, 1usize),
-        (3, 15),
-        (4, 16),
-        (5, 17),
-        (7, 33),
-        (9, 128),
-        (3, 2560),
-        (2, 2567),
-    ] {
-        let m = rng.halves(rows * len);
-        let mb: Vec<u8> = m.iter().flat_map(|h| h.to_le_bytes()).collect();
-        let x = rng.floats(len, 3.0);
-        let want: Vec<f32> = (0..rows)
-            .map(|r| num::dot16_f16(&m[r * len..(r + 1) * len], &x))
-            .collect();
-        for isa in simd_tiers() {
-            let mut got = vec![0f32; rows];
-            f16_matvec_bytes(isa, &mb, &x, &mut got);
-            assert_eq!(bits(&got), bits(&want), "{} bytes {rows}x{len}", isa.name());
-        }
-        // Strided: rows `stride` apart starting at `offset`, as in the KV cache.
-        let (offset, stride) = (3usize, len + 5);
-        let v = rng.halves(offset + rows * stride);
-        let want: Vec<f32> = (0..rows)
-            .map(|r| num::dot16_f16(&v[offset + r * stride..offset + r * stride + len], &x))
-            .collect();
-        for isa in simd_tiers() {
-            let mut got = vec![0f32; rows];
-            f16_matvec_strided(isa, &v, offset, stride, &x, &mut got);
-            assert_eq!(
-                bits(&got),
-                bits(&want),
-                "{} strided {rows}x{len}",
-                isa.name()
-            );
+    // Any f32 x, and an x of exact f16 values (the only input the fhm arm takes).
+    for exact in [false, true] {
+        for (rows, len) in [
+            (1usize, 1usize),
+            (3, 15),
+            (4, 16),
+            (5, 17),
+            (7, 33),
+            (9, 128),
+            (3, 2560),
+            (2, 2567),
+        ] {
+            let m = rng.halves(rows * len);
+            let mb: Vec<u8> = m.iter().flat_map(|h| h.to_le_bytes()).collect();
+            let mut x = rng.floats(len, 3.0);
+            if exact {
+                x.iter_mut().for_each(|v| *v = num::round_f16(*v));
+            }
+            let want: Vec<f32> = (0..rows)
+                .map(|r| num::dot16_f16(&m[r * len..(r + 1) * len], &x))
+                .collect();
+            for isa in simd_tiers() {
+                let mut got = vec![0f32; rows];
+                f16_matvec_bytes(isa, &mb, &x, &mut got);
+                assert_eq!(bits(&got), bits(&want), "{} bytes {rows}x{len}", isa.name());
+            }
+            // Strided: rows `stride` apart starting at `offset`, as in the KV cache.
+            let (offset, stride) = (3usize, len + 5);
+            let v = rng.halves(offset + rows * stride);
+            let want: Vec<f32> = (0..rows)
+                .map(|r| num::dot16_f16(&v[offset + r * stride..offset + r * stride + len], &x))
+                .collect();
+            for isa in simd_tiers() {
+                let mut got = vec![0f32; rows];
+                f16_matvec_strided(isa, &v, offset, stride, &x, &mut got);
+                assert_eq!(
+                    bits(&got),
+                    bits(&want),
+                    "{} strided {rows}x{len}",
+                    isa.name()
+                );
+            }
         }
     }
 }

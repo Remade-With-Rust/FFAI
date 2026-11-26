@@ -907,3 +907,30 @@ Only 4 threads, one phone, two cells, both prompts greedy.
 
 Also: `zero` attention weights after f16 rounding are 1-5% of weights at 512-2,000 positions (two
 prompts, x86), so skipping them is not worth code.
+
+## Phone: fmlal, keep-awake workers, background head (2026-11-25)
+
+Pixel 9 Pro XL, 4 threads, one binary, arms by environment variable, fresh process a run, order
+rotated; a run starts only awake, caps at maximum and battery <= 33.0 C (1856 cell: <= 35.0 C).
+Every arm's tokens identical. Ratios are against the `base` arm, faster above 1; `null` is a
+second copy of `base`, so it shows the noise.
+
+| cell | arm | decode, per round | median | first token median | caps min |
+|---|---|---|---|---|---|
+| 64 -> 128, 8 rounds | null | 1.06 1.15 1.01 0.96 0.98 1.01 1.03 1.07 | 1.019 | 1.151 | 3.1 GHz |
+| | fhm | 1.11 1.11 1.02 0.95 1.00 1.02 1.03 1.00 | 1.018 | 1.051 | 3.1 GHz |
+| | keep-awake | 0.91 0.96 0.94 0.82 0.85 0.82 0.88 0.86 | **0.870** | 1.423, 8/8 | 3.1 GHz |
+| | background head | 0.96 1.06 0.97 0.87 0.95 0.94 0.92 0.96 | 0.954 | 1.135 | 3.1 GHz |
+| 1856 -> 64, 6 rounds | null | 1.17 1.09 0.97 1.18 1.15 1.19 | 1.159 | 1.005 | 2.36 GHz |
+| | fhm | 1.36 1.27 1.16 1.60 1.35 1.32 | **1.338, 6/6** | **1.375, 6/6** | 2.69 GHz |
+
+- **fmlal (`neonfhm`): kept.** No change at 64 positions, where attention is small. At 1,856
+  positions, against the null arm in the same round, decode is 1.16 1.17 1.20 1.36 1.17 1.11
+  (16.45 against 13.58 tok/s) and the first token 24.6 s against 34.5 s. The base arm throttled
+  the most (2.15 GHz) and the phone warmed 27 -> 36 C through the cell, so the fair reference is
+  the null arm, not the base. Same bits: `f16 x f16` products are exact in `f32`, and the fused
+  path is taken only when the vector is all `f16` values (checked; else the old path).
+- **Keep-awake workers for the whole answer: refuted** for decode (0.870, 0/8) though the first
+  token gains 1.42x: spinning workers cost the decode step more than parking saves.
+- **Building the int8 head in the background: refuted.** First token 1.135 sits inside the null's
+  1.151; decode 0.954. Reverted.
