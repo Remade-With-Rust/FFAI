@@ -192,9 +192,13 @@ fn print_census(path: &str, c: &ByteCensus) {
 const USAGE: &str = "usage:
   minerva roofline [--gguf PATH] [--mib N] [--reps N] [--threads 1,2,4]
   minerva info     [--gguf PATH]
-  minerva generate --ids FILE --new N [--gguf PATH] [--threads N] [--probs OUT.jsonl] [--census]
+  minerva generate --ids FILE --new N [--gguf PATH] [--threads N] [--head FILE] [--probs OUT.jsonl] [--census]
       prints the generated ids, comma separated, as the last line of stdout;
-      MINERVA_ISA=scalar|ssse3|avx2|neon|simd128 picks the instruction set (default: the widest)";
+      MINERVA_ISA=scalar|ssse3|avx2|neon|simd128 picks the instruction set (default: the widest);
+      --head FILE uses a head file from prepare-head instead of building the screen at the first token
+  minerva prepare-head --out FILE [--gguf PATH] [--beside-model]
+      builds the greedy head's int8 screen once and writes it as a head file (refuses the model's
+      own directory unless --beside-model)";
 
 fn parse_ids(text: &str) -> Result<Vec<u32>, String> {
     text.split(|c: char| c == ',' || c.is_whitespace())
@@ -251,6 +255,11 @@ fn generate(args: &[String]) -> Result<(), String> {
     let a0 = alloc_census::read();
     let t0 = Instant::now();
     let m = Model::load(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    if let Some(h) = arg(args, "--head") {
+        let h8 =
+            ffai_minerva::head::HeadQ8::open(&m, Path::new(h)).map_err(|e| format!("{h}: {e}"))?;
+        m.screen.attach(h8);
+    }
     let load = t0.elapsed();
     let mut s = Session::new(&m, prompt.len() + new);
     let mut probs = match arg(args, "--probs") {
@@ -329,7 +338,7 @@ fn generate(args: &[String]) -> Result<(), String> {
     let first = first.unwrap_or(total);
     let decode = total - first;
     eprintln!(
-        "minerva: load {:.2}s | prefill {} tokens + first: {:.2}s | decode {} tokens: {:.2}s ({:.2} tok/s) | threads {} | isa {} | head {:?} | logits-fnv {fnv:016x}",
+        "minerva: load {:.2}s | prefill {} tokens + first: {:.2}s | decode {} tokens: {:.2}s ({:.2} tok/s) | threads {} | isa {} | head {:?} | logits-fnv {fnv:016x} | head: {}",
         load.as_secs_f64(),
         prompt.len(),
         first.as_secs_f64(),
@@ -338,7 +347,8 @@ fn generate(args: &[String]) -> Result<(), String> {
         new.saturating_sub(1) as f64 / decode.as_secs_f64().max(1e-9),
         rayon::current_num_threads(),
         s.isa().name(),
-        mode
+        mode,
+        m.screen.source()
     );
     if let Some(e) = ends.filter(|e| e.len() > 1) {
         let ms: Vec<f64> = e
@@ -448,12 +458,52 @@ fn generate(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `prepare-head`: build the screen once and write it as a head file. Never beside the model by
+/// default (a model's directory may be a checked golden set).
+fn prepare_head(args: &[String]) -> Result<(), String> {
+    let path = arg(args, "--gguf").unwrap_or(DEFAULT_GGUF);
+    let out = arg(args, "--out").ok_or("--out FILE is required")?;
+    let dir = |p: &str| {
+        std::fs::canonicalize(
+            Path::new(p)
+                .parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )
+        .ok()
+    };
+    if !args.iter().any(|a| a == "--beside-model") && dir(path).is_some() && dir(path) == dir(out) {
+        return Err(format!(
+            "{out}: beside the model; pass --beside-model to write into the model's directory"
+        ));
+    }
+    let m = Model::load(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let t = Instant::now();
+    let h8 = ffai_minerva::head::HeadQ8::build(&m);
+    let built = t.elapsed();
+    h8.write(&m, Path::new(out))
+        .map_err(|e| format!("{out}: {e}"))?;
+    let t = Instant::now();
+    ffai_minerva::head::HeadQ8::open(&m, Path::new(out))
+        .map_err(|e| format!("{out}: reopened: {e}"))?;
+    eprintln!(
+        "prepare-head: {} x {} | built {:.2}s | wrote {:.1} MB to {out} | reopened and checked {:.2}s",
+        m.cfg.vocab,
+        m.cfg.embd,
+        built.as_secs_f64(),
+        std::fs::metadata(out).map_or(0, |x| x.len()) as f64 / 1e6,
+        t.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("roofline") => {}
         Some("info") => return info(&args),
         Some("generate") => return generate(&args),
+        Some("prepare-head") => return prepare_head(&args),
         _ => return Err(USAGE.into()),
     }
     let path = arg(&args, "--gguf").unwrap_or(DEFAULT_GGUF);

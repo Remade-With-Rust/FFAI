@@ -72,10 +72,37 @@ fn round_up(x: f64) -> f32 {
     }
 }
 
+/// A screen's codes: built in memory, or mapped from a head file ([`HeadQ8::open`]).
+enum Codes {
+    Owned(Vec<i8>),
+    #[cfg(not(target_arch = "wasm32"))]
+    Mapped {
+        map: memmap2::Mmap,
+        at: usize,
+        len: usize,
+    },
+}
+
+impl Codes {
+    #[allow(unsafe_code)]
+    fn as_slice(&self) -> &[i8] {
+        match self {
+            Self::Owned(v) => v,
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Mapped { map, at, len } => {
+                let b = &map[*at..*at + *len];
+                // SAFETY: `i8` and `u8` have the same size and alignment and every bit pattern is
+                // valid for both; the slice borrows the map, which lives as long as `self`.
+                unsafe { std::slice::from_raw_parts(b.as_ptr().cast::<i8>(), b.len()) }
+            }
+        }
+    }
+}
+
 /// The `int8` copy of a head and each row's bound coefficient.
 pub struct HeadQ8 {
     cols: usize,
-    q: Vec<i8>,
+    q: Codes,
     scale: Vec<f32>,
     c: Vec<f32>,
     /// `s ‖q‖₂`, rounded up: what a row multiplies the activation's error by.
@@ -125,7 +152,7 @@ impl HeadQ8 {
             );
         Self {
             cols,
-            q,
+            q: Codes::Owned(q),
             scale,
             c,
             sq,
@@ -135,8 +162,176 @@ impl HeadQ8 {
     /// The bytes the screen reads a token.
     #[must_use]
     pub fn bytes(&self) -> usize {
-        self.q.len() + 12 * self.scale.len()
+        self.q.as_slice().len() + 12 * self.scale.len()
     }
+
+    /// Write this screen as a head file for `m` (layout at [`HEAD_FILE`]), so a later process
+    /// can [`Self::open`] it instead of building it.
+    ///
+    /// # Errors
+    /// When the file cannot be written.
+    pub fn write(&self, m: &Model, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+        let rows = self.scale.len();
+        let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+        let header = head_file_header(rows, self.cols, fingerprint(m));
+        f.write_all(&header)?;
+        for v in [&self.scale, &self.c, &self.sq] {
+            for x in v {
+                f.write_all(&x.to_le_bytes())?;
+            }
+        }
+        let at = header.len() + 12 * rows;
+        f.write_all(&vec![0u8; at.next_multiple_of(PAGE) - at])?;
+        for chunk in self.q.as_slice().chunks(1 << 20) {
+            let bytes: Vec<u8> = chunk.iter().map(|v| v.cast_unsigned()).collect();
+            f.write_all(&bytes)?;
+        }
+        f.flush()
+    }
+
+    /// Open a head file written by [`Self::write`] for `m`, mapping its codes (on wasm32,
+    /// reading them). It is accepted only if it was made from this model by this quantiser:
+    /// every [`SAMPLE`]th row is quantised again from the model and must equal the file's codes,
+    /// scale and bound coefficients bit for bit, and those rows' bytes must give the file's
+    /// fingerprint. The screen's proof is checked for those rows; for the rest it rests on the
+    /// file being the one [`Self::write`] wrote for this model, which the explicit `--head` flag
+    /// asserts.
+    ///
+    /// # Errors
+    /// When the file cannot be read, is not a version-1 head file of this shape, or does not
+    /// match the model.
+    pub fn open(m: &Model, path: &std::path::Path) -> Result<Self, String> {
+        let (rows, cols) = (m.cfg.vocab, m.cfg.embd);
+        let at_codes = (HEADER + 12 * rows).next_multiple_of(PAGE);
+        let total = at_codes + rows * cols;
+        #[cfg(not(target_arch = "wasm32"))]
+        let map = {
+            let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+            map_file(&f).map_err(|e| e.to_string())?
+        };
+        #[cfg(target_arch = "wasm32")]
+        let map = std::fs::read(path).map_err(|e| e.to_string())?;
+        let b: &[u8] = &map;
+        if b.len() != total || b[..8] != HEAD_FILE[..] {
+            return Err(format!(
+                "not a head file for this model ({} bytes; want {total}, starting MNVHEAD)",
+                b.len()
+            ));
+        }
+        let word = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        if word(8) != 1 || word(12) as usize != rows || word(16) as usize != cols {
+            return Err(format!(
+                "head file version {} for {} x {}; want version 1 for {rows} x {cols}",
+                word(8),
+                word(12),
+                word(16)
+            ));
+        }
+        let mut fp = [0u8; 8];
+        fp.copy_from_slice(&b[24..32]);
+        if u64::from_le_bytes(fp) != fingerprint(m) {
+            return Err("head file made from a different model (fingerprint differs)".into());
+        }
+        let floats = |k: usize| -> Vec<f32> {
+            let at = HEADER + 4 * k * rows;
+            b[at..at + 4 * rows]
+                .chunks_exact(4)
+                .map(|x| f32::from_le_bytes([x[0], x[1], x[2], x[3]]))
+                .collect()
+        };
+        let (scale, c, sq) = (floats(0), floats(1), floats(2));
+        let codes = &b[at_codes..];
+        let t16 = f16_table();
+        let (mut w, mut qr) = (vec![0f32; cols], vec![0i8; cols]);
+        for r in (0..rows).step_by(SAMPLE) {
+            let got = quantise_row(m.f16_row(m.head, cols, r), t16, &mut w, &mut qr);
+            let same = got.0.to_bits() == scale[r].to_bits()
+                && got.1.to_bits() == c[r].to_bits()
+                && got.2.to_bits() == sq[r].to_bits()
+                && qr
+                    .iter()
+                    .zip(&codes[r * cols..(r + 1) * cols])
+                    .all(|(a, &b)| a.cast_unsigned() == b);
+            if !same {
+                return Err(format!(
+                    "head file row {r} differs from this model quantised by this build"
+                ));
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let q = Codes::Mapped {
+            map,
+            at: at_codes,
+            len: rows * cols,
+        };
+        #[cfg(target_arch = "wasm32")]
+        let q = Codes::Owned(map[at_codes..].iter().map(|v| v.cast_signed()).collect());
+        Ok(Self {
+            cols,
+            q,
+            scale,
+            c,
+            sq,
+        })
+    }
+}
+
+/// A head file's magic. Layout, little-endian: the magic (8 bytes); version `1`, rows, cols
+/// and a zero (`u32` each); the model's [`fingerprint`] (`u64`); then every row's scale, then
+/// every row's bound coefficient `c`, then every row's `s ‖q‖₂` (three `f32` arrays of `rows`);
+/// zeros to the next 4,096-byte boundary; then the codes, `rows x cols` `i8`, row-major.
+pub const HEAD_FILE: [u8; 8] = *b"MNVHEAD\0";
+
+/// The header's bytes.
+const HEADER: usize = 32;
+
+/// The codes start on a page boundary.
+const PAGE: usize = 4096;
+
+/// Every this many rows is quantised again when a head file is opened (2,004 of 128,256 rows:
+/// about 10 MB of the head read).
+const SAMPLE: usize = 64;
+
+fn head_file_header(rows: usize, cols: usize, fp: u64) -> Vec<u8> {
+    let mut h = HEAD_FILE.to_vec();
+    for v in [1, rows, cols, 0] {
+        h.extend_from_slice(&u32::try_from(v).unwrap_or(u32::MAX).to_le_bytes());
+    }
+    h.extend_from_slice(&fp.to_le_bytes());
+    h
+}
+
+/// FNV-1a over the head's shape and the bytes of every [`SAMPLE`]th row: which model a head
+/// file belongs to.
+fn fingerprint(m: &Model) -> u64 {
+    let (rows, cols) = (m.cfg.vocab, m.cfg.embd);
+    let mut f = 0xcbf2_9ce4_8422_2325_u64;
+    let mut eat = |b: &[u8]| {
+        for &x in b {
+            f = (f ^ u64::from(x)).wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    eat(&(rows as u64).to_le_bytes());
+    eat(&(cols as u64).to_le_bytes());
+    for r in (0..rows).step_by(SAMPLE) {
+        eat(m.f16_row(m.head, cols, r));
+    }
+    f
+}
+
+/// Map a head file read-only, asking the OS to read it ahead.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(unsafe_code)]
+fn map_file(f: &std::fs::File) -> std::io::Result<memmap2::Mmap> {
+    // SAFETY: a read-only map of a file no one modifies while it is mapped (a head file is an
+    // immutable artifact, as the model file is); every access is bounds-checked through slices.
+    let m = unsafe { memmap2::Mmap::map(f)? };
+    #[cfg(unix)]
+    {
+        let _ = m.advise(memmap2::Advice::WillNeed);
+    }
+    Ok(m)
 }
 
 /// One row: `w` (scratch) its `f32` values, `qr` its codes. Returns its scale, its bound
@@ -265,7 +460,7 @@ pub fn argmax(
         .dots
         .par_chunks_mut(CHUNK)
         .zip(sc.hi.par_chunks_mut(CHUNK))
-        .zip(h8.q.par_chunks(CHUNK * cols))
+        .zip(h8.q.as_slice().par_chunks(CHUNK * cols))
         .enumerate()
         .map(|(ci, ((dots, hi), q))| {
             if let Some((t, _)) = int {
@@ -317,24 +512,89 @@ pub fn argmax(
     best.map(|(r, _)| (r, sc.survivors.len()))
 }
 
-/// A model's screen, built on first use.
+/// A model's screen: built on first use, or attached from a head file.
 #[derive(Debug, Default)]
-pub struct Lazy(OnceLock<HeadQ8>);
+pub struct Lazy {
+    h: OnceLock<HeadQ8>,
+    sidecar: OnceLock<()>,
+}
 
 impl Lazy {
+    /// Use `h` (from [`HeadQ8::open`]) as the screen. `false` when a screen is already in place.
+    pub fn attach(&self, h: HeadQ8) -> bool {
+        let ok = self.h.set(h).is_ok();
+        if ok {
+            let _ = self.sidecar.set(());
+        }
+        ok
+    }
+
+    /// Where the screen came from: `"sidecar"` (a head file), `"built"`, or `"none"` yet.
+    #[must_use]
+    pub fn source(&self) -> &'static str {
+        match (self.h.get(), self.sidecar.get()) {
+            (None, _) => "none",
+            (Some(_), Some(())) => "sidecar",
+            (Some(_), None) => "built",
+        }
+    }
+
     /// The screen of `m`, building it the first time.
     pub fn get(&self, m: &Model) -> &HeadQ8 {
-        self.0.get_or_init(|| {
+        self.h.get_or_init(|| {
             let t = std::time::Instant::now();
             let h = HeadQ8::build(m);
             let t = t.elapsed();
             if std::env::var_os("MINERVA_PROF").is_some() {
-                let f = h.q.iter().fold(0xcbf2_9ce4_8422_2325_u64, |f, &q| {
-                    (f ^ u64::from(q.cast_unsigned())).wrapping_mul(0x0100_0000_01b3)
-                });
+                let f =
+                    h.q.as_slice()
+                        .iter()
+                        .fold(0xcbf2_9ce4_8422_2325_u64, |f, &q| {
+                            (f ^ u64::from(q.cast_unsigned())).wrapping_mul(0x0100_0000_01b3)
+                        });
                 eprintln!("head build: {:.3}s codes-fnv {f:016x}", t.as_secs_f64());
             }
             h
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OURS: &str = "F:/coding/bitnet-golden/ours-i2_s.gguf";
+
+    /// A head file written for the real model opens to the same screen; one changed byte in a
+    /// checked row, or the fingerprint, is refused.
+    #[test]
+    #[ignore = "needs F:/coding/bitnet-golden/ours-i2_s.gguf"]
+    fn a_head_file_round_trips_and_a_changed_one_is_refused() {
+        let m = Model::load(std::path::Path::new(OURS)).expect("model");
+        let built = HeadQ8::build(&m);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        let path = dir.join("test-head.mnvh");
+        built.write(&m, &path).expect("write");
+        let opened = HeadQ8::open(&m, &path).expect("open");
+        assert!(opened.q.as_slice() == built.q.as_slice());
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&opened.scale), bits(&built.scale));
+        assert_eq!(bits(&opened.c), bits(&built.c));
+        assert_eq!(bits(&opened.sq), bits(&built.sq));
+        drop(opened);
+        let bytes = std::fs::read(&path).expect("read");
+        let at_codes = (HEADER + 12 * m.cfg.vocab).next_multiple_of(PAGE);
+        for at in [24, HEADER, at_codes + SAMPLE * m.cfg.embd + 7] {
+            let mut bad = bytes.clone();
+            bad[at] ^= 1;
+            let p = dir.join("test-head-bad.mnvh");
+            std::fs::write(&p, &bad).expect("write bad");
+            assert!(
+                HeadQ8::open(&m, &p).is_err(),
+                "byte {at} changed, still opened"
+            );
+            let _ = std::fs::remove_file(p);
+        }
+        let _ = std::fs::remove_file(path);
     }
 }

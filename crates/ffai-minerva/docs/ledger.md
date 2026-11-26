@@ -1054,3 +1054,21 @@ Default on x86 from 1,024 positions only; the decode gain is **not established**
 the three phases cost more than the reads they save. On aarch64 the grouped kernels are AVX2-only
 (NEON loops per head), so the phone keeps the per-head path; NEON fhm grouped kernels are written
 but unrun on a phone, held back for the next phone session (they would also change prefill).
+
+## Head file: the screen prepared once (2026-11-26)
+
+`minerva prepare-head --out FILE [--gguf PATH] [--beside-model]` builds the int8 screen and
+writes it; `minerva generate ... --head FILE` maps it instead of building the screen at the first
+token. Explicit only: nothing is discovered beside a model, `prepare-head` refuses the model's own
+directory unless `--beside-model`, and the load line ends `| head: built|sidecar|none`. Format
+(little-endian): `MNVHEAD\0`, version 1, rows, cols, 0 (`u32`), fingerprint (`u64`); scale, `c`,
+`s ‖q‖₂` (`f32 x rows` each); zeros to 4,096; codes (`i8`, rows x cols). 329.9 MB for this model.
+
+Opening checks every 64th row (2,004 rows) against the model: re-quantised, codes and the three
+floats bit for bit, and their f16 bytes' FNV against the fingerprint; a changed scale, a changed
+code in a checked row, a changed fingerprint and a short file were all refused. A byte changed in
+an unchecked row opens (by design: the flag asserts the file is the one written for this model).
+
+Laptop, p64, 8 threads, 2 runs each: first token 0.92 / 1.04 s building the screen, 0.66 / 0.77 s
+with the head file; load 0.52-0.57 -> 0.60-0.62 s (the check, 0.05 s). About 0.2 s saved; tokens
+identical. Phone and the race arm pending (rusty-sloth wires it into export and the race).
