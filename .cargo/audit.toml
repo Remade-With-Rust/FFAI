@@ -12,6 +12,17 @@ ignore = [
     # A fourth, same scope: extract() aborts on a symlink entry with a huge
     # declared size. candle never calls extract. Added 2026-11-08.
     "RUSTSEC-2026-0429",
+    # Four more zip 8.6.0 advisories, fixed only in zip 9; see deny.toml. AES and
+    # the legacy decoders are not compiled (default-features off); extract and
+    # ZipStreamReader are never called. Added 2026-11-27.
+    "RUSTSEC-2026-0545",
+    "RUSTSEC-2026-0546",
+    "RUSTSEC-2026-0547",
+    "RUSTSEC-2026-0548",
+    # chrono and humantime, unmaintained, only via the optional hf-hub downloader;
+    # see deny.toml. Added 2026-11-27.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0542",
     # ocipkg 0.2.9 - path traversal when unpacking an OCI archive. AUDIT ONLY,
     # deliberately not in deny.toml: it is in Cargo.lock solely as
     # candle-core's optional `mkl` feature (intel-mkl-src -> ocipkg), which no
