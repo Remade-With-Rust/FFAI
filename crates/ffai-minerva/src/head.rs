@@ -433,16 +433,10 @@ impl Scratch {
     }
 }
 
-/// The screened argmax of `m`'s head times `x` (the hidden state rounded to `f16`), or `None`
-/// when `x` is all zero or not finite (the caller then runs the full head). Returns the token
-/// and the number of rows recomputed exactly.
-pub fn argmax(
-    isa: Isa,
-    m: &Model,
-    h8: &HeadQ8,
-    x: &[f32],
-    sc: &mut Scratch,
-) -> Option<(u32, usize)> {
+/// Every row's interval around its exact logit: the upper bounds into `sc.hi`, and with
+/// `keep_lo` the lower bounds into `sc.dots`. Returns the largest lower bound, or `None` when `x`
+/// is all zero or not finite.
+fn intervals(isa: Isa, h8: &HeadQ8, x: &[f32], sc: &mut Scratch, keep_lo: bool) -> Option<f32> {
     let cols = h8.cols;
     assert_eq!(x.len(), cols);
     let x2: f64 = x.iter().map(|&v| f64::from(v) * f64::from(v)).sum();
@@ -482,17 +476,35 @@ pub fn argmax(
             }
             let base = ci * CHUNK;
             let mut lo_max = f32::NEG_INFINITY;
-            for (j, (&d, h)) in dots.iter().zip(hi.iter_mut()).enumerate() {
+            for (j, (d, h)) in dots.iter_mut().zip(hi.iter_mut()).enumerate() {
                 let r = base + j;
-                let av = d * h8.scale[r];
+                let av = *d * h8.scale[r];
                 let b = (h8.c[r] * xn + h8.sq[r] * en) * 1.0001 + 1e-6 * av.abs();
                 *h = av + b;
                 lo_max = lo_max.max(av - b);
+                if keep_lo {
+                    *d = av - b;
+                }
             }
             lo_max
         })
         .reduce(|| f32::NEG_INFINITY, f32::max);
 
+    Some(lo_max)
+}
+
+/// The screened argmax of `m`'s head times `x` (the hidden state rounded to `f16`), or `None`
+/// when `x` is all zero or not finite (the caller then runs the full head). Returns the token
+/// and the number of rows recomputed exactly.
+pub fn argmax(
+    isa: Isa,
+    m: &Model,
+    h8: &HeadQ8,
+    x: &[f32],
+    sc: &mut Scratch,
+) -> Option<(u32, usize)> {
+    let cols = h8.cols;
+    let lo_max = intervals(isa, h8, x, sc, false)?;
     sc.survivors.clear();
     for (r, &h) in sc.hi.iter().enumerate() {
         // A NaN bound keeps its row.
@@ -509,6 +521,54 @@ pub fn argmax(
         }
     }
     best.map(|(r, _)| (r, sc.survivors.len()))
+}
+
+/// The screened top `k` of `m`'s head times `x`: the `k` largest logits with the full head's
+/// exact values, largest first and the lowest id on a tie, or `None` when `x` is all zero or not
+/// finite or `k` is 0 or not below the vocabulary (the caller then runs the full head). Also
+/// returns the number of rows recomputed exactly.
+///
+/// The bound (a design first measured in our private trainer): let `T` be the `k`-th largest
+/// lower bound. The `k` rows holding the `k` largest lower bounds all have logits `>= T`, so a
+/// row whose upper bound is below `T` has at least `k` rows strictly above it and is in no top
+/// `k` under any tie-break. Every other row is recomputed exactly; their top `k` is the full
+/// head's. `k = 1` is [`argmax`].
+pub fn top_k(
+    isa: Isa,
+    m: &Model,
+    h8: &HeadQ8,
+    x: &[f32],
+    sc: &mut Scratch,
+    k: usize,
+) -> Option<(Vec<(u32, f32)>, usize)> {
+    let cols = h8.cols;
+    let rows = h8.scale.len();
+    if k == 0 || k >= rows {
+        return None;
+    }
+    intervals(isa, h8, x, sc, true)?;
+    // The k-th largest lower bound (a heap pass for small k: no copy of the 128 K bounds).
+    let kth = crate::engine::top_k_ids(&sc.dots, k)[k - 1];
+    let t = sc.dots[kth as usize];
+    sc.survivors.clear();
+    for (r, (&h, &l)) in sc.hi.iter().zip(&sc.dots).enumerate() {
+        // A NaN bound keeps its row.
+        if h >= t || h.is_nan() || l.is_nan() {
+            sc.survivors.push(u32::try_from(r).unwrap_or(u32::MAX));
+        }
+    }
+    let mut exact: Vec<(u32, f32)> = sc
+        .survivors
+        .par_iter()
+        .map(|&r| {
+            let mut one = [0f32];
+            simd::f16_matvec_bytes(isa, m.f16_row(m.head, cols, r as usize), x, &mut one);
+            (r, one[0])
+        })
+        .collect();
+    exact.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    exact.truncate(k);
+    Some((exact, sc.survivors.len()))
 }
 
 /// A model's screen: built on first use, or attached from a head file.
@@ -541,10 +601,12 @@ impl Lazy {
     /// The screen of `m`, building it the first time.
     pub fn get(&self, m: &Model) -> &HeadQ8 {
         self.h.get_or_init(|| {
-            let t = std::time::Instant::now();
+            // Timed only when asked: `Instant` panics on wasm32-unknown-unknown (the browser).
+            let prof = std::env::var_os("MINERVA_PROF").is_some();
+            let t = prof.then(std::time::Instant::now);
             let h = HeadQ8::build(m);
-            let t = t.elapsed();
-            if std::env::var_os("MINERVA_PROF").is_some() {
+            if let Some(t) = t {
+                let t = t.elapsed();
                 let f =
                     h.q.as_slice()
                         .iter()
