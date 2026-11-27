@@ -1,0 +1,15 @@
+# release-plz settings. Defaults apply to every crate not listed here.
+
+# cargo-semver-checks documents the crate with ALL features on, and the `metal`
+# feature pulls in `objc2`, which refuses to compile anywhere but Apple targets.
+# On the Linux runner that aborts the whole run before any version is chosen,
+# so these two crates (and everything after them) never get a release PR.
+# Skip the check for them; their public API is not feature-gated on the GPU
+# backends, so the CPU build is what a semver check would cover anyway.
+[[package]]
+name = "ffai-core"
+semver_check = false
+
+[[package]]
+name = "ffai-mercury"
+semver_check = false
