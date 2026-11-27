@@ -46,7 +46,7 @@ rff-format-mp4 = "0.8.4"
 rff-format-mkv = "0.8.4"
 rff-format-avi = "0.8.4"
 rff-format-ts = "0.8.4"
-rff-codec = "0.8.4"
+rff-codec = "0.9.4"
 # `default-features = false` is LOAD-BEARING, not tidying. rusty_h264 0.16
 # added a `global-alloc` feature, ON BY DEFAULT, which installs rusty_alloc as
 # `#[global_allocator]` from inside a LIBRARY. There is exactly one global
