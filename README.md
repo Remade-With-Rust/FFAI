@@ -252,8 +252,16 @@ its scalar oracle.
 - **LoRA adapters and log-probabilities.** `--lora` loads llama.cpp-format
   adapter GGUFs; `--logprobs` and `minerva score` report log-probabilities
   over the full vocabulary, the same bits on every device.
+- **Chat and serve.** The model file's own tokenizer and chat template,
+  seeded sampling (top-k, top-p, min-p, temperature) that gives the same
+  tokens on every device, `minerva chat` in the terminal, and
+  `minerva-server`, which takes llama-server's flags and answers its
+  `/completion` API, streaming included. The int8 screen serves top-k
+  sampling exactly too.
 
 ```sh
+minerva chat --gguf model-i2_s.gguf
+minerva-server -m model-i2_s.gguf --port 8080
 minerva generate --gguf model-i2_s.gguf --ids prompt.ids --new 128
 minerva generate --gguf model-i2_s.gguf --ids prompt.ids --new 64 --lora adapter.gguf --logprobs out.jsonl
 minerva score --gguf model-i2_s.gguf --ids prompt.ids --target answer.ids
