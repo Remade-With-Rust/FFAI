@@ -136,7 +136,8 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use ffai_minerva::engine::{self, HeadMode, Session, top_k};
+use ffai_minerva::engine::{self, HeadMode, Session, top_k, top_k_logprobs};
+use ffai_minerva::lora::Adapter;
 use ffai_minerva::model::Model;
 use ffai_minerva::roofline::{self, ByteCensus};
 use ffai_minerva::simd;
@@ -192,10 +193,16 @@ fn print_census(path: &str, c: &ByteCensus) {
 const USAGE: &str = "usage:
   minerva roofline [--gguf PATH] [--mib N] [--reps N] [--threads 1,2,4]
   minerva info     [--gguf PATH]
-  minerva generate --ids FILE --new N [--gguf PATH] [--threads N] [--head FILE] [--probs OUT.jsonl] [--census]
+  minerva generate --ids FILE --new N [--gguf PATH] [--threads N] [--head FILE] [--lora FILE [--lora-scale S]]
+                   [--probs OUT.jsonl] [--logprobs OUT.jsonl] [--census]
       prints the generated ids, comma separated, as the last line of stdout;
       MINERVA_ISA=scalar|ssse3|avx2|neon|simd128 picks the instruction set (default: the widest);
-      --head FILE uses a head file from prepare-head instead of building the screen at the first token
+      --head FILE uses a head file from prepare-head instead of building the screen at the first token;
+      --lora FILE adds a LoRA adapter GGUF (llama.cpp's format) at strength S (default 1);
+      --logprobs writes each step's token, its log-probability and the top 8 (full vocabulary softmax)
+  minerva score --ids PROMPT --target IDS [--gguf PATH] [--threads N] [--lora FILE [--lora-scale S]]
+      teacher-forced: the log-probability of each target id after the prompt, one per line
+      (`index id logprob`), then the total, mean and perplexity
   minerva prepare-head --out FILE [--gguf PATH] [--beside-model]
       builds the greedy head's int8 screen once and writes it as a head file (refuses the model's
       own directory unless --beside-model)";
@@ -231,14 +238,8 @@ fn info(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn generate(args: &[String]) -> Result<(), String> {
-    let path = arg(args, "--gguf").unwrap_or(DEFAULT_GGUF);
-    let ids_path = arg(args, "--ids").ok_or("--ids FILE is required")?;
-    let new: usize = arg(args, "--new")
-        .ok_or("--new N is required")?
-        .parse()
-        .map_err(|e| format!("--new: {e}"))?;
-    // `--threads`, else `RAYON_NUM_THREADS` (the pool reads it), else the fast cores.
+/// `--threads`, else `RAYON_NUM_THREADS` (the pool reads it), else the fast cores.
+fn set_threads(args: &[String]) -> Result<(), String> {
     let threads = match arg(args, "--threads") {
         Some(t) => Some(t.parse().map_err(|e| format!("--threads: {e}"))?),
         None if std::env::var_os("RAYON_NUM_THREADS").is_some() => None,
@@ -250,6 +251,53 @@ fn generate(args: &[String]) -> Result<(), String> {
             .build_global()
             .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+/// `--lora FILE [--lora-scale S]`: the adapter, if one is named.
+fn adapter(args: &[String], m: &Model) -> Result<Option<Adapter>, String> {
+    let Some(f) = arg(args, "--lora") else {
+        return Ok(None);
+    };
+    let scale: f32 = arg(args, "--lora-scale")
+        .unwrap_or("1")
+        .parse()
+        .map_err(|e| format!("--lora-scale: {e}"))?;
+    Adapter::load(m, Path::new(f), scale)
+        .map(Some)
+        .map_err(|e| format!("{f}: {e}"))
+}
+
+/// The adapter's note for the output (empty without one).
+fn adapter_note(a: Option<&Adapter>, args: &[String]) -> String {
+    a.map_or_else(String::new, |a| {
+        let (pairs, rank) = a.summary();
+        format!(
+            " | lora: {} ({pairs} projections, rank {rank}, alpha {}, scale {})",
+            arg(args, "--lora").unwrap_or(""),
+            a.alpha,
+            arg(args, "--lora-scale").unwrap_or("1")
+        )
+    })
+}
+
+/// A session, with the adapter on when there is one.
+fn session<'m>(m: &'m Model, ctx: usize, a: Option<&'m Adapter>) -> Result<Session<'m>, String> {
+    let s = Session::new(m, ctx);
+    match a {
+        Some(a) => s.with_adapter(a),
+        None => Ok(s),
+    }
+}
+
+fn generate(args: &[String]) -> Result<(), String> {
+    let path = arg(args, "--gguf").unwrap_or(DEFAULT_GGUF);
+    let ids_path = arg(args, "--ids").ok_or("--ids FILE is required")?;
+    let new: usize = arg(args, "--new")
+        .ok_or("--new N is required")?
+        .parse()
+        .map_err(|e| format!("--new: {e}"))?;
+    set_threads(args)?;
     let prompt =
         parse_ids(&std::fs::read_to_string(ids_path).map_err(|e| format!("{ids_path}: {e}"))?)?;
     let a0 = alloc_census::read();
@@ -260,14 +308,20 @@ fn generate(args: &[String]) -> Result<(), String> {
             ffai_minerva::head::HeadQ8::open(&m, Path::new(h)).map_err(|e| format!("{h}: {e}"))?;
         m.screen.attach(h8);
     }
+    let lora = adapter(args, &m)?;
     let load = t0.elapsed();
-    let mut s = Session::new(&m, prompt.len() + new);
-    let mut probs = match arg(args, "--probs") {
-        Some(p) => Some(std::io::BufWriter::new(
-            std::fs::File::create(p).map_err(|e| format!("{p}: {e}"))?,
-        )),
-        None => None,
+    let mut s = session(&m, prompt.len() + new, lora.as_ref())?;
+    let file = |flag: &str| -> Result<Option<std::io::BufWriter<std::fs::File>>, String> {
+        arg(args, flag)
+            .map(|p| {
+                std::fs::File::create(p)
+                    .map(std::io::BufWriter::new)
+                    .map_err(|e| format!("{p}: {e}"))
+            })
+            .transpose()
     };
+    let mut probs = file("--probs")?;
+    let mut logprobs = file("--logprobs")?;
     simd::census::enable(args.iter().any(|a| a == "--census"));
     simd::census::reset();
     let a1 = alloc_census::read();
@@ -283,8 +337,9 @@ fn generate(args: &[String]) -> Result<(), String> {
     // FNV-1a over every generated step's logit bits: one number that says two runs (two tiers,
     // two devices) computed the same thing, not merely chose the same tokens.
     let mut fnv = 0xcbf2_9ce4_8422_2325_u64;
-    // `--probs` needs every logit, so it runs the full head; otherwise MINERVA_HEAD (screen).
-    let mode = if probs.is_some() {
+    // `--probs` and `--logprobs` need every logit, so they run the full head (the same tokens);
+    // otherwise MINERVA_HEAD (screen).
+    let mode = if probs.is_some() || logprobs.is_some() {
         HeadMode::Full
     } else {
         HeadMode::from_env()
@@ -326,14 +381,30 @@ fn generate(args: &[String]) -> Result<(), String> {
                 io_err.get_or_insert(e);
             }
         }
+        if let (Some(w), Some(logits)) = (logprobs.as_mut(), logits) {
+            let norm = engine::log_norm(logits);
+            let top: Vec<String> = top_k_logprobs(logits, 8)
+                .iter()
+                .map(|(t, l)| format!("[{t},{l}]"))
+                .collect();
+            let lp = engine::logprob(logits, norm, tok);
+            if let Err(e) = writeln!(
+                w,
+                "{{\"step\":{i},\"token\":{tok},\"logprob\":{lp},\"top\":[{}]}}",
+                top.join(",")
+            ) {
+                io_err.get_or_insert(e);
+            }
+        }
     })
     .map_err(|e| e.to_string())?;
     let total = t1.elapsed();
     if let Some(e) = io_err {
-        return Err(format!("--probs: {e}"));
+        return Err(format!("--probs / --logprobs: {e}"));
     }
-    if let Some(mut w) = probs {
-        w.flush().map_err(|e| format!("--probs: {e}"))?;
+    for mut w in [probs, logprobs].into_iter().flatten() {
+        w.flush()
+            .map_err(|e| format!("--probs / --logprobs: {e}"))?;
     }
     let first = first.unwrap_or(total);
     let decode = total - first;
@@ -350,6 +421,9 @@ fn generate(args: &[String]) -> Result<(), String> {
         mode,
         m.screen.source()
     );
+    if lora.is_some() {
+        eprintln!("minerva:{}", adapter_note(lora.as_ref(), args));
+    }
     if let Some(e) = ends.filter(|e| e.len() > 1) {
         let ms: Vec<f64> = e
             .windows(2)
@@ -458,6 +532,38 @@ fn generate(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `score`: teacher-forced log-probabilities of `--target` after `--ids`.
+fn score(args: &[String]) -> Result<(), String> {
+    let path = arg(args, "--gguf").unwrap_or(DEFAULT_GGUF);
+    let read = |flag: &str| -> Result<Vec<u32>, String> {
+        let f = arg(args, flag).ok_or_else(|| format!("{flag} FILE is required"))?;
+        parse_ids(&std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?)
+    };
+    let (prompt, target) = (read("--ids")?, read("--target")?);
+    set_threads(args)?;
+    let m = Model::load(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let lora = adapter(args, &m)?;
+    let mut s = session(&m, prompt.len() + target.len(), lora.as_ref())?;
+    let t = Instant::now();
+    let lps = engine::score(&mut s, &prompt, &target).map_err(|e| e.to_string())?;
+    for (i, (id, lp)) in target.iter().zip(&lps).enumerate() {
+        println!("{i} {id} {lp}");
+    }
+    let total: f64 = lps.iter().sum();
+    #[expect(clippy::cast_precision_loss, reason = "a token count")]
+    let mean = total / lps.len().max(1) as f64;
+    println!(
+        "score: {} tokens after {} | logprob total {total} | mean {mean} | perplexity {} | {:.2}s | isa {}{}",
+        lps.len(),
+        prompt.len(),
+        libm::exp(-mean),
+        t.elapsed().as_secs_f64(),
+        s.isa().name(),
+        adapter_note(lora.as_ref(), args)
+    );
+    Ok(())
+}
+
 /// `prepare-head`: build the screen once and write it as a head file. Never beside the model by
 /// default (a model's directory may be a checked golden set).
 fn prepare_head(args: &[String]) -> Result<(), String> {
@@ -504,6 +610,7 @@ fn run() -> Result<(), String> {
         Some("info") => return info(&args),
         Some("generate") => return generate(&args),
         Some("prepare-head") => return prepare_head(&args),
+        Some("score") => return score(&args),
         _ => return Err(USAGE.into()),
     }
     let path = arg(&args, "--gguf").unwrap_or(DEFAULT_GGUF);

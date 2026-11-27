@@ -14,6 +14,7 @@
 //!   bytes, the full head's token.
 //! - [`numerics`]: the float arithmetic in one canonical order, so a file gives the same tokens
 //!   on every device; these scalar functions are the oracles.
+//! - [`lora`]: LoRA adapters (llama.cpp's adapter `GGUF`) on top of the ternary base.
 //! - [`simd`]: a bit-identical SIMD twin of every scalar kernel (SSSE3, AVX2, NEON, WASM-SIMD128),
 //!   with a kernel-reach census.
 //!
@@ -27,6 +28,7 @@
 pub mod engine;
 pub mod head;
 pub mod kernel;
+pub mod lora;
 pub mod model;
 pub mod numerics;
 pub mod prof;

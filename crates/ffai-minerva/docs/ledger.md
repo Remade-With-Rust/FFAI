@@ -1124,3 +1124,50 @@ against 4 x 64 (null 0.990, one 0.48 outlier): 4 x 16 0.860, 5 x 16 0.894, 6 x 1
 stands at both lengths.
 
 Phone folder deleted after these runs.
+
+## Brick f: LoRA adapters and log-probabilities (2026-11-27)
+
+**What.** `lora.rs` reads llama.cpp's adapter `GGUF` (`general.type = adapter`,
+`adapter.type = lora`, `blk.N.<proj>.weight.lora_a|lora_b`, `f32`) and adds
+`s · B (A x)` to each adapted projection's finished output, `x` the projection's `f32` input
+before its 8-bit quantisation and `s = user_scale · alpha / rank`, as bitnet.cpp's
+`llm_build_lora_mm` does in `build_bitnet_158` (765741d). Decode and the batched prefill both
+apply it. Every dot product is eight running sums in a fixed tree, no FMA, so it vectorises
+everywhere and gives the same bits everywhere. CLI: `generate --lora FILE [--lora-scale S]`,
+`generate --logprobs OUT.jsonl` (each step's token, log-probability and top 8, a full-vocabulary
+log-softmax in `f64` with `libm`), and `score --ids P --target T` (teacher-forced
+log-probabilities, total, mean, perplexity). `top_k` for `--probs` now uses `libm` too.
+Without `--lora` the load line is unchanged; with it a second `minerva: | lora: ...` line follows.
+
+**Same bits.** Adapter `handbook-s2.gguf` (rank 16, alpha 16, 210 projections) on the golden
+base, h2 + 8 tokens, `MINERVA_HEAD=full`: logits hash `fae5e6bad613bf9c` on x86 AVX2, SSSE3 and
+scalar, with `MINERVA_PREFILL=step`, and in wasm32 under wasmtime at scalar and simd128. p256 + 8:
+`0588a63983818c75` on AVX2, SSSE3, scalar and step prefill. Without an adapter, p64 + 8 still
+gives `1c2856725481ae14` (the recorded value). Not run on the phone.
+
+**Against bitnet.cpp** (clang build, `llama-server --lora`, teacher-forced, n_probs 256,
+`docs/conformance-lora.json`): the four golden adapter prompts plus p64, p256 and p512, 48 new
+tokens each. **329/336 steps agree; the near-tie gate FAILS at one step**: h0 step 23, where
+ours is a coin flip (0.4999 / 0.4978) and bitnet.cpp gives 0.570 / 0.428, gap 0.142. The other
+six partings are near-ties (worst 0.055). The head screen chose the full head's ids on all
+seven prompts.
+
+Is the wide parting a defect or amplified noise? Every teacher-forced step's difference in the
+two engines' top-2 log-ratio (invariant to the server's top-256 renormalisation), with negative
+controls that scale only our adapter:
+
+| arms | steps | rms difference | max |
+|---|---|---|---|
+| no adapter on either side | 336 | 0.140 nats | 0.730 |
+| adapter on both, ours at 1.00 | 336 | **0.175** | 0.809 |
+| ours at 1.05 (planted 5 % error) | 336 | 0.250 | 1.208 |
+| ours at 1.25 (planted 25 % error) | 335 | 0.814 | 4.029 |
+
+The failing step differs by 0.29 nats, inside the base model's own spread (max 0.73). A 5 %
+error in the update would add about 0.21 nats rms in quadrature; ours adds 0.10, which is what
+a different summation order through the int8 quantiser looks like. Verdict: **kept**, with the
+gate's FAIL recorded as is, not waived. The adapter's speed cost is unmeasured: the laptop's
+base runs alone spread 18-40 tok/s.
+
+The adapter's provenance (rusty-sloth): trained 2026-11-20 08:39, before the checkpoint damage
+window; `ref-handbook-s2.json` came from the damaged checkpoint and was not used.

@@ -24,6 +24,7 @@ use rayon::prelude::*;
 
 use crate::head;
 use crate::kernel::{gemm_par, gemv_par};
+use crate::lora::{self, Adapter, Proj};
 use crate::model::{Model, Ternary};
 use crate::numerics::rope_table;
 use crate::simd::{self, Isa};
@@ -98,6 +99,8 @@ pub struct Session<'m> {
     sin: Vec<f32>,
     logits: Vec<f32>,
     screen: head::Scratch,
+    /// The LoRA adapter on top of the base, if any ([`Self::with_adapter`]).
+    lora: Option<&'m Adapter>,
     /// Screened steps, rows recomputed exactly in total, and the most in one step.
     pub screen_stats: (u64, u64, usize),
 }
@@ -422,8 +425,30 @@ impl<'m> Session<'m> {
             sin: vec![0.0; c.head_dim / 2],
             logits: vec![0.0; c.vocab],
             screen: head::Scratch::new(c.vocab, c.embd),
+            lora: None,
             screen_stats: (0, 0, 0),
         }
+    }
+
+    /// Run with `a`'s updates on top of the base model, from the first token.
+    ///
+    /// # Errors
+    /// When the session has already consumed tokens (its cache holds the base's keys and values)
+    /// or the adapter does not fit this model's projections.
+    pub fn with_adapter(mut self, a: &'m Adapter) -> Result<Self, String> {
+        if self.pos != 0 {
+            return Err("an adapter goes on before the first token".into());
+        }
+        if !a.fits(self.m) {
+            return Err("the adapter's shapes do not fit this model".into());
+        }
+        self.lora = Some(a);
+        Ok(self)
+    }
+
+    /// Layer `li`'s update of projection `p`, when there is an adapter and it updates it.
+    fn lora(&self, li: usize, p: Proj) -> Option<&'m lora::Pair> {
+        self.lora.and_then(|a| a.get(li, p))
     }
 
     /// The instruction set this session runs.
@@ -609,6 +634,15 @@ impl<'m> Session<'m> {
             bitlinear_batch(isa, m, &l.q, &qa, &acts, &mut ysum, &mut q, q_dim);
             bitlinear_batch(isa, m, &l.k, &qa, &acts, &mut ysum, &mut kc, kv_dim);
             bitlinear_batch(isa, m, &l.v, &qa, &acts, &mut ysum, &mut vc, kv_dim);
+            for (p, o, w) in [
+                (Proj::Q, &mut q, q_dim),
+                (Proj::K, &mut kc, kv_dim),
+                (Proj::V, &mut vc, kv_dim),
+            ] {
+                if let Some(p) = self.lora(li, p) {
+                    lora::apply_batch(p, &h, embd, o, w, bm);
+                }
+            }
             let half = hd / 2;
             let layer_base = li * ctx * kv_dim;
             let at = layer_base + pos0 * kv_dim;
@@ -670,6 +704,9 @@ impl<'m> Session<'m> {
                 &mut acts[..bm],
             );
             bitlinear_batch(isa, m, &l.o, &qa, &acts, &mut ysum, &mut out, embd);
+            if let Some(p) = self.lora(li, Proj::O) {
+                lora::apply_batch(p, &h, q_dim, &mut out, embd, bm);
+            }
             x[..bm * embd]
                 .par_chunks_mut(embd)
                 .zip(out[..bm * embd].par_chunks(embd))
@@ -687,6 +724,11 @@ impl<'m> Session<'m> {
             );
             bitlinear_batch(isa, m, &l.gate, &qa, &acts, &mut ysum, &mut gate, ffn);
             bitlinear_batch(isa, m, &l.up, &qa, &acts, &mut ysum, &mut up, ffn);
+            for (p, o) in [(Proj::Gate, &mut gate), (Proj::Up, &mut up)] {
+                if let Some(p) = self.lora(li, p) {
+                    lora::apply_batch(p, &h, embd, o, ffn, bm);
+                }
+            }
             gate[..bm * ffn]
                 .par_chunks_mut(ffn)
                 .zip(up[..bm * ffn].par_chunks(ffn))
@@ -699,6 +741,9 @@ impl<'m> Session<'m> {
                     *act = quantise(isa, h, qa);
                 });
             bitlinear_batch(isa, m, &l.down, &qa, &acts, &mut ysum, &mut out, embd);
+            if let Some(p) = self.lora(li, Proj::Down) {
+                lora::apply_batch(p, &h, ffn, &mut out, embd, bm);
+            }
             x[..bm * embd]
                 .par_chunks_mut(embd)
                 .zip(out[..bm * embd].par_chunks(embd))
@@ -751,6 +796,15 @@ impl<'m> Session<'m> {
                         )
                     },
                 );
+                if let Some(p) = self.lora(li, Proj::Q) {
+                    p.apply(&self.h[..embd], &mut self.q);
+                }
+                if let Some(p) = self.lora(li, Proj::K) {
+                    p.apply(&self.h[..embd], &mut self.kc);
+                }
+                if let Some(p) = self.lora(li, Proj::V) {
+                    p.apply(&self.h[..embd], &mut self.vc);
+                }
             }
             for head in self.q.chunks_exact_mut(hd) {
                 simd::rope_neox(isa, head, &self.cos, &self.sin);
@@ -810,6 +864,9 @@ impl<'m> Session<'m> {
             {
                 let _t = crate::prof::scope(crate::prof::Stage::DecTernary);
                 bitlinear(isa, m, &l.o, &self.qa, act, &mut self.isum, &mut self.out);
+                if let Some(p) = self.lora(li, Proj::O) {
+                    p.apply(&self.h[..q_dim], &mut self.out);
+                }
             }
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
 
@@ -825,6 +882,12 @@ impl<'m> Session<'m> {
                     || bitlinear(isa, m, &l.gate, qa, act, isum, go),
                     || bitlinear(isa, m, &l.up, qa, act, isum2, uo),
                 );
+                if let Some(p) = self.lora(li, Proj::Gate) {
+                    p.apply(&self.h[..embd], &mut self.gate);
+                }
+                if let Some(p) = self.lora(li, Proj::Up) {
+                    p.apply(&self.h[..embd], &mut self.up);
+                }
             }
             simd::relu2_mul(isa, &mut self.gate, &self.up);
             simd::rms_norm(
@@ -845,6 +908,9 @@ impl<'m> Session<'m> {
                 &mut self.isum,
                 &mut self.out,
             );
+            if let Some(p) = self.lora(li, Proj::Down) {
+                p.apply(&self.h[..ffn], &mut self.out);
+            }
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
         }
         self.pos += 1;
@@ -864,29 +930,94 @@ pub fn argmax(logits: &[f32]) -> u32 {
     u32::try_from(best).unwrap_or(u32::MAX)
 }
 
-/// The `k` likeliest tokens with their probabilities (softmax in `f64`, for reporting only).
+/// The log of the softmax's denominator over every logit: `max + ln Σ exp(l - max)`, in `f64`,
+/// summed in vocabulary order with `libm`'s `exp` and `log` (pure Rust, so the same bits on
+/// every device, unlike the platform's maths library).
 #[must_use]
-pub fn top_k(logits: &[f32], k: usize) -> Vec<(u32, f64)> {
-    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let z: f64 = logits
-        .iter()
-        .map(|&l| (f64::from(l) - f64::from(max)).exp())
-        .sum();
+pub fn log_norm(logits: &[f32]) -> f64 {
+    let max = f64::from(logits.iter().copied().fold(f32::NEG_INFINITY, f32::max));
+    let z: f64 = logits.iter().map(|&l| libm::exp(f64::from(l) - max)).sum();
+    max + libm::log(z)
+}
+
+/// Each token's log-probability under `logits` (a log-softmax over the whole vocabulary),
+/// given [`log_norm`] of them.
+#[must_use]
+pub fn logprob(logits: &[f32], norm: f64, token: u32) -> f64 {
+    logits
+        .get(token as usize)
+        .map_or(f64::NEG_INFINITY, |&l| f64::from(l) - norm)
+}
+
+/// The `k` likeliest tokens and their log-probabilities, likeliest first (lowest id on a tie).
+#[must_use]
+pub fn top_k_logprobs(logits: &[f32], k: usize) -> Vec<(u32, f64)> {
+    let norm = log_norm(logits);
+    top_ids(logits, k)
+        .into_iter()
+        .map(|i| (i, logprob(logits, norm, i)))
+        .collect()
+}
+
+/// The `k` largest logits' ids, largest first, the lowest id on a tie.
+fn top_ids(logits: &[f32], k: usize) -> Vec<u32> {
     let mut idx: Vec<usize> = (0..logits.len()).collect();
     let k = k.min(idx.len());
-    idx.select_nth_unstable_by(k.saturating_sub(1), |&a, &b| {
+    if k == 0 {
+        return Vec::new();
+    }
+    idx.select_nth_unstable_by(k - 1, |&a, &b| {
         logits[b].total_cmp(&logits[a]).then(a.cmp(&b))
     });
     idx.truncate(k);
     idx.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
     idx.into_iter()
+        .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
+        .collect()
+}
+
+/// The `k` likeliest tokens with their probabilities (softmax in `f64` with `libm`, for
+/// reporting only).
+#[must_use]
+pub fn top_k(logits: &[f32], k: usize) -> Vec<(u32, f64)> {
+    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let z: f64 = logits
+        .iter()
+        .map(|&l| libm::exp(f64::from(l) - f64::from(max)))
+        .sum();
+    top_ids(logits, k)
+        .into_iter()
         .map(|i| {
             (
-                u32::try_from(i).unwrap_or(u32::MAX),
-                (f64::from(logits[i]) - f64::from(max)).exp() / z,
+                i,
+                libm::exp(f64::from(logits[i as usize]) - f64::from(max)) / z,
             )
         })
         .collect()
+}
+
+/// Teacher-forced scoring: the log-probability of each of `target` after `prompt` (the
+/// prompt's tokens, then each target token in turn, each step through the full head). The
+/// sequence's log-likelihood is their sum.
+///
+/// # Errors
+/// When the context overflows, a token is out of range, or `prompt` is empty.
+pub fn score(s: &mut Session<'_>, prompt: &[u32], target: &[u32]) -> Result<Vec<f64>, StepError> {
+    rayon::scope(|_| {
+        let (last, head) = prompt.split_last().ok_or(StepError::BadToken(u32::MAX))?;
+        s.prefill(head)?;
+        let mut out = Vec::with_capacity(target.len());
+        let mut next = *last;
+        for &t in target {
+            if usize::try_from(t).ok().is_none_or(|t| t >= s.m.cfg.vocab) {
+                return Err(StepError::BadToken(t));
+            }
+            let logits = s.step(next, true)?.unwrap_or_default();
+            out.push(logprob(logits, log_norm(logits), t));
+            next = t;
+        }
+        Ok(out)
+    })
 }
 
 /// Prefill `prompt`, then decode `new` tokens greedily. EOS is not a stop (matched token
@@ -1005,4 +1136,26 @@ fn generate_in<'s, 'm: 's>(
         drop(awake.take());
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod logprob_tests {
+    use super::*;
+
+    #[test]
+    fn logprobs_are_a_log_softmax() {
+        let logits = [2.0f32, -1.0, 0.5, 2.0, -30.0];
+        let norm = log_norm(&logits);
+        let total: f64 = (0..5).map(|t| libm::exp(logprob(&logits, norm, t))).sum();
+        assert!((total - 1.0).abs() < 1e-12, "{total}");
+        // Shifting every logit moves the norm, not the log-probabilities.
+        let shifted: Vec<f32> = logits.iter().map(|l| l + 100.0).collect();
+        let n2 = log_norm(&shifted);
+        assert!((logprob(&shifted, n2, 2) - logprob(&logits, norm, 2)).abs() < 1e-9);
+        // Ties go to the lowest id; an id outside the vocabulary has no probability.
+        let top = top_k_logprobs(&logits, 3);
+        assert_eq!(top.iter().map(|t| t.0).collect::<Vec<_>>(), vec![0, 3, 2]);
+        assert_eq!(logprob(&logits, norm, 9), f64::NEG_INFINITY);
+        assert!(top_k_logprobs(&logits, 0).is_empty());
+    }
 }

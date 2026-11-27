@@ -2,6 +2,7 @@
 
     python tools/conformance.py [--minerva EXE] [--server EXE] [--gguf F] [--prompts DIR]
                                 [--sizes 64,256,512,1024] [--new 48] [--out results.json]
+                                [--lora ADAPTER.gguf] [--ids-files A.ids,B.ids]
 
 For each bench prompt (bitnet-bench `prompts/pN.ids`: BOS + N-1 ids, so exactly N ids):
 
@@ -13,6 +14,9 @@ For each bench prompt (bitnet-bench `prompts/pN.ids`: BOS + N-1 ids, so exactly 
 A step agrees when the reference's argmax is our token; where it is not, the gap is the
 reference's probability of its argmax less that of ours. **Gate: every parting is a near-tie,
 worst gap < 0.1** (rusty_sloth's TIE for I2_S). Token COUNTS must match: N in, NEW out.
+
+With `--lora`, both engines load the same adapter (Minerva `--lora`, the server `--lora`):
+the gate is then on the adapted model.
 
 The comparison itself is rusty_sloth's (`tools/conformance_matrix.py`: `step`, `teacher_forced`,
 `vocabulary`), imported, not copied, so both engines face the same judge. Only the server
@@ -30,10 +34,12 @@ TIE = cm.TIE['i2_s']
 class Server:
     """bitnet.cpp's server on the CPU, `-c` sized to the longest prompt plus NEW."""
 
-    def __init__(self, exe, gguf, ctx, port, log_dir):
+    def __init__(self, exe, gguf, ctx, port, log_dir, lora=None):
         self.port = port
         self.log = open(os.path.join(log_dir, f'server-{port}.log'), 'w')
         cmd = [exe, '-m', gguf, '--port', str(port), '-ngl', '0', '-c', str(ctx), '-np', '1']
+        if lora:
+            cmd += ['--lora', lora]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=self.log)
         deadline = time.time() + 600
         while time.time() < deadline:
@@ -58,12 +64,15 @@ class Server:
         self.log.close()
 
 
+LORA = []
+
+
 def ours(exe, gguf, ids_file, new, work, n):
-    probs = os.path.join(work, f'ours-p{n}.probs.jsonl')
-    r = subprocess.run([exe, 'generate', '--gguf', gguf, '--ids', ids_file, '--new', str(new), '--probs', probs],
+    probs = os.path.join(work, f'ours-{n}.probs.jsonl')
+    r = subprocess.run([exe, 'generate', '--gguf', gguf, '--ids', ids_file, '--new', str(new), '--probs', probs] + LORA,
                        capture_output=True, text=True)
     if r.returncode != 0:
-        raise SystemExit(f'minerva failed on p{n}:\n{r.stderr[-2000:]}')
+        raise SystemExit(f'minerva failed on {n}:\n{r.stderr[-2000:]}')
     ids = [int(x) for x in r.stdout.strip().splitlines()[-1].split(',') if x]
     timing = next(l for l in r.stderr.splitlines() if l.startswith('minerva: load'))
     return ids, timing, probs
@@ -72,7 +81,7 @@ def ours(exe, gguf, ids_file, new, work, n):
 def ours_screened(exe, gguf, ids_file, new):
     """The same prompt through the head screen (brick d): the ids must be the full head's."""
     env = dict(os.environ, MINERVA_HEAD='screen')
-    r = subprocess.run([exe, 'generate', '--gguf', gguf, '--ids', ids_file, '--new', str(new)],
+    r = subprocess.run([exe, 'generate', '--gguf', gguf, '--ids', ids_file, '--new', str(new)] + LORA,
                        capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise SystemExit('minerva (screen) failed:\n' + r.stderr[-2000:])
@@ -93,30 +102,40 @@ def main():
     ap.add_argument('--out', default=os.path.join(HERE, '..', 'docs', 'conformance-b.json'))
     ap.add_argument('--poison', action='store_true',
                     help='negative control: rotate our ids by one before judging; the gate must FAIL')
+    ap.add_argument('--lora', help='adapter GGUF loaded by both engines')
+    ap.add_argument('--ids-files', help='comma-separated id files instead of --prompts/--sizes (named by their stem)')
     a = ap.parse_args()
     os.makedirs(a.work, exist_ok=True)
-    sizes = [int(s) for s in a.sizes.split(',')]
+    if a.lora:
+        LORA.extend(['--lora', a.lora])
+    if a.ids_files:
+        files = {os.path.splitext(os.path.basename(f))[0]: f for f in a.ids_files.split(',')}
+    else:
+        files = {f'p{n}': os.path.join(a.prompts, f'p{n}.ids') for n in [int(s) for s in a.sizes.split(',')]}
+    sizes = list(files)
 
     # 1. Ours first, alone (the host's free RAM holds one 1.2 GB model comfortably, not two).
     runs = {}
     for n in sizes:
-        f = os.path.join(a.prompts, f'p{n}.ids')
+        f = files[n]
         prompt = [int(x) for x in open(f).read().replace(',', ' ').split()]
-        assert len(prompt) == n, f'p{n}.ids holds {len(prompt)} ids'
+        if n[0] == 'p' and n[1:].isdigit():
+            assert len(prompt) == int(n[1:]), f'{n}.ids holds {len(prompt)} ids'
         mine, timing, probs = ours(a.minerva, a.gguf, f, a.new, a.work, n)
-        assert len(mine) == a.new, f'p{n}: {len(mine)} ids out, want {a.new}'
+        assert len(mine) == a.new, f'{n}: {len(mine)} ids out, want {a.new}'
         screened, screen = ours_screened(a.minerva, a.gguf, f, a.new)
         if screened != mine:
-            raise SystemExit(f'p{n}: the head screen chose other ids than the full head')
-        print(f'p{n}: head screen ids == full head ids | {screen}', flush=True)
+            raise SystemExit(f'{n}: the head screen chose other ids than the full head')
+        print(f'{n}: head screen ids == full head ids | {screen}', flush=True)
         if a.poison:
             mine = mine[1:] + mine[:1]
-        print(f'p{n}: ours {len(mine)} ids | {timing}', flush=True)
+        print(f'{n}: ours {len(mine)} ids | {timing}', flush=True)
         runs[n] = (prompt, mine, probs)
 
     # 2. The reference, teacher-forced along our ids.
     piece = cm.vocabulary(a.gguf)
-    server = Server(a.server, a.gguf, max(sizes) + a.new + 16, a.port, a.work)
+    longest = max(len(runs[n][0]) for n in sizes)
+    server = Server(a.server, a.gguf, longest + a.new + 16, a.port, a.work, a.lora)
     rows, ok = [], True
     try:
         for n in sizes:
@@ -128,9 +147,9 @@ def main():
             ours_top = [json.loads(l)['top'] for l in open(probs)]
             for p in parts:
                 p['ours_top2'] = ours_top[p['step']][:2]
-            rows.append({'prompt': f'p{n}', 'in': n, 'out': len(mine), 'agree': agree, 'steps': len(mine),
+            rows.append({'prompt': f'{n}', 'in': len(prompt), 'out': len(mine), 'agree': agree, 'steps': len(mine),
                          'worst_gap': worst, 'pass': passed, 'parts': parts, 'ours': mine})
-            print(f'p{n}: {agree}/{len(mine)} agree, worst gap {worst:.4f} -> {"PASS" if passed else "FAIL"} '
+            print(f'{n}: {agree}/{len(mine)} agree, worst gap {worst:.4f} -> {"PASS" if passed else "FAIL"} '
                   f'({time.time() - t0:.0f}s)', flush=True)
             for p in parts:
                 print(f'    step {p["step"]}: ours {p["ours"]} (cpp p={p["p_ours"]}) vs cpp {p["runtime"]!r} '
@@ -139,7 +158,7 @@ def main():
         server.close()
 
     json.dump({'gate': f'every parting a near-tie: worst gap < {TIE}', 'pass': ok, 'model': a.gguf,
-               'reference': 'bitnet.cpp 765741d llama-server (Windows MSVC build, CPU), n_probs 256',
+               'reference': f'bitnet.cpp 765741d llama-server {a.server} (CPU), n_probs 256', 'lora': a.lora,
                'new': a.new, 'rows': rows}, open(a.out, 'w'), indent=1)
     print(('PASS' if ok else 'FAIL') + f' -> {a.out}')
     sys.exit(0 if ok else 1)
