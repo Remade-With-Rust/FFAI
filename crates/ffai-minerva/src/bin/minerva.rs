@@ -136,7 +136,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use ffai_minerva::engine::{self, HeadMode, Session, top_k, top_k_logprobs};
+use ffai_minerva::engine::{self, HeadMode, Session, top_k};
 use ffai_minerva::lora::Adapter;
 use ffai_minerva::model::Model;
 use ffai_minerva::roofline::{self, ByteCensus};
@@ -393,7 +393,7 @@ fn generate(args: &[String]) -> Result<(), String> {
         }
         if let (Some(w), Some(logits)) = (logprobs.as_mut(), logits) {
             let norm = engine::log_norm(logits);
-            let top: Vec<String> = top_k_logprobs(logits, 8)
+            let top: Vec<String> = engine::top_k_logprobs_norm(logits, 8, norm)
                 .iter()
                 .map(|(t, l)| format!("[{t},{l}]"))
                 .collect();
@@ -526,20 +526,25 @@ fn generate(args: &[String]) -> Result<(), String> {
         );
     }
     if args.iter().any(|a| a == "--census") {
-        let snap = simd::census::snapshot();
-        for k in simd::census::NAMES {
-            let cells: Vec<_> = snap.iter().filter(|c| c.0 == k).collect();
-            let total: u64 = cells.iter().map(|c| c.2).sum();
-            let split: Vec<String> = cells
-                .iter()
-                .map(|c| format!("{} {:.2}%", c.1, 100.0 * c.2 as f64 / total.max(1) as f64))
-                .collect();
-            eprintln!("census: {k:<13} {total:>15}  {}", split.join(", "));
-        }
+        print_kernel_census();
     }
     let line: Vec<String> = out.iter().map(u32::to_string).collect();
     println!("{}", line.join(","));
     Ok(())
+}
+
+/// Each kernel's elements by the tier that ran them (`--census`).
+fn print_kernel_census() {
+    let snap = simd::census::snapshot();
+    for k in simd::census::NAMES {
+        let cells: Vec<_> = snap.iter().filter(|c| c.0 == k).collect();
+        let total: u64 = cells.iter().map(|c| c.2).sum();
+        let split: Vec<String> = cells
+            .iter()
+            .map(|c| format!("{} {:.2}%", c.1, 100.0 * c.2 as f64 / total.max(1) as f64))
+            .collect();
+        eprintln!("census: {k:<13} {total:>15}  {}", split.join(", "));
+    }
 }
 
 /// `chat`: a conversation in the terminal.
@@ -726,6 +731,8 @@ fn topk_census(args: &[String]) -> Result<(), String> {
     let (last, head) = prompt.split_last().ok_or("empty prompt")?;
     let mut rows: Vec<Vec<usize>> = vec![Vec::new(); ks.len()];
     let mut bad = 0usize;
+    simd::census::enable(args.iter().any(|a| a == "--census"));
+    simd::census::reset();
     rayon::scope(|_| -> Result<(), String> {
         s.prefill(head).map_err(|e| e.to_string())?;
         let mut next = *last;
@@ -762,6 +769,9 @@ fn topk_census(args: &[String]) -> Result<(), String> {
             v.last().copied().unwrap_or(0),
             s.isa().name()
         );
+    }
+    if args.iter().any(|a| a == "--census") {
+        print_kernel_census();
     }
     println!(
         "topk-census: screen top-k == full head top-k: {}",

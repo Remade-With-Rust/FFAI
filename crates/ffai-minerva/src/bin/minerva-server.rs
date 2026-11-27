@@ -359,7 +359,7 @@ impl Server<'_> {
                     let t = sample(logits, &sp, &mut rng);
                     if n_probs > 0 {
                         let norm = engine::log_norm(logits);
-                        let top: Vec<Value> = engine::top_k_logprobs(logits, n_probs)
+                        let top: Vec<Value> = engine::top_k_logprobs_norm(logits, n_probs, norm)
                             .into_iter()
                             .map(|(id, lp)| token_entry(tok, id, lp))
                             .collect();

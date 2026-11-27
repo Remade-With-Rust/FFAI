@@ -875,14 +875,20 @@ impl<'m> Session<'m> {
                         )
                     },
                 );
-                if let Some(p) = self.lora(li, Proj::Q) {
-                    p.apply(&self.h[..embd], &mut self.q);
-                }
-                if let Some(p) = self.lora(li, Proj::K) {
-                    p.apply(&self.h[..embd], &mut self.kc);
-                }
-                if let Some(p) = self.lora(li, Proj::V) {
-                    p.apply(&self.h[..embd], &mut self.vc);
+                if self.lora.is_some() {
+                    let (q, k, v) = (
+                        self.lora(li, Proj::Q),
+                        self.lora(li, Proj::K),
+                        self.lora(li, Proj::V),
+                    );
+                    lora::apply_group(
+                        &mut [
+                            (q, &mut self.q[..]),
+                            (k, &mut self.kc[..]),
+                            (v, &mut self.vc[..]),
+                        ],
+                        &self.h[..embd],
+                    );
                 }
             }
             for head in self.q.chunks_exact_mut(hd) {
@@ -944,7 +950,7 @@ impl<'m> Session<'m> {
                 let _t = crate::prof::scope(crate::prof::Stage::DecTernary);
                 bitlinear(isa, m, &l.o, &self.qa, act, &mut self.isum, &mut self.out);
                 if let Some(p) = self.lora(li, Proj::O) {
-                    p.apply(&self.h[..q_dim], &mut self.out);
+                    lora::apply_group(&mut [(Some(p), &mut self.out[..])], &self.h[..q_dim]);
                 }
             }
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
@@ -961,11 +967,12 @@ impl<'m> Session<'m> {
                     || bitlinear(isa, m, &l.gate, qa, act, isum, go),
                     || bitlinear(isa, m, &l.up, qa, act, isum2, uo),
                 );
-                if let Some(p) = self.lora(li, Proj::Gate) {
-                    p.apply(&self.h[..embd], &mut self.gate);
-                }
-                if let Some(p) = self.lora(li, Proj::Up) {
-                    p.apply(&self.h[..embd], &mut self.up);
+                if self.lora.is_some() {
+                    let (g, u) = (self.lora(li, Proj::Gate), self.lora(li, Proj::Up));
+                    lora::apply_group(
+                        &mut [(g, &mut self.gate[..]), (u, &mut self.up[..])],
+                        &self.h[..embd],
+                    );
                 }
             }
             simd::relu2_mul(isa, &mut self.gate, &self.up);
@@ -988,7 +995,7 @@ impl<'m> Session<'m> {
                 &mut self.out,
             );
             if let Some(p) = self.lora(li, Proj::Down) {
-                p.apply(&self.h[..ffn], &mut self.out);
+                lora::apply_group(&mut [(Some(p), &mut self.out[..])], &self.h[..ffn]);
             }
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
         }
@@ -1031,7 +1038,13 @@ pub fn logprob(logits: &[f32], norm: f64, token: u32) -> f64 {
 /// The `k` likeliest tokens and their log-probabilities, likeliest first (lowest id on a tie).
 #[must_use]
 pub fn top_k_logprobs(logits: &[f32], k: usize) -> Vec<(u32, f64)> {
-    let norm = log_norm(logits);
+    top_k_logprobs_norm(logits, k, log_norm(logits))
+}
+
+/// [`top_k_logprobs`] given [`log_norm`] of the logits already (a caller that also needs the
+/// chosen token's log-probability computes the norm, 128 K `exp`s, once).
+#[must_use]
+pub fn top_k_logprobs_norm(logits: &[f32], k: usize, norm: f64) -> Vec<(u32, f64)> {
     top_ids(logits, k)
         .into_iter()
         .map(|i| (i, logprob(logits, norm, i)))

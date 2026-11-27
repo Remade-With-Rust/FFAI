@@ -69,11 +69,13 @@ pub struct Pair {
 const STACK_RANK: usize = 128;
 
 /// `B` rows a task takes.
-const B_CHUNK: usize = 256;
+const B_CHUNK: usize = 1024;
 
 impl Pair {
-    /// `y[..rows] += scale · B (A x)` for one token (`x` holds `cols`).
-    pub(crate) fn apply(&self, x: &[f32], y: &mut [f32]) {
+    /// `y[..rows] += scale · B (A x)` for one token (`x` holds `cols`). Each half forks across
+    /// the pool when its multiply-adds reach `par_min` (`usize::MAX`: serial), `B` in chunks of
+    /// `b_chunk` rows. Decode uses [`apply_group`]; prefill calls this serially per token.
+    pub(crate) fn apply_with(&self, x: &[f32], y: &mut [f32], par_min: usize, b_chunk: usize) {
         let mut stack = [0f32; STACK_RANK];
         let mut heap = Vec::new();
         let t: &mut [f32] = if self.rank <= STACK_RANK {
@@ -83,18 +85,33 @@ impl Pair {
             &mut heap
         };
         let x = &x[..self.cols];
-        t.par_iter_mut()
-            .zip(self.a.par_chunks_exact(self.cols))
-            .for_each(|(t, a)| *t = dot(a, x));
+        let a_rows = |(t, a): (&mut f32, &[f32])| *t = dot(a, x);
+        if self.rank * self.cols >= par_min {
+            t.par_iter_mut()
+                .zip(self.a.par_chunks_exact(self.cols))
+                .for_each(a_rows);
+        } else {
+            t.iter_mut()
+                .zip(self.a.chunks_exact(self.cols))
+                .for_each(a_rows);
+        }
         let (t, rank, scale) = (&*t, self.rank, self.scale);
-        y[..self.rows]
-            .par_chunks_mut(B_CHUNK)
-            .zip(self.b.par_chunks(B_CHUNK * rank))
-            .for_each(|(y, b)| {
-                for (y, b) in y.iter_mut().zip(b.chunks_exact(rank)) {
-                    *y += dot(b, t) * scale;
-                }
-            });
+        let b_rows = |(y, b): (&mut [f32], &[f32])| {
+            for (y, b) in y.iter_mut().zip(b.chunks_exact(rank)) {
+                *y += dot(b, t) * scale;
+            }
+        };
+        if self.rows * rank >= par_min {
+            y[..self.rows]
+                .par_chunks_mut(b_chunk)
+                .zip(self.b.par_chunks(b_chunk * rank))
+                .for_each(b_rows);
+        } else {
+            y[..self.rows]
+                .chunks_mut(b_chunk)
+                .zip(self.b.chunks(b_chunk * rank))
+                .for_each(b_rows);
+        }
     }
 
     /// The rank.
@@ -287,6 +304,65 @@ fn parse_name(base: &str) -> Option<(usize, usize)> {
     Some((n.parse().ok()?, PROJ.iter().position(|&p| p == proj)?))
 }
 
+/// `y_i += s_i · B_i (A_i x)` for updates that share one input `x` (q, k and v; gate and up), in
+/// two parallel phases for the whole group instead of two per update: every `A_i x`, then every
+/// `B_i` row chunk. Nested `join`s, so nothing is allocated; each sum is the same as
+/// [`Pair::apply_with`]'s, so the bits are too.
+pub(crate) fn apply_group(items: &mut [(Option<&Pair>, &mut [f32])], x: &[f32]) {
+    let total: usize = items.iter().map(|it| it.0.map_or(0, |p| p.rank)).sum();
+    let mut stack = [0f32; 3 * STACK_RANK];
+    let mut heap = Vec::new();
+    let t: &mut [f32] = if total <= stack.len() {
+        &mut stack[..total]
+    } else {
+        heap.resize(total, 0.0);
+        &mut heap
+    };
+    fn phase_a(items: &[(Option<&Pair>, &mut [f32])], t: &mut [f32], x: &[f32]) {
+        match items {
+            [] | [(None, _)] => {}
+            [(Some(p), _)] => {
+                let x = &x[..p.cols];
+                t.par_iter_mut()
+                    .zip(p.a.par_chunks_exact(p.cols))
+                    .for_each(|(t, a)| *t = dot(a, x));
+            }
+            [first, rest @ ..] => {
+                let (t0, t1) = t.split_at_mut(first.0.map_or(0, |p| p.rank));
+                rayon::join(
+                    || phase_a(std::slice::from_ref(first), t0, x),
+                    || phase_a(rest, t1, x),
+                );
+            }
+        }
+    }
+    fn phase_b(items: &mut [(Option<&Pair>, &mut [f32])], t: &[f32]) {
+        match items {
+            [] | [(None, _)] => {}
+            [(Some(p), y)] => {
+                let (rank, scale) = (p.rank, p.scale);
+                y[..p.rows]
+                    .par_chunks_mut(B_CHUNK)
+                    .zip(p.b.par_chunks(B_CHUNK * rank))
+                    .for_each(|(y, b)| {
+                        for (y, b) in y.iter_mut().zip(b.chunks_exact(rank)) {
+                            *y += dot(b, t) * scale;
+                        }
+                    });
+            }
+            [first, rest @ ..] => {
+                let (t0, t1) = t.split_at(first.0.map_or(0, |p| p.rank));
+                rayon::join(
+                    || phase_b(std::slice::from_mut(first), t0),
+                    || phase_b(rest, t1),
+                );
+            }
+        }
+    }
+    phase_a(items, t, x);
+    phase_b(items, t);
+}
+
 /// A batch's update: token `k` reads `h[k·dim ..][..dim]` and adds to `out[k·stride ..]`.
 pub(crate) fn apply_batch(
     p: &Pair,
@@ -299,7 +375,8 @@ pub(crate) fn apply_batch(
     out[..bm * stride]
         .par_chunks_mut(stride)
         .zip(h[..bm * dim].par_chunks(dim))
-        .for_each(|(o, x)| p.apply(x, o));
+        // Parallel across tokens already: each token's update runs on its own thread.
+        .for_each(|(o, x)| p.apply_with(x, o, usize::MAX, B_CHUNK));
 }
 
 #[cfg(test)]
@@ -341,8 +418,95 @@ mod tests {
             scale: 0.5,
         };
         let mut y = vec![10.0, 20.0];
-        p.apply(&[1.0, 2.0, 3.0], &mut y);
+        p.apply_with(&[1.0, 2.0, 3.0], &mut y, usize::MAX, B_CHUNK);
         // A x = [7, 2]; B (A x) = [9, 6]; y += 0.5 · that.
         assert_eq!(y, vec![14.5, 23.0]);
+    }
+
+    /// Prices a token's worth of updates (every pair once) for fork thresholds and chunks,
+    /// interleaved, best of 7. Needs `MINERVA_GGUF` and `MINERVA_LORA`.
+    #[test]
+    #[ignore = "a benchmark; needs MINERVA_GGUF and MINERVA_LORA"]
+    fn bench_apply() {
+        let m = Model::load(std::path::Path::new(
+            &std::env::var("MINERVA_GGUF").expect("MINERVA_GGUF"),
+        ))
+        .expect("model");
+        let a = Adapter::load(
+            &m,
+            std::path::Path::new(&std::env::var("MINERVA_LORA").expect("MINERVA_LORA")),
+            1.0,
+        )
+        .expect("adapter");
+        let pairs: Vec<&Pair> = a.layers.iter().flatten().flatten().collect();
+        let x: Vec<f32> = (0..8192)
+            .map(|i| ((i * 37 % 101) as f32 - 50.0) * 0.01)
+            .collect();
+        let mut y = vec![0f32; 8192];
+        let arms: [(&str, usize, usize); 4] = [
+            ("serial", usize::MAX, 256),
+            ("par-256", 1 << 14, 256),
+            ("par-1024", 1 << 14, 1024),
+            ("par-2048", 1 << 14, 2048),
+        ];
+        let mut best = [f64::MAX; 4];
+        rayon::scope(|_| {
+            for _ in 0..7 {
+                for (j, &(_, pm, bc)) in arms.iter().enumerate() {
+                    let t = std::time::Instant::now();
+                    for _ in 0..4 {
+                        for p in &pairs {
+                            p.apply_with(&x, &mut y, pm, bc);
+                        }
+                    }
+                    best[j] = best[j].min(t.elapsed().as_secs_f64() * 1e3 / 4.0);
+                }
+            }
+        });
+        // Grouped as decode would: [q, k, v], [o], [gate, up], [down] per layer.
+        let mut grouped = f64::MAX;
+        let (mut ya, mut yb, mut yc) = (vec![0f32; 8192], vec![0f32; 8192], vec![0f32; 8192]);
+        rayon::scope(|_| {
+            for _ in 0..7 {
+                let t = std::time::Instant::now();
+                for _ in 0..4 {
+                    for l in &a.layers {
+                        let g = |p: usize| l[p].as_ref();
+                        if let (Some(q), Some(k), Some(v)) = (g(0), g(1), g(2)) {
+                            apply_group(
+                                &mut [
+                                    (Some(q), &mut ya[..]),
+                                    (Some(k), &mut yb[..]),
+                                    (Some(v), &mut yc[..]),
+                                ],
+                                &x,
+                            );
+                        }
+                        if let Some(o) = g(3) {
+                            apply_group(&mut [(Some(o), &mut ya[..])], &x);
+                        }
+                        if let (Some(gt), Some(up)) = (g(4), g(5)) {
+                            apply_group(
+                                &mut [(Some(gt), &mut ya[..]), (Some(up), &mut yb[..])],
+                                &x,
+                            );
+                        }
+                        if let Some(d) = g(6) {
+                            apply_group(&mut [(Some(d), &mut ya[..])], &x);
+                        }
+                    }
+                }
+                grouped = grouped.min(t.elapsed().as_secs_f64() * 1e3 / 4.0);
+            }
+        });
+        eprintln!("lora bench: grouped   {grouped:.2} ms a token");
+        for (j, (name, _, _)) in arms.iter().enumerate() {
+            eprintln!(
+                "lora bench: {name:<9} {:.2} ms a token ({} pairs, {} threads)",
+                best[j],
+                pairs.len(),
+                rayon::current_num_threads()
+            );
+        }
     }
 }

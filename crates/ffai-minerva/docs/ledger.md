@@ -1193,3 +1193,40 @@ token 1.1 s (7.3 s), p64 + 8 through the full head 3.8 s (23.6 s). Under load. T
 way: this nightly no longer makes atomics imply shared memory (the module's memory came out
 unshared and the helper workers could not receive it), and the rayon helper imports its package
 as a bare directory, which only bundlers resolve.
+
+## Twin reach audit of the chat tooling (codec-vectorize-kernel, 2026-11-27)
+
+**Census, every path the new tooling takes** (`--census`, p64, avx2vnni, now also on
+`topk-census`): greedy through the screen, top-k 40 through the screen, `--logprobs` through the
+full head, and `--lora`. Every one of the 11 kernels ran **100.00 % on avx2vnni** on every path.
+The single zero, `i8f_matvec`, is the float screen (`MINERVA_SCREEN=f32`, not the default).
+
+**Loops the census cannot see** (plain Rust, no `simd::` call), priced before any twin:
+
+- **`lora::dot`**: auto-vectorised (linked post-LTO asm: SSE2, 8 floats a trip, `mulps` + `addps`,
+  no FMA, the fixed order kept). It is **memory-bound, not compute-bound**: the adapter is 86 MB of
+  f32 read every token, and one core streams ~6 GB/s (serial: 13.5 ms a token for 21.6 M
+  multiply-adds). A wider SIMD dot cannot move that, so there is no twin to write. The real cost
+  was synchronisation: every update forked twice (420 fork-joins a token for ~30 µs of work each).
+  Isolated benchmark (`lora::tests::bench_apply`, a token's 210 updates, best of 7, 8 threads):
+
+  | arm | ms a token |
+  |---|---|
+  | serial | 13.54 |
+  | parallel, B in 256-row chunks (the shipped version) | 8.73-10.52 |
+  | parallel, B in 1,024-row chunks | 8.62-10.59 |
+  | **grouped: q+k+v, o, gate+up, down, two phases a group, nested joins** | **7.69** |
+
+  Kept: decode runs `lora::apply_group` (240 sync points a token instead of 420, nothing
+  allocated); prefill, already parallel across tokens, runs each token's update serially.
+  The same bits: LoRA hashes unchanged (h2 + 8 `fae5e6bad613bf9c`; p256 + 8 `0588a63983818c75` on
+  avx2vnni, scalar and step prefill). Floor still ~3 ms (86 MB at ~30 GB/s); the next lever is
+  running the update inside decode's existing q|k|v and gate|up joins, beside the ternary GEMV.
+- **`log_norm`** (128 K `libm::exp` in `f64`, only with `--logprobs` / `n_probs`): no SIMD form
+  that keeps `libm`'s bits on every device; ~0.5 ms a step. **It ran twice a step**: the CLI and
+  the server computed it, then `top_k_logprobs` computed it again. `top_k_logprobs_norm` takes
+  it; the `--logprobs` file is byte-identical.
+- **Sampling weights** (`exp_canon` over the top-k candidates, k <= 40 by default) and the
+  **tokenizer** (prompt time only): not hot, no twin.
+- **`head::top_k` survivors**: each is one `f16_matvec_bytes` call (in the census, at the top
+  tier); ~140-220 a step at k = 40, so the per-call dispatch is noise.
