@@ -1,0 +1,40 @@
+[package]
+name = "ffai-minerva"
+description = "Minerva — FFai's CPU/WASM inference engine for ternary (BitNet b1.58) language models, pure Rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Remade-With-Rust/FFai"
+authors = ["Remade With Rust"]
+# NOT published, by decision (2026-11-23): the format crate `rusty_ternary`
+# lives in the private rusty_sloth repository and comes in by git, and
+# `cargo publish` refuses git dependencies. The bench binary lives here, not in
+# ffai-cli, so ffai-cli never depends on Minerva and stays publishable.
+publish = false
+
+# Its own workspace: excluded from the root one so the private git dependency
+# never enters FFai's public lockfile or CI (see the root Cargo.toml).
+[workspace]
+
+[dependencies]
+half = "2.7.1"
+libm = "0.2.16"
+rayon = "1.12.0"
+rusty_ternary = { git = "https://github.com/Remade-With-Rust/rusty_sloth", rev = "e68e2031d1e357d4f72a9b31e77d3dcf2c279431", version = "0.0.0" }
+
+[profile.release]
+# Same as the root workspace: thin LTO, one codegen unit.
+lto = "thin"
+codegen-units = 1
+
+[features]
+# Measurement only: a counting global allocator in the `minerva` binary, so `generate` reports
+# allocations per phase (load / prefill / decode). Off in every timed build.
+census-alloc = []
+
+[lints.rust]
+unsafe_code = "warn"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+memmap2 = "0.9.12"
