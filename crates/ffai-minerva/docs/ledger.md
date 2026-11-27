@@ -1099,5 +1099,28 @@ until re-raced with a head arm.)
 `par_chunks`; tasks are stolen, so the split is already uneven), every run starting at <= 31.0 C,
 6 rounds, 64 -> 64. Decode against 4 threads x 64 rows (null 0.990): 4 x 16 rows 1.013, 5 x 16
 0.819, 6 x 16 0.875, 8 x 16 0.630, 8 x 64 0.693; first token 0.555-0.756 for 5-8 threads. Smaller
-tasks do not let the A520s help: the 4-thread default stands. The 1,856-position cell did not run
-(adb dropped).
+tasks do not let the A520s help: the 4-thread default stands. The 1,856-position cell is below.
+
+## Phone: head-file re-race and the long-prompt core split (2026-11-27)
+
+**Re-race with a head arm** (b07aa41 binary; bitnet.cpp `llama-server` with OpenMP), 64 -> 128,
+4 v 4 threads, 6 rounds, arms rotated, battery 29.1-32.6 C. Every head run printed `head: sidecar`.
+
+| arm | first token | decode | p99 token |
+|---|---|---|---|
+| Minerva + head file | **1,140 ms** | 22.63 tok/s | 62.9 ms |
+| Minerva, head built | 1,475 ms | 22.73 tok/s | 69.9 ms |
+| bitnet.cpp -omp | 1,306 ms | 19.44 tok/s | - |
+
++head v bitnet.cpp: first token **1.153x 6/6**, decode 1.167x 4/6 (two 0.96 rounds at 32-33 C).
+Built head v bitnet.cpp: first token 0.844x 1/6, decode 1.166x 6/6. Null v built: first token
+0.985, decode 0.993. The head file turns the phone's short-prompt first token from behind to
+ahead; decode lead unchanged. Provisional (one session, 6 rounds).
+
+**Uneven core split at 1,856 positions: refuted.** Same arms as the 64-position cell, 1,856 -> 64,
+4 rounds. The battery sat at 32.5 C on the charger overnight, so the gate was <= 33.0 C. Decode
+against 4 x 64 (null 0.990, one 0.48 outlier): 4 x 16 0.860, 5 x 16 0.894, 6 x 16 0.900,
+8 x 16 0.571, 8 x 64 0.763, 0/4 wins for each; first token 0.906-0.962. The 4-thread default
+stands at both lengths.
+
+Phone folder deleted after these runs.
