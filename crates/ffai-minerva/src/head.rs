@@ -547,9 +547,9 @@ pub fn top_k(
         return None;
     }
     intervals(isa, h8, x, sc, true)?;
-    let mut lo = sc.dots.clone();
-    lo.select_nth_unstable_by(k - 1, |a, b| b.total_cmp(a));
-    let t = lo[k - 1];
+    // The k-th largest lower bound (a heap pass for small k: no copy of the 128 K bounds).
+    let kth = crate::engine::top_k_ids(&sc.dots, k)[k - 1];
+    let t = sc.dots[kth as usize];
     sc.survivors.clear();
     for (r, (&h, &l)) in sc.hi.iter().zip(&sc.dots).enumerate() {
         // A NaN bound keeps its row.

@@ -532,10 +532,8 @@ impl<'m> Session<'m> {
             return Ok(r);
         }
         self.head_full();
-        let mut ids: Vec<u32> = (0..u32::try_from(self.logits.len()).unwrap_or(u32::MAX)).collect();
         let l = &self.logits;
-        ids.sort_unstable_by(|a, b| l[*b as usize].total_cmp(&l[*a as usize]).then(a.cmp(b)));
-        ids.truncate(k.max(1));
+        let ids = top_k_ids(l, k.max(1));
         Ok((
             ids.into_iter().map(|i| (i, l[i as usize])).collect(),
             l.len(),
@@ -557,12 +555,7 @@ impl<'m> Session<'m> {
             k,
         )?;
         let l = &self.logits;
-        let mut ids: Vec<u32> = (0..u32::try_from(l.len()).unwrap_or(u32::MAX)).collect();
-        ids.select_nth_unstable_by(k - 1, |a, b| {
-            l[*b as usize].total_cmp(&l[*a as usize]).then(a.cmp(b))
-        });
-        ids.truncate(k);
-        ids.sort_unstable_by(|a, b| l[*b as usize].total_cmp(&l[*a as usize]).then(a.cmp(b)));
+        let ids = top_k_ids(l, k);
         let same = got.len() == ids.len()
             && got
                 .iter()
@@ -1053,19 +1046,90 @@ pub fn top_k_logprobs_norm(logits: &[f32], k: usize, norm: f64) -> Vec<(u32, f64
 
 /// The `k` largest logits' ids, largest first, the lowest id on a tie.
 fn top_ids(logits: &[f32], k: usize) -> Vec<u32> {
-    let mut idx: Vec<usize> = (0..logits.len()).collect();
-    let k = k.min(idx.len());
+    // k = 0 asks for none here (top_k_ids reads 0 as all).
     if k == 0 {
         return Vec::new();
     }
-    idx.select_nth_unstable_by(k - 1, |&a, &b| {
-        logits[b].total_cmp(&logits[a]).then(a.cmp(&b))
-    });
-    idx.truncate(k);
-    idx.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
-    idx.into_iter()
-        .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
-        .collect()
+    top_k_ids(logits, k)
+}
+
+/// Candidate order: `a` before `b` when its value is larger, or equal with a lower id. A total
+/// order (`total_cmp`), so the result never depends on how the scan or a sort went.
+fn better(v: &[f32], a: u32, b: u32) -> bool {
+    match v[a as usize].total_cmp(&v[b as usize]) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => a < b,
+    }
+}
+
+/// `k` above this selects over a full index array instead of a heap.
+const HEAP_MAX: usize = 128;
+
+/// The ids of the `k` best of `v` in candidate order ([`better`]), all of them when `k` is 0 or
+/// at least `v.len()`. For `k <= 128` one pass keeps a `k`-slot heap of the best so far (worst
+/// on top): no 128 K-index array, no reorder of it. Above, `select_nth` over the indices.
+pub(crate) fn top_k_ids(v: &[f32], k: usize) -> Vec<u32> {
+    let n = u32::try_from(v.len()).unwrap_or(u32::MAX);
+    let ord = |a: &u32, b: &u32| {
+        if better(v, *a, *b) {
+            std::cmp::Ordering::Less
+        } else if a == b {
+            std::cmp::Ordering::Equal
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    };
+    if k == 0 || k >= v.len() {
+        let mut ids: Vec<u32> = (0..n).collect();
+        ids.sort_unstable_by(ord);
+        return ids;
+    }
+    if k > HEAP_MAX {
+        let mut ids: Vec<u32> = (0..n).collect();
+        ids.select_nth_unstable_by(k - 1, ord);
+        ids.truncate(k);
+        ids.sort_unstable_by(ord);
+        return ids;
+    }
+    // A max-heap on "worse": the root is the worst kept id.
+    let mut h: Vec<u32> = Vec::with_capacity(k);
+    let worse = |a: u32, b: u32| better(v, b, a);
+    for id in 0..n {
+        if h.len() < k {
+            h.push(id);
+            let mut i = h.len() - 1;
+            while i > 0 {
+                let p = (i - 1) / 2;
+                if worse(h[i], h[p]) {
+                    h.swap(i, p);
+                    i = p;
+                } else {
+                    break;
+                }
+            }
+        } else if better(v, id, h[0]) {
+            h[0] = id;
+            let mut i = 0;
+            loop {
+                let (l, r) = (2 * i + 1, 2 * i + 2);
+                let mut w = i;
+                if l < k && worse(h[l], h[w]) {
+                    w = l;
+                }
+                if r < k && worse(h[r], h[w]) {
+                    w = r;
+                }
+                if w == i {
+                    break;
+                }
+                h.swap(i, w);
+                i = w;
+            }
+        }
+    }
+    h.sort_unstable_by(ord);
+    h
 }
 
 /// The `k` likeliest tokens with their probabilities (softmax in `f64` with `libm`, for
@@ -1228,6 +1292,72 @@ fn generate_in<'s, 'm: 's>(
         drop(awake.take());
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod top_k_ids_tests {
+    use super::*;
+
+    /// The previous implementation: every index, `select_nth`, sort.
+    fn by_select(v: &[f32], k: usize) -> Vec<u32> {
+        let mut idx: Vec<u32> = (0..u32::try_from(v.len()).unwrap()).collect();
+        let ord = |a: &u32, b: &u32| v[*b as usize].total_cmp(&v[*a as usize]).then(a.cmp(b));
+        if k > 0 && k < idx.len() {
+            idx.select_nth_unstable_by(k - 1, ord);
+            idx.truncate(k);
+        }
+        idx.sort_unstable_by(ord);
+        idx
+    }
+
+    fn logits(n: usize, seed: u64) -> Vec<f32> {
+        let mut s = seed;
+        (0..n)
+            .map(|_| {
+                s = s
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                // Coarse values so ties occur; a few large ones on top.
+                #[expect(clippy::cast_precision_loss, reason = "test data")]
+                let x = ((s >> 40) % 2000) as f32 * 0.01 - 10.0;
+                x
+            })
+            .collect()
+    }
+
+    #[test]
+    fn heap_equals_select_with_ties() {
+        for seed in 0..5 {
+            let v = logits(5000, seed);
+            for k in [1, 2, 7, 40, 256, 257, 1000, 4999, 5000, 0] {
+                assert_eq!(top_k_ids(&v, k), by_select(&v, k), "seed {seed} k {k}");
+            }
+        }
+        let v = vec![1.0f32; 50];
+        assert_eq!(top_k_ids(&v, 5), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    #[ignore = "a benchmark"]
+    fn bench_top_k_ids() {
+        let v = logits(128_256, 9);
+        for k in [1usize, 8, 40, 128, 256, 1000] {
+            let (mut a, mut b) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                let t = std::time::Instant::now();
+                let x = by_select(&v, k);
+                a = a.min(t.elapsed().as_secs_f64() * 1e6);
+                let t = std::time::Instant::now();
+                let y = top_k_ids(&v, k);
+                b = b.min(t.elapsed().as_secs_f64() * 1e6);
+                assert_eq!(x, y);
+            }
+            eprintln!(
+                "top_k_ids k {k:>4}: select {a:8.1} us | heap {b:8.1} us | {:.1}x",
+                a / b
+            );
+        }
+    }
 }
 
 #[cfg(test)]

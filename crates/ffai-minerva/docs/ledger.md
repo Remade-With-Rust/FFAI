@@ -1230,3 +1230,24 @@ The single zero, `i8f_matvec`, is the float screen (`MINERVA_SCREEN=f32`, not th
   **tokenizer** (prompt time only): not hot, no twin.
 - **`head::top_k` survivors**: each is one `f16_matvec_bytes` call (in the census, at the top
   tier); ~140-220 a step at k = 40, so the per-call dispatch is noise.
+
+## Copies and allocations in the chat tooling (codec-memory-copies, 2026-11-27)
+
+Census by reading every new path, then each candidate priced:
+
+| site | what it did | verdict |
+|---|---|---|
+| `head::top_k` | `sc.dots.clone()`: 128,256 f32 (513 KB) allocated and copied every sampled step, then `select_nth` | **removed**: the k-th lower bound comes from a heap pass |
+| top-k ids, four copies (`sampling::candidates`, `engine::top_ids`, `check_top_k`, `step_top_k`'s fallback) | each built a 128 K-index `Vec`, then `select_nth` and a sort | **one helper**, `engine::top_k_ids`: a k-slot heap for k <= 128, the select above |
+| `log_norm` | computed twice per log-prob step (found by the twin audit) | **removed** (above) |
+| `Adapter::load` | `fs::read` of the 86 MB file beside its f32 copies | **refuted, reverted**: peak private commit 432.6 MB with a map or a read, load 0.34-0.38 s either way. The copy happens before the screen and the cache exist, so it never sets the peak |
+| `ModelBuffer::new` (browser) | `vec![0; 1.19 GB]`, then overwritten by the fetch | kept: a zeroed request this large gets fresh `memory.grow` pages, already zero, so the allocator skips the fill (reasoned, not measured; the 58 s load is the download) |
+| `Tokenizer::from_gguf` | each token's text twice (a `String` key and its bytes) | kept: **216.6 ms once** a process (best of 5) |
+| `sampling::weights` | a k-length `Vec` a sampled step (k <= 40) | kept: tiny |
+
+`top_k_ids` against the previous select, 128,256 logits with ties, best of 9
+(`engine::top_k_ids_tests::bench_top_k_ids`): k = 1 1.0x, k = 8 1.6x, k = 40 1.5x, k = 128 1.3x,
+k = 256 1.0x, k = 1000 0.2x, hence the heap only up to 128. `heap_equals_select_with_ties` checks
+the two give the same ids for every k on tied data. Unchanged after: the screen's top-k equal to
+the full head's at every step for k in {1, 2, 40, 1000} (p64, p1024); the server's seeded story
+digest `072048c851d9` with and without `n_probs`; the `--logprobs` file byte for byte.

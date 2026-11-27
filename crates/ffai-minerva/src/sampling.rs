@@ -90,18 +90,7 @@ impl Rng {
 /// The ids of `logits` in candidate order (logit descending, id ascending), cut to the `k`
 /// largest when `k > 0`.
 fn candidates(logits: &[f32], k: usize) -> Vec<u32> {
-    let order = |a: &u32, b: &u32| {
-        logits[*b as usize]
-            .total_cmp(&logits[*a as usize])
-            .then(a.cmp(b))
-    };
-    let mut ids: Vec<u32> = (0..u32::try_from(logits.len()).unwrap_or(u32::MAX)).collect();
-    if k > 0 && k < ids.len() {
-        ids.select_nth_unstable_by(k - 1, order);
-        ids.truncate(k);
-    }
-    ids.sort_unstable_by(order);
-    ids
+    crate::engine::top_k_ids(logits, k)
 }
 
 /// `exp((l - max) · scale)` for each candidate (in order), and their sum in `f64`.

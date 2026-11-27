@@ -629,4 +629,22 @@ mod tests {
             )
         );
     }
+
+    /// What building the tokenizer costs on a mapped model (best of 5). Needs `MINERVA_GGUF`.
+    #[test]
+    #[ignore = "a benchmark; needs MINERVA_GGUF"]
+    fn bench_from_gguf() {
+        let m = crate::model::Model::load(std::path::Path::new(
+            &std::env::var("MINERVA_GGUF").expect("MINERVA_GGUF"),
+        ))
+        .expect("model");
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let tok = Tokenizer::from_gguf(m.file_bytes()).expect("tokenizer");
+            best = best.min(t.elapsed().as_secs_f64() * 1e3);
+            assert!(tok.len() > 100_000);
+        }
+        eprintln!("tokenizer build: {best:.1} ms (best of 5)");
+    }
 }
