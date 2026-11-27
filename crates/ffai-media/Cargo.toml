@@ -41,7 +41,7 @@ rusty_jpeg = "0.4.12"
 # git dependency in the workspace root does not — that constraint cost this
 # project a publication chain once already.
 rff-core = "0.9.4"
-rff-format = "0.8.4"
+rff-format = "0.9.4"
 rff-format-mp4 = "0.8.4"
 rff-format-mkv = "0.8.4"
 rff-format-avi = "0.8.4"
