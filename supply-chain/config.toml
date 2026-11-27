@@ -830,6 +830,10 @@ criteria = "safe-to-deploy"
 version = "0.3.33"
 criteria = "safe-to-deploy"
 
+[[exemptions.png]]
+version = "0.18.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.portable-atomic]]
 version = "1.14.0"
 criteria = "safe-to-deploy"
