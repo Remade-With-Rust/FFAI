@@ -304,7 +304,7 @@ engines, not rewrites.
    images decode through [`rusty_jpeg`](https://crates.io/crates/rusty_jpeg)
    and [`rusty_png`](https://crates.io/crates/rusty_png).
 8. **Pure-Rust allocator.** The `ffai` binary and the wasm crates use
-   [`rusty_alloc`](https://crates.io/crates/rusty_alloc) 2.4.0. It replaced
+   [`rusty_alloc`](https://crates.io/crates/rusty_alloc) 2.6.0. It replaced
    mimalloc with byte-identical output and speed parity, and the engines'
    byte-identity oracles pass on every release.
 

@@ -30,8 +30,8 @@ hound = { workspace = true }
 # The registry seam (`rff_codec::CodecRegistry`) is still the right home for
 # DEMUXERS and video codecs, where rff provides something nothing else does.
 # For a still-image decoder it bought an indirection and cost publication.
-rusty_png = "0.3"
-rusty_jpeg = "0.4"
+rusty_png = "0.3.2"
+rusty_jpeg = "0.4.12"
 # VIDEO INGEST, from crates.io rather than the git workspace.
 #
 # `sample_frames` was a stub waiting on "the rff backend". The backend is
@@ -40,13 +40,13 @@ rusty_jpeg = "0.4"
 # the RELEASED crates keeps every FFai crate downstream publishable, which the
 # git dependency in the workspace root does not — that constraint cost this
 # project a publication chain once already.
-rff-core = "0.2"
-rff-format = "0.2"
-rff-format-mp4 = "0.2"
-rff-format-mkv = "0.2"
-rff-format-avi = "0.2"
-rff-format-ts = "0.2"
-rff-codec = "0.2"
+rff-core = "0.8.4"
+rff-format = "0.8.4"
+rff-format-mp4 = "0.8.4"
+rff-format-mkv = "0.8.4"
+rff-format-avi = "0.8.4"
+rff-format-ts = "0.8.4"
+rff-codec = "0.8.4"
 # `default-features = false` is LOAD-BEARING, not tidying. rusty_h264 0.16
 # added a `global-alloc` feature, ON BY DEFAULT, which installs rusty_alloc as
 # `#[global_allocator]` from inside a LIBRARY. There is exactly one global
@@ -57,7 +57,7 @@ rff-codec = "0.2"
 # Choosing the allocator is the deliverable's call, never a library's - the
 # house rule, and the reason `ffai-cli` owns that decision. `std` and `asm`
 # are the two default features worth keeping, so they come back by name.
-rusty_h264 = { version = "0.16", default-features = false, features = ["std", "asm"] }
+rusty_h264 = { version = "0.17.4", default-features = false, features = ["std", "asm"] }
 # PDF pages for OCR (`pdf` feature; docs/plans/commercial-gaps.md gaps 1, 2,
 # 11). Both pure Rust, MIT. lopdf's defaults (chrono, jiff, rayon, time) are
 # date handling and parallel parsing this module never uses. `fax` is the
