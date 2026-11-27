@@ -219,7 +219,7 @@ ceiling. The f16 head is still 55.7 % of those bytes, which is brick d's target.
   GEMM twin that decodes each weight row once for many tokens is the prefill lever.
 - Bandwidth rerun on a quiet box (still open from brick a).
 
-## Standing rule: engine comparisons run at EQUAL thread counts (Tim, 2026-11-23)
+## Standing rule: engine comparisons run at EQUAL thread counts (2026-11-23)
 
 Every Minerva vs bitnet.cpp (or any other engine) corpus comparison sets the thread count
 explicitly on both engines: Minerva's `--threads` and bitnet.cpp's `-t` / `-tb`. The count is
@@ -672,7 +672,7 @@ rotated rounds, two new arms, null arm beside each.
   when the baseline folds its loads into memory operands. Quote loads per trip beside insns;
   `asm_count.py` now counts folded loads (rusty-sloth).
 
-Counted toward Tim's 10: W1, W2, W3, V1, V3, V4, V2 (7). Time wins beside them: the rayon
+Counted toward the goal of 10: W1, W2, W3, V1, V3, V4, V2 (7). Time wins beside them: the rayon
 pool fix, e1b, the parallel per-token chain.
 
 ## The last three (2026-11-23)
@@ -692,7 +692,7 @@ pool fix, e1b, the parallel per-token chain.
   variant, tiling query tokens over each widened K row, only re-saves the widening, which V3
   already cut to ~12 % of the score kernel: under 1 % of prefill. Not built.
 
-**Counted toward Tim's 10:** W1, W2, W3, V1, V3, V4, V2, the paired GEMV, V5, and the q|k|v +
+**Counted toward the goal of 10:** W1, W2, W3, V1, V3, V4, V2, the paired GEMV, V5, and the q|k|v +
 gate|up join. Every one is bit-identical, gated by `assert_eq!` and the logits hashes.
 
 ## NeonDot executed on the Pixel (closes brick e2's open item, 2026-11-23)
@@ -955,7 +955,7 @@ against 3.1 GHz). Spot check with the default: 64-token first token 1.28 s again
 ### Re-race at 64 tokens after fmlal and short-prompt keep-awake (2026-11-25, PROVISIONAL)
 
 Same phone, harness and gates as the race above; Minerva at e0df6a7 (neonfhm, keep-awake on for
-this 64-token prompt), 6 rounds, three arms (`-noomp` dropped: the phone is Tim's main phone, and
+this 64-token prompt), 6 rounds, three arms (`-noomp` dropped: the phone is in daily use, and
 only `-omp` is quoted). Battery 24.5 -> 31.8 C; no cap fell; no run redone.
 
 | 64 -> 128 | Minerva | bitnet.cpp -omp | Minerva / -omp, per round | median, wins | null arm, per round |
