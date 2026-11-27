@@ -273,22 +273,22 @@ user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
 [[publisher.clap]]
-version = "4.6.4"
-when = "2026-07-21"
+version = "4.6.7"
+when = "2026-09-14"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
 [[publisher.clap_builder]]
-version = "4.6.2"
-when = "2026-07-15"
+version = "4.6.7"
+when = "2026-09-14"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
 [[publisher.clap_derive]]
-version = "4.6.4"
-when = "2026-07-21"
+version = "4.6.7"
+when = "2026-09-14"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -382,6 +382,13 @@ when = "2026-07-22"
 user-id = 5
 user-login = "sfackler"
 user-name = "Steven Fackler"
+
+[[publisher.form_urlencoded]]
+version = "1.2.3"
+when = "2026-11-20"
+user-id = 1139
+user-login = "Manishearth"
+user-name = "Manish Goregaokar"
 
 [[publisher.glob]]
 version = "0.3.4"
@@ -709,8 +716,8 @@ user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
 [[publisher.rustix]]
-version = "1.1.4"
-when = "2026-02-22"
+version = "1.1.6"
+when = "2026-10-27"
 user-id = 6825
 user-login = "sunfishcode"
 user-name = "Dan Gohman"
@@ -821,15 +828,15 @@ user-login = "sunfishcode"
 user-name = "Dan Gohman"
 
 [[publisher.thiserror]]
-version = "2.0.19"
-when = "2026-07-18"
+version = "2.0.21"
+when = "2026-09-23"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.thiserror-impl]]
-version = "2.0.19"
-when = "2026-07-18"
+version = "2.0.21"
+when = "2026-09-23"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -849,8 +856,8 @@ user-login = "Manishearth"
 user-name = "Manish Goregaokar"
 
 [[publisher.tokio]]
-version = "1.53.1"
-when = "2026-07-20"
+version = "1.54.1"
+when = "2026-10-21"
 user-id = 6741
 user-login = "Darksonn"
 user-name = "Alice Ryhl"
@@ -940,8 +947,8 @@ user-login = "Manishearth"
 user-name = "Manish Goregaokar"
 
 [[publisher.url]]
-version = "2.5.8"
-when = "2026-01-05"
+version = "2.5.9"
+when = "2026-11-20"
 user-id = 1139
 user-login = "Manishearth"
 user-name = "Manish Goregaokar"
@@ -2579,24 +2586,6 @@ criteria = "safe-to-deploy"
 delta = "0.1.1 -> 0.3.1"
 aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.form_urlencoded]]
-who = "Valentin Gosu <valentin.gosu@gmail.com>"
-criteria = "safe-to-deploy"
-version = "1.2.0"
-aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.form_urlencoded]]
-who = "Valentin Gosu <valentin.gosu@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "1.2.0 -> 1.2.1"
-aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.form_urlencoded]]
-who = "edgul <ed.guloien@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "1.2.1 -> 1.2.2"
-aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.futures-core]]
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
@@ -2913,6 +2902,12 @@ who = "Max Leonard Inden <mail@max-inden.de>"
 criteria = "safe-to-deploy"
 delta = "0.5.12 -> 0.5.13"
 aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.quinn-udp]]
+who = "Alex Franchuk <afranchuk@mozilla.com>"
+criteria = "safe-to-deploy"
+delta = "0.5.13 -> 0.5.16"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/cargo-vet/main/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.quote]]
 who = "Jan-Erik Rediger <jrediger@mozilla.com>"
@@ -3261,12 +3256,6 @@ criteria = "safe-to-deploy"
 delta = "0.2.1 -> 0.2.2"
 notes = "No changes to unsafe code, straightforward refactoring and cleanup."
 aggregated-from = "https://raw.githubusercontent.com/zcash/librustzcash/main/supply-chain/audits.toml"
-
-[[audits.zcash.audits.quinn-udp]]
-who = "Jack Grigg <jack@electriccoin.co>"
-criteria = "safe-to-deploy"
-delta = "0.5.13 -> 0.5.14"
-aggregated-from = "https://raw.githubusercontent.com/zcash/wallet/main/supply-chain/audits.toml"
 
 [[audits.zcash.audits.rand_xorshift]]
 who = "Sean Bowe <ewillbefull@gmail.com>"

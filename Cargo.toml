@@ -4,7 +4,15 @@ members = ["crates/*"]
 # The demo UI is a wasm app with its own lockfile and its own target dir.
 # Inside the workspace it would be built for the host by `cargo build
 # --workspace` and fail; excluded, `dx` owns it entirely.
-exclude = ["demo-ui"]
+#
+# Minerva (the BitNet b1.58 engine) depends on `rusty_ternary` by git from a
+# PRIVATE repository (rusty_sloth stays private by decision, 2026-11-23). Inside
+# this workspace that dependency would enter the root lockfile, and resolving it
+# needs the private manifest — so this PUBLIC repo's CI, and every fork's PR,
+# would fail to resolve at all. Excluded, it is its own workspace with its own
+# lockfile; it is `publish = false` for the same reason (cargo publish refuses
+# git dependencies — see the rff note below).
+exclude = ["demo-ui", "crates/ffai-minerva"]
 
 [workspace.package]
 version = "0.10.0"

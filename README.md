@@ -1,8 +1,8 @@
 # FFAI
 
 **The AI media toolkit, remade with Rust.** Speech recognition, text-to-speech,
-OCR, object detection and tracking, and vision-language captioning in one
-toolkit. It is built the way ffmpeg was built: libraries first, one binary on
+OCR, object detection and tracking, vision-language captioning, and ternary
+language models in one toolkit. It is built the way ffmpeg was built: libraries first, one binary on
 top, every engine swappable by name. No Python runtime, no ONNX runtime, no
 gated weights, and the same engines compile to WebAssembly and run in a browser
 tab.
@@ -89,6 +89,7 @@ produced by `ffai bench` (below).
 | **Carmenta** | [`ffai-carmenta`](crates/ffai-carmenta) | OCR | Roman goddess who adapted the Greek alphabet into Latin letters |
 | **Diana** | [`ffai-diana`](crates/ffai-diana) | Detection + tracking | Roman goddess of the hunt |
 | **Argus** | [`ffai-argus`](crates/ffai-argus) | VLM captioning | Argus Panoptes, the all-seeing watchman |
+| **Minerva** | [`ffai-minerva`](crates/ffai-minerva) | Ternary LLM inference (BitNet b1.58) | Roman goddess of wisdom and craft |
 
 Browser builds: [`ffai-wasm`](https://crates.io/crates/ffai-wasm) (Diana),
 `ffai-carmenta-wasm`, `ffai-mercury-wasm` and `ffai-argus-wasm`.
@@ -229,6 +230,39 @@ ffai caption -i street.jpg --prompt "What is written in this image?"
 ffai caption -i clip.mp4  --fps 2 --window 8 --output captions.srt
 ```
 
+### Minerva: ternary language models on any CPU
+
+A pure-Rust engine for BitNet b1.58 models, whose weights are only −1, 0 and +1.
+It reads bitnet.cpp's `I2_S` GGUF and runs on x86, ARM and WebAssembly. Its
+promise is **the same file gives the same tokens on every device**: the
+arithmetic has one canonical order, and every SIMD kernel is bit-identical to
+its scalar oracle.
+
+- **One hash everywhere.** On BitNet b1.58 2B-4T, an FNV-1a hash over every
+  generated token's full logits matches across x86 (scalar, SSSE3, AVX2), a
+  Pixel 9 Pro XL (scalar, NEON, NEON dot product) and WebAssembly (scalar,
+  SIMD128).
+- **Held to bitnet.cpp.** Our tokens are teacher-forced through bitnet.cpp's
+  own server. Where the two disagree it must be a near-tie (probability gap
+  under 0.1): 189 of 192 steps agree, worst gap 0.011.
+- **Half the output layer's reads.** An int8 screen of the 128K-token output
+  layer, with a proven per-row bound, picks the same greedy token as the full
+  f16 layer. `minerva prepare-head` saves the screen once so later runs skip
+  building it.
+- **LoRA adapters and log-probabilities.** `--lora` loads llama.cpp-format
+  adapter GGUFs; `--logprobs` and `minerva score` report log-probabilities
+  over the full vocabulary, the same bits on every device.
+
+```sh
+minerva generate --gguf model-i2_s.gguf --ids prompt.ids --new 128
+minerva generate --gguf model-i2_s.gguf --ids prompt.ids --new 64 --lora adapter.gguf --logprobs out.jsonl
+minerva score --gguf model-i2_s.gguf --ids prompt.ids --target answer.ids
+```
+
+Minerva builds on its own, outside the workspace, and is not on crates.io yet:
+its format crate, `rusty_ternary`, is not public. Every measurement, including
+the refuted ideas, is in [its ledger](crates/ffai-minerva/docs/ledger.md).
+
 ## The analyzer: `ffai bench`
 
 One command compares any FFAI engine against world-standard implementations on
@@ -270,7 +304,7 @@ engines, not rewrites.
    images decode through [`rusty_jpeg`](https://crates.io/crates/rusty_jpeg)
    and [`rusty_png`](https://crates.io/crates/rusty_png).
 8. **Pure-Rust allocator.** The `ffai` binary and the wasm crates use
-   [`rusty_alloc`](https://crates.io/crates/rusty_alloc) 2.4.0. It replaced
+   [`rusty_alloc`](https://crates.io/crates/rusty_alloc) 2.6.0. It replaced
    mimalloc with byte-identical output and speed parity, and the engines'
    byte-identity oracles pass on every release.
 
