@@ -19,7 +19,7 @@ readme = "README.md"
 # `quickstart.rs` is kept precisely because it is the README's code, compiled.
 include = [
     "src/**/*.rs",
-    "README.md",
+    "README.md", "LICENSE-MIT", "LICENSE-APACHE",
     "examples/quickstart.rs",
 ]
 keywords = ["object-detection", "yolo", "computer-vision", "candle", "edge"]
