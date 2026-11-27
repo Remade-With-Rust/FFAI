@@ -154,7 +154,7 @@ impl Adapter {
     /// # Errors
     /// As [`Self::load`].
     pub fn from_bytes(m: &Model, bytes: &[u8], user_scale: f32) -> Result<Self, String> {
-        let g = Gguf::parse(bytes).map_err(|e| format!("not a readable GGUF: {e:?}"))?;
+        let g = Gguf::parse_lazy(bytes).map_err(|e| format!("not a readable GGUF: {e:?}"))?;
         let text = |k: &str| g.get(k).and_then(Value::as_str).unwrap_or("");
         if text("general.type") != "adapter" || text("adapter.type") != "lora" {
             return Err(

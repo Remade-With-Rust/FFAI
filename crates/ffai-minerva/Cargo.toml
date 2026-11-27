@@ -21,7 +21,9 @@ publish = false
 half = "2.7.1"
 libm = "0.2.16"
 rayon = "1.12.0"
-rusty_ternary = { git = "https://github.com/Remade-With-Rust/rusty_sloth", rev = "e68e2031d1e357d4f72a9b31e77d3dcf2c279431", version = "0.0.0" }
+rusty_json_turbo = "0.3.3"
+rusty_ternary = { git = "https://github.com/Remade-With-Rust/rusty_sloth", rev = "18995881f0f43f573619209d3dd7f6ce6ca48ff1", version = "0.0.0" }
+unicode-general-category = "1.1.0"
 
 [profile.release]
 # Same as the root workspace: thin LTO, one codegen unit.

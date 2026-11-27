@@ -463,6 +463,18 @@ impl<'m> Session<'m> {
         self.pos
     }
 
+    /// The context size in positions.
+    #[must_use]
+    pub const fn ctx(&self) -> usize {
+        self.ctx
+    }
+
+    /// Forget every position from `pos` on, keeping the cache before it (a shared prompt
+    /// prefix); the next token is fed at `pos`. No-op when `pos` is not before the current one.
+    pub fn rewind(&mut self, pos: usize) {
+        self.pos = self.pos.min(pos);
+    }
+
     /// Feed one token. With `logits`, compute and return the next-token logits (the full head).
     ///
     /// # Errors
@@ -490,6 +502,73 @@ impl<'m> Session<'m> {
         let _head = crate::prof::scope(crate::prof::Stage::DecHead);
         self.final_hidden();
         Ok(self.screen_argmax())
+    }
+
+    /// Feed one token and return the next token's top `k` (the full head's, exact values, largest
+    /// first, lowest id on a tie) through the head screen ([`head::top_k`]), and the rows it
+    /// recomputed. Falls back to the full head when the screen cannot serve `k`.
+    ///
+    /// # Errors
+    /// When the context is full or the token is outside the vocabulary.
+    pub fn step_top_k(
+        &mut self,
+        token: u32,
+        k: usize,
+    ) -> Result<(Vec<(u32, f32)>, usize), StepError> {
+        let _total = crate::prof::scope(crate::prof::Stage::DecTotal);
+        self.forward(token)?;
+        let _head = crate::prof::scope(crate::prof::Stage::DecHead);
+        self.final_hidden();
+        let m = self.m;
+        let embd = m.cfg.embd;
+        if let Some(r) = head::top_k(
+            self.isa,
+            m,
+            m.screen.get(m),
+            &self.h[..embd],
+            &mut self.screen,
+            k,
+        ) {
+            return Ok(r);
+        }
+        self.head_full();
+        let mut ids: Vec<u32> = (0..u32::try_from(self.logits.len()).unwrap_or(u32::MAX)).collect();
+        let l = &self.logits;
+        ids.sort_unstable_by(|a, b| l[*b as usize].total_cmp(&l[*a as usize]).then(a.cmp(b)));
+        ids.truncate(k.max(1));
+        Ok((
+            ids.into_iter().map(|i| (i, l[i as usize])).collect(),
+            l.len(),
+        ))
+    }
+
+    /// After [`Self::step`] with logits: the screen's top `k` against the full head's (the same
+    /// ids and the same value bits, in order), and the rows the screen recomputed. `None` when the
+    /// screen cannot serve `k`. For the census and the oracle test.
+    pub fn check_top_k(&mut self, k: usize) -> Option<(bool, usize)> {
+        let m = self.m;
+        let embd = m.cfg.embd;
+        let (got, n) = head::top_k(
+            self.isa,
+            m,
+            m.screen.get(m),
+            &self.h[..embd],
+            &mut self.screen,
+            k,
+        )?;
+        let l = &self.logits;
+        let mut ids: Vec<u32> = (0..u32::try_from(l.len()).unwrap_or(u32::MAX)).collect();
+        ids.select_nth_unstable_by(k - 1, |a, b| {
+            l[*b as usize].total_cmp(&l[*a as usize]).then(a.cmp(b))
+        });
+        ids.truncate(k);
+        ids.sort_unstable_by(|a, b| l[*b as usize].total_cmp(&l[*a as usize]).then(a.cmp(b)));
+        let same = got.len() == ids.len()
+            && got
+                .iter()
+                .zip(&ids)
+                .all(|(g, &i)| g.0 == i && g.1.to_bits() == l[i as usize].to_bits());
+        Some((same, n))
     }
 
     fn screen_argmax(&mut self) -> u32 {

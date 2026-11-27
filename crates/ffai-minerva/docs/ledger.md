@@ -1112,3 +1112,59 @@ about 10 %.
 
 The gate tool now has its own judge (the server's `/detokenize` names our token) instead of importing
 the trainer's; rerun on the same ids it reproduces every row above exactly.
+
+## Brick h: Minerva you can chat with (2026-11-27)
+
+**Tokenizer** (`tokenizer.rs`): the model file's own byte-level BPE (`tokenizer.ggml.*`, GPT-2
+byte alphabet, Llama 3 pre-tokenizer written out by hand because its regex needs look-ahead,
+`ignore_merges`, lowest rank first and leftmost on a tie), special-token strings parsed as
+specials, a detokenizer, a streaming detokenizer that holds incomplete UTF-8, and the file's
+chat template (`Role: content<|eot_id|>` per message, then `Assistant: `). Letter and number
+classes from `unicode-general-category` (Rust's `is_alphabetic` is not `\p{L}`).
+**Gate: exact on every reference case** (the trainer team's file, two oracles that agree:
+Hugging Face `tokenizers` and bitnet.cpp's `/tokenize`): 28 texts (Latin, CJK, Korean, Arabic,
+Cyrillic, emoji with ZWJ and skin tones, combining marks, CRLF, NBSP, zero-width, code, JSON,
+URLs, contractions, specials inside text) for `ids`, `ids_bos` and `decoded`; 5 chats for the
+rendering and `ids_bos`; the streamed partial pieces. Ignored test
+`reproduces_the_reference_exactly` (`MINERVA_GGUF`, `MINERVA_TOKREF`).
+
+**Sampling** (`sampling.rs`): llama.cpp's default chain (top-k, top-p, min-p, temperature, one
+draw). Candidates ordered (logit desc, id asc), weights from `exp_canon`, sums in `f64` in that
+order, xoshiro256** seeded by splitmix64. A seed and a file give the same tokens on every tier:
+the server's 48-token seeded story had one token digest on AVX-VNNI and on scalar.
+
+**Top-k through the head screen** (`head::top_k`, a design first measured in our private
+trainer): `T` = the k-th largest lower bound; rows whose upper bound is below `T` cannot be in
+the top k; the rest are recomputed exactly. `minerva topk-census` checks the screen's top k
+against the full head's (ids and value bits) at every step:
+
+| prompt | k = 1 rows (mean / max) | k = 2 | k = 40 | k = 1000 |
+|---|---|---|---|---|
+| p64 | 2.3 / 11 | 7.3 / 30 | 168.9 / 334 | 4,587 / 8,407 |
+| p256 | 2.4 / 8 | 5.8 / 22 | 189.8 / 284 | 4,378 / 6,066 |
+| p512 | 2.5 / 6 | 5.9 / 15 | 166.2 / 491 | 4,376 / 15,199 |
+| p1024 | 21.4 / 618 | 25.5 / 672 | 222.9 / 2,428 | 4,695 / 11,235 |
+
+32 greedy steps each, out of 128,256 rows. **Equal to the full head at every step and every k**,
+on avx2vnni (all four prompts) and on scalar, SSSE3 and AVX2 (p64, 16 steps, identical counts).
+At k = 40 a step reads ~1 MB of f16 rows beside the int8 screen instead of the 657 MB head.
+Server, 48-token seeded story, laptop under load: 37.2 tok/s through the screen against 25.0
+through the full head (`n_probs: 1` forces it), the same tokens.
+
+**Server** (`minerva-server`): llama-server's flags (`-m --port --host -c -t --lora --head`;
+`-ngl -np -tb -b -ub -fa` accepted and ignored) and endpoints: `/health`, `/props`,
+`/completion` (`prompt` text or ids, `n_predict`, `temperature`, `top_k`, `top_p`, `min_p`,
+`seed`, `n_probs`, `stop`, `ignore_eos`, `stream` as server-sent events),
+`/tokenize`, `/detokenize`, `/apply-template`. `completion_probabilities` in llama-server's
+current shape with full-vocabulary log-probabilities. One slot; the prompt cache keeps the
+longest prefix shared with the last request (a seeded run gave one token digest with 3 and 13
+cached tokens). Greedy goes through the screen, sampling with top-k through `head::top_k`,
+`n_probs` or `top_k = 0` through the full head.
+
+**`minerva chat`**: a terminal conversation through the template, streamed, with the prompt
+cache across turns. "What is the capital of France?" -> "The capital of France is Paris.";
+"And what river runs through it?" -> "The Seine River runs through Paris."
+
+**Load**: `rusty_ternary` repinned for `Gguf::parse_lazy` (metadata arrays checked, not built).
+Load allocations 409,688 -> 1,289 (8.8 MB), `--features census-alloc`; load 0.30 s warm. Logits
+hashes unchanged (p64 + 8 `1c2856725481ae14`; LoRA h2 + 8 `fae5e6bad613bf9c`).
