@@ -491,7 +491,7 @@ version = "0.7.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.fontdue]]
-version = "0.9.4"
+version = "0.9.5"
 criteria = "safe-to-run"
 
 [[exemptions.fs2]]
@@ -1043,7 +1043,7 @@ version = "0.16.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_jpeg]]
-version = "0.4.1"
+version = "0.4.14"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_json_turbo]]
