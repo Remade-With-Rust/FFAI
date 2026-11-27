@@ -18,9 +18,10 @@
   const finish = async () => { const body = JSON.stringify({ ...out, total_s: (performance.now() - t0) / 1e3, ua: navigator.userAgent }); log(body); await fetch('result', { method: 'POST', body }); };
   w.onmessage = async (e) => {
     const m = e.data;
-    if (m.type === 'progress') return;
+    if (m.type === 'progress') { if (m.loaded === m.total) fetch('log', { method: 'POST', body: 'loaded ' + ((performance.now() - t0) / 1e3).toFixed(1) + ' s' }); return; }
+    if (m.type !== 'piece') fetch('log', { method: 'POST', body: m.type + ' ' + ((performance.now() - t0) / 1e3).toFixed(1) + ' s' });
     if (m.type === 'ready') {
-      out.ready_s = (performance.now() - t0) / 1e3; out.isa = m.isa;
+      out.ready_s = (performance.now() - t0) / 1e3; out.isa = m.isa; out.threads = m.threads; out.isolated = crossOriginIsolated;
       w.postMessage({ type: 'fnv', ids, n: 8 });
     } else if (m.type === 'fnv') {
       out.fnv = m.result; ask();
@@ -34,5 +35,6 @@
       out.error = m.message; await finish();
     }
   };
-  w.postMessage({ type: 'load', url: 'model.gguf', ctx: 512 });
+  const threads = Number(new URLSearchParams(location.search).get('threads') || 1);
+  w.postMessage({ type: 'load', url: 'model.gguf', ctx: 512, threads });
 </script>

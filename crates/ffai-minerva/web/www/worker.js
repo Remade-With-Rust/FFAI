@@ -1,14 +1,19 @@
 // Minerva's engine in a Web Worker, so generation never blocks the page.
-// Messages in:  {type:'load', url, ctx} | {type:'chat', messages, n_predict, temperature, top_k,
+// Messages in:  {type:'load', url, ctx, threads} | {type:'chat', messages, n_predict, temperature, top_k,
 //               top_p, min_p, seed} | {type:'fnv', ids, n} | {type:'reset'}
 // Messages out: {type:'progress', loaded, total} | {type:'ready', isa, ctx} | {type:'piece', text}
 //               | {type:'done', stats} | {type:'fnv', result} | {type:'error', message}
-import init, { ModelBuffer, Engine } from './pkg/ffai_minerva_web.js';
+// With `threads` and a cross-origin-isolated page (COOP/COEP headers), the threaded build
+// (pkg-threads: rayon on Web Workers over shared memory); otherwise the single-threaded one.
 
 let engine = null;
 
-async function load(url, ctx) {
-  const wasm = await init();
+async function load(url, ctx, threads) {
+  const useThreads = threads > 1 && self.crossOriginIsolated;
+  const mod = await import(useThreads ? './pkg-threads/ffai_minerva_web.js' : './pkg/ffai_minerva_web.js');
+  const { ModelBuffer, Engine } = mod;
+  const wasm = await mod.default();
+  if (useThreads) await mod.initThreadPool(threads);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`fetching the model: HTTP ${res.status}`);
   const total = Number(res.headers.get('content-length'));
@@ -33,14 +38,14 @@ async function load(url, ctx) {
   }
   if (off !== total) throw new Error(`the model arrived short: ${off} of ${total} bytes`);
   engine = new Engine(buf, ctx || 4096);
-  postMessage({ type: 'ready', isa: engine.isa(), ctx: engine.ctx() });
+  postMessage({ type: 'ready', isa: engine.isa(), ctx: engine.ctx(), threads: useThreads ? threads : 1 });
 }
 
 self.onmessage = async (e) => {
   const m = e.data;
   try {
     if (m.type === 'load') {
-      await load(m.url, m.ctx);
+      await load(m.url, m.ctx, m.threads ?? 1);
     } else if (m.type === 'chat') {
       const prompt = engine.apply_chat_template(JSON.stringify(m.messages));
       const stats = engine.complete(

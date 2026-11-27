@@ -61,7 +61,7 @@
     if (m.type === 'progress') {
       $('status').textContent = `Loading the model… ${(m.loaded / 1e6).toFixed(0)} of ${(m.total / 1e6).toFixed(0)} MB`;
     } else if (m.type === 'ready') {
-      $('status').textContent = `Ready · ${m.isa} · context ${m.ctx}`;
+      $('status').textContent = `Ready · ${m.isa} · ${m.threads} thread${m.threads > 1 ? 's' : ''} · context ${m.ctx}`;
       busy(false); $('q').focus();
     } else if (m.type === 'piece') {
       text += m.text; reply.textContent = text; reply.scrollIntoView({ block: 'end' });
@@ -86,7 +86,8 @@
   };
   $('q').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('f').requestSubmit(); } };
   $('reset').onclick = (e) => { e.preventDefault(); history.length = 0; $('log').textContent = ''; w.postMessage({ type: 'reset' }); };
-  w.postMessage({ type: 'load', url: 'model.gguf', ctx: 4096 });
+  // Threads when the page is cross-origin isolated (serve.py sends COOP/COEP), at most 8.
+  w.postMessage({ type: 'load', url: 'model.gguf', ctx: 4096, threads: Math.min(navigator.hardwareConcurrency || 1, 8) });
 </script>
 </body>
 </html>

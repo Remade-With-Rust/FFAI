@@ -24,6 +24,9 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(size))
         self.send_header('Cache-Control', 'no-store')
+        # Cross-origin isolation, so the threaded build can share memory between workers.
+        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+        self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         self.end_headers()
         with open(path, 'rb') as f:
             shutil.copyfileobj(f, self.wfile, 1 << 20)
@@ -46,6 +49,8 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
         self.send_response(204)
         self.end_headers()
+        if self.path.startswith('/log'):
+            print('LOG ' + body.decode('utf-8', 'replace'), flush=True)
         if self.path.startswith('/result'):
             print('RESULT ' + body.decode('utf-8', 'replace'), flush=True)
             if a.once:

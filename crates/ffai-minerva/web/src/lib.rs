@@ -13,6 +13,11 @@ use ffai_minerva::tokenizer::{StreamDecoder, Tokenizer};
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
 
+/// With the `threads` feature: `initThreadPool(n)` starts rayon's pool on `n` Web Workers. Await it
+/// once, before building the [`Engine`].
+#[cfg(feature = "threads")]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 /// The model file's bytes, written in place by JavaScript through [`Self::ptr`].
 #[wasm_bindgen]
 pub struct ModelBuffer {

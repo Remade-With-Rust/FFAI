@@ -1184,3 +1184,12 @@ engine runs in a Web Worker. Headless Chrome 158 on Windows, simd128, one thread
 The library change: the screen build reads the clock only under `MINERVA_PROF`
 (`Instant::now` panics on wasm32-unknown-unknown). Next: threads in the browser
 (SharedArrayBuffer, which needs COOP/COEP), and FFAI's browser app.
+
+**Threads in the browser** (`web` feature `threads`, wasm-bindgen-rayon 1.3.0, nightly
+`-Z build-std`, `+atomics`, explicit `--shared-memory --import-memory` and TLS exports; the page
+cross-origin isolated by COOP/COEP). Headless Chrome 158, 8 threads: logits hash
+**`1c2856725481ae14`** again, the same chat replies; decode ~8.0 tok/s (one thread ~1.2), first
+token 1.1 s (7.3 s), p64 + 8 through the full head 3.8 s (23.6 s). Under load. Two traps on the
+way: this nightly no longer makes atomics imply shared memory (the module's memory came out
+unshared and the helper workers could not receive it), and the rayon helper imports its package
+as a bare directory, which only bundlers resolve.
