@@ -16,6 +16,8 @@ publish = false
 # Its own workspace: excluded from the root one so the private git dependency
 # never enters FFai's public lockfile or CI (see the root Cargo.toml).
 [workspace]
+# `web/` is the browser build (wasm-bindgen), kept in this workspace for the same reason.
+members = ["web"]
 
 [dependencies]
 half = "2.7.1"

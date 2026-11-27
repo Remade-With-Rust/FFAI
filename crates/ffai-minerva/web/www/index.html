@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minerva chat</title>
+<style>
+  :root { --bg: #f7f6f2; --fg: #1d1c19; --muted: #6b675e; --line: #dedad0; --you: #e9e5da; --accent: #3d5a40; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161614; --fg: #ebe8e0; --muted: #9a958a; --line: #2e2d29; --you: #24231f; --accent: #8fb894; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 140px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
+  #status { color: var(--muted); font-size: 13px; text-align: right; }
+  #log { margin-top: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { white-space: pre-wrap; word-wrap: break-word; }
+  .you { align-self: flex-end; background: var(--you); padding: 8px 12px; border-radius: 10px; max-width: 85%; }
+  .bot { padding: 2px 0; }
+  .stats { color: var(--muted); font-size: 12px; margin-top: -8px; }
+  form { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-top: 1px solid var(--line); }
+  .bar { max-width: 720px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 8px; }
+  textarea { flex: 1; resize: none; height: 46px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--fg); font: inherit; }
+  button { padding: 0 18px; border: 0; border-radius: 8px; background: var(--accent); color: var(--bg); font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  .opts { max-width: 720px; margin: 0 auto; padding: 0 16px 10px; color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .opts input { width: 64px; background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Minerva</h1>
+    <div id="status">Loading the model…</div>
+  </header>
+  <div id="log"></div>
+</main>
+<form id="f">
+  <div class="bar">
+    <textarea id="q" placeholder="Ask something" disabled></textarea>
+    <button id="send" disabled>Send</button>
+  </div>
+  <div class="opts">
+    <label>Temperature <input id="temp" type="number" step="0.1" min="0" value="0.7"></label>
+    <label>Max tokens <input id="max" type="number" min="1" value="512"></label>
+    <a href="#" id="reset">New conversation</a>
+  </div>
+</form>
+<script type="module">
+  // The whole model runs in this tab (WebAssembly, in a worker); nothing is sent anywhere.
+  const $ = (id) => document.getElementById(id);
+  const w = new Worker('worker.js', { type: 'module' });
+  const history = [];
+  let reply = null, text = '';
+  const add = (cls, s) => { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = s; $('log').append(d); d.scrollIntoView({ block: 'end' }); return d; };
+  const busy = (b) => { $('q').disabled = b; $('send').disabled = b; };
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'progress') {
+      $('status').textContent = `Loading the model… ${(m.loaded / 1e6).toFixed(0)} of ${(m.total / 1e6).toFixed(0)} MB`;
+    } else if (m.type === 'ready') {
+      $('status').textContent = `Ready · ${m.isa} · context ${m.ctx}`;
+      busy(false); $('q').focus();
+    } else if (m.type === 'piece') {
+      text += m.text; reply.textContent = text; reply.scrollIntoView({ block: 'end' });
+    } else if (m.type === 'done') {
+      history.push({ role: 'assistant', content: text });
+      add('stats', `${m.stats.predicted_n} tokens · ${m.stats.tokens_per_second.toFixed(1)} tok/s · first token ${(m.stats.prompt_ms / 1e3).toFixed(1)} s`);
+      busy(false); $('q').focus();
+    } else if (m.type === 'error') {
+      $('status').textContent = 'Error: ' + m.message; busy(false);
+    }
+  };
+  $('f').onsubmit = (e) => {
+    e.preventDefault();
+    const q = $('q').value.trim();
+    if (!q) return;
+    $('q').value = '';
+    history.push({ role: 'user', content: q });
+    add('you', q);
+    text = ''; reply = add('bot', '');
+    busy(true);
+    w.postMessage({ type: 'chat', messages: history, temperature: Number($('temp').value), n_predict: Number($('max').value) });
+  };
+  $('q').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('f').requestSubmit(); } };
+  $('reset').onclick = (e) => { e.preventDefault(); history.length = 0; $('log').textContent = ''; w.postMessage({ type: 'reset' }); };
+  w.postMessage({ type: 'load', url: 'model.gguf', ctx: 4096 });
+</script>
+</body>
+</html>

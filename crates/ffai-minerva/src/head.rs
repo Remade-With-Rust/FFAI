@@ -601,10 +601,12 @@ impl Lazy {
     /// The screen of `m`, building it the first time.
     pub fn get(&self, m: &Model) -> &HeadQ8 {
         self.h.get_or_init(|| {
-            let t = std::time::Instant::now();
+            // Timed only when asked: `Instant` panics on wasm32-unknown-unknown (the browser).
+            let prof = std::env::var_os("MINERVA_PROF").is_some();
+            let t = prof.then(std::time::Instant::now);
             let h = HeadQ8::build(m);
-            let t = t.elapsed();
-            if std::env::var_os("MINERVA_PROF").is_some() {
+            if let Some(t) = t {
+                let t = t.elapsed();
                 let f =
                     h.q.as_slice()
                         .iter()

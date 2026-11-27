@@ -1,0 +1,22 @@
+[package]
+name = "ffai-minerva-web"
+description = "Minerva in the browser: the full BitNet b1.58 model on WebAssembly, behind wasm-bindgen"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Remade-With-Rust/FFai"
+authors = ["Remade With Rust"]
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ffai-minerva = { path = ".." }
+js-sys = "=0.3.105"
+rusty_json_turbo = "0.3.3"
+wasm-bindgen = "=0.2.128"
+
+[lints.rust]
+unsafe_code = "forbid"

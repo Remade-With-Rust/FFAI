@@ -1168,3 +1168,19 @@ cache across turns. "What is the capital of France?" -> "The capital of France i
 **Load**: `rusty_ternary` repinned for `Gguf::parse_lazy` (metadata arrays checked, not built).
 Load allocations 409,688 -> 1,289 (8.8 MB), `--features census-alloc`; load 0.30 s warm. Logits
 hashes unchanged (p64 + 8 `1c2856725481ae14`; LoRA h2 + 8 `fae5e6bad613bf9c`).
+
+### Brick h, continued: the full model in a real browser (2026-11-27)
+
+`web/` (`ffai-minerva-web`, in this workspace, wasm-bindgen 0.2.128): the model file streams from
+`fetch` straight into a `Vec` in the module's memory (no second copy in JavaScript), and the
+engine runs in a Web Worker. Headless Chrome 158 on Windows, simd128, one thread:
+
+- **Logits hash for p64 + 8 through the full head: `1c2856725481ae14`**, the native value
+  (x86, Pixel, wasmtime). Same greedy ids.
+- Greedy two-turn chat gives the native replies, the second turn reusing 13 cached tokens.
+- Load 58-74 s (1.19 GB from a local Python server), first token ~7.3 s including the screen
+  build, decode ~1.2 tok/s on one thread under load.
+
+The library change: the screen build reads the clock only under `MINERVA_PROF`
+(`Instant::now` panics on wasm32-unknown-unknown). Next: threads in the browser
+(SharedArrayBuffer, which needs COOP/COEP), and FFAI's browser app.
