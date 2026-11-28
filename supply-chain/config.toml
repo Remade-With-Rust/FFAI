@@ -1195,7 +1195,7 @@ version = "0.2.0@git:77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_pdf_core]]
-version = "0.1.0"
+version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_png]]

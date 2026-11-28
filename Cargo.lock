@@ -4096,9 +4096,9 @@ source = "git+https://github.com/Remade-With-Rust/rusty_json_turbo?branch=master
 
 [[package]]
 name = "rusty_pdf_core"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e0b9a56eb89bfd96628ef54ebf8fa02ee5e3465cc547858106c8755e1607071"
+checksum = "3a814ee14f65488bbeaac0b3a9cbd3c9542df741d8713944c1d84a2cbabf7d4c"
 dependencies = [
  "aes",
  "cbc",
