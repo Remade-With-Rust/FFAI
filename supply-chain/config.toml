@@ -1098,8 +1098,16 @@ criteria = "safe-to-deploy"
 version = "0.17.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.rusty_jbig2]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.rusty_jpeg]]
 version = "0.4.14"
+criteria = "safe-to-deploy"
+
+[[exemptions.rusty_jpx]]
+version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty_json_turbo]]

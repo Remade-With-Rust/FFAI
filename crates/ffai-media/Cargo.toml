@@ -64,6 +64,10 @@ rusty_h264 = { version = "0.17.4", default-features = false, features = ["std", 
 # CCITT Group 3/4 decoder; a house `rusty_ccitt` would replace it.
 lopdf = { version = "0.44", default-features = false, optional = true }
 fax = { version = "0.3", optional = true }
+# JBIG2Decode and JPXDecode scans: the house decoders from remade_ffmpeg_rs.
+# No dependencies of their own, bounded memory and work, errors on bad input.
+rusty_jbig2 = { version = "0.1.1", optional = true }
+rusty_jpx = { version = "0.1.1", optional = true }
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.
@@ -92,7 +96,7 @@ remade-ffmpeg = []
 # Read PDF pages as a viewer shows them — scan composited with redactions and
 # overlays, turned upright — for OCR. Off by default: it adds a PDF parser to
 # a crate most users take for images and audio.
-pdf = ["dep:lopdf", "dep:fax"]
+pdf = ["dep:lopdf", "dep:fax", "dep:rusty_jbig2", "dep:rusty_jpx"]
 
 # wasm32 needs getrandom's browser backend selected explicitly. BOTH halves are
 # required and the crate errors if either is missing: this feature, plus

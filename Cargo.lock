@@ -1376,7 +1376,9 @@ dependencies = [
  "rff-format-mp4",
  "rff-format-ts",
  "rusty_h264",
+ "rusty_jbig2",
  "rusty_jpeg",
+ "rusty_jpx",
  "rusty_png",
 ]
 
@@ -4038,10 +4040,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty_jbig2"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae8c93186b4d6dfe523304a29fb336e33bc6e96d25bdc0a2dde7ddd97214af5"
+
+[[package]]
 name = "rusty_jpeg"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc69fa81cb3d73fc09c7576eadc03962c9721a3c52ea618376feae45843862a1"
+
+[[package]]
+name = "rusty_jpx"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d7514e8cdc80a7e2210bb7052421c0f057bce2509126f724ecc0ebbfdf778fc"
 
 [[package]]
 name = "rusty_json_turbo"
