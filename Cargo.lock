@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-argus-wasm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ffai-argus",
  "ffai-core",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-bench"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "clap",
  "csv",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-carmenta-wasm"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "ffai-carmenta",
  "ffai-core",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-core"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "candle-core",
  "rayon",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-diana"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-media"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "fax",
  "ffai-core",
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "candle-nn",
  "candle-transformers",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-mercury-wasm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ffai-core",
  "ffai-mercury",
@@ -1413,7 +1413,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-models"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ffai-core",
  "hf-hub",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-wasm"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "ffai-core",
  "ffai-diana",

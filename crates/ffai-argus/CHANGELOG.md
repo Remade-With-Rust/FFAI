@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-v0.10.1...ffai-argus-v0.10.2) - 2026-11-28
+
+### Other
+
+- bump rff-codec to 0.8.4 ([#60](https://github.com/Remade-With-Rust/FFAI/pull/60))
+- licence files in the repository and every published crate ([#64](https://github.com/Remade-With-Rust/FFAI/pull/64))
+
 ## [0.10.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-argus-v0.10.0...ffai-argus-v0.10.1) - 2026-11-08
 
 ### Changed

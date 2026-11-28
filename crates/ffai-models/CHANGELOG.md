@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-models-v0.7.0...ffai-models-v0.7.1) - 2026-11-28
+
+### Other
+
+- licence files in the repository and every published crate ([#64](https://github.com/Remade-With-Rust/FFAI/pull/64))
+
 ## [0.7.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-models-v0.6.6...ffai-models-v0.7.0) - 2026-10-31
 
 ### Added
