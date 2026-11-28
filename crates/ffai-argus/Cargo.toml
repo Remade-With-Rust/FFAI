@@ -1,7 +1,7 @@
 [package]
 name = "ffai-argus"
 description = "Argus — FFai's VLM component: image captioning and video understanding"
-version = "0.10.1"
+version = "0.10.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,14 +15,14 @@ categories = ["computer-vision", "multimedia::images", "science"]
 # Explicit rather than inherited: 0.10.1 calls fastmath kernels new in
 # ffai-core 0.9.1, and raising the workspace floor would re-release every
 # other crate for nothing.
-ffai-core = { path = "../ffai-core", version = "0.9.1" }
+ffai-core = { path = "../ffai-core", version = "0.9.2" }
 # Manifest-driven checkpoint resolution, the same seam every other engine uses:
 # no engine hardcodes an HF cache path.
 # `default-features = false` drops hf-hub (and aws-lc-sys). OEM sidecars ship
 # their own weights; they must not inherit fetch just because Argus is linked.
 # Not `workspace = true`: cargo forbids overriding default-features on an
 # inherited dep.
-ffai-models = { path = "../ffai-models", version = "0.7.0", default-features = false }
+ffai-models = { path = "../ffai-models", version = "0.7.1", default-features = false }
 # The tokenizer is the ENGINE's business now, not just the step-4 test's: the
 # assembled prompt has to become ids and the generated ids have to become text.
 tokenizers = { workspace = true }

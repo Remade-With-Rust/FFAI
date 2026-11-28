@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.7.0...ffai-media-v0.7.1) - 2026-11-28
+
+### Other
+
+- bump rff-codec to 0.8.4 ([#60](https://github.com/Remade-With-Rust/FFAI/pull/60))
+- png 0.18 (supersedes #10) ([#66](https://github.com/Remade-With-Rust/FFAI/pull/66))
+- licence files in the repository and every published crate ([#64](https://github.com/Remade-With-Rust/FFAI/pull/64))
+
 ## [0.7.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.6.8...ffai-media-v0.7.0) - 2026-10-31
 
 ### Changed
