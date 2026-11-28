@@ -998,32 +998,64 @@ criteria = "safe-to-deploy"
 version = "0.8.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.rff-codec]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.rff-core]]
 version = "0.8.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.rff-core]]
+version = "0.9.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format]]
 version = "0.8.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.rff-format]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.rff-format-avi]]
 version = "0.8.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.rff-format-avi]]
+version = "0.9.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-mkv]]
 version = "0.8.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.rff-format-mkv]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.rff-format-mp4]]
 version = "0.8.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.rff-format-mp4]]
+version = "0.9.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.rff-format-ts]]
 version = "0.8.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.rff-format-ts]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.rff-subtitle]]
 version = "0.8.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.rff-subtitle]]
+version = "0.9.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.ring]]
