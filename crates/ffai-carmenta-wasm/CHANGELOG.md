@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-wasm-v0.5.0...ffai-carmenta-wasm-v0.5.1) - 2026-11-28
+
+### Other
+
+- bump rff-codec to 0.8.4 ([#60](https://github.com/Remade-With-Rust/FFAI/pull/60))
+- licence files in the repository and every published crate ([#64](https://github.com/Remade-With-Rust/FFAI/pull/64))
+
 ## [0.5.0](https://github.com/Remade-With-Rust/FFAI/compare/ffai-carmenta-wasm-v0.4.0...ffai-carmenta-wasm-v0.5.0) - 2026-11-07
 
 ### Changed

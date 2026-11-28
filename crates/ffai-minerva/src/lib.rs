@@ -15,6 +15,9 @@
 //! - [`numerics`]: the float arithmetic in one canonical order, so a file gives the same tokens
 //!   on every device; these scalar functions are the oracles.
 //! - [`lora`]: LoRA adapters (llama.cpp's adapter `GGUF`) on top of the ternary base.
+//! - [`sampling`]: temperature, top-k, top-p and min-p, seeded and the same on every device.
+//! - [`tokenizer`]: the model file's byte-level BPE tokenizer, streaming detokenizer and chat
+//!   template.
 //! - [`simd`]: a bit-identical SIMD twin of every scalar kernel (SSSE3, AVX2, NEON, WASM-SIMD128),
 //!   with a kernel-reach census.
 //!
@@ -33,6 +36,8 @@ pub mod model;
 pub mod numerics;
 pub mod prof;
 pub mod roofline;
+pub mod sampling;
 #[allow(unsafe_code)]
 pub mod simd;
 pub mod threads;
+pub mod tokenizer;

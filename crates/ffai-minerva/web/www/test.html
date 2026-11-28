@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Minerva browser check</title>
+<pre id="log">loading...</pre>
+<script type="module">
+  // Loads the model in a worker, then: (1) greedy-decodes 8 tokens after p64 through the full
+  // head and reports the logits hash (the native one is 1c2856725481ae14); (2) holds a greedy
+  // two-turn chat. Posts everything to /result, where the test server prints it.
+  const log = (s) => { document.getElementById('log').textContent += '\n' + s; };
+  const ids = (await (await fetch('p64.ids')).text()).split(/[\s,]+/).filter(Boolean).map(Number);
+  const w = new Worker('worker.js', { type: 'module' });
+  const t0 = performance.now();
+  const out = { chat: [] };
+  const turns = ['What is the capital of France?', 'And what river runs through it?'];
+  const history = [];
+  let text = '';
+  const ask = () => { history.push({ role: 'user', content: turns[history.length / 2] }); text = ''; w.postMessage({ type: 'chat', messages: history, temperature: 0, n_predict: 48 }); };
+  const finish = async () => { const body = JSON.stringify({ ...out, total_s: (performance.now() - t0) / 1e3, ua: navigator.userAgent }); log(body); await fetch('result', { method: 'POST', body }); };
+  w.onmessage = async (e) => {
+    const m = e.data;
+    if (m.type === 'progress') { if (m.loaded === m.total) fetch('log', { method: 'POST', body: 'loaded ' + ((performance.now() - t0) / 1e3).toFixed(1) + ' s' }); return; }
+    if (m.type !== 'piece') fetch('log', { method: 'POST', body: m.type + ' ' + ((performance.now() - t0) / 1e3).toFixed(1) + ' s' });
+    if (m.type === 'ready') {
+      out.ready_s = (performance.now() - t0) / 1e3; out.isa = m.isa; out.threads = m.threads; out.isolated = crossOriginIsolated;
+      w.postMessage({ type: 'fnv', ids, n: 8 });
+    } else if (m.type === 'fnv') {
+      out.fnv = m.result; ask();
+    } else if (m.type === 'piece') {
+      text += m.text;
+    } else if (m.type === 'done') {
+      history.push({ role: 'assistant', content: text });
+      out.chat.push({ reply: text, stats: m.stats });
+      if (history.length < turns.length * 2) ask(); else await finish();
+    } else if (m.type === 'error') {
+      out.error = m.message; await finish();
+    }
+  };
+  const threads = Number(new URLSearchParams(location.search).get('threads') || 1);
+  w.postMessage({ type: 'load', url: 'model.gguf', ctx: 512, threads });
+</script>

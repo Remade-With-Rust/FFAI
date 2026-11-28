@@ -136,7 +136,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use ffai_minerva::engine::{self, HeadMode, Session, top_k, top_k_logprobs};
+use ffai_minerva::engine::{self, HeadMode, Session, top_k};
 use ffai_minerva::lora::Adapter;
 use ffai_minerva::model::Model;
 use ffai_minerva::roofline::{self, ByteCensus};
@@ -206,6 +206,10 @@ const USAGE: &str = "usage:
       --head FILE uses a head file from prepare-head instead of building the screen at the first token;
       --lora FILE adds a LoRA adapter GGUF (llama.cpp's format) at strength S (default 1);
       --logprobs writes each step's token, its log-probability and the top 8 (full vocabulary softmax)
+  minerva chat [--gguf PATH] [--system TEXT] [--temp T] [--top-k K] [--top-p P] [--min-p P] [--seed S]
+               [-c CTX] [--threads N] [--head FILE] [--lora FILE [--lora-scale S]]
+      a conversation in the terminal through the model's chat template, streamed as it is
+      generated; an empty line or end of input quits, /reset starts over
   minerva score --ids PROMPT --target IDS [--gguf PATH] [--threads N] [--lora FILE [--lora-scale S]]
       teacher-forced: the log-probability of each target id after the prompt, one per line
       (`index id logprob`), then the total, mean and perplexity
@@ -389,7 +393,7 @@ fn generate(args: &[String]) -> Result<(), String> {
         }
         if let (Some(w), Some(logits)) = (logprobs.as_mut(), logits) {
             let norm = engine::log_norm(logits);
-            let top: Vec<String> = top_k_logprobs(logits, 8)
+            let top: Vec<String> = engine::top_k_logprobs_norm(logits, 8, norm)
                 .iter()
                 .map(|(t, l)| format!("[{t},{l}]"))
                 .collect();
@@ -522,19 +526,264 @@ fn generate(args: &[String]) -> Result<(), String> {
         );
     }
     if args.iter().any(|a| a == "--census") {
-        let snap = simd::census::snapshot();
-        for k in simd::census::NAMES {
-            let cells: Vec<_> = snap.iter().filter(|c| c.0 == k).collect();
-            let total: u64 = cells.iter().map(|c| c.2).sum();
-            let split: Vec<String> = cells
-                .iter()
-                .map(|c| format!("{} {:.2}%", c.1, 100.0 * c.2 as f64 / total.max(1) as f64))
-                .collect();
-            eprintln!("census: {k:<13} {total:>15}  {}", split.join(", "));
-        }
+        print_kernel_census();
     }
     let line: Vec<String> = out.iter().map(u32::to_string).collect();
     println!("{}", line.join(","));
+    Ok(())
+}
+
+/// Each kernel's elements by the tier that ran them (`--census`).
+fn print_kernel_census() {
+    let snap = simd::census::snapshot();
+    for k in simd::census::NAMES {
+        let cells: Vec<_> = snap.iter().filter(|c| c.0 == k).collect();
+        let total: u64 = cells.iter().map(|c| c.2).sum();
+        let split: Vec<String> = cells
+            .iter()
+            .map(|c| format!("{} {:.2}%", c.1, 100.0 * c.2 as f64 / total.max(1) as f64))
+            .collect();
+        eprintln!("census: {k:<13} {total:>15}  {}", split.join(", "));
+    }
+}
+
+/// `chat`: a conversation in the terminal.
+fn chat(args: &[String]) -> Result<(), String> {
+    use ffai_minerva::sampling::{Rng, Sampling, sample_from};
+    use ffai_minerva::tokenizer::{StreamDecoder, Tokenizer};
+    use std::io::BufRead;
+    let path = &gguf(args)?;
+    let num = |flag: &str, d: &str| -> Result<f64, String> {
+        arg(args, flag)
+            .unwrap_or(d)
+            .parse()
+            .map_err(|e| format!("{flag}: {e}"))
+    };
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "small settings"
+    )]
+    let mut sp = Sampling {
+        temperature: num("--temp", "0.7")? as f32,
+        top_k: num("--top-k", "40")? as usize,
+        top_p: num("--top-p", "0.95")? as f32,
+        min_p: num("--min-p", "0.05")? as f32,
+        seed: 0,
+    };
+    sp.seed = match arg(args, "--seed") {
+        Some(v) => v.parse().map_err(|e| format!("--seed: {e}"))?,
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64),
+    };
+    let ctx: usize = arg(args, "-c")
+        .unwrap_or("4096")
+        .parse()
+        .map_err(|e| format!("-c: {e}"))?;
+    set_threads(args)?;
+    let m = Model::load(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    if let Some(h) = arg(args, "--head") {
+        m.screen.attach(
+            ffai_minerva::head::HeadQ8::open(&m, Path::new(h)).map_err(|e| format!("{h}: {e}"))?,
+        );
+    }
+    let lora = adapter(args, &m)?;
+    let tok = Tokenizer::from_gguf(m.file_bytes()).map_err(|e| format!("{path}: {e}"))?;
+    let mut s = session(&m, ctx, lora.as_ref())?;
+    let eog: Vec<u32> = ["<|eot_id|>", "<|end_of_text|>"]
+        .iter()
+        .filter_map(|n| tok.special(n))
+        .chain(tok.eos)
+        .collect();
+    let system = arg(args, "--system").map(str::to_owned);
+    let mut history: Vec<(String, String)> = Vec::new();
+    let mut cached: Vec<u32> = Vec::new();
+    let mut rng = Rng::new(sp.seed);
+    eprintln!(
+        "minerva chat: {} | ctx {ctx} | temp {} top-k {} top-p {} min-p {} seed {}{} | empty line quits, /reset starts over",
+        path,
+        sp.temperature,
+        sp.top_k,
+        sp.top_p,
+        sp.min_p,
+        sp.seed,
+        adapter_note(lora.as_ref(), args)
+    );
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    loop {
+        eprint!(
+            "
+> "
+        );
+        let mut line = String::new();
+        if stdin
+            .lock()
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?
+            == 0
+            || line.trim().is_empty()
+        {
+            break;
+        }
+        if line.trim() == "/reset" {
+            history.clear();
+            eprintln!("(conversation reset)");
+            continue;
+        }
+        history.push(("user".into(), line.trim().to_owned()));
+        let mut msgs: Vec<(String, String)> = system
+            .iter()
+            .map(|t| ("system".to_owned(), t.clone()))
+            .collect();
+        msgs.extend(history.iter().cloned());
+        let prompt = tok.encode(
+            &tok.apply_chat_template(&msgs, true)
+                .map_err(|e| e.to_string())?,
+            tok.add_bos,
+        );
+        if prompt.len() + 8 >= ctx {
+            history.clear();
+            eprintln!("(the conversation no longer fits the context; reset)");
+            continue;
+        }
+        let keep = cached
+            .iter()
+            .zip(&prompt)
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(prompt.len() - 1)
+            .min(s.pos());
+        s.rewind(keep);
+        cached.truncate(keep);
+        let mut reply = String::new();
+        let mut dec = StreamDecoder::new();
+        let t0 = Instant::now();
+        let mut n = 0usize;
+        rayon::scope(|_| -> Result<(), String> {
+            s.prefill(&prompt[keep..prompt.len() - 1])
+                .map_err(|e| e.to_string())?;
+            cached.extend_from_slice(&prompt[keep..prompt.len() - 1]);
+            let mut next = prompt[prompt.len() - 1];
+            while s.pos() + 1 < ctx {
+                let t = if sp.is_greedy() {
+                    s.step_argmax(next).map_err(|e| e.to_string())?
+                } else if sp.top_k > 0 {
+                    let (cands, _) = s.step_top_k(next, sp.top_k).map_err(|e| e.to_string())?;
+                    sample_from(&cands, &sp, &mut rng)
+                } else {
+                    let logits = s
+                        .step(next, true)
+                        .map_err(|e| e.to_string())?
+                        .unwrap_or_default();
+                    ffai_minerva::sampling::sample(logits, &sp, &mut rng)
+                };
+                cached.push(next);
+                if eog.contains(&t) {
+                    break;
+                }
+                n += 1;
+                let piece = dec.push(&tok, t);
+                reply.push_str(&piece);
+                let _ = write!(out, "{piece}");
+                let _ = out.flush();
+                next = t;
+            }
+            Ok(())
+        })?;
+        let rest = dec.finish();
+        reply.push_str(&rest);
+        let _ = writeln!(out, "{rest}");
+        #[expect(clippy::cast_precision_loss, reason = "a token count")]
+        let rate = n as f64 / t0.elapsed().as_secs_f64().max(1e-9);
+        eprintln!("({n} tokens, {rate:.1} tok/s)");
+        history.push(("assistant".into(), reply));
+    }
+    Ok(())
+}
+
+/// `topk-census`: greedy decoding through the full head, and at every step the head screen's
+/// top `k` checked against the full head's (ids and value bits) for each `--k`, with the rows
+/// it recomputed.
+fn topk_census(args: &[String]) -> Result<(), String> {
+    let path = &gguf(args)?;
+    let ids_path = arg(args, "--ids").ok_or("--ids FILE is required")?;
+    let new: usize = arg(args, "--new")
+        .unwrap_or("32")
+        .parse()
+        .map_err(|e| format!("--new: {e}"))?;
+    let ks: Vec<usize> = arg(args, "--k")
+        .unwrap_or("1,40")
+        .split(',')
+        .map(|k| k.trim().parse().map_err(|e| format!("--k: {e}")))
+        .collect::<Result<_, String>>()?;
+    set_threads(args)?;
+    let prompt =
+        parse_ids(&std::fs::read_to_string(ids_path).map_err(|e| format!("{ids_path}: {e}"))?)?;
+    let m = Model::load(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    if let Some(h) = arg(args, "--head") {
+        m.screen.attach(
+            ffai_minerva::head::HeadQ8::open(&m, Path::new(h)).map_err(|e| format!("{h}: {e}"))?,
+        );
+    }
+    let mut s = Session::new(&m, prompt.len() + new);
+    let (last, head) = prompt.split_last().ok_or("empty prompt")?;
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new(); ks.len()];
+    let mut bad = 0usize;
+    simd::census::enable(args.iter().any(|a| a == "--census"));
+    simd::census::reset();
+    rayon::scope(|_| -> Result<(), String> {
+        s.prefill(head).map_err(|e| e.to_string())?;
+        let mut next = *last;
+        for _ in 0..new {
+            let t = engine::argmax(
+                s.step(next, true)
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_default(),
+            );
+            for (j, &k) in ks.iter().enumerate() {
+                if let Some((same, n)) = s.check_top_k(k) {
+                    bad += usize::from(!same);
+                    rows[j].push(n);
+                }
+            }
+            next = t;
+        }
+        Ok(())
+    })?;
+    for (k, r) in ks.iter().zip(&rows) {
+        let mut v = r.clone();
+        v.sort_unstable();
+        #[expect(clippy::cast_precision_loss, reason = "counts")]
+        let mean = v.iter().sum::<usize>() as f64 / v.len().max(1) as f64;
+        println!(
+            "topk-census: {} prompt {} | k {k} | {} steps | rows recomputed mean {mean:.1} median {} p90 {} max {} | isa {}",
+            ids_path,
+            prompt.len(),
+            v.len(),
+            v.get(v.len() / 2).copied().unwrap_or(0),
+            v.get(v.len().saturating_sub(1) * 9 / 10)
+                .copied()
+                .unwrap_or(0),
+            v.last().copied().unwrap_or(0),
+            s.isa().name()
+        );
+    }
+    if args.iter().any(|a| a == "--census") {
+        print_kernel_census();
+    }
+    println!(
+        "topk-census: screen top-k == full head top-k: {}",
+        if bad == 0 {
+            "every step, every k".to_owned()
+        } else {
+            format!("{bad} MISMATCHES")
+        }
+    );
+    if bad > 0 {
+        return Err("the screen's top k differed from the full head's".into());
+    }
     Ok(())
 }
 
@@ -617,6 +866,8 @@ fn run() -> Result<(), String> {
         Some("generate") => return generate(&args),
         Some("prepare-head") => return prepare_head(&args),
         Some("score") => return score(&args),
+        Some("topk-census") => return topk_census(&args),
+        Some("chat") => return chat(&args),
         _ => return Err(USAGE.into()),
     }
     let path = &gguf(&args)?;

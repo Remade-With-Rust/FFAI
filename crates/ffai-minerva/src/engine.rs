@@ -463,6 +463,18 @@ impl<'m> Session<'m> {
         self.pos
     }
 
+    /// The context size in positions.
+    #[must_use]
+    pub const fn ctx(&self) -> usize {
+        self.ctx
+    }
+
+    /// Forget every position from `pos` on, keeping the cache before it (a shared prompt
+    /// prefix); the next token is fed at `pos`. No-op when `pos` is not before the current one.
+    pub fn rewind(&mut self, pos: usize) {
+        self.pos = self.pos.min(pos);
+    }
+
     /// Feed one token. With `logits`, compute and return the next-token logits (the full head).
     ///
     /// # Errors
@@ -490,6 +502,66 @@ impl<'m> Session<'m> {
         let _head = crate::prof::scope(crate::prof::Stage::DecHead);
         self.final_hidden();
         Ok(self.screen_argmax())
+    }
+
+    /// Feed one token and return the next token's top `k` (the full head's, exact values, largest
+    /// first, lowest id on a tie) through the head screen ([`head::top_k`]), and the rows it
+    /// recomputed. Falls back to the full head when the screen cannot serve `k`.
+    ///
+    /// # Errors
+    /// When the context is full or the token is outside the vocabulary.
+    pub fn step_top_k(
+        &mut self,
+        token: u32,
+        k: usize,
+    ) -> Result<(Vec<(u32, f32)>, usize), StepError> {
+        let _total = crate::prof::scope(crate::prof::Stage::DecTotal);
+        self.forward(token)?;
+        let _head = crate::prof::scope(crate::prof::Stage::DecHead);
+        self.final_hidden();
+        let m = self.m;
+        let embd = m.cfg.embd;
+        if let Some(r) = head::top_k(
+            self.isa,
+            m,
+            m.screen.get(m),
+            &self.h[..embd],
+            &mut self.screen,
+            k,
+        ) {
+            return Ok(r);
+        }
+        self.head_full();
+        let l = &self.logits;
+        let ids = top_k_ids(l, k.max(1));
+        Ok((
+            ids.into_iter().map(|i| (i, l[i as usize])).collect(),
+            l.len(),
+        ))
+    }
+
+    /// After [`Self::step`] with logits: the screen's top `k` against the full head's (the same
+    /// ids and the same value bits, in order), and the rows the screen recomputed. `None` when the
+    /// screen cannot serve `k`. For the census and the oracle test.
+    pub fn check_top_k(&mut self, k: usize) -> Option<(bool, usize)> {
+        let m = self.m;
+        let embd = m.cfg.embd;
+        let (got, n) = head::top_k(
+            self.isa,
+            m,
+            m.screen.get(m),
+            &self.h[..embd],
+            &mut self.screen,
+            k,
+        )?;
+        let l = &self.logits;
+        let ids = top_k_ids(l, k);
+        let same = got.len() == ids.len()
+            && got
+                .iter()
+                .zip(&ids)
+                .all(|(g, &i)| g.0 == i && g.1.to_bits() == l[i as usize].to_bits());
+        Some((same, n))
     }
 
     fn screen_argmax(&mut self) -> u32 {
@@ -796,14 +868,20 @@ impl<'m> Session<'m> {
                         )
                     },
                 );
-                if let Some(p) = self.lora(li, Proj::Q) {
-                    p.apply(&self.h[..embd], &mut self.q);
-                }
-                if let Some(p) = self.lora(li, Proj::K) {
-                    p.apply(&self.h[..embd], &mut self.kc);
-                }
-                if let Some(p) = self.lora(li, Proj::V) {
-                    p.apply(&self.h[..embd], &mut self.vc);
+                if self.lora.is_some() {
+                    let (q, k, v) = (
+                        self.lora(li, Proj::Q),
+                        self.lora(li, Proj::K),
+                        self.lora(li, Proj::V),
+                    );
+                    lora::apply_group(
+                        &mut [
+                            (q, &mut self.q[..]),
+                            (k, &mut self.kc[..]),
+                            (v, &mut self.vc[..]),
+                        ],
+                        &self.h[..embd],
+                    );
                 }
             }
             for head in self.q.chunks_exact_mut(hd) {
@@ -865,7 +943,7 @@ impl<'m> Session<'m> {
                 let _t = crate::prof::scope(crate::prof::Stage::DecTernary);
                 bitlinear(isa, m, &l.o, &self.qa, act, &mut self.isum, &mut self.out);
                 if let Some(p) = self.lora(li, Proj::O) {
-                    p.apply(&self.h[..q_dim], &mut self.out);
+                    lora::apply_group(&mut [(Some(p), &mut self.out[..])], &self.h[..q_dim]);
                 }
             }
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
@@ -882,11 +960,12 @@ impl<'m> Session<'m> {
                     || bitlinear(isa, m, &l.gate, qa, act, isum, go),
                     || bitlinear(isa, m, &l.up, qa, act, isum2, uo),
                 );
-                if let Some(p) = self.lora(li, Proj::Gate) {
-                    p.apply(&self.h[..embd], &mut self.gate);
-                }
-                if let Some(p) = self.lora(li, Proj::Up) {
-                    p.apply(&self.h[..embd], &mut self.up);
+                if self.lora.is_some() {
+                    let (g, u) = (self.lora(li, Proj::Gate), self.lora(li, Proj::Up));
+                    lora::apply_group(
+                        &mut [(g, &mut self.gate[..]), (u, &mut self.up[..])],
+                        &self.h[..embd],
+                    );
                 }
             }
             simd::relu2_mul(isa, &mut self.gate, &self.up);
@@ -909,7 +988,7 @@ impl<'m> Session<'m> {
                 &mut self.out,
             );
             if let Some(p) = self.lora(li, Proj::Down) {
-                p.apply(&self.h[..ffn], &mut self.out);
+                lora::apply_group(&mut [(Some(p), &mut self.out[..])], &self.h[..ffn]);
             }
             simd::add_assign(isa, &mut self.x, &self.out[..embd]);
         }
@@ -952,7 +1031,13 @@ pub fn logprob(logits: &[f32], norm: f64, token: u32) -> f64 {
 /// The `k` likeliest tokens and their log-probabilities, likeliest first (lowest id on a tie).
 #[must_use]
 pub fn top_k_logprobs(logits: &[f32], k: usize) -> Vec<(u32, f64)> {
-    let norm = log_norm(logits);
+    top_k_logprobs_norm(logits, k, log_norm(logits))
+}
+
+/// [`top_k_logprobs`] given [`log_norm`] of the logits already (a caller that also needs the
+/// chosen token's log-probability computes the norm, 128 K `exp`s, once).
+#[must_use]
+pub fn top_k_logprobs_norm(logits: &[f32], k: usize, norm: f64) -> Vec<(u32, f64)> {
     top_ids(logits, k)
         .into_iter()
         .map(|i| (i, logprob(logits, norm, i)))
@@ -961,19 +1046,90 @@ pub fn top_k_logprobs(logits: &[f32], k: usize) -> Vec<(u32, f64)> {
 
 /// The `k` largest logits' ids, largest first, the lowest id on a tie.
 fn top_ids(logits: &[f32], k: usize) -> Vec<u32> {
-    let mut idx: Vec<usize> = (0..logits.len()).collect();
-    let k = k.min(idx.len());
+    // k = 0 asks for none here (top_k_ids reads 0 as all).
     if k == 0 {
         return Vec::new();
     }
-    idx.select_nth_unstable_by(k - 1, |&a, &b| {
-        logits[b].total_cmp(&logits[a]).then(a.cmp(&b))
-    });
-    idx.truncate(k);
-    idx.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
-    idx.into_iter()
-        .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
-        .collect()
+    top_k_ids(logits, k)
+}
+
+/// Candidate order: `a` before `b` when its value is larger, or equal with a lower id. A total
+/// order (`total_cmp`), so the result never depends on how the scan or a sort went.
+fn better(v: &[f32], a: u32, b: u32) -> bool {
+    match v[a as usize].total_cmp(&v[b as usize]) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => a < b,
+    }
+}
+
+/// `k` above this selects over a full index array instead of a heap.
+const HEAP_MAX: usize = 128;
+
+/// The ids of the `k` best of `v` in candidate order ([`better`]), all of them when `k` is 0 or
+/// at least `v.len()`. For `k <= 128` one pass keeps a `k`-slot heap of the best so far (worst
+/// on top): no 128 K-index array, no reorder of it. Above, `select_nth` over the indices.
+pub(crate) fn top_k_ids(v: &[f32], k: usize) -> Vec<u32> {
+    let n = u32::try_from(v.len()).unwrap_or(u32::MAX);
+    let ord = |a: &u32, b: &u32| {
+        if better(v, *a, *b) {
+            std::cmp::Ordering::Less
+        } else if a == b {
+            std::cmp::Ordering::Equal
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    };
+    if k == 0 || k >= v.len() {
+        let mut ids: Vec<u32> = (0..n).collect();
+        ids.sort_unstable_by(ord);
+        return ids;
+    }
+    if k > HEAP_MAX {
+        let mut ids: Vec<u32> = (0..n).collect();
+        ids.select_nth_unstable_by(k - 1, ord);
+        ids.truncate(k);
+        ids.sort_unstable_by(ord);
+        return ids;
+    }
+    // A max-heap on "worse": the root is the worst kept id.
+    let mut h: Vec<u32> = Vec::with_capacity(k);
+    let worse = |a: u32, b: u32| better(v, b, a);
+    for id in 0..n {
+        if h.len() < k {
+            h.push(id);
+            let mut i = h.len() - 1;
+            while i > 0 {
+                let p = (i - 1) / 2;
+                if worse(h[i], h[p]) {
+                    h.swap(i, p);
+                    i = p;
+                } else {
+                    break;
+                }
+            }
+        } else if better(v, id, h[0]) {
+            h[0] = id;
+            let mut i = 0;
+            loop {
+                let (l, r) = (2 * i + 1, 2 * i + 2);
+                let mut w = i;
+                if l < k && worse(h[l], h[w]) {
+                    w = l;
+                }
+                if r < k && worse(h[r], h[w]) {
+                    w = r;
+                }
+                if w == i {
+                    break;
+                }
+                h.swap(i, w);
+                i = w;
+            }
+        }
+    }
+    h.sort_unstable_by(ord);
+    h
 }
 
 /// The `k` likeliest tokens with their probabilities (softmax in `f64` with `libm`, for
@@ -1136,6 +1292,72 @@ fn generate_in<'s, 'm: 's>(
         drop(awake.take());
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod top_k_ids_tests {
+    use super::*;
+
+    /// The previous implementation: every index, `select_nth`, sort.
+    fn by_select(v: &[f32], k: usize) -> Vec<u32> {
+        let mut idx: Vec<u32> = (0..u32::try_from(v.len()).unwrap()).collect();
+        let ord = |a: &u32, b: &u32| v[*b as usize].total_cmp(&v[*a as usize]).then(a.cmp(b));
+        if k > 0 && k < idx.len() {
+            idx.select_nth_unstable_by(k - 1, ord);
+            idx.truncate(k);
+        }
+        idx.sort_unstable_by(ord);
+        idx
+    }
+
+    fn logits(n: usize, seed: u64) -> Vec<f32> {
+        let mut s = seed;
+        (0..n)
+            .map(|_| {
+                s = s
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                // Coarse values so ties occur; a few large ones on top.
+                #[expect(clippy::cast_precision_loss, reason = "test data")]
+                let x = ((s >> 40) % 2000) as f32 * 0.01 - 10.0;
+                x
+            })
+            .collect()
+    }
+
+    #[test]
+    fn heap_equals_select_with_ties() {
+        for seed in 0..5 {
+            let v = logits(5000, seed);
+            for k in [1, 2, 7, 40, 256, 257, 1000, 4999, 5000, 0] {
+                assert_eq!(top_k_ids(&v, k), by_select(&v, k), "seed {seed} k {k}");
+            }
+        }
+        let v = vec![1.0f32; 50];
+        assert_eq!(top_k_ids(&v, 5), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    #[ignore = "a benchmark"]
+    fn bench_top_k_ids() {
+        let v = logits(128_256, 9);
+        for k in [1usize, 8, 40, 128, 256, 1000] {
+            let (mut a, mut b) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                let t = std::time::Instant::now();
+                let x = by_select(&v, k);
+                a = a.min(t.elapsed().as_secs_f64() * 1e6);
+                let t = std::time::Instant::now();
+                let y = top_k_ids(&v, k);
+                b = b.min(t.elapsed().as_secs_f64() * 1e6);
+                assert_eq!(x, y);
+            }
+            eprintln!(
+                "top_k_ids k {k:>4}: select {a:8.1} us | heap {b:8.1} us | {:.1}x",
+                a / b
+            );
+        }
+    }
 }
 
 #[cfg(test)]

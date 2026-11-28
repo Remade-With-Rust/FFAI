@@ -1112,3 +1112,142 @@ about 10 %.
 
 The gate tool now has its own judge (the server's `/detokenize` names our token) instead of importing
 the trainer's; rerun on the same ids it reproduces every row above exactly.
+
+## Brick h: Minerva you can chat with (2026-11-27)
+
+**Tokenizer** (`tokenizer.rs`): the model file's own byte-level BPE (`tokenizer.ggml.*`, GPT-2
+byte alphabet, Llama 3 pre-tokenizer written out by hand because its regex needs look-ahead,
+`ignore_merges`, lowest rank first and leftmost on a tie), special-token strings parsed as
+specials, a detokenizer, a streaming detokenizer that holds incomplete UTF-8, and the file's
+chat template (`Role: content<|eot_id|>` per message, then `Assistant: `). Letter and number
+classes from `unicode-general-category` (Rust's `is_alphabetic` is not `\p{L}`).
+**Gate: exact on every reference case** (the trainer team's file, two oracles that agree:
+Hugging Face `tokenizers` and bitnet.cpp's `/tokenize`): 28 texts (Latin, CJK, Korean, Arabic,
+Cyrillic, emoji with ZWJ and skin tones, combining marks, CRLF, NBSP, zero-width, code, JSON,
+URLs, contractions, specials inside text) for `ids`, `ids_bos` and `decoded`; 5 chats for the
+rendering and `ids_bos`; the streamed partial pieces. Ignored test
+`reproduces_the_reference_exactly` (`MINERVA_GGUF`, `MINERVA_TOKREF`).
+
+**Sampling** (`sampling.rs`): llama.cpp's default chain (top-k, top-p, min-p, temperature, one
+draw). Candidates ordered (logit desc, id asc), weights from `exp_canon`, sums in `f64` in that
+order, xoshiro256** seeded by splitmix64. A seed and a file give the same tokens on every tier:
+the server's 48-token seeded story had one token digest on AVX-VNNI and on scalar.
+
+**Top-k through the head screen** (`head::top_k`, a design first measured in our private
+trainer): `T` = the k-th largest lower bound; rows whose upper bound is below `T` cannot be in
+the top k; the rest are recomputed exactly. `minerva topk-census` checks the screen's top k
+against the full head's (ids and value bits) at every step:
+
+| prompt | k = 1 rows (mean / max) | k = 2 | k = 40 | k = 1000 |
+|---|---|---|---|---|
+| p64 | 2.3 / 11 | 7.3 / 30 | 168.9 / 334 | 4,587 / 8,407 |
+| p256 | 2.4 / 8 | 5.8 / 22 | 189.8 / 284 | 4,378 / 6,066 |
+| p512 | 2.5 / 6 | 5.9 / 15 | 166.2 / 491 | 4,376 / 15,199 |
+| p1024 | 21.4 / 618 | 25.5 / 672 | 222.9 / 2,428 | 4,695 / 11,235 |
+
+32 greedy steps each, out of 128,256 rows. **Equal to the full head at every step and every k**,
+on avx2vnni (all four prompts) and on scalar, SSSE3 and AVX2 (p64, 16 steps, identical counts).
+At k = 40 a step reads ~1 MB of f16 rows beside the int8 screen instead of the 657 MB head.
+Server, 48-token seeded story, laptop under load: 37.2 tok/s through the screen against 25.0
+through the full head (`n_probs: 1` forces it), the same tokens.
+
+**Server** (`minerva-server`): llama-server's flags (`-m --port --host -c -t --lora --head`;
+`-ngl -np -tb -b -ub -fa` accepted and ignored) and endpoints: `/health`, `/props`,
+`/completion` (`prompt` text or ids, `n_predict`, `temperature`, `top_k`, `top_p`, `min_p`,
+`seed`, `n_probs`, `stop`, `ignore_eos`, `stream` as server-sent events),
+`/tokenize`, `/detokenize`, `/apply-template`. `completion_probabilities` in llama-server's
+current shape with full-vocabulary log-probabilities. One slot; the prompt cache keeps the
+longest prefix shared with the last request (a seeded run gave one token digest with 3 and 13
+cached tokens). Greedy goes through the screen, sampling with top-k through `head::top_k`,
+`n_probs` or `top_k = 0` through the full head.
+
+**`minerva chat`**: a terminal conversation through the template, streamed, with the prompt
+cache across turns. "What is the capital of France?" -> "The capital of France is Paris.";
+"And what river runs through it?" -> "The Seine River runs through Paris."
+
+**Load**: `rusty_ternary` repinned for `Gguf::parse_lazy` (metadata arrays checked, not built).
+Load allocations 409,688 -> 1,289 (8.8 MB), `--features census-alloc`; load 0.30 s warm. Logits
+hashes unchanged (p64 + 8 `1c2856725481ae14`; LoRA h2 + 8 `fae5e6bad613bf9c`).
+
+### Brick h, continued: the full model in a real browser (2026-11-27)
+
+`web/` (`ffai-minerva-web`, in this workspace, wasm-bindgen 0.2.128): the model file streams from
+`fetch` straight into a `Vec` in the module's memory (no second copy in JavaScript), and the
+engine runs in a Web Worker. Headless Chrome 158 on Windows, simd128, one thread:
+
+- **Logits hash for p64 + 8 through the full head: `1c2856725481ae14`**, the native value
+  (x86, Pixel, wasmtime). Same greedy ids.
+- Greedy two-turn chat gives the native replies, the second turn reusing 13 cached tokens.
+- Load 58-74 s (1.19 GB from a local Python server), first token ~7.3 s including the screen
+  build, decode ~1.2 tok/s on one thread under load.
+
+The library change: the screen build reads the clock only under `MINERVA_PROF`
+(`Instant::now` panics on wasm32-unknown-unknown). Next: threads in the browser
+(SharedArrayBuffer, which needs COOP/COEP), and FFAI's browser app.
+
+**Threads in the browser** (`web` feature `threads`, wasm-bindgen-rayon 1.3.0, nightly
+`-Z build-std`, `+atomics`, explicit `--shared-memory --import-memory` and TLS exports; the page
+cross-origin isolated by COOP/COEP). Headless Chrome 158, 8 threads: logits hash
+**`1c2856725481ae14`** again, the same chat replies; decode ~8.0 tok/s (one thread ~1.2), first
+token 1.1 s (7.3 s), p64 + 8 through the full head 3.8 s (23.6 s). Under load. Two traps on the
+way: this nightly no longer makes atomics imply shared memory (the module's memory came out
+unshared and the helper workers could not receive it), and the rayon helper imports its package
+as a bare directory, which only bundlers resolve.
+
+## Twin reach audit of the chat tooling (codec-vectorize-kernel, 2026-11-27)
+
+**Census, every path the new tooling takes** (`--census`, p64, avx2vnni, now also on
+`topk-census`): greedy through the screen, top-k 40 through the screen, `--logprobs` through the
+full head, and `--lora`. Every one of the 11 kernels ran **100.00 % on avx2vnni** on every path.
+The single zero, `i8f_matvec`, is the float screen (`MINERVA_SCREEN=f32`, not the default).
+
+**Loops the census cannot see** (plain Rust, no `simd::` call), priced before any twin:
+
+- **`lora::dot`**: auto-vectorised (linked post-LTO asm: SSE2, 8 floats a trip, `mulps` + `addps`,
+  no FMA, the fixed order kept). It is **memory-bound, not compute-bound**: the adapter is 86 MB of
+  f32 read every token, and one core streams ~6 GB/s (serial: 13.5 ms a token for 21.6 M
+  multiply-adds). A wider SIMD dot cannot move that, so there is no twin to write. The real cost
+  was synchronisation: every update forked twice (420 fork-joins a token for ~30 µs of work each).
+  Isolated benchmark (`lora::tests::bench_apply`, a token's 210 updates, best of 7, 8 threads):
+
+  | arm | ms a token |
+  |---|---|
+  | serial | 13.54 |
+  | parallel, B in 256-row chunks (the shipped version) | 8.73-10.52 |
+  | parallel, B in 1,024-row chunks | 8.62-10.59 |
+  | **grouped: q+k+v, o, gate+up, down, two phases a group, nested joins** | **7.69** |
+
+  Kept: decode runs `lora::apply_group` (240 sync points a token instead of 420, nothing
+  allocated); prefill, already parallel across tokens, runs each token's update serially.
+  The same bits: LoRA hashes unchanged (h2 + 8 `fae5e6bad613bf9c`; p256 + 8 `0588a63983818c75` on
+  avx2vnni, scalar and step prefill). Floor still ~3 ms (86 MB at ~30 GB/s); the next lever is
+  running the update inside decode's existing q|k|v and gate|up joins, beside the ternary GEMV.
+- **`log_norm`** (128 K `libm::exp` in `f64`, only with `--logprobs` / `n_probs`): no SIMD form
+  that keeps `libm`'s bits on every device; ~0.5 ms a step. **It ran twice a step**: the CLI and
+  the server computed it, then `top_k_logprobs` computed it again. `top_k_logprobs_norm` takes
+  it; the `--logprobs` file is byte-identical.
+- **Sampling weights** (`exp_canon` over the top-k candidates, k <= 40 by default) and the
+  **tokenizer** (prompt time only): not hot, no twin.
+- **`head::top_k` survivors**: each is one `f16_matvec_bytes` call (in the census, at the top
+  tier); ~140-220 a step at k = 40, so the per-call dispatch is noise.
+
+## Copies and allocations in the chat tooling (codec-memory-copies, 2026-11-27)
+
+Census by reading every new path, then each candidate priced:
+
+| site | what it did | verdict |
+|---|---|---|
+| `head::top_k` | `sc.dots.clone()`: 128,256 f32 (513 KB) allocated and copied every sampled step, then `select_nth` | **removed**: the k-th lower bound comes from a heap pass |
+| top-k ids, four copies (`sampling::candidates`, `engine::top_ids`, `check_top_k`, `step_top_k`'s fallback) | each built a 128 K-index `Vec`, then `select_nth` and a sort | **one helper**, `engine::top_k_ids`: a k-slot heap for k <= 128, the select above |
+| `log_norm` | computed twice per log-prob step (found by the twin audit) | **removed** (above) |
+| `Adapter::load` | `fs::read` of the 86 MB file beside its f32 copies | **refuted, reverted**: peak private commit 432.6 MB with a map or a read, load 0.34-0.38 s either way. The copy happens before the screen and the cache exist, so it never sets the peak |
+| `ModelBuffer::new` (browser) | `vec![0; 1.19 GB]`, then overwritten by the fetch | kept: a zeroed request this large gets fresh `memory.grow` pages, already zero, so the allocator skips the fill (reasoned, not measured; the 58 s load is the download) |
+| `Tokenizer::from_gguf` | each token's text twice (a `String` key and its bytes) | kept: **216.6 ms once** a process (best of 5) |
+| `sampling::weights` | a k-length `Vec` a sampled step (k <= 40) | kept: tiny |
+
+`top_k_ids` against the previous select, 128,256 logits with ties, best of 9
+(`engine::top_k_ids_tests::bench_top_k_ids`): k = 1 1.0x, k = 8 1.6x, k = 40 1.5x, k = 128 1.3x,
+k = 256 1.0x, k = 1000 0.2x, hence the heap only up to 128. `heap_equals_select_with_ties` checks
+the two give the same ids for every k on tied data. Unchanged after: the screen's top-k equal to
+the full head's at every step for k in {1, 2, 40, 1000} (p64, p1024); the server's seeded story
+digest `072048c851d9` with and without `n_probs`; the `--logprobs` file byte for byte.

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-mercury-v1.2.1...ffai-mercury-v1.2.2) - 2026-11-28
+
+### Other
+
+- licence files in the repository and every published crate ([#64](https://github.com/Remade-With-Rust/FFAI/pull/64))
+
 ## [1.2.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-mercury-v1.2.0...ffai-mercury-v1.2.1) - 2026-11-08
 
 ### Fixed

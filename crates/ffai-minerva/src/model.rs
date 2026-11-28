@@ -315,7 +315,7 @@ impl Model {
 
     fn from_store(store: Store) -> Result<Self, LoadError> {
         let bytes = store.as_slice();
-        let g = Gguf::parse(bytes).map_err(LoadError::Format)?;
+        let g = Gguf::parse_lazy(bytes).map_err(LoadError::Format)?;
         let arch = g
             .get("general.architecture")
             .and_then(Value::as_str)
@@ -517,6 +517,12 @@ impl Model {
     #[must_use]
     pub fn head_bytes(&self) -> &[u8] {
         &self.store.as_slice()[self.head..self.head + self.cfg.vocab * self.cfg.embd * 2]
+    }
+
+    /// The whole model file (its metadata holds the tokenizer: [`crate::tokenizer`]).
+    #[must_use]
+    pub fn file_bytes(&self) -> &[u8] {
+        self.store.as_slice()
     }
 }
 
