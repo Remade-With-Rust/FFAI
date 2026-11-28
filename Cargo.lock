@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "ffai-cli"
-version = "0.11.4"
+version = "0.11.5"
 dependencies = [
  "anyhow",
  "clap",
