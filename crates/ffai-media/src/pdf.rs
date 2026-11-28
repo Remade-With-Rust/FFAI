@@ -26,8 +26,9 @@
 //!
 //! Decoders: DCT (JPEG, via `rusty_jpeg`), CCITT Group 3 one-dimensional and
 //! Group 4 (via the pure-Rust `fax` crate), and Flate/LZW/raw samples at 1 or
-//! 8 bits in gray or RGB, including 1-bit stencil masks. JBIG2 and JPEG 2000
-//! are reported per page as unsupported rather than guessed at.
+//! 8 bits in gray or RGB, including 1-bit stencil masks; JBIG2 (via
+//! `rusty_jbig2`, with its `/JBIG2Globals`) and JPEG 2000 (via `rusty_jpx`,
+//! gray, RGB, sYCC and CMYK at any bit depth).
 //!
 //! Every decoded image is bounded by [`MAX_PIXELS`] before anything is
 //! allocated for it, and decompression is capped at the size the declared
@@ -756,8 +757,8 @@ fn decode_image_xobject(doc: &Document, id: ObjectId) -> std::result::Result<Ima
             }
             Ok(gray(bits))
         }
-        Some(b"JBIG2Decode") => Err("JBIG2 is not supported yet".into()),
-        Some(b"JPXDecode") => Err("JPEG 2000 is not supported".into()),
+        Some(b"JBIG2Decode") => decode_jbig2(doc, stream, fs.len(), (w, w32), (h, h32), invert),
+        Some(b"JPXDecode") => decode_jpx(stream, fs.len(), (w32, h32)),
         _ => {
             let bpc = match dict
                 .get(b"BitsPerComponent")
@@ -785,6 +786,168 @@ fn decode_image_xobject(doc: &Document, id: ObjectId) -> std::result::Result<Ima
             samples_to_image(&raw, (w, w32), (h, h32), comps, bpc, invert)
         }
     }
+}
+
+/// A `JBIG2Decode` image: PDF polarity (0 = black) in packed rows of
+/// `w.div_ceil(8)` bytes, exactly the layout of an uncompressed 1-bit image,
+/// so `/Decode` and `/ImageMask` mean what they mean there.
+fn decode_jbig2(
+    doc: &Document,
+    stream: &lopdf::Stream,
+    n_filters: usize,
+    (w, w32): (usize, u32),
+    (h, h32): (usize, u32),
+    invert: bool,
+) -> std::result::Result<ImageBuffer, String> {
+    if n_filters > 1 {
+        return Err("JBIG2 behind another filter is not supported".into());
+    }
+    let globals = jbig2_globals(doc, decode_parms(doc, &stream.dict).as_ref())?;
+    let limits = rusty_jbig2::Limits::default().with_max_pixels(MAX_PIXELS as u64);
+    let opts = rusty_jbig2::DecodeOptions::new().with_limits(limits);
+    let page = rusty_jbig2::decode_jbig2_with(&stream.content, globals.as_deref(), &opts)
+        .map_err(|e| format!("JBIG2: {e}"))?;
+    if (page.width, page.height) != (w32, h32) {
+        return Err("JBIG2 page size disagrees with /Width and /Height".into());
+    }
+    samples_to_image(&page.into_pdf_samples(), (w, w32), (h, h32), 1, 1, invert)
+}
+
+/// A `JPXDecode` image, bounded to [`MAX_PIXELS`] per component.
+fn decode_jpx(
+    stream: &lopdf::Stream,
+    n_filters: usize,
+    (w32, h32): (u32, u32),
+) -> std::result::Result<ImageBuffer, String> {
+    if n_filters > 1 {
+        return Err("JPEG 2000 behind another filter is not supported".into());
+    }
+    let mut limits = rusty_jpx::Limits::default();
+    // Four components at MAX_PIXELS each: CMYK at the pixel cap.
+    limits.max_samples = 4 * MAX_PIXELS as u64;
+    let opts = rusty_jpx::DecodeOptions::new().with_limits(limits);
+    let img = rusty_jpx::decode_jpx_with(&stream.content, &opts)
+        .map_err(|e| format!("JPEG 2000: {e}"))?;
+    if (img.width, img.height) != (w32, h32) {
+        return Err("JPEG 2000 dimensions disagree with /Width and /Height".into());
+    }
+    jpx_to_image(&img)
+}
+
+/// The `/JBIG2Globals` stream's bytes, when the image names one. Bounded:
+/// shared symbol dictionaries are kilobytes, never gigabytes.
+fn jbig2_globals(
+    doc: &Document,
+    parms: Option<&Dictionary>,
+) -> std::result::Result<Option<Vec<u8>>, String> {
+    const MAX_GLOBALS: usize = 64 << 20;
+    let Some(r) = parms.and_then(|p| p.get(b"JBIG2Globals").ok()) else {
+        return Ok(None);
+    };
+    let s = doc
+        .dereference(r)
+        .and_then(|(_, o)| o.as_stream())
+        .map_err(|e| format!("JBIG2Globals: {e}"))?;
+    if filters(&s.dict).is_empty() {
+        return Ok(Some(s.content.clone()));
+    }
+    s.decompressed_content_with_limit(MAX_GLOBALS)
+        .map(Some)
+        .map_err(|e| format!("JBIG2Globals: {e}"))
+}
+
+/// A decoded JPEG 2000 image to 8-bit gray or RGB. PDF ignores `/Decode` and
+/// `/ColorSpace` for JPX data in favour of the file's own, so this reads
+/// [`rusty_jpx::Jpx::color`]. An opacity channel is dropped: OCR reads the
+/// colour, and a mask cannot reveal anything the colour hides.
+fn jpx_to_image(img: &rusty_jpx::Jpx) -> std::result::Result<ImageBuffer, String> {
+    use rusty_jpx::ColorSpace;
+    let colors: Vec<usize> = img
+        .components
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.role == rusty_jpx::ChannelRole::Color)
+        .map(|(i, _)| i)
+        .collect();
+    let mut planes = Vec::with_capacity(colors.len());
+    for &i in &colors {
+        let c = &img.components[i];
+        let samples = img
+            .upsampled(i)
+            .ok_or("JPEG 2000 component has no samples")?;
+        planes.push(to_8bit(&samples, c.bits, c.signed));
+    }
+    let n = img.width as usize * img.height as usize;
+    let image = |format, data| {
+        Ok(ImageBuffer {
+            width: img.width,
+            height: img.height,
+            format,
+            data,
+        })
+    };
+    match (planes.len(), img.color) {
+        (1, _) => image(PixelFormat::Gray8, planes.swap_remove(0)),
+        (3, ColorSpace::Sycc | ColorSpace::ESycc) => {
+            let mut data = Vec::with_capacity(n * 3);
+            for ((&y, &cb), &cr) in planes[0].iter().zip(&planes[1]).zip(&planes[2]) {
+                data.extend(ycc_to_rgb(y, cb, cr));
+            }
+            image(PixelFormat::Rgb8, data)
+        }
+        (3, _) => {
+            let mut data = Vec::with_capacity(n * 3);
+            for ((&r, &g), &b) in planes[0].iter().zip(&planes[1]).zip(&planes[2]) {
+                data.extend([r, g, b]);
+            }
+            image(PixelFormat::Rgb8, data)
+        }
+        (4, _) => {
+            // CMYK to RGB, naive, as for uncompressed CMYK samples.
+            let mut data = Vec::with_capacity(n * 3);
+            for p in 0..n {
+                let k = 255 - u16::from(planes[3][p]);
+                for plane in &planes[..3] {
+                    // (255 - c) * k / 255 is at most 255.
+                    data.push(
+                        u8::try_from((255 - u16::from(plane[p])) * k / 255).unwrap_or(u8::MAX),
+                    );
+                }
+            }
+            image(PixelFormat::Rgb8, data)
+        }
+        (c, _) => Err(format!(
+            "JPEG 2000 with {c} colour channels is not supported"
+        )),
+    }
+}
+
+/// Samples of `bits` bits (signed ones centred) to 0..=255, rounded.
+fn to_8bit(samples: &[i32], bits: u8, signed: bool) -> Vec<u8> {
+    let bits = u32::from(bits.clamp(1, 38));
+    let max = (1i64 << bits) - 1;
+    let offset = if signed { 1i64 << (bits - 1) } else { 0 };
+    samples
+        .iter()
+        .map(|&v| {
+            let v = (i64::from(v) + offset).clamp(0, max);
+            // v * 255 / max with rounding; v <= max < 2^38 keeps it in i64.
+            u8::try_from((v * 255 + max / 2) / max).unwrap_or(u8::MAX)
+        })
+        .collect()
+}
+
+/// Full-range YCbCr (sYCC) to sRGB, BT.601 coefficients.
+fn ycc_to_rgb(y: u8, cb: u8, cr: u8) -> [u8; 3] {
+    let (y, cb, cr) = (f32::from(y), f32::from(cb) - 128.0, f32::from(cr) - 128.0);
+    // Each value is clamped to 0..=255 before the cast.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let q = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+    [
+        q(y + 1.402 * cr),
+        q(y - 0.344_136 * cb - 0.714_136 * cr),
+        q(y + 1.772 * cb),
+    ]
 }
 
 /// Widest CCITT row accepted: 100 000 pixels, far past a 600 ppi tabloid.
@@ -1146,15 +1309,16 @@ mod tests {
 
     #[test]
     fn unsupported_and_oversized_images_are_reported_not_guessed() {
-        let mut jbig2 = gray_image(4, 4, |_, _| 0);
-        jbig2.dict.set("Filter", "JBIG2Decode");
+        // Not a JPEG 2000 codestream: an error note, never pixels.
+        let mut jpx = gray_image(4, 4, |_, _| 0);
+        jpx.dict.set("Filter", "JPXDecode");
         let p = only_page(&pdf(
             b"q 10 0 0 10 0 0 cm /Scan Do Q",
-            vec![("Scan", jbig2)],
+            vec![("Scan", jpx)],
             vec![],
         ));
         assert!(p.image.is_none());
-        assert!(p.note.unwrap().contains("JBIG2"));
+        assert!(p.note.unwrap().contains("JPEG 2000"));
 
         let mut huge = gray_image(1, 1, |_, _| 0);
         huge.dict.set("Width", 20_000);
@@ -1166,6 +1330,83 @@ mod tests {
         ));
         assert!(p.image.is_none());
         assert!(p.note.unwrap().contains("pixel limit"));
+    }
+
+    /// rusty_jbig2's documented page: 16x1, one MMR generic region, 8 white
+    /// then 8 black pixels.
+    #[rustfmt::skip]
+    const JBIG2_PAGE: [u8; 61] = [
+        0, 0, 0, 0, 48, 0, 1, 0, 0, 0, 19, // page information, page 1
+        0, 0, 0, 16, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
+        0, 0, 0, 1, 38, 0, 1, 0, 0, 0, 20, // immediate generic region
+        0, 0, 0, 16, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, //
+        0b0011_0011, 0b0001_0100, // horizontal mode, white 8, black 8
+    ];
+
+    fn jbig2_image(decode: Option<Vec<Object>>) -> Stream {
+        let mut dict = dictionary! {
+            "Type" => "XObject", "Subtype" => "Image",
+            "Width" => 16, "Height" => 1,
+            "ColorSpace" => "DeviceGray", "BitsPerComponent" => 1,
+            "Filter" => "JBIG2Decode",
+        };
+        if let Some(d) = decode {
+            dict.set("Decode", d);
+        }
+        Stream::new(dict, JBIG2_PAGE.to_vec())
+    }
+
+    #[test]
+    fn jbig2_scans_decode_with_black_as_black() {
+        let p = only_page(&pdf(
+            b"q 16 0 0 1 0 0 cm /Scan Do Q",
+            vec![("Scan", jbig2_image(None))],
+            vec![],
+        ));
+        let img = p.image.expect("JBIG2 decodes");
+        assert_eq!((img.width, img.height), (16, 1));
+        assert!((0..8).all(|x| at(&img, x, 0) == 255), "left half white");
+        assert!((8..16).all(|x| at(&img, x, 0) == 0), "right half black");
+
+        // A [1 0] /Decode flips it, as for any 1-bit image.
+        let p = only_page(&pdf(
+            b"q 16 0 0 1 0 0 cm /Scan Do Q",
+            vec![("Scan", jbig2_image(Some(vec![1.into(), 0.into()])))],
+            vec![],
+        ));
+        let img = p.image.expect("JBIG2 decodes");
+        assert_eq!((at(&img, 0, 0), at(&img, 15, 0)), (0, 255));
+    }
+
+    #[test]
+    fn a_jbig2_page_of_the_wrong_size_is_refused() {
+        let mut s = jbig2_image(None);
+        s.dict.set("Width", 8);
+        let p = only_page(&pdf(
+            b"q 8 0 0 1 0 0 cm /Scan Do Q",
+            vec![("Scan", s)],
+            vec![],
+        ));
+        assert!(p.image.is_none());
+        assert!(p.note.unwrap().contains("JBIG2"));
+    }
+
+    #[test]
+    fn jpx_samples_scale_to_8_bits() {
+        assert_eq!(to_8bit(&[0, 128, 255], 8, false), [0, 128, 255]);
+        assert_eq!(to_8bit(&[0, 1], 1, false), [0, 255]);
+        assert_eq!(to_8bit(&[0, 2048, 4095], 12, false), [0, 128, 255]);
+        assert_eq!(to_8bit(&[-128, 0, 127], 8, true), [0, 128, 255]);
+        // Out-of-range samples clamp instead of wrapping.
+        assert_eq!(to_8bit(&[-5, 300], 8, false), [0, 255]);
+        assert_eq!(to_8bit(&[i32::MAX, i32::MIN], 16, true), [255, 0]);
+    }
+
+    #[test]
+    fn sycc_converts_to_rgb() {
+        assert_eq!(ycc_to_rgb(0, 128, 128), [0, 0, 0]);
+        assert_eq!(ycc_to_rgb(255, 128, 128), [255, 255, 255]);
+        assert_eq!(ycc_to_rgb(76, 85, 255), [254, 0, 0]);
     }
 
     /// A stencil mask (`/ImageMask true`) paints where the sample is 0.
