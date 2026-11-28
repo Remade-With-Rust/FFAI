@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.7.1...ffai-media-v0.7.2) - 2026-11-28
+
+### Added
+
+- *(media)* JBIG2 and JPEG 2000 scans in PDF pages (rusty_jbig2, rusty_jpx) ([#74](https://github.com/Remade-With-Rust/FFAI/pull/74))
+
+### Other
+
+- bump rff-codec to 0.9.4 ([#70](https://github.com/Remade-With-Rust/FFAI/pull/70))
+
 ## [0.7.1](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.7.0...ffai-media-v0.7.1) - 2026-11-28
 
 ### Other
