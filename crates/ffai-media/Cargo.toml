@@ -61,7 +61,7 @@ rusty_h264 = { version = "0.17.4", default-features = false, features = ["std", 
 # PDF pages for OCR (`pdf` feature; docs/plans/commercial-gaps.md gaps 1, 2,
 # 11): the house reader. It parses, decrypts and decodes every image filter
 # (DCT, CCITT, JBIG2, JPEG 2000 through the house decoders), bounded.
-rusty_pdf_core = { version = "0.1.0", optional = true }
+rusty_pdf_core = { version = "0.2", optional = true }
 
 # THE PUBLISHING CONSTRAINT IS RESOLVED, and the note stays because it cost
 # real time to establish.
