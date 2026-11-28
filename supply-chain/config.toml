@@ -550,6 +550,10 @@ criteria = "safe-to-deploy"
 version = "0.1.9"
 criteria = "safe-to-deploy"
 
+[[exemptions.flate2]]
+version = "1.1.11"
+criteria = "safe-to-deploy"
+
 [[exemptions.float8]]
 version = "0.7.0"
 criteria = "safe-to-deploy"
@@ -818,6 +822,10 @@ criteria = "safe-to-deploy"
 version = "0.2.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.miniz_oxide]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.more-asserts]]
 version = "0.3.1"
 criteria = "safe-to-deploy"
@@ -978,12 +986,20 @@ criteria = "safe-to-deploy"
 version = "1.8.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.rangemap]]
+version = "1.9.0"
+criteria = "safe-to-run"
+
 [[exemptions.raw-cpuid]]
 version = "11.6.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rawpointer]]
 version = "0.2.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.rc4]]
+version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.reborrow]]
@@ -1150,6 +1166,10 @@ criteria = "safe-to-deploy"
 version = "0.4.14"
 criteria = "safe-to-deploy"
 
+[[exemptions.rusty_jpeg]]
+version = "0.4.15"
+criteria = "safe-to-deploy"
+
 [[exemptions.rusty_jpx]]
 version = "0.1.1"
 criteria = "safe-to-deploy"
@@ -1162,8 +1182,16 @@ criteria = "safe-to-deploy"
 version = "0.2.0@git:77a58ed4c8e281f66e2d6b3a5b9ccd979ebec05b"
 criteria = "safe-to-deploy"
 
+[[exemptions.rusty_pdf_core]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.rusty_png]]
 version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.rusty_tiff]]
+version = "0.1.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.safe-transmute]]
@@ -1512,4 +1540,8 @@ criteria = "safe-to-deploy"
 
 [[exemptions.zlib-rs]]
 version = "0.6.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.zlib-rs]]
+version = "0.6.9"
 criteria = "safe-to-deploy"

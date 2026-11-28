@@ -24,26 +24,22 @@
 //! The composited image is then turned upright the way a viewer shows it,
 //! from the image's placement matrix and the page's `/Rotate`.
 //!
-//! Decoders: DCT (JPEG, via `rusty_jpeg`), CCITT Group 3 one-dimensional and
-//! Group 4 (via the pure-Rust `fax` crate), and Flate/LZW/raw samples at 1 or
-//! 8 bits in gray or RGB, including 1-bit stencil masks; JBIG2 (via
-//! `rusty_jbig2`, with its `/JBIG2Globals`) and JPEG 2000 (via `rusty_jpx`,
-//! gray, RGB, sYCC and CMYK at any bit depth).
-//!
-//! Every decoded image is bounded by [`MAX_PIXELS`] before anything is
-//! allocated for it, and decompression is capped at the size the declared
-//! dimensions justify, so a hostile PDF cannot drive an unbounded allocation.
-//!
-//! Numbers read from the file (dimensions, component counts, parameters) go
-//! through checked conversions. The casts that remain carry their own
-//! `allow` and the reason the value is already bounded.
+//! Parsing, decryption and image decoding are `rusty_pdf_core`'s: DCT, CCITT
+//! (Group 3 one- and two-dimensional, Group 4), JBIG2 with its globals,
+//! JPEG 2000, and raw/Flate/LZW/RunLength samples at 1 to 16 bits in gray,
+//! RGB, CMYK, Indexed and ICC spaces. Every image is bounded by
+//! [`MAX_PIXELS`] before anything is allocated for it, and decompression is
+//! capped at what the declared dimensions need, so a hostile PDF cannot drive
+//! an unbounded allocation.
 
 // Page geometry is f64 affine arithmetic on coordinates a PDF writer chose. A
 // fused multiply-add rounds differently from every other reader of the same
 // file, and nothing here needs the extra precision.
 #![allow(clippy::suboptimal_flops)]
 
-use lopdf::{Dictionary, Document, Object, ObjectId};
+use rusty_pdf_core::{
+    ColorSpace, Dictionary, Document, ImageOptions, Object, ObjectId, Operation, Page,
+};
 
 use ffai_core::error::{Error, Result};
 use ffai_core::types::{ImageBuffer, PixelFormat};
@@ -69,9 +65,8 @@ pub struct PdfPage {
     pub image: Option<ImageBuffer>,
     /// Why `image` is `None`, or what was approximated.
     pub note: Option<String>,
-    /// The page's text layer, when it has one (`lopdf`'s extractor: text in
-    /// content-stream order, no positions). **Read `redaction_risk` before
-    /// using it.**
+    /// The page's text layer, when it has one (text in content-stream order,
+    /// no positions). **Read `redaction_risk` before using it.**
     pub text: Option<String>,
     /// The text layer may contain text a viewer does NOT show. A black box
     /// drawn over born-digital text hides it on screen and leaves it in the
@@ -86,16 +81,23 @@ pub struct PdfPage {
 /// Every page of `pdf`, in order. Errors only when the file itself cannot be
 /// parsed; a page that cannot be rendered safely carries a note instead.
 pub fn pdf_pages(pdf: &[u8]) -> Result<Vec<PdfPage>> {
-    let doc = Document::load_mem(pdf).map_err(|e| Error::Media(format!("PDF parse: {e}")))?;
-    Ok(doc
-        .get_pages()
-        .into_iter()
-        .enumerate()
-        .map(|(index, (_, id))| page(&doc, index, id))
+    let doc = Document::load(pdf).map_err(|e| Error::Media(format!("PDF parse: {e}")))?;
+    Ok((0..doc.page_count())
+        .map(|index| match doc.page(index) {
+            Ok(p) => page(&doc, index, &p),
+            Err(e) => PdfPage {
+                index,
+                has_text_layer: false,
+                image: None,
+                note: Some(format!("page could not be read: {e}")),
+                text: None,
+                redaction_risk: true,
+            },
+        })
         .collect())
 }
 
-fn page(doc: &Document, index: usize, id: ObjectId) -> PdfPage {
+fn page(doc: &Document, index: usize, p: &Page<'_>) -> PdfPage {
     let mut out = PdfPage {
         index,
         has_text_layer: false,
@@ -104,7 +106,7 @@ fn page(doc: &Document, index: usize, id: ObjectId) -> PdfPage {
         text: None,
         redaction_risk: false,
     };
-    let walked = match walk_page(doc, id) {
+    let walked = match walk_page(doc, p) {
         Ok(w) => w,
         Err(e) => {
             // Unwalkable: nothing can be said about what covers the text
@@ -115,14 +117,11 @@ fn page(doc: &Document, index: usize, id: ObjectId) -> PdfPage {
         }
     };
     out.has_text_layer = walked.text;
-    let covering_annotations = annotation_overlays(doc, id).map_or(true, |a| !a.is_empty());
+    let annotations = annotation_overlays(doc, p);
+    let covering_annotations = annotations.as_ref().map_or(true, |a| !a.is_empty());
     out.redaction_risk = walked.dark_fill_after_text || covering_annotations;
     if walked.text {
-        // lopdf numbers pages from 1.
-        let number = u32::try_from(index + 1).unwrap_or(u32::MAX);
-        out.text = doc
-            .extract_text_with_limit(&[number], MAX_FORM_CONTENT)
-            .ok();
+        out.text = p.extract_text(MAX_FORM_CONTENT).ok();
     }
     let Some(scan) = walked.scan else {
         out.note = Some("no image on this page".into());
@@ -136,7 +135,7 @@ fn page(doc: &Document, index: usize, id: ObjectId) -> PdfPage {
         }
     };
     let mut overlays = walked.overlays;
-    match annotation_overlays(doc, id) {
+    match annotations {
         Ok(a) => overlays.extend(a),
         Err(e) => {
             out.note = Some(format!(
@@ -146,7 +145,7 @@ fn page(doc: &Document, index: usize, id: ObjectId) -> PdfPage {
         }
     }
     paint(&mut image, &scan.ctm, &overlays);
-    let (turns, mirrored) = upright_turns(&scan.ctm, page_rotate(doc, id));
+    let (turns, mirrored) = upright_turns(&scan.ctm, i64::from(p.rotate()));
     if mirrored {
         image = flip_horizontal(&image);
     }
@@ -202,13 +201,13 @@ struct Walked {
 /// A fill at or below this gray level counts as a box that could hide text.
 const DARK_FILL: f64 = 0.2;
 
-fn real(o: &Object) -> Option<f64> {
+const fn real(o: &Object) -> Option<f64> {
     match o {
         // A coordinate or colour beyond 2^52 is not a page; precision there
         // is irrelevant.
         #[allow(clippy::cast_precision_loss)]
         Object::Integer(i) => Some(*i as f64),
-        Object::Real(r) => Some(f64::from(*r)),
+        Object::Real(r) => Some(*r),
         _ => None,
     }
 }
@@ -222,48 +221,26 @@ fn gray_of(values: &[f64]) -> Option<f64> {
     }
 }
 
-fn walk_page(doc: &Document, page_id: ObjectId) -> std::result::Result<Walked, String> {
-    let content = doc
-        .get_and_decode_page_content(page_id)
-        .map_err(|e| e.to_string())?;
-    let xobjects = page_xobjects(doc, page_id);
+fn walk_page(doc: &Document, p: &Page<'_>) -> std::result::Result<Walked, String> {
+    let ops = p.operations().map_err(|e| e.to_string())?;
+    let xobjects: Vec<Dictionary> = p
+        .resources()
+        .and_then(|r| doc.lookup_dict(r, b"XObject"))
+        .cloned()
+        .into_iter()
+        .collect();
     let mut w = Walked {
         scan: None,
         overlays: Vec::new(),
         text: false,
         dark_fill_after_text: false,
     };
-    walk(doc, &content.operations, &xobjects, IDENTITY, &mut w, 0)?;
+    walk(doc, &ops, &xobjects, IDENTITY, &mut w, 0)?;
     Ok(w)
 }
 
-/// The page's `XObject` dictionary, own resources first, then inherited.
-fn page_xobjects(doc: &Document, page_id: ObjectId) -> Vec<Dictionary> {
-    let Ok((own, inherited)) = doc.get_page_resources(page_id) else {
-        return Vec::new();
-    };
-    own.into_iter()
-        .cloned()
-        .chain(
-            inherited
-                .iter()
-                .filter_map(|id| doc.get_dictionary(*id).ok().cloned()),
-        )
-        .filter_map(|r| xobject_dict(doc, &r))
-        .collect()
-}
-
-fn xobject_dict(doc: &Document, resources: &Dictionary) -> Option<Dictionary> {
-    let x = resources.get(b"XObject").ok()?;
-    doc.dereference(x)
-        .ok()
-        .and_then(|(_, o)| o.as_dict().ok().cloned())
-}
-
 fn resolve_xobject(dicts: &[Dictionary], name: &[u8]) -> Option<ObjectId> {
-    dicts
-        .iter()
-        .find_map(|d| d.get(name).ok()?.as_reference().ok())
+    dicts.iter().find_map(|d| d.get(name)?.as_reference().ok())
 }
 
 /// Largest form `XObject` content stream decompressed, in bytes. A content
@@ -286,12 +263,11 @@ fn draw_xobject(
     let Ok(stream) = doc.get_object(id).and_then(Object::as_stream) else {
         return Ok(());
     };
-    match stream
-        .dict
-        .get(b"Subtype")
+    let subtype = doc
+        .lookup(&stream.dict, b"Subtype")
         .ok()
-        .and_then(|t| t.as_name().ok())
-    {
+        .and_then(|t| t.as_name().ok());
+    match subtype {
         Some(b"Image") => {
             let area = (ctm[0] * ctm[3] - ctm[1] * ctm[2]).abs();
             let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
@@ -308,34 +284,25 @@ fn draw_xobject(
             }
         }
         Some(b"Form") => {
-            let matrix = stream
-                .dict
-                .get(b"Matrix")
+            let matrix = doc
+                .lookup(&stream.dict, b"Matrix")
                 .ok()
                 .and_then(|m| m.as_array().ok())
                 .map(|a| a.iter().filter_map(real).collect::<Vec<_>>())
                 .filter(|v| v.len() == 6)
                 .map_or(IDENTITY, |v| [v[0], v[1], v[2], v[3], v[4], v[5]]);
-            let content = if stream.dict.get(b"Filter").is_ok() {
-                stream
-                    .decompressed_content_with_limit(MAX_FORM_CONTENT)
-                    .map_err(|e| format!("form XObject content: {e}"))?
-            } else {
-                stream.content.clone()
-            };
-            let ops = lopdf::content::Content::decode(&content)
+            let content = doc
+                .decode_stream(stream, MAX_FORM_CONTENT)
+                .map_err(|e| format!("form XObject content: {e}"))?;
+            let ops = rusty_pdf_core::Content::parse_with(&content, doc.limits())
                 .map_err(|e| format!("form XObject decode: {e}"))?
                 .operations;
             let mut inner = xobjects.to_vec();
-            if let Some(r) = stream
-                .dict
-                .get(b"Resources")
-                .ok()
-                .and_then(|r| doc.dereference(r).ok())
-                .and_then(|(_, r)| r.as_dict().ok())
-                .and_then(|r| xobject_dict(doc, r))
+            if let Some(r) = doc
+                .lookup_dict(&stream.dict, b"Resources")
+                .and_then(|r| doc.lookup_dict(r, b"XObject"))
             {
-                inner.insert(0, r);
+                inner.insert(0, r.clone());
             }
             walk(doc, &ops, &inner, concat(matrix, ctm), w, depth + 1)?;
         }
@@ -346,7 +313,7 @@ fn draw_xobject(
 
 fn walk(
     doc: &Document,
-    ops: &[lopdf::content::Operation],
+    ops: &[Operation],
     xobjects: &[Dictionary],
     base: Matrix,
     w: &mut Walked,
@@ -411,44 +378,27 @@ fn walk(
     Ok(())
 }
 
-/// Opaque annotations drawn over the page, painted black.
-///
-/// `/Annots` is resolved here rather than through lopdf's
-/// `get_page_annotations`, which follows only indirect references: an
-/// annotation stored inline in the array would be skipped, and a skipped
-/// redaction is the one failure this module exists to prevent.
-fn annotation_overlays(
-    doc: &Document,
-    page_id: ObjectId,
-) -> std::result::Result<Vec<Overlay>, String> {
-    let page = doc.get_dictionary(page_id).map_err(|e| e.to_string())?;
-    let Ok(annots) = page.get(b"Annots") else {
-        return Ok(Vec::new());
-    };
-    let annots = doc.dereference(annots).map_err(|e| e.to_string())?.1;
-    let annots = annots
-        .as_array()
-        .map_err(|_| "/Annots is not an array".to_string())?;
+/// Opaque annotations drawn over the page, painted black. `Page::annotations`
+/// reads inline entries as well as references and fails on an entry that is
+/// not a dictionary: a skipped redaction is the one failure this module
+/// exists to prevent.
+fn annotation_overlays(doc: &Document, p: &Page<'_>) -> std::result::Result<Vec<Overlay>, String> {
     let mut out = Vec::new();
-    for item in annots {
-        let a = doc
-            .dereference(item)
-            .map_err(|e| e.to_string())?
-            .1
-            .as_dict()
-            .map_err(|_| "an annotation is not a dictionary".to_string())?;
-        let sub = a.get(b"Subtype").ok().and_then(|s| s.as_name().ok());
+    for a in p.annotations().map_err(|e| e.to_string())? {
+        let sub = doc
+            .lookup(a, b"Subtype")
+            .ok()
+            .and_then(|s| s.as_name().ok());
         if !matches!(
             sub,
             Some(b"Redact" | b"Square" | b"Circle" | b"Polygon" | b"Stamp")
         ) {
             continue;
         }
-        let Some(rect) = a
-            .get(b"Rect")
+        let Some(rect) = doc
+            .lookup(a, b"Rect")
             .ok()
-            .and_then(|r| doc.dereference(r).ok())
-            .and_then(|(_, r)| r.as_array().ok())
+            .and_then(|r| r.as_array().ok())
             .map(|v| v.iter().filter_map(real).collect::<Vec<_>>())
             .filter(|v| v.len() == 4)
         else {
@@ -461,21 +411,6 @@ fn annotation_overlays(
         });
     }
     Ok(out)
-}
-
-fn page_rotate(doc: &Document, page_id: ObjectId) -> i64 {
-    // /Rotate is inheritable: walk up through /Parent.
-    let mut id = Some(page_id);
-    for _ in 0..32 {
-        let Some(dict) = id.and_then(|i| doc.get_dictionary(i).ok()) else {
-            break;
-        };
-        if let Ok(r) = dict.get(b"Rotate").and_then(Object::as_i64) {
-            return r;
-        }
-        id = dict.get(b"Parent").ok().and_then(|p| p.as_reference().ok());
-    }
-    0
 }
 
 // ------------------------------------------------------------- painting
@@ -596,481 +531,35 @@ fn flip_horizontal(img: &ImageBuffer) -> ImageBuffer {
 
 // ------------------------------------------------------------- decoding
 
-const fn int(o: &Object) -> Option<i64> {
-    match o {
-        Object::Integer(i) => Some(*i),
-        // A float where an integer belongs: saturating truncation, and every
-        // caller range-checks the result before using it as a size.
-        #[allow(clippy::cast_possible_truncation)]
-        Object::Real(r) => Some(*r as i64),
-        _ => None,
-    }
-}
-
-/// A positive integer entry, as a `usize` — or an error naming the key.
-fn dim(dict: &Dictionary, key: &[u8]) -> std::result::Result<usize, String> {
-    let k = String::from_utf8_lossy(key);
-    let v = dict
-        .get(key)
-        .ok()
-        .and_then(int)
-        .ok_or_else(|| format!("missing /{k}"))?;
-    usize::try_from(v)
-        .ok()
-        .filter(|v| *v > 0)
-        .ok_or_else(|| format!("/{k} {v} is not a positive size"))
-}
-
-fn filters(dict: &Dictionary) -> Vec<Vec<u8>> {
-    match dict.get(b"Filter") {
-        Ok(Object::Name(n)) => vec![n.clone()],
-        Ok(Object::Array(a)) => a
-            .iter()
-            .filter_map(|o| o.as_name().ok().map(<[u8]>::to_vec))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// `/DecodeParms` for the LAST filter (the one that produced the samples).
-fn decode_parms(doc: &Document, dict: &Dictionary) -> Option<Dictionary> {
-    let p = dict.get(b"DecodeParms").ok()?;
-    let p = doc.dereference(p).ok()?.1;
-    match p {
-        Object::Dictionary(d) => Some(d.clone()),
-        Object::Array(a) => a.iter().rev().find_map(|o| {
-            doc.dereference(o)
-                .ok()
-                .and_then(|(_, o)| o.as_dict().ok().cloned())
-        }),
-        _ => None,
-    }
-}
-
-/// Components per sample of the image's colour space.
-fn components(doc: &Document, dict: &Dictionary) -> std::result::Result<usize, String> {
-    let Ok(cs) = dict.get(b"ColorSpace") else {
-        return Ok(1);
-    };
-    let cs = doc.dereference(cs).map_err(|e| e.to_string())?.1;
-    let name = match cs {
-        Object::Name(n) => n.clone(),
-        Object::Array(a) => match a.first() {
-            Some(Object::Name(n)) if n == b"ICCBased" => {
-                let n = a
-                    .get(1)
-                    .and_then(|s| doc.dereference(s).ok())
-                    .and_then(|(_, s)| s.as_stream().ok())
-                    .and_then(|s| s.dict.get(b"N").ok().and_then(int))
-                    .unwrap_or(3);
-                // /N comes from the file and feeds the row-size arithmetic:
-                // only the three sizes a colour space can have are accepted.
-                return match n {
-                    1 => Ok(1),
-                    3 => Ok(3),
-                    4 => Ok(4),
-                    other => Err(format!("ICC colour space with {other} components")),
-                };
-            }
-            Some(Object::Name(n)) => n.clone(),
-            _ => return Err("unrecognised colour space".into()),
-        },
-        _ => return Err("unrecognised colour space".into()),
-    };
-    match name.as_slice() {
-        b"DeviceGray" | b"CalGray" | b"G" => Ok(1),
-        b"DeviceRGB" | b"CalRGB" | b"RGB" => Ok(3),
-        b"DeviceCMYK" | b"CMYK" => Ok(4),
-        other => Err(format!(
-            "colour space {} not supported",
-            String::from_utf8_lossy(other)
-        )),
-    }
-}
-
+/// The scan's image `XObject` as 8-bit gray or RGB. A stencil mask comes
+/// back with 0 where it paints, which as gray is black: the module's
+/// fail-safe reading of a mask drawn as a scan. An alpha channel (JPEG 2000
+/// `SMaskInData`) is dropped: OCR reads the colour, and a mask cannot reveal
+/// anything the colour hides.
 fn decode_image_xobject(doc: &Document, id: ObjectId) -> std::result::Result<ImageBuffer, String> {
     let stream = doc
         .get_object(id)
         .and_then(Object::as_stream)
         .map_err(|e| e.to_string())?;
-    let dict = &stream.dict;
-    let (w, h) = (dim(dict, b"Width")?, dim(dict, b"Height")?);
-    let pixels = w.checked_mul(h).ok_or("image dimensions overflow")?;
-    if pixels > MAX_PIXELS {
-        return Err(format!("{w}x{h} exceeds the {MAX_PIXELS}-pixel limit"));
-    }
-    // Both sides are now at most MAX_PIXELS, which fits a u32.
-    let (w32, h32) = (
-        u32::try_from(w).map_err(|_| "width out of range")?,
-        u32::try_from(h).map_err(|_| "height out of range")?,
-    );
-    let mask = matches!(dict.get(b"ImageMask"), Ok(Object::Boolean(true)));
-    let invert = dict
-        .get(b"Decode")
-        .ok()
-        .and_then(|d| d.as_array().ok())
-        .and_then(|a| a.first())
-        .and_then(real)
-        .is_some_and(|first| first > 0.5);
-    let fs = filters(dict);
-    let last = fs.last().map(Vec::as_slice);
-
-    let gray = |data: Vec<u8>| ImageBuffer {
-        width: w32,
-        height: h32,
-        format: PixelFormat::Gray8,
+    let img = doc
+        .decode_image(stream, &ImageOptions::with_max_pixels(MAX_PIXELS))
+        .map_err(|e| e.to_string())?;
+    let (format, data) = match img.color_space {
+        ColorSpace::Gray => (PixelFormat::Gray8, img.samples),
+        _ => (PixelFormat::Rgb8, img.to_rgb8().map_err(|e| e.to_string())?),
+    };
+    Ok(ImageBuffer {
+        width: img.width,
+        height: img.height,
+        format,
         data,
-    };
-
-    match last {
-        Some(b"DCTDecode") => {
-            let img = crate::decode_image(&stream.content).map_err(|e| e.to_string())?;
-            if (img.width as usize, img.height as usize) != (w, h) {
-                return Err("JPEG dimensions disagree with /Width and /Height".into());
-            }
-            Ok(img)
-        }
-        Some(b"CCITTFaxDecode") => {
-            let parms = decode_parms(doc, dict);
-            let get = |k: &[u8]| parms.as_ref().and_then(|p| p.get(k).ok()).and_then(int);
-            let k = get(b"K").unwrap_or(0);
-            // /Columns sizes the decoder's line buffers; it must be a real
-            // row width, not whatever the file says.
-            let columns = match get(b"Columns") {
-                None => w,
-                Some(c) => usize::try_from(c)
-                    .ok()
-                    .filter(|c| (1..=MAX_CCITT_COLUMNS).contains(c))
-                    .ok_or_else(|| format!("CCITT /Columns {c} out of range"))?,
-            };
-            let black_is_1 = matches!(
-                parms.as_ref().and_then(|p| p.get(b"BlackIs1").ok()),
-                Some(Object::Boolean(true))
-            );
-            let mut bits = ccitt(&stream.content, k, columns, w, h)?;
-            // `ccitt` yields 0 for black. BlackIs1 and a [1 0] /Decode each
-            // flip what a sample means; two flips cancel.
-            if black_is_1 ^ invert {
-                for v in &mut bits {
-                    *v = 255 - *v;
-                }
-            }
-            Ok(gray(bits))
-        }
-        Some(b"JBIG2Decode") => decode_jbig2(doc, stream, fs.len(), (w, w32), (h, h32), invert),
-        Some(b"JPXDecode") => decode_jpx(stream, fs.len(), (w32, h32)),
-        _ => {
-            let bpc = match dict
-                .get(b"BitsPerComponent")
-                .ok()
-                .and_then(int)
-                .unwrap_or(1)
-            {
-                1 => 1usize,
-                8 => 8,
-                other => return Err(format!("{other} bits per component is not supported")),
-            };
-            let comps = if mask { 1 } else { components(doc, dict)? };
-            let row_bytes = (w * comps * bpc).div_ceil(8);
-            let expected = row_bytes.checked_mul(h).ok_or("image size overflows")?;
-            let raw = if fs.is_empty() {
-                stream.content.clone()
-            } else {
-                stream
-                    .decompressed_content_with_limit(expected + 1024)
-                    .map_err(|e| format!("decompress: {e}"))?
-            };
-            if raw.len() < expected {
-                return Err(format!("{} bytes of samples, {expected} needed", raw.len()));
-            }
-            samples_to_image(&raw, (w, w32), (h, h32), comps, bpc, invert)
-        }
-    }
-}
-
-/// A `JBIG2Decode` image: PDF polarity (0 = black) in packed rows of
-/// `w.div_ceil(8)` bytes, exactly the layout of an uncompressed 1-bit image,
-/// so `/Decode` and `/ImageMask` mean what they mean there.
-fn decode_jbig2(
-    doc: &Document,
-    stream: &lopdf::Stream,
-    n_filters: usize,
-    (w, w32): (usize, u32),
-    (h, h32): (usize, u32),
-    invert: bool,
-) -> std::result::Result<ImageBuffer, String> {
-    if n_filters > 1 {
-        return Err("JBIG2 behind another filter is not supported".into());
-    }
-    let globals = jbig2_globals(doc, decode_parms(doc, &stream.dict).as_ref())?;
-    let limits = rusty_jbig2::Limits::default().with_max_pixels(MAX_PIXELS as u64);
-    let opts = rusty_jbig2::DecodeOptions::new().with_limits(limits);
-    let page = rusty_jbig2::decode_jbig2_with(&stream.content, globals.as_deref(), &opts)
-        .map_err(|e| format!("JBIG2: {e}"))?;
-    if (page.width, page.height) != (w32, h32) {
-        return Err("JBIG2 page size disagrees with /Width and /Height".into());
-    }
-    samples_to_image(&page.into_pdf_samples(), (w, w32), (h, h32), 1, 1, invert)
-}
-
-/// A `JPXDecode` image, bounded to [`MAX_PIXELS`] per component.
-fn decode_jpx(
-    stream: &lopdf::Stream,
-    n_filters: usize,
-    (w32, h32): (u32, u32),
-) -> std::result::Result<ImageBuffer, String> {
-    if n_filters > 1 {
-        return Err("JPEG 2000 behind another filter is not supported".into());
-    }
-    let mut limits = rusty_jpx::Limits::default();
-    // Four components at MAX_PIXELS each: CMYK at the pixel cap.
-    limits.max_samples = 4 * MAX_PIXELS as u64;
-    let opts = rusty_jpx::DecodeOptions::new().with_limits(limits);
-    let img = rusty_jpx::decode_jpx_with(&stream.content, &opts)
-        .map_err(|e| format!("JPEG 2000: {e}"))?;
-    if (img.width, img.height) != (w32, h32) {
-        return Err("JPEG 2000 dimensions disagree with /Width and /Height".into());
-    }
-    jpx_to_image(&img)
-}
-
-/// The `/JBIG2Globals` stream's bytes, when the image names one. Bounded:
-/// shared symbol dictionaries are kilobytes, never gigabytes.
-fn jbig2_globals(
-    doc: &Document,
-    parms: Option<&Dictionary>,
-) -> std::result::Result<Option<Vec<u8>>, String> {
-    const MAX_GLOBALS: usize = 64 << 20;
-    let Some(r) = parms.and_then(|p| p.get(b"JBIG2Globals").ok()) else {
-        return Ok(None);
-    };
-    let s = doc
-        .dereference(r)
-        .and_then(|(_, o)| o.as_stream())
-        .map_err(|e| format!("JBIG2Globals: {e}"))?;
-    if filters(&s.dict).is_empty() {
-        return Ok(Some(s.content.clone()));
-    }
-    s.decompressed_content_with_limit(MAX_GLOBALS)
-        .map(Some)
-        .map_err(|e| format!("JBIG2Globals: {e}"))
-}
-
-/// A decoded JPEG 2000 image to 8-bit gray or RGB. PDF ignores `/Decode` and
-/// `/ColorSpace` for JPX data in favour of the file's own, so this reads
-/// [`rusty_jpx::Jpx::color`]. An opacity channel is dropped: OCR reads the
-/// colour, and a mask cannot reveal anything the colour hides.
-fn jpx_to_image(img: &rusty_jpx::Jpx) -> std::result::Result<ImageBuffer, String> {
-    use rusty_jpx::ColorSpace;
-    let colors: Vec<usize> = img
-        .components
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.role == rusty_jpx::ChannelRole::Color)
-        .map(|(i, _)| i)
-        .collect();
-    let mut planes = Vec::with_capacity(colors.len());
-    for &i in &colors {
-        let c = &img.components[i];
-        let samples = img
-            .upsampled(i)
-            .ok_or("JPEG 2000 component has no samples")?;
-        planes.push(to_8bit(&samples, c.bits, c.signed));
-    }
-    let n = img.width as usize * img.height as usize;
-    let image = |format, data| {
-        Ok(ImageBuffer {
-            width: img.width,
-            height: img.height,
-            format,
-            data,
-        })
-    };
-    match (planes.len(), img.color) {
-        (1, _) => image(PixelFormat::Gray8, planes.swap_remove(0)),
-        (3, ColorSpace::Sycc | ColorSpace::ESycc) => {
-            let mut data = Vec::with_capacity(n * 3);
-            for ((&y, &cb), &cr) in planes[0].iter().zip(&planes[1]).zip(&planes[2]) {
-                data.extend(ycc_to_rgb(y, cb, cr));
-            }
-            image(PixelFormat::Rgb8, data)
-        }
-        (3, _) => {
-            let mut data = Vec::with_capacity(n * 3);
-            for ((&r, &g), &b) in planes[0].iter().zip(&planes[1]).zip(&planes[2]) {
-                data.extend([r, g, b]);
-            }
-            image(PixelFormat::Rgb8, data)
-        }
-        (4, _) => {
-            // CMYK to RGB, naive, as for uncompressed CMYK samples.
-            let mut data = Vec::with_capacity(n * 3);
-            for p in 0..n {
-                let k = 255 - u16::from(planes[3][p]);
-                for plane in &planes[..3] {
-                    // (255 - c) * k / 255 is at most 255.
-                    data.push(
-                        u8::try_from((255 - u16::from(plane[p])) * k / 255).unwrap_or(u8::MAX),
-                    );
-                }
-            }
-            image(PixelFormat::Rgb8, data)
-        }
-        (c, _) => Err(format!(
-            "JPEG 2000 with {c} colour channels is not supported"
-        )),
-    }
-}
-
-/// Samples of `bits` bits (signed ones centred) to 0..=255, rounded.
-fn to_8bit(samples: &[i32], bits: u8, signed: bool) -> Vec<u8> {
-    let bits = u32::from(bits.clamp(1, 38));
-    let max = (1i64 << bits) - 1;
-    let offset = if signed { 1i64 << (bits - 1) } else { 0 };
-    samples
-        .iter()
-        .map(|&v| {
-            let v = (i64::from(v) + offset).clamp(0, max);
-            // v * 255 / max with rounding; v <= max < 2^38 keeps it in i64.
-            u8::try_from((v * 255 + max / 2) / max).unwrap_or(u8::MAX)
-        })
-        .collect()
-}
-
-/// Full-range YCbCr (sYCC) to sRGB, BT.601 coefficients.
-fn ycc_to_rgb(y: u8, cb: u8, cr: u8) -> [u8; 3] {
-    let (y, cb, cr) = (f32::from(y), f32::from(cb) - 128.0, f32::from(cr) - 128.0);
-    // Each value is clamped to 0..=255 before the cast.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let q = |v: f32| v.round().clamp(0.0, 255.0) as u8;
-    [
-        q(y + 1.402 * cr),
-        q(y - 0.344_136 * cb - 0.714_136 * cr),
-        q(y + 1.772 * cb),
-    ]
-}
-
-/// Widest CCITT row accepted: 100 000 pixels, far past a 600 ppi tabloid.
-const MAX_CCITT_COLUMNS: usize = 100_000;
-
-/// Raw samples to an 8-bit image. `invert_one_bit`: for 1-bit data, whether a
-/// 1 bit is dark. By default a 1 bit is white for BOTH a 1-bit gray image and
-/// a stencil mask (a mask paints where the sample is 0), so the mask flag does
-/// not change the mapping; only a `[1 0]` /Decode flips it.
-fn samples_to_image(
-    raw: &[u8],
-    (w, width): (usize, u32),
-    (h, height): (usize, u32),
-    comps: usize,
-    bpc: usize,
-    invert_one_bit: bool,
-) -> std::result::Result<ImageBuffer, String> {
-    let row_bytes = (w * comps * bpc).div_ceil(8);
-    let image = |format, data| {
-        Ok(ImageBuffer {
-            width,
-            height,
-            format,
-            data,
-        })
-    };
-    match (comps, bpc) {
-        (1, 1) => {
-            let mut data = Vec::with_capacity(w * h);
-            for y in 0..h {
-                let row = &raw[y * row_bytes..(y + 1) * row_bytes];
-                for x in 0..w {
-                    let bit = (row[x / 8] >> (7 - (x % 8))) & 1 == 1;
-                    // Default gray: 1 is white. For a stencil mask, a 0 bit is
-                    // painted (black) — also "1 is white". An invert flips both.
-                    let white = bit != invert_one_bit;
-                    data.push(if white { 255 } else { 0 });
-                }
-            }
-            image(PixelFormat::Gray8, data)
-        }
-        (1, 8) => image(
-            PixelFormat::Gray8,
-            (0..h)
-                .flat_map(|y| raw[y * row_bytes..y * row_bytes + w].iter().copied())
-                .collect(),
-        ),
-        (3, 8) => image(
-            PixelFormat::Rgb8,
-            (0..h)
-                .flat_map(|y| raw[y * row_bytes..y * row_bytes + 3 * w].iter().copied())
-                .collect(),
-        ),
-        (4, 8) => {
-            // CMYK to RGB, naive: enough for OCR, which reads luminance.
-            let mut data = Vec::with_capacity(w * h * 3);
-            for y in 0..h {
-                for px in raw[y * row_bytes..y * row_bytes + 4 * w].chunks_exact(4) {
-                    let k = 255 - u16::from(px[3]);
-                    for c in &px[..3] {
-                        // (255 - c) * k / 255 is at most 255.
-                        data.push(u8::try_from((255 - u16::from(*c)) * k / 255).unwrap_or(u8::MAX));
-                    }
-                }
-            }
-            image(PixelFormat::Rgb8, data)
-        }
-        (c, b) => Err(format!(
-            "{c} components at {b} bits per component is not supported"
-        )),
-    }
-}
-
-/// CCITT Group 3 (1-D) or Group 4 to 8-bit gray, 0 for black.
-fn ccitt(
-    data: &[u8],
-    k: i64,
-    columns: usize,
-    w: usize,
-    h: usize,
-) -> std::result::Result<Vec<u8>, String> {
-    let mut out = Vec::with_capacity(w * h);
-    let mut line_cb = |transitions: &[u32]| {
-        if out.len() >= w * h {
-            return;
-        }
-        let mut line = vec![255u8; w];
-        let (mut black, mut x) = (false, 0usize);
-        for &t in transitions {
-            let t = (t as usize).min(w);
-            if black {
-                line[x..t].fill(0);
-            }
-            x = t;
-            black = !black;
-        }
-        if black {
-            line[x.min(w)..].fill(0);
-        }
-        out.extend_from_slice(&line);
-    };
-    let columns = u32::try_from(columns).map_err(|_| "CCITT /Columns out of range")?;
-    let rows = u32::try_from(h).map_err(|_| "image height out of range")?;
-    let ok = match k.cmp(&0) {
-        std::cmp::Ordering::Less => {
-            fax::decoder::decode_g4(data.iter().copied(), columns, Some(rows), &mut line_cb)
-        }
-        std::cmp::Ordering::Equal => fax::decoder::decode_g3(data.iter().copied(), &mut line_cb),
-        std::cmp::Ordering::Greater => {
-            return Err("CCITT Group 3 two-dimensional (K > 0) is not supported yet".into());
-        }
-    };
-    if ok.is_none() && out.is_empty() {
-        return Err("CCITT data did not decode".into());
-    }
-    out.resize(w * h, 255);
-    Ok(out)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lopdf::{Stream, dictionary};
+    use lopdf::{Dictionary, Document, Object, Stream, dictionary};
 
     /// A one-page PDF: `content` drawn with `images` as named XObjects, and
     /// any extra page-dictionary entries (`/Rotate`, `/Annots`).
@@ -1329,7 +818,8 @@ mod tests {
             vec![],
         ));
         assert!(p.image.is_none());
-        assert!(p.note.unwrap().contains("pixel limit"));
+        let note = p.note.unwrap();
+        assert!(note.contains("pixel"), "{note}");
     }
 
     /// rusty_jbig2's documented page: 16x1, one MMR generic region, 8 white
@@ -1389,24 +879,6 @@ mod tests {
         ));
         assert!(p.image.is_none());
         assert!(p.note.unwrap().contains("JBIG2"));
-    }
-
-    #[test]
-    fn jpx_samples_scale_to_8_bits() {
-        assert_eq!(to_8bit(&[0, 128, 255], 8, false), [0, 128, 255]);
-        assert_eq!(to_8bit(&[0, 1], 1, false), [0, 255]);
-        assert_eq!(to_8bit(&[0, 2048, 4095], 12, false), [0, 128, 255]);
-        assert_eq!(to_8bit(&[-128, 0, 127], 8, true), [0, 128, 255]);
-        // Out-of-range samples clamp instead of wrapping.
-        assert_eq!(to_8bit(&[-5, 300], 8, false), [0, 255]);
-        assert_eq!(to_8bit(&[i32::MAX, i32::MIN], 16, true), [255, 0]);
-    }
-
-    #[test]
-    fn sycc_converts_to_rgb() {
-        assert_eq!(ycc_to_rgb(0, 128, 128), [0, 0, 0]);
-        assert_eq!(ycc_to_rgb(255, 128, 128), [255, 255, 255]);
-        assert_eq!(ycc_to_rgb(76, 85, 255), [254, 0, 0]);
     }
 
     /// A stencil mask (`/ImageMask true`) paints where the sample is 0.
