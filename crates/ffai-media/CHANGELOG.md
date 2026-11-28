@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.7.2...ffai-media-v0.7.3) - 2026-11-28
+
+### Added
+
+- *(media)* read PDFs with the house reader, rusty_pdf_core ([#77](https://github.com/Remade-With-Rust/FFAI/pull/77))
+
 ## [0.7.2](https://github.com/Remade-With-Rust/FFAI/compare/ffai-media-v0.7.1...ffai-media-v0.7.2) - 2026-11-28
 
 ### Added
