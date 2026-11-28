@@ -3740,36 +3740,36 @@ dependencies = [
 
 [[package]]
 name = "rff-codec"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3490c4262a20a38821239a1bf80a08d801542a489b13b4772982464a125ac156"
+checksum = "3b1b0fd5f9108ff26c1945e71b0dd491b69ca7805facb8c88bf62e6fd7281e15"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-core"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfa0a3a9a0ffe5b8d1f64765f869ee017a865e4872dd04f7884fc8f678cd3eeb"
+checksum = "552e4953c51363081e11eab5725f890f2fa7a23b3f63c1f3115e08e992a8ae28"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "rff-format"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c05d88201285ef06cc9093fc7bd67bf3bc49b6ce4f2215506d7faaec0958f781"
+checksum = "3a0d5b6429f6f55d23e1a752a25ae617ef381c62ff939b7f663a435f6a69d5a5"
 dependencies = [
  "rff-core",
 ]
 
 [[package]]
 name = "rff-format-avi"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca4f27718e92518b44287b1c28a4188ee66239bb214b0151cca8c2ea111f37b4"
+checksum = "793eb75f2dfe88e34e9613ccb1f66697599a5277ec3bd1aaadca744356be6095"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3777,9 +3777,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-mkv"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3f324e4f17992ea8b783d97bb0a66cd579d27c5b0c812c6508fcdcce1548a4a"
+checksum = "79fe9817865c4f49bd54c63023fd75c95422e16668fa38db566af0829ade98cc"
 dependencies = [
  "miniz_oxide",
  "rff-core",
@@ -3789,9 +3789,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-mp4"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "970bf49cd8c2b986606928d138ab195e840e586f16e020cd09b5bd63e850f6e7"
+checksum = "eac21214c886d97bae8317dc2b46e797d5c19ae7269258a42f8f05ff88dae208"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3799,9 +3799,9 @@ dependencies = [
 
 [[package]]
 name = "rff-format-ts"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "835c4e1b560a3ed8460e280fab6600fe6dcd3a128fce4c7c48734151c9bb0db9"
+checksum = "1c088d8dc3fcc00aa2e91dfcdd4dd7139029ec73ecb5821462774b684ebf0f41"
 dependencies = [
  "rff-core",
  "rff-format",
@@ -3809,9 +3809,9 @@ dependencies = [
 
 [[package]]
 name = "rff-subtitle"
-version = "0.8.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ceea36ac9d50f443992678e65235312dc590aa08cfa7dd0a0b67a8ecf58155f0"
+checksum = "f2820b04ce68d9d1403af8c394d45f60d58f3d3ce18aa085c80a08f3cb17c612"
 
 [[package]]
 name = "ring"
